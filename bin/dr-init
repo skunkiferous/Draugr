@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# dr-init - set this project up for Draugr.
+#
+# Writes .draugr.conf (commit it), a starter sbx kit at .draugr/kit/ (commit that
+# too), gitignores the per-user layer, and trusts the config it just wrote.
+#
+#   dr-init                  set up the current repository
+#   dr-init --agent codex    pick the agent up front
+#   dr-init --force          overwrite files that already exist
+set -euo pipefail
+
+DR_PROG=dr-init
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# ${2:?msg} aborts with that message when --agent is given no value.
+force=
+agent=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --force|-f) force=1 ;;
+        --agent)    agent=${2:?--agent needs a value}; shift ;;
+        -h|--help)  sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) dr_die "unknown option: $1" "Try: dr-init --help" ;;
+    esac
+    shift
+done
+
+repo=$(dr_repo_root)
+dr_require_win_path "$repo"
+
+dr_load_config "$repo"
+[ -n "$agent" ] && DRAUGR_AGENT=$agent
+name=$(dr_sandbox_name "$repo")
+name=${name#draugr-}
+
+wrote=0
+
+# --- .draugr.conf ----------------------------------------------------------
+conf="$repo/.draugr.conf"
+if [ -f "$conf" ] && [ -z "$force" ]; then
+    dr_info "kept existing .draugr.conf"
+else
+    {
+        cat "$DRAUGR_SHARE/project.example"
+        if [ -n "$agent" ]; then
+            printf '\nDRAUGR_AGENT=%s\n' "$agent"
+        fi
+    } > "$conf"
+    dr_ok "wrote .draugr.conf"
+    wrote=$((wrote + 1))
+fi
+
+# --- the kit ---------------------------------------------------------------
+kitdir="$repo/${DRAUGR_KIT:-.draugr/kit}"
+case "${DRAUGR_KIT:-}" in /*) kitdir=$DRAUGR_KIT ;; esac
+if [ -f "$kitdir/spec.yaml" ] && [ -z "$force" ]; then
+    dr_info "kept existing kit at ${kitdir#"$repo"/}"
+else
+    mkdir -p "$kitdir"
+    sed -e "s|@NAME@|$name|g" -e "s|@AGENT@|${DRAUGR_AGENT:-claude}|g" \
+        "$DRAUGR_SHARE/kit.example/spec.yaml" > "$kitdir/spec.yaml"
+    dr_ok "wrote ${kitdir#"$repo"/}/spec.yaml"
+    wrote=$((wrote + 1))
+fi
+
+# --- gitignore the per-user layer ------------------------------------------
+ignore="$repo/.gitignore"
+if ! grep -qxF '.draugr.local.conf' "$ignore" 2>/dev/null; then
+    # Decide whether the file ends mid-line BEFORE opening the append redirect:
+    # reading and writing the same file in one pipeline is asking for trouble.
+    # $(...) strips trailing newlines, so a non-empty result means no final \n.
+    terminator=
+    if [ -s "$ignore" ] && [ -n "$(tail -c1 "$ignore")" ]; then
+        terminator=$'\n'
+    fi
+    printf '%s\n# Draugr: per-user settings, never shared.\n.draugr.local.conf\n' \
+        "$terminator" >> "$ignore"
+    dr_ok "gitignored .draugr.local.conf"
+    wrote=$((wrote + 1))
+fi
+
+# --- trust what we just wrote ----------------------------------------------
+# Draugr wrote this file itself, so there is nothing for the user to review yet.
+# The prompt exists to stop a *cloned* config running unread; it would be theatre
+# here, and theatre is how people learn to click through real warnings.
+dr_trust_add "$conf"
+
+# Say plainly whether anything changed: re-running dr-init is harmless, and you
+# should be able to tell the difference without diffing your own repo.
+printf '\n'
+if [ "$wrote" -eq 0 ]; then
+    dr_info "nothing to do - this project was already initialised"
+else
+    dr_ok "$name is ready"
+fi
+
+cat >&2 <<EOF
+
+  ${_DR_BOLD}Next${_DR_OFF}
+    1. Edit ${_DR_BOLD}${kitdir#"$repo"/}/spec.yaml${_DR_OFF} - list the domains your build needs
+       under network.allowedDomains, and your setup under commands.install.
+       The agent reaches nothing you do not list.
+    2. Commit both files. A teammate then gets the same mound in one command.
+    3. ${_DR_BOLD}dr-go${_DR_OFF}
+
+  Check anything with:  dr-doctor   dr-config
+EOF

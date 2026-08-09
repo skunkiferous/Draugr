@@ -58,7 +58,7 @@ These shape every script, so they are stated once here rather than repeated per 
    to trust it.
 2. **`set -euo pipefail` everywhere**, and `IFS=$'\n\t'` where word-splitting matters.
 3. **Fail loud and early, with the fix in the error message.** "Not a git repository" is useless;
-   "`/mnt/c/Code/foo` is not a git repository — run `git init` or cd into your project" is not.
+   "`/mnt/c/src/foo` is not a git repository — run `git init` or cd into your project" is not.
 4. **Every destructive action is refused by default** and requires either a clean precondition or
    an explicit `--force`. `dr-rm` is the archetype.
 5. **`sbx` stays visible.** Draugr does not abstract over it. Error output names the underlying
@@ -75,7 +75,7 @@ Checked on this machine (Windows 11 Pro, WSL2/Ubuntu, `sbx` v0.37.1) — not ass
 |---|---|
 | `sbx.exe` is **not on WSL's `PATH`**; it lives at `$LOCALAPPDATA/DockerSandboxes/bin/sbx.exe` | `lib/common.sh` must discover it. Cannot just call `sbx`. |
 | `sbx` is a Windows binary and its workspace arguments are **Windows paths** (`C:\Code\claude`) | Every path handed to `sbx` needs `wslpath -w`. Every path used inside the mound needs the `/mnt` strip. |
-| A workspace is mounted **at the same path** inside the sandbox | `C:\Code\p` → `/c/Code/p` in the mound → `/mnt/c/Code/p` in WSL. Three-way translation is a core primitive. |
+| A workspace is mounted **at the same path** inside the sandbox | `C:\src\p` → `/c/src/p` in the mound → `/mnt/c/src/p` in WSL. Three-way translation is a core primitive. |
 | `sbx ls --json` emits `{sandboxes:[{name,id,agent,status,workspaces}]}` | State lookup is a JSON query, not table scraping. Needs `jq`. |
 | The `*.sbx` ssh block is already present in WSL `~/.ssh/config` | `dr-setup` must be idempotent and detect the existing managed block rather than duplicating it. |
 | `sbx run --name <existing>` re-attaches; the agent is read from the sandbox spec | `dr-go` is create-if-missing then `sbx run --name`. There is no `sbx attach`. |
@@ -217,7 +217,7 @@ Path-translation round-trips are bats-tested against a table of cases including 
 **Verification task:** determine what `sbx run` returns on detach, and whether Ctrl+D is
 distinguishable from a detach-key sequence. This decides how `DRAUGR_AUTO_SYNC` fires.
 
-**Acceptance:** in a scratch repo under `C:\Code\`, `dr-go` creates and enters a mound; Ctrl+D
+**Acceptance:** in a scratch repo on a Windows drive, `dr-go` creates and enters a mound; Ctrl+D
 returns to WSL; `dr-status` reports `running`; `dr-stop` then `dr-go` re-attaches without
 re-creating; `dr-rm` removes it. Running `dr-up` twice in a row produces no second sandbox. A dirty
 tree blocks `dr-go` with the "the clone only sees commits" explanation.
@@ -314,7 +314,7 @@ files land in the mound owned by `agent` and mode 644.
 **Goal:** the agent remembers, across `dr-rm`.
 
 - `dr-mem export|import|diff` — port `tmp/sbx-memory.ps1` to bash. The whole value is the
-  project-key translation (`-mnt-c-Code-p` ↔ `-c-Code-p` ↔ `c--Code-p`) plus the `chown` after
+  project-key translation (`-mnt-c-src-p` ↔ `-c-src-p` ↔ `c--src-p`) plus the `chown` after
   `sbx cp`. Never touches `~/.claude` itself, only the `memory` subtree.
 - `DRAUGR_MEM_SYNC=auto` wired into `dr-up` (import) and the detach path (export).
 - `dr-mem import` prints a warning about imported memory being instructions, per the README's safety

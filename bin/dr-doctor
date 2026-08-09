@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# dr-doctor - check every precondition and say exactly what to fix.
+#
+# Run this first, and run it again whenever something behaves oddly. Each failure
+# carries its own remedy; you should never have to search for what a line means.
+#
+#   dr-doctor          check everything
+#   dr-doctor --quiet  only report problems
+set -euo pipefail
+
+DR_PROG=dr-doctor
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# Only one option, so a plain case beats an argument loop here.
+quiet=
+case "${1:-}" in
+    --quiet|-q) quiet=1 ;;
+    -h|--help)  sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    "") ;;
+    *) dr_die "unknown option: $1" ;;
+esac
+
+fails=0
+warns=0
+
+# Three report helpers, all called the same way:
+#
+#     bad "<label>" "<what is wrong>" "<remedy line>" "<remedy line>" ...
+#
+# %-34s pads the label to 34 columns so the second column lines up. The `shift 2`
+# drops the label and summary, leaving the remedy lines in "$@" to be indented
+# underneath. `|| shift $#` covers being called with fewer than two arguments,
+# where `shift 2` would fail and, under `set -e`, abort the script.
+ok()   { [ -n "$quiet" ] || printf '  %s✓%s %-34s %s\n' "$_DR_GREEN" "$_DR_OFF" "$1" "${2:-}"; }
+bad()  {
+    fails=$((fails + 1))
+    printf '  %s✗%s %-34s %s\n' "$_DR_RED" "$_DR_OFF" "$1" "${2:-}"
+    shift 2 || shift $#
+    for l in "$@"; do printf '      %s%s%s\n' "$_DR_DIM" "$l" "$_DR_OFF"; done
+}
+soft() {
+    warns=$((warns + 1))
+    printf '  %s!%s %-34s %s\n' "$_DR_YELLOW" "$_DR_OFF" "$1" "${2:-}"
+    shift 2 || shift $#
+    for l in "$@"; do printf '      %s%s%s\n' "$_DR_DIM" "$l" "$_DR_OFF"; done
+}
+
+# version_ge 0.37.1 0.37  ->  true
+#
+# Print both versions, sort them with `sort -V` (version sort, which knows that
+# 0.10 is newer than 0.9), and check the minimum ended up first. If the smaller
+# of the two is the one we require, then what we have is at least that.
+version_ge() {
+    [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]
+}
+
+printf '%sDraugr %s%s\n' "$_DR_BOLD" "$DRAUGR_VERSION" "$_DR_OFF"
+
+# --- the host --------------------------------------------------------------
+printf '\n%sHost%s\n' "$_DR_BOLD" "$_DR_OFF"
+
+# Two independent signals, because WSL_DISTRO_NAME is not set in every shell
+# (cron, some IDE terminals) while /proc/version always names the kernel.
+if [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null; then
+    ok "WSL" "${WSL_DISTRO_NAME:-detected}"
+else
+    soft "WSL" "not detected" \
+        "Draugr is built for WSL2 on Windows: it drives sbx.exe, translates" \
+        "/mnt/c paths, and reaches the mound over the *.sbx ssh transport." \
+        "Other platforms are not supported yet."
+fi
+
+if version_ge "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" 4.2; then
+    ok "bash" "${BASH_VERSION%%(*}"
+else
+    bad "bash" "${BASH_VERSION%%(*} is too old" "Draugr needs bash 4.2 or newer."
+fi
+
+# --- required tools --------------------------------------------------------
+printf '\n%sTools%s\n' "$_DR_BOLD" "$_DR_OFF"
+
+# git: required, and old enough versions lack flags dr-sync relies on.
+if command -v git >/dev/null 2>&1; then
+    gitver=$(git --version | awk '{print $3}')
+    if version_ge "$gitver" 2.40; then
+        ok "git" "$gitver"
+    else
+        soft "git" "$gitver is older than 2.40" "Draugr is only tested against 2.40 and newer."
+    fi
+else
+    bad "git" "not found" "sudo apt install git"
+fi
+
+# jq: required. Every sandbox state lookup parses 'sbx ls --json'.
+if command -v jq >/dev/null 2>&1; then
+    ok "jq" "$(jq --version 2>/dev/null)"
+else
+    bad "jq" "not found" \
+        "Draugr reads 'sbx ls --json' to find out what your sandboxes are doing." \
+        "sudo apt install jq"
+fi
+
+# rsync: optional, and only DRAUGR_DATA needs it - hence soft, not bad.
+if command -v rsync >/dev/null 2>&1; then
+    ok "rsync" "$(rsync --version 2>/dev/null | head -1 | awk '{print $3}')"
+else
+    soft "rsync" "not found" \
+        "Only needed for DRAUGR_DATA file sync. Everything else works without it." \
+        "sudo apt install rsync"
+fi
+
+# ssh: required. It is how commits and data cross the boundary.
+if command -v ssh >/dev/null 2>&1; then
+    ok "ssh" "$(ssh -V 2>&1 | cut -d, -f1)"
+else
+    bad "ssh" "not found" \
+        "dr-sync moves commits over git's ssh:// transport." \
+        "sudo apt install openssh-client"
+fi
+
+# --- sbx -------------------------------------------------------------------
+printf '\n%sDocker Sandboxes%s\n' "$_DR_BOLD" "$_DR_OFF"
+
+if sbx_path=$(dr_find_sbx 2>/dev/null); then
+    ok "sbx.exe" "$sbx_path"
+
+    # Pull the first x.y.z out of whatever 'sbx version' prints, so the check
+    # survives a change of wording around it.
+    if sbxver=$("$sbx_path" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1); then
+        if version_ge "$sbxver" 0.37; then
+            ok "sbx version" "$sbxver"
+        else
+            bad "sbx version" "$sbxver is older than 0.37" \
+                "Draugr uses 'sbx ls --json' and per-sandbox policy scoping." \
+                "winget upgrade Docker.sbx"
+        fi
+    else
+        soft "sbx version" "could not parse 'sbx version' output"
+    fi
+
+    # A successful 'ls' is the cheapest proof the daemon is actually up.
+    if "$sbx_path" ls --json >/dev/null 2>&1; then
+        count=$("$sbx_path" ls --json 2>/dev/null | jq '(.sandboxes // []) | length' 2>/dev/null || echo '?')
+        ok "sandbox daemon" "reachable, $count sandbox(es)"
+    else
+        bad "sandbox daemon" "not reachable" \
+            "Start it, or diagnose with:  sbx diagnose" \
+            "On Windows the Hypervisor Platform feature must be enabled."
+    fi
+else
+    bad "sbx.exe" "not found" \
+        "sbx is a Windows binary and is not on WSL's PATH by default." \
+        "Install:  winget install Docker.sbx" \
+        "Or point Draugr at it:  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
+fi
+
+# --- the WSL ssh bridge ----------------------------------------------------
+printf '\n%sssh bridge (WSL)%s\n' "$_DR_BOLD" "$_DR_OFF"
+
+# The block must exist AND its ProxyCommand must mention sbx: an ssh config can
+# easily contain a Host *.sbx stanza that does not actually reach a sandbox.
+ssh_config="$HOME/.ssh/config"
+if [ -f "$ssh_config" ] && grep -qE '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$ssh_config"; then
+    proxy=$(grep -A6 -E '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$ssh_config" \
+            | grep -i ProxyCommand | head -1 | sed 's/.*ProxyCommand //' || true)
+    if printf '%s' "$proxy" | grep -q 'sbx'; then
+        ok "*.sbx block" "present in ~/.ssh/config"
+    else
+        bad "*.sbx block" "present but has no sbx ProxyCommand" \
+            "Rewrite it with:  dr-setup --force"
+    fi
+else
+    bad "*.sbx block" "missing from WSL's ~/.ssh/config" \
+        "This is the step people miss. 'sbx setup ssh' configures the WINDOWS" \
+        "ssh client only; WSL has its own config, and without this block neither" \
+        "'ssh <name>.sbx' nor git's ssh:// transport works from here." \
+        "Fix:  dr-setup"
+fi
+
+# --- this project ----------------------------------------------------------
+printf '\n%sThis project%s\n' "$_DR_BOLD" "$_DR_OFF"
+
+# Everything below is about the project you are standing in, so all of it is
+# skipped - with a warning, not an error - when that is not a repository.
+if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
+    ok "git repository" "$repo"
+
+    # The constraint the README leads with, checked before anything depends on it.
+    if mound=$(dr_path_mound "$repo" 2>/dev/null); then
+        ok "on a Windows drive" "$(dr_path_win "$repo")  ->  $mound in the mound"
+    else
+        bad "on a Windows drive" "$repo is not under /mnt/<drive>/" \
+            "sbx.exe workspaces are Windows paths, so a repo on WSL's own ext4" \
+            "filesystem has no path sbx can mount." \
+            "Move the project under /mnt/c/ and work on it from there."
+    fi
+
+    # An untrusted config is silently ignored by the loader, which is exactly
+    # the kind of thing someone would otherwise spend an hour not noticing.
+    for f in "$repo/.draugr.conf" "$repo/.draugr.local.conf"; do
+        [ -f "$f" ] || continue
+        name=./${f#"$repo"/}
+        if dr_trust_is_trusted "$f"; then
+            ok "$name" "trusted"
+        else
+            bad "$name" "untrusted, so it is being IGNORED" \
+                "Draugr sources this file, which means running it." \
+                "Review it, then:  dr-trust"
+        fi
+    done
+
+    # The kit carries the network rules, so a missing one means the mound will
+    # be built with no allow-list at all.
+    dr_load_config "$repo"
+    if [ -n "$DRAUGR_KIT" ]; then
+        kit=$DRAUGR_KIT
+        case "$kit" in /*|*:*) ;; *) kit="$repo/$kit" ;; esac
+        if [ -d "$kit" ] || [ -f "$kit" ]; then
+            ok "kit" "$DRAUGR_KIT"
+        else
+            soft "kit" "$DRAUGR_KIT does not exist" \
+                "Network rules and setup commands live in the kit." \
+                "Create a starter one with:  dr-init"
+        fi
+    fi
+else
+    soft "git repository" "$PWD is not one" \
+        "Draugr works on one repository at a time. cd into a project, or 'git init'."
+fi
+
+# --- verdict ---------------------------------------------------------------
+#
+# Exit status is what a script would check, so only real failures make it
+# non-zero: a warning is something to know about, not something blocking.
+printf '\n'
+if [ "$fails" -gt 0 ]; then
+    printf '%s%d problem(s) to fix.%s' "$_DR_RED" "$fails" "$_DR_OFF"
+    [ "$warns" -gt 0 ] && printf ' %s%d warning(s).%s' "$_DR_YELLOW" "$warns" "$_DR_OFF"
+    printf '\n'
+    exit 1
+fi
+if [ "$warns" -gt 0 ]; then
+    printf '%sReady, with %d warning(s).%s\n' "$_DR_YELLOW" "$warns" "$_DR_OFF"
+    exit 0
+fi
+printf '%sEverything checks out.%s\n' "$_DR_GREEN" "$_DR_OFF"

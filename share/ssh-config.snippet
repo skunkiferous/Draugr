@@ -1,0 +1,20 @@
+# >>> draugr (managed) >>>
+# WSL has its own ~/.ssh/config. `sbx setup ssh` configures the Windows client
+# only, so without this block neither `ssh <name>.sbx` nor git's ssh:// transport
+# works from WSL - which is where Draugr runs. dr-setup writes it.
+#
+# ProxyCommand shells out to sbx.exe exactly the way an interactive login does,
+# so there is no TCP port involved, nothing to elevate, and a stopped sandbox is
+# started automatically.
+Host *.sbx
+    User _default_user_
+    ProxyCommand "@SBX_EXE@" ssh proxy %n
+    IdentityAgent none
+    IdentityFile /dev/null
+    IdentitiesOnly yes
+    ControlMaster no
+    ControlPath none
+    UserKnownHostsFile "@KNOWN_HOSTS@"
+    StrictHostKeyChecking accept-new
+    SendEnv *
+# <<< draugr (managed) <<<

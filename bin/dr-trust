@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# dr-trust - accept a project config after reviewing it.
+#
+# .draugr.conf is shell, and sourcing it runs it. Draugr records its hash the
+# first time you accept it and refuses to source a version it has not seen. Same
+# bargain your shell makes with direnv, and for the same reason.
+#
+#   dr-trust                 review and accept this repo's configs
+#   dr-trust <file>          accept a specific file
+#   dr-trust --list          what is currently trusted
+#   dr-trust --revoke <file> forget it again
+set -euo pipefail
+
+DR_PROG=dr-trust
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# Anything that is not an option is taken as a config file path to act on.
+action=accept
+files=()
+
+# -* catches a mistyped option; a bare word is collected as a file path.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --list)    action=list ;;
+        --revoke)  action=revoke ;;
+        -y|--yes)  DR_ASSUME_YES=1 ;;
+        -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) dr_die "unknown option: $1" "Try: dr-trust --help" ;;
+        *)  files+=("$1") ;;
+    esac
+    shift
+done
+
+# --list: replay the trust file, re-hashing each entry so the report says not
+# just what you trusted but whether it still says what it said at the time.
+if [ "$action" = list ]; then
+    [ -f "$DR_TRUST_FILE" ] || { printf 'Nothing trusted yet.\n'; exit 0; }
+    printf '%s\n' "Trusted project configs ($DR_TRUST_FILE):"
+
+    # Each record is "<hash>  <path>", which read splits into two variables.
+    while read -r hash path; do
+        [ -n "$path" ] || continue
+        if [ ! -f "$path" ]; then
+            state="${_DR_DIM}(file is gone)${_DR_OFF}"
+        elif [ "$(_dr_hash "$path")" = "$hash" ]; then
+            state="${_DR_GREEN}current${_DR_OFF}"
+        else
+            state="${_DR_YELLOW}EDITED since you trusted it${_DR_OFF}"
+        fi
+        printf '  %-58s %b\n' "$path" "$state"
+    done < "$DR_TRUST_FILE"
+    exit 0
+fi
+
+# Default to this repo's configs.
+if [ ${#files[@]} -eq 0 ]; then
+    repo=$(dr_repo_root)
+    for f in "$repo/.draugr.conf" "$repo/.draugr.local.conf"; do
+        [ -f "$f" ] && files+=("$f")
+    done
+    [ ${#files[@]} -gt 0 ] || dr_die \
+        "no .draugr.conf in $repo" \
+        "Create one with:  dr-init"
+fi
+
+# --revoke: filter the path out of the trust file. Entries are keyed by absolute
+# path, so resolve whatever was typed before matching.
+if [ "$action" = revoke ]; then
+    for f in "${files[@]}"; do
+        abs=$(cd "$(dirname "$f")" && pwd)/$(basename "$f")
+        if [ -f "$DR_TRUST_FILE" ] && grep -qF "  $abs" "$DR_TRUST_FILE"; then
+            grep -vF "  $abs" "$DR_TRUST_FILE" > "$DR_TRUST_FILE.tmp" || :
+            mv "$DR_TRUST_FILE.tmp" "$DR_TRUST_FILE"
+            dr_ok "revoked $abs"
+        else
+            dr_warn "$abs was not trusted anyway"
+        fi
+    done
+    exit 0
+fi
+
+for f in "${files[@]}"; do
+    [ -f "$f" ] || dr_die "no such file: $f"
+    abs=$(cd "$(dirname "$f")" && pwd)/$(basename "$f")
+
+    if dr_trust_is_trusted "$abs"; then
+        dr_ok "already trusted, unchanged: $abs"
+        continue
+    fi
+
+    # Show it. This is the entire point of the command - a prompt you accept
+    # without reading is worse than no prompt, because it feels like diligence.
+    dr_heading "$abs"
+    printf '%s\n' "${_DR_DIM}---------------------------------------------------------------${_DR_OFF}" >&2
+    cat "$abs" >&2
+    printf '%s\n' "${_DR_DIM}---------------------------------------------------------------${_DR_OFF}" >&2
+    printf 'This file is shell. Draugr will run it. ' >&2
+
+    # Three ways this can go: --yes (you have already reviewed it), an
+    # interactive prompt, or no terminal at all - in which case refuse, because
+    # silently trusting a config in a script is exactly the failure this guards.
+    if [ -n "${DR_ASSUME_YES:-}" ]; then
+        printf 'Accepting (--yes).\n' >&2
+    elif [ -t 0 ]; then
+        printf 'Trust it? [y/N] ' >&2
+        read -r reply
+        case "$reply" in
+            y|Y|yes|Yes) ;;
+            *) dr_warn "not trusted: $abs"; continue ;;
+        esac
+    else
+        dr_die "refusing to trust $abs without a terminal" \
+               "Run dr-trust interactively, or pass --yes if you have already reviewed it."
+    fi
+
+    dr_trust_add "$abs"
+    dr_ok "trusted $abs"
+done

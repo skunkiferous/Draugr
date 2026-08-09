@@ -1,0 +1,105 @@
+# ~/.config/draugr/config - Draugr's user-home configuration.
+#
+# Plain shell. KEY=value, comments with #, sourced by every dr-* command. Because
+# it is sourced you can compute values:  DRAUGR_PORTS="$(cat ~/.ports)"
+#
+# Precedence, lowest to highest:
+#   built-in defaults -> THIS FILE -> <repo>/.draugr.conf -> <repo>/.draugr.local.conf
+#     -> DRAUGR_* in the environment -> command-line flags
+#
+# Everything below is commented out and shows the built-in default. Uncomment
+# only what you want to change; `dr-config` will tell you where each value came
+# from once you have.
+
+# --- Which agent, and how big a mound ---------------------------------------
+
+# claude | codex | copilot | cursor | droid | gemini | kiro | opencode | shell
+#DRAUGR_AGENT=claude
+
+# Sandbox name. Empty derives draugr-<repo-folder-name>, which is what you want
+# unless two projects share a folder name.
+#DRAUGR_SANDBOX=
+
+# Empty means sbx's own defaults: 50% of host RAM capped at 32 GiB, and all CPUs.
+#DRAUGR_MEMORY=8g
+#DRAUGR_CPUS=4
+
+# Container image. Empty means the agent's stock image.
+#DRAUGR_TEMPLATE=
+
+# false bind-mounts your working tree READ-WRITE instead of giving the agent a
+# private clone. That is the setting that undoes the entire point of Draugr, so
+# it prompts for confirmation every single time. No config key silences that.
+#DRAUGR_CLONE=true
+
+# --- What the agent is allowed to reach -------------------------------------
+#
+# Network rules and setup commands are NOT Draugr settings: they live in an sbx
+# kit, which is a first-party declarative format that already does this job and
+# travels with the repo. dr-init writes a starter one.
+#
+#   https://docs.docker.com/ai/sandboxes/customize/kits/
+#
+# Path to the kit, relative to the repo root, or an absolute path, git ref or OCI
+# reference. Empty disables kit loading entirely.
+#DRAUGR_KIT=.draugr/kit
+
+# --- Ports and extra material -----------------------------------------------
+
+# Published to Windows loopback. Applied at creation; use dr-ports mid-session.
+#DRAUGR_PORTS="5173:5173 8080:8080"
+
+# Extra workspaces. Append :ro for read-only, which is almost always what you
+# want - a read-only mount is strictly safer than copying data in.
+#DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"
+
+# --- Data files that are not ready to commit --------------------------------
+#
+# Repo-relative globs, synced with rsync alongside git rather than through it.
+# Paths matching these are exempt from the DRAUGR_REQUIRE_CLEAN check.
+#DRAUGR_DATA="tmp/** *.parquet scratch/raw/"
+
+# auto | manual | off.  push is host -> sandbox before the agent starts;
+# pull is sandbox -> host when you detach. Never both at once: there is no merge
+# algorithm for a parquet file, so each transfer declares a winner.
+#DRAUGR_DATA_PUSH=auto
+#DRAUGR_DATA_PULL=manual
+
+# Propagate deletions (rsync --delete). Off by default, because a push after you
+# tidied a directory would otherwise delete the agent's generated output.
+#DRAUGR_DATA_DELETE=false
+
+# /mnt/c is mode 777 under WSL; normalise on the way in.
+#DRAUGR_DATA_CHMOD=D755,F644
+
+# --- Git behaviour ----------------------------------------------------------
+
+# Empty tracks whichever branch you have checked out.
+#DRAUGR_BRANCH=
+
+# Name of the git remote pointing at the sandbox. Draugr never touches origin.
+#DRAUGR_REMOTE=draugr
+
+# The clone contains committed history only, so uncommitted work is simply not
+# there and the agent would quietly build on stale code. This catches that.
+#DRAUGR_REQUIRE_CLEAN=true
+
+# Run dr-sync automatically when you detach.
+#DRAUGR_AUTO_SYNC=true
+
+# --- Memory -----------------------------------------------------------------
+
+# auto | manual | off
+#DRAUGR_MEM_SYNC=auto
+#DRAUGR_MEM_STORE="$HOME/.local/share/draugr/memory"
+
+# --- Safety rails -----------------------------------------------------------
+#
+# .gitignore hides files from git, not from the filesystem: an untracked .env is
+# absent from the agent's clone but fully readable through the read-only mount.
+# This finds those before the agent can.
+#DRAUGR_SCAN=true
+#DRAUGR_SCAN_PATTERNS=".env *.pem *.key id_rsa id_ed25519 credentials.json secrets.*"
+
+# warn | block
+#DRAUGR_SCAN_FAIL=block

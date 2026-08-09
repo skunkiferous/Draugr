@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# dr-config - the merged configuration, with the origin of every value.
+#
+# "Why is it doing that" should always be one command away.
+#
+#   dr-config              every key, with where its value came from
+#   dr-config KEY          just that key's value, bare (for scripts)
+#   dr-config --changed    only the keys that are not built-in defaults
+#   dr-config --files      which config files exist, and whether they are trusted
+set -euo pipefail
+
+DR_PROG=dr-config
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+mode=all
+key=
+
+# Any non-option argument is taken as a single setting to print bare.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --changed) mode=changed ;;
+        --files)   mode=files ;;
+        -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) dr_die "unknown option: $1" "Try: dr-config --help" ;;
+        *)  mode=one; key=$1 ;;
+    esac
+    shift
+done
+
+# `|| true` because being outside a repository is fine here - dr-config still has
+# machine-level settings to show. Without it, `set -e` would abort.
+repo=$(git rev-parse --show-toplevel 2>/dev/null || true)
+dr_load_config "$repo"
+
+if [ "$mode" = one ]; then
+    # Is $key one of ours? "${DR_KEYS[*]}" joins the array into one space-
+    # separated string; padding both it and the needle with spaces means we
+    # match whole words only, so "AGENT" cannot match inside "DRAUGR_AGENT".
+    case " ${DR_KEYS[*]} " in
+        # ${!key} is an indirect read: the value of the variable NAMED by $key.
+        # Printed bare, with no label, so scripts can use:  x=$(dr-config DRAUGR_AGENT)
+        *" $key "*) printf '%s\n' "${!key}" ;;
+        *) dr_die "no such setting: $key" "Run dr-config with no arguments to list them all." ;;
+    esac
+    exit 0
+fi
+
+# --files: which layers exist, and whether each is trusted. Answers "why is my
+# .draugr.conf being ignored" without making anyone read the loader.
+if [ "$mode" = files ]; then
+    printf '%-46s %-9s %s\n' "FILE" "EXISTS" "TRUSTED"
+
+    # Same three layers, in the same order, as dr_load_config sources them.
+    # ${repo:+…} collapses the project entries to empty when outside a repo.
+    for f in "$DR_CONFIG_USER/config" \
+             "${repo:+$repo/.draugr.conf}" \
+             "${repo:+$repo/.draugr.local.conf}"
+    do
+        [ -n "$f" ] || continue
+        if [ -f "$f" ]; then
+            # Your own config is never subject to trust; project files are.
+            case "$f" in
+                "$DR_CONFIG_USER"/*) t="n/a (yours)" ;;
+                *) if dr_trust_is_trusted "$f"; then t="yes"; else t="NO - run dr-trust"; fi ;;
+            esac
+            printf '%-46s %-9s %s\n' "$f" "yes" "$t"
+        else
+            printf '%-46s %-9s %s\n' "$f" "-" "-"
+        fi
+    done
+    exit 0
+fi
+
+[ -n "$repo" ] || dr_warn "not in a git repository - showing machine-level configuration only"
+
+# The default view: every setting, its value, and which layer last set it.
+printf '%-26s %-34s %s\n' "SETTING" "VALUE" "FROM"
+for k in "${DR_KEYS[@]}"; do
+    origin=${DR_ORIGIN[$k]:-built-in default}
+
+    # --changed hides anything still sitting at its built-in value.
+    [ "$mode" = changed ] && [ "$origin" = "built-in default" ] && continue
+    value=${!k}
+    [ -z "$value" ] && value="${_DR_DIM}(unset)${_DR_OFF}"
+
+    # Shorten the two long paths that otherwise dominate the column: a config
+    # under $HOME becomes ~/..., one inside the repo becomes ./...
+    # The quotes in ${origin#"$HOME"} keep the prefix a literal string - without
+    # them, a path containing glob characters would be treated as a pattern.
+    case "$origin" in
+        "$HOME"/*) origin="~${origin#"$HOME"}" ;;
+        "$repo"/*) origin="./${origin#"$repo"/}" ;;
+    esac
+
+    # %b rather than %s for the value, because when it is empty we substituted
+    # a string containing terminal escape codes that need interpreting.
+    printf '%-26s %-34b %s%s%s\n' "$k" "$value" "$_DR_DIM" "$origin" "$_DR_OFF"
+done

@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# dr - dispatcher. `dr go` runs dr-go. Use whichever form you prefer; the dr-*
+# scripts are the real commands and work perfectly well on their own.
+set -euo pipefail
+
+DR_PROG=dr
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# The list of verbs is derived by globbing bin/dr-*, never hard-coded, so a new
+# command shows up in the help the moment its file exists. ${f##*/dr-} strips
+# everything up to and including "dr-", leaving the bare verb.
+_dr_verbs() {
+    local f
+    for f in "$_dr_bin"/dr-*; do
+        [ -f "$f" ] || continue
+        printf '%s\n' "${f##*/dr-}"
+    done | sort
+}
+
+usage() {
+    cat >&2 <<EOF
+${_DR_BOLD}Draugr${_DR_OFF} $DRAUGR_VERSION - bind your coding agent to a mound it cannot leave.
+
+  ${_DR_BOLD}usage:${_DR_OFF} dr <verb> [args...]        (or run dr-<verb> directly)
+
+  ${_DR_BOLD}every day${_DR_OFF}
+    go            create-or-start the mound, attach, launch the agent
+    sync          fetch the agent's commits onto ${DRAUGR_REMOTE:-draugr}/<branch>
+    diff  log     review what it did
+    merge         accept it
+
+  ${_DR_BOLD}lifecycle${_DR_OFF}
+    init  up  shell  status  ls  stop  rm
+
+  ${_DR_BOLD}moving things${_DR_OFF}
+    send  cp  data  mem  skills
+
+  ${_DR_BOLD}operations${_DR_OFF}
+    doctor  config  scan  kit  policy  ports  code  setup  trust
+
+  ${_DR_BOLD}installed verbs:${_DR_OFF}
+$(_dr_verbs | tr '\n' ' ' | fold -s -w 68 | sed 's/^/    /')
+
+  Start with:  dr doctor
+EOF
+}
+
+[ $# -gt 0 ] || { usage; exit 0; }
+
+case "$1" in
+    -h|--help|help) usage; exit 0 ;;
+    -V|--version)   printf 'draugr %s\n' "$DRAUGR_VERSION"; exit 0 ;;
+esac
+
+verb=$1
+shift
+target="$_dr_bin/dr-$verb"
+
+if [ -x "$target" ]; then
+    exec "$target" "$@"
+fi
+
+# Unknown verb: suggest the closest installed one rather than just refusing.
+near=$(_dr_verbs | while read -r v; do
+    case "$v" in
+        "$verb"*|*"$verb"*) printf '%s ' "$v" ;;
+    esac
+done)
+
+if [ -n "$near" ]; then
+    dr_die "no such command: dr $verb" "Did you mean:  ${near% }"
+fi
+dr_die "no such command: dr $verb" "Run 'dr' to list the verbs that exist."

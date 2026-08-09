@@ -15,6 +15,10 @@ no reach outside it.
 > **Status: early.** The design below is settled and the underlying mechanics are verified on
 > Windows 11 + WSL2 + `sbx` v0.37.1. The `dr-*` scripts are being written against this document —
 > README-driven development. Commands marked ⏳ are not implemented yet.
+>
+> **Reading the source?** Start with [docs/HACKING.md](docs/HACKING.md), not with a script. It
+> explains the handful of bash constructs this code leans on and the rules every command follows,
+> and it will save you working them out one file at a time.
 
 ---
 
@@ -27,8 +31,8 @@ radius small enough that "let it run" is the *responsible* choice.
 `sbx` already provides the isolation. What it does not provide is a workflow. Out of the box you
 are hand-building git remotes, remembering that the git daemon is unreachable from WSL, discovering
 that agent memory lives under a path-derived key that differs between host and sandbox, and
-re-typing five commands per session. Draugr is the missing layer: **two config files and a set of
-one-purpose `dr-*` scripts.**
+re-typing five commands per session. Draugr is the missing layer: **a layered config, a per-project
+kit, and a set of one-purpose `dr-*` scripts.**
 
 ---
 
@@ -37,7 +41,7 @@ one-purpose `dr-*` scripts.**
 This is the whole thing. Five commands, from one WSL terminal.
 
 ```bash
-cd /mnt/c/Code/myproject
+cd /mnt/c/src/myproject
 
 dr-go                    # preflight, create-or-start the mound, attach, launch the agent
                          # ... the agent works and commits inside the sandbox ...
@@ -66,7 +70,7 @@ You have **three** repositories. Everything else follows from that.
       push │  │ pull                    ← unchanged, exactly as you always did it
            │  ▼
       HOST REPO  ◄────── dr-sync ──────  SANDBOX CLONE
-   /mnt/c/Code/myproject                 (inside the microVM)
+   /mnt/c/src/myproject                 (inside the microVM)
            │
            └──── mounted READ-ONLY ────►  visible to the agent at /run/sandbox/source
 ```
@@ -127,7 +131,7 @@ WSL has its own `~/.ssh/config`, and without the matching block neither `ssh <na
 Then, in each project:
 
 ```bash
-cd /mnt/c/Code/myproject
+cd /mnt/c/src/myproject
 dr-init       # writes a starter .draugr.conf and trusts it                   ⏳
 ```
 
@@ -231,7 +235,7 @@ A kit can declare `network.publishedPorts` too. Use the kit for ports the projec
 **Data files that are not ready to commit** — see [Working with data files](#working-with-data-files)
 
 ```bash
-DRAUGR_DATA="data/** *.parquet fixtures/raw/"   # repo-relative globs
+DRAUGR_DATA="tmp/** *.parquet scratch/raw/"   # repo-relative globs
 DRAUGR_DATA_PUSH=auto                # auto|manual|off   host → sandbox, before the agent starts
 DRAUGR_DATA_PULL=manual              # auto|manual|off   sandbox → host, when you detach
 DRAUGR_DATA_DELETE=false             # propagate deletions (rsync --delete)
@@ -333,9 +337,9 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 >
 > | Where you ran the agent | Path | Project key |
 > |---|---|---|
-> | Windows | `C:\Code\myproject` | `c--Code-myproject` |
-> | WSL | `/mnt/c/Code/myproject` | `-mnt-c-Code-myproject` |
-> | Sandbox | `/c/Code/myproject` | `-c-Code-myproject` |
+> | Windows | `C:\src\myproject` | `c--src-myproject` |
+> | WSL | `/mnt/c/src/myproject` | `-mnt-c-src-myproject` |
+> | Sandbox | `/c/src/myproject` | `-c-src-myproject` |
 >
 > Copy the folder across without translating and you get a directory the agent silently never
 > reads — no error, no warning, just an agent that has forgotten everything. `dr-mem` translates.
@@ -365,14 +369,14 @@ valid, `DRAUGR_DATA` gives you a second channel that runs alongside git instead 
 
 ```bash
 # .draugr.conf
-DRAUGR_DATA="data/** *.parquet fixtures/raw/"
+DRAUGR_DATA="tmp/** *.parquet scratch/raw/"
 DRAUGR_DATA_PUSH=auto        # dr-up pushes before the agent starts
 DRAUGR_DATA_PULL=manual      # you run dr-data pull when you want results back
 ```
 
 Matching paths are transferred with `rsync` over the same `ssh://` transport `dr-sync` uses, and
 land at the **same repo-relative path** inside the agent's clone — so a script that reads
-`data/raw/2024.parquet` works unchanged on both sides. Four consequences worth having in mind:
+`tmp/raw/2024.parquet` works unchanged on both sides. Four consequences worth having in mind:
 
 - **They are exempt from `DRAUGR_REQUIRE_CLEAN`.** Data churn will not stop you starting a session.
 - **Keep them gitignored.** Then they are ignored in the agent's clone too (`.gitignore` is
@@ -466,6 +470,7 @@ draugr/
 │   ├── kit.example/        starter sbx kit, also written by dr-init
 │   └── ssh-config.snippet  the *.sbx block dr-setup installs
 ├── docs/                   setup, workflow, config reference, security, troubleshooting
+│   └── HACKING.md          the bash this project uses, and the house rules
 ├── tests/                  bats
 └── install.sh
 ```

@@ -1,0 +1,13 @@
+# Draugr's scripts run under bash in WSL. A CRLF line ending anywhere in them
+# produces "bad interpreter: /usr/bin/env bash^M", so force LF regardless of
+# core.autocrlf on the machine that checks the repo out.
+*           text=auto eol=lf
+bin/*       text eol=lf
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.bats      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.md        text eol=lf
+*.example   text eol=lf
+*.snippet   text eol=lf

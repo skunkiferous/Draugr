@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# A stand-in for sbx.exe. Records its argv so tests can assert on the command
+# line Draugr built, and replays canned output. Never touches a hypervisor.
+#
+#   DR_MOCK_LOG    file to append the argv to (one invocation per line)
+#   DR_MOCK_STATE  what 'ls --json' should report: absent|stopped|running
+#   DR_MOCK_FAIL   exit non-zero for any subcommand named here
+set -euo pipefail
+
+if [ -n "${DR_MOCK_LOG:-}" ]; then
+    printf '%s\n' "$*" >> "$DR_MOCK_LOG"
+fi
+
+sub=${1:-}
+case " ${DR_MOCK_FAIL:-} " in
+    *" $sub "*) printf 'mock sbx: %s failed\n' "$sub" >&2; exit 1 ;;
+esac
+
+case "$sub" in
+# A version string new enough to satisfy dr-doctor's >= 0.37 check.
+version)
+    printf 'Docker Sandboxes version 0.37.1\n'
+    ;;
+
+# The only output any test actually parses. DR_MOCK_STATE=absent yields an empty
+# list; anything else yields one sandbox in that state.
+ls)
+    state=${DR_MOCK_STATE:-stopped}
+    if [ "$state" = absent ]; then
+        printf '{\n  "sandboxes": []\n}\n'
+    else
+        cat <<EOF
+{
+  "sandboxes": [
+    {
+      "name": "${DR_MOCK_NAME:-draugr-testrepo}",
+      "id": "00000000-0000-0000-0000-000000000000",
+      "agent": "claude",
+      "status": "$state",
+      "workspaces": [
+        "C:\\\\Code\\\\testrepo"
+      ]
+    }
+  ]
+}
+EOF
+    fi
+    ;;
+create|run|exec|stop|rm|ports|policy|kit|skills|cp)
+    printf 'mock sbx: %s\n' "$*"
+    ;;
+*)
+    printf 'mock sbx: unhandled subcommand: %s\n' "$sub" >&2
+    exit 127
+    ;;
+esac

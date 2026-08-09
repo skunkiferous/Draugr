@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint
+        # bin/* have no extension, so they are listed explicitly.
+        run: shellcheck --external-sources --shell=bash lib/common.sh install.sh tests/mocks/sbx bin/*
+
+      - name: Comment density
+        # Draugr's premise is that you can read a file before you trust it, so
+        # an uncommented block is a defect like any other. See docs/HACKING.md.
+        run: ./tests/lint-comments.sh lib/common.sh install.sh bin/* tests/mocks/sbx tests/helper.bash tests/lint-comments.sh
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats and jq
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+      - name: Configure git for the fixtures
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          git config --global init.defaultBranch main
+      - name: Run tests
+        run: bats tests/
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every dr-* named in the README exists in bin/
+        # Advisory until Phase 7: the README is the specification and documents
+        # commands that are not written yet, each marked with an hourglass. When
+        # the last one is gone this drops the "exit 0" and becomes blocking.
+        run: |
+          missing=0
+          for cmd in $(grep -oE '\bdr-[a-z]+' README.md | sort -u); do
+            if [ ! -f "bin/$cmd" ]; then
+              echo "not implemented yet: $cmd"
+              missing=$((missing + 1))
+            fi
+          done
+          echo "$missing README command(s) still unimplemented."
+          exit 0
