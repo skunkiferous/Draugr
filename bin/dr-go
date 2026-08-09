@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# dr-go - the one you type. Create-or-start the mound, then attach to the agent.
+#
+# Everything after "--" is handed to the agent, so `dr-go -- --continue` resumes
+# a Claude session. If you nearly always want the same flags, put them in
+# DRAUGR_AGENT_ARGS and they are passed for you; --bare then means "not today".
+# Leaving the agent returns you here; the mound keeps running until you dr-stop it.
+#
+#   dr-go                  go, with DRAUGR_AGENT_ARGS if you have set any
+#   dr-go -- --continue    go, resuming the agent's last session
+#   dr-go --bare           go with NO agent arguments, ignoring DRAUGR_AGENT_ARGS
+#   dr-go --dirty          skip the clean-tree check, just this once
+set -euo pipefail
+
+DR_PROG=dr-go
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# Options are ours until "--", after which everything belongs to the agent.
+#
+# $args_given records whether the command line said anything about agent
+# arguments at all. It has to be separate from the array, because "you asked for
+# none" and "you did not ask" are different answers and an empty array cannot
+# tell them apart - the first must beat DRAUGR_AGENT_ARGS, the second must not.
+dirty=
+args_given=
+agent_args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dirty)   dirty=1 ;;
+        -y|--yes)  DR_ASSUME_YES=1 ;;
+        --bare)    args_given=1; agent_args=() ;;
+        -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --) shift; args_given=1; agent_args=("$@"); break ;;
+        *) dr_die "unknown option: $1" "Agent arguments go after --, e.g. dr-go -- --continue" ;;
+    esac
+    shift
+done
+
+dr_context
+
+# Fall back to the configured arguments only when the command line said nothing.
+# The command line REPLACES them rather than adding to them, which is the same
+# rule the whole config cascade follows: an explicit flag beats a config file.
+# It is also the only way to *remove* a configured argument for one run.
+if [ -z "$args_given" ] && [ -n "$DRAUGR_AGENT_ARGS" ]; then
+    read -ra agent_args <<< "$DRAUGR_AGENT_ARGS"
+    dr_debug "agent args from ${DR_ORIGIN[DRAUGR_AGENT_ARGS]}: $DRAUGR_AGENT_ARGS"
+fi
+
+# --- the two things worth refusing over -------------------------------------
+#
+# A clone-mode sandbox is built from committed history, so uncommitted work is
+# simply not in it. Without this check the agent quietly builds on stale code and
+# you find out an hour later. --dirty is the escape hatch when that is fine.
+if dr_is_true "$DRAUGR_REQUIRE_CLEAN" && [ -z "$dirty" ] && dr_is_true "$DRAUGR_CLONE"; then
+    if ! dr_repo_is_clean "$DR_REPO"; then
+        dr_error "your working tree has uncommitted changes"
+        git -C "$DR_REPO" status --short >&2
+        dr_die "the agent would not see them" \
+            "The sandbox gets a CLONE of this repo, and a clone only contains commits." \
+            "Commit them, stash them, or run:  dr-go --dirty"
+    fi
+fi
+
+# The other direction: DRAUGR_CLONE=false bind-mounts your real working tree
+# read-write, which is precisely the thing Draugr exists to prevent. It prompts
+# every single time, and no config key silences it - that is the point.
+if ! dr_is_true "$DRAUGR_CLONE"; then
+    dr_warn "DRAUGR_CLONE is false"
+    printf '  %sThe agent gets your real working tree, read-write. It can change and%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sdelete files in %s directly. There is no clone to review first.%s\n' "$_DR_DIM" "$DR_REPO" "$_DR_OFF" >&2
+    dr_confirm "Continue without the mound?" || dr_die "cancelled"
+fi
+
+# dr-up is a separate process on purpose: one implementation of the state
+# machine, and `dr-up --print` stays a truthful preview of what dr-go will do.
+"$_dr_bin/dr-up" ${DR_ASSUME_YES:+--yes}
+
+# Checked after dr-up so that `dr-go` from a script still creates the mound
+# before complaining that it cannot attach to it.
+dr_require_tty dr-go
+
+dr_hook pre-go "$DR_REPO"
+
+# ${arr[@]+"${arr[@]}"} expands to nothing at all when the array is empty, rather
+# than to one empty string. Needed because `set -u` treats an empty array
+# expansion as an error on bash 4.3 and earlier.
+# Name the arguments in the attach line. If DRAUGR_AGENT_ARGS is doing something
+# on your behalf you should see it, rather than wondering why the agent resumed.
+if [ ${#agent_args[@]} -gt 0 ]; then
+    dr_info "attaching to $DRAUGR_SANDBOX ($DRAUGR_AGENT ${agent_args[*]})"
+else
+    dr_info "attaching to $DRAUGR_SANDBOX ($DRAUGR_AGENT)"
+fi
+dr_sbx run --name "$DRAUGR_SANDBOX" \
+    ${agent_args[0]+-- "${agent_args[@]}"} || rc=$?
+
+# The agent exiting is normal, and so is a non-zero code from it, so neither is
+# reported as a Draugr failure. What matters is that we are back on the host.
+rc=${rc:-0}
+dr_info "left $DRAUGR_SANDBOX (it is still running - dr-stop to shut it down)"
+dr_hook post-go "$DR_REPO"
+
+# DRAUGR_AUTO_SYNC fetches the agent's commits here. dr-sync arrives in Phase 3;
+# until it exists, say what would happen rather than silently doing nothing.
+if dr_is_true "$DRAUGR_AUTO_SYNC"; then
+    if [ -x "$_dr_bin/dr-sync" ]; then
+        "$_dr_bin/dr-sync"
+    else
+        dr_warn "DRAUGR_AUTO_SYNC is on but dr-sync is not implemented yet"
+        printf '  %sFetch the agent'"'"'s commits by hand:  git fetch sandbox%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    fi
+fi
+
+exit "$rc"

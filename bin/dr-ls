@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# dr-ls - every mound on this machine, not just this repo's.
+#
+# Sandboxes outlive the shell you started them from, and a stopped one is easy to
+# forget about, so this lists all of them - including any created by sbx directly.
+# The arrow marks the one belonging to the repo you are standing in.
+#
+#   dr-ls           table
+#   dr-ls --json    the raw sbx output, for scripts
+#   dr-ls --names   one name per line
+set -euo pipefail
+
+DR_PROG=dr-ls
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# --json is sbx's own output passed straight through, so a script that outgrows
+# dr-ls can keep working without waiting for us to add a field.
+format=table
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --json)    format=json ;;
+        --names|-q) format=names ;;
+        -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) dr_die "unknown option: $1" "Try: dr-ls --help" ;;
+    esac
+    shift
+done
+
+json=$(dr_sbx ls --json) || dr_die "could not list sandboxes" "Is sbx working?  dr-doctor"
+
+if [ "$format" = json ]; then
+    printf '%s\n' "$json"
+    exit 0
+fi
+
+if [ "$format" = names ]; then
+    printf '%s' "$json" | jq -r '(.sandboxes // [])[].name'
+    exit 0
+fi
+
+# Which one is ours? Only meaningful inside a repo, and being outside one is
+# perfectly normal for this command, so failure here is not an error. The
+# subshell keeps dr_repo_root's `exit 1` from taking dr-ls down with it.
+mine=
+if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
+    mine=$(dr_sandbox_name "$repo")
+fi
+
+# jq builds the rows; the shell does the marking.
+#
+# join("\t") rather than the more obvious @tsv, because @tsv escapes backslashes:
+# every workspace here is a Windows path, and C:\Code would come out as C:\\Code.
+# Nothing in these four fields can contain a tab, so plain joining is safe.
+rows=$(printf '%s' "$json" | jq -r \
+    '(.sandboxes // [])[]
+     | [(.name // "-"), (.agent // "-"), (.status // "-"),
+        ((.workspaces // []) | join(" "))]
+     | join("\t")')
+
+if [ -z "$rows" ]; then
+    dr_info "no sandboxes on this machine"
+    printf '  %sCreate one with:  dr-up%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    exit 0
+fi
+
+# Three spaces, because each row below starts with a two-character marker and a
+# separator. Getting this wrong shifts the whole table one column against itself.
+printf '%s   %-24s %-8s %-9s %s%s\n' "$_DR_BOLD" SANDBOX AGENT STATUS WORKSPACE "$_DR_OFF"
+
+# IFS=$'\t' splits on tabs only, so a workspace path with spaces survives intact.
+while IFS=$'\t' read -r name agent status workspace; do
+    [ -n "$name" ] || continue
+
+    # Colour carries the state so the eye finds a running mound without reading.
+    case "$status" in
+        running) colour=$_DR_GREEN ;;
+        stopped) colour=$_DR_DIM ;;
+        *)       colour=$_DR_YELLOW ;;
+    esac
+
+    marker='  '
+    [ "$name" = "$mine" ] && marker="${_DR_BLUE}->${_DR_OFF}"
+
+    printf '%b %-24s %-8s %b%-9s%b %s\n' \
+        "$marker" "$name" "$agent" "$colour" "$status" "$_DR_OFF" "$workspace"
+done <<< "$rows"

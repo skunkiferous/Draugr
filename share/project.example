@@ -10,6 +10,11 @@
 # The agent this project expects.
 #DRAUGR_AGENT=claude
 
+# Arguments for the agent. Set this here only if the PROJECT needs them; a habit
+# like "--continue" is yours rather than the repo's, so it belongs in
+# ~/.config/draugr/config (or .draugr.local.conf) instead of a committed file.
+#DRAUGR_AGENT_ARGS=
+
 # Network rules and setup commands live in the kit, not here:
 #   .draugr/kit/spec.yaml
 # See https://docs.docker.com/ai/sandboxes/customize/kits/

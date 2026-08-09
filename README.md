@@ -14,7 +14,8 @@ no reach outside it.
 
 > **Status: early.** The design below is settled and the underlying mechanics are verified on
 > Windows 11 + WSL2 + `sbx` v0.37.1. The `dr-*` scripts are being written against this document —
-> README-driven development. Commands marked ⏳ are not implemented yet.
+> README-driven development: this file is the specification, and the code follows it.
+> Commands marked ⏳ in the tables below are not built yet. Everything else is, and has tests.
 >
 > **Reading the source?** Start with [docs/HACKING.md](docs/HACKING.md), not with a script. It
 > explains the handful of bash constructs this code leans on and the rules every command follows,
@@ -76,7 +77,9 @@ You have **three** repositories. Everything else follows from that.
 ```
 
 1. **Only you talk to the remote.** The sandbox has no credentials and no route to it.
-2. **The sandbox can never write to the host.** The mount is read-only, enforced by the kernel.
+2. **The sandbox cannot write to your repository.** That mount is read-only, enforced by the
+   kernel — not by convention. (It is not the *only* thing mounted from the host, though: see
+   [Safety model](#safety-model) for the one writable exception, which is not your project.)
 3. **You pull *from* the sandbox.** It never pushes to you.
 
 Treat the agent like a colleague who hands you a branch: fetch it, review it, merge it, push it
@@ -120,8 +123,8 @@ git clone https://github.com/YOU/draugr.git ~/draugr
 echo 'export PATH="$HOME/draugr/bin:$PATH"' >> ~/.bashrc
 exec bash
 
-dr-setup      # one-time: writes the *.sbx block into your WSL ~/.ssh/config   ⏳
-dr-doctor     # verifies everything, tells you exactly what is missing        ⏳
+dr-setup      # one-time: writes the *.sbx block into your WSL ~/.ssh/config
+dr-doctor     # verifies everything, tells you exactly what is missing
 ```
 
 `dr-setup` is the piece people miss. `sbx setup ssh` configures the **Windows** SSH client only;
@@ -132,7 +135,7 @@ Then, in each project:
 
 ```bash
 cd /mnt/c/src/myproject
-dr-init       # writes a starter .draugr.conf and trusts it                   ⏳
+dr-init       # writes a starter .draugr.conf and trusts it
 ```
 
 ---
@@ -168,6 +171,7 @@ is always one command away.
 
 ```bash
 DRAUGR_AGENT=claude                  # claude|codex|copilot|cursor|droid|gemini|kiro|opencode|shell
+DRAUGR_AGENT_ARGS=                   # passed to the agent every time, e.g. "--continue"
 DRAUGR_SANDBOX=                      # default: draugr-<repo-folder-name>
 DRAUGR_MEMORY=8g                     # default: 50% of host RAM, capped at 32 GiB
 DRAUGR_CPUS=                         # default: all
@@ -178,6 +182,25 @@ DRAUGR_TEMPLATE=                     # custom container image
 `DRAUGR_CLONE=false` hands the agent your actual working tree with write access. Draugr will make
 you confirm it interactively every single time, because that is the setting that undoes the entire
 point of the project.
+
+`DRAUGR_AGENT_ARGS` is for the flags you would otherwise retype on every session. If you almost
+always want to pick up where you left off:
+
+```bash
+DRAUGR_AGENT_ARGS="--continue"       # in ~/.config/draugr/config, or per project
+```
+
+Now `dr-go` resumes by default, and the attach line says so. Two ways out of it for a single run:
+
+| | |
+|---|---|
+| `dr-go --bare` | pass the agent **nothing** — a clean session |
+| `dr-go -- --model opus` | pass these **instead** — the command line replaces the config, it does not add to it |
+
+Replacing rather than appending is deliberate: it follows the same precedence as every other
+setting, and it is the only way to *drop* a configured argument for one run. These are the agent's
+own flags — `--continue` is Claude's spelling and means nothing to `shell` — so Draugr passes them
+through without interpreting them.
 
 **What the agent is allowed to reach, and what is installed for it** — a kit, not a Draugr setting
 
@@ -303,12 +326,12 @@ earlier on `PATH`, and call them from Makefiles and other scripts. `dr <verb>` i
 
 | Command | |
 |---|---|
-| `dr-sync` | Fetch the agent's commits onto `draugr/<branch>` |
-| `dr-log` | What is new that you have not seen |
-| `dr-diff` | Review it properly |
-| `dr-merge` | Accept it (merge, or `--pick <sha>` to cherry-pick) |
-| `dr-send` | Push *your* new host commits into the running sandbox |
-| `dr-cp` | Pull uncommitted files out of the sandbox |
+| `dr-sync` | Fetch the agent's commits onto `draugr/<branch>` ⏳ |
+| `dr-log` | What is new that you have not seen ⏳ |
+| `dr-diff` | Review it properly ⏳ |
+| `dr-merge` | Accept it (merge, or `--pick <sha>` to cherry-pick) ⏳ |
+| `dr-send` | Push *your* new host commits into the running sandbox ⏳ |
+| `dr-cp` | Pull uncommitted files out of the sandbox ⏳ |
 
 `dr-sync` uses git's `ssh://` transport, not the `git://` daemon. The daemon is published on
 Windows loopback only, which WSL cannot reach across its NAT, and its port is randomised on every
@@ -318,18 +341,18 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 
 | Command | |
 |---|---|
-| `dr-data status` | Dry run, both directions: what would move, and how much |
-| `dr-data push` | Host → sandbox, for paths matching `DRAUGR_DATA` |
-| `dr-data pull` | Sandbox → host, same paths |
+| `dr-data status` | Dry run, both directions: what would move, and how much ⏳ |
+| `dr-data push` | Host → sandbox, for paths matching `DRAUGR_DATA` ⏳ |
+| `dr-data pull` | Sandbox → host, same paths ⏳ |
 
 ### Context
 
 | Command | |
 |---|---|
-| `dr-mem export` | Sandbox memory → `$DRAUGR_MEM_STORE`. Do this before `dr-rm` |
-| `dr-mem import` | Host memory → sandbox. Do this *before* launching the agent |
-| `dr-mem diff` | What each side knows that the other does not |
-| `dr-skills` | Push a skill directory into the shared, `sbx rm`-proof skills mount |
+| `dr-mem export` | Sandbox memory → `$DRAUGR_MEM_STORE`. Do this before `dr-rm` ⏳ |
+| `dr-mem import` | Host memory → sandbox. Do this *before* launching the agent ⏳ |
+| `dr-mem diff` | What each side knows that the other does not ⏳ |
+| `dr-skills` | Push a skill directory into the shared, `sbx rm`-proof skills mount ⏳ |
 
 > ### The project-key trap, handled
 > Claude Code derives its memory folder name from the project's **absolute path**, so the same
@@ -352,11 +375,11 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 |---|---|
 | `dr-doctor` | Check every precondition and say exactly what to fix |
 | `dr-config` | The merged config, with the origin of each value |
-| `dr-scan` | Find credential-shaped files the agent would be able to read |
-| `dr-kit` | `validate`, `show`, `apply` this project's kit — and warn when it has drifted |
-| `dr-policy` | Show the network rules in force; `--allow <host>` for a temporary hole |
-| `dr-ports` | Publish a port to an already-running sandbox |
-| `dr-code` | Open VS Code Remote-SSH into the mound |
+| `dr-scan` | Find credential-shaped files the agent would be able to read ⏳ |
+| `dr-kit` | `validate`, `show`, `apply` this project's kit — and warn when it has drifted ⏳ |
+| `dr-policy` | Show the network rules in force; `--allow <host>` for a temporary hole ⏳ |
+| `dr-ports` | Publish a port to an already-running sandbox ⏳ |
+| `dr-code` | Open VS Code Remote-SSH into the mound ⏳ |
 | `dr-trust` | Accept a project config after reviewing it |
 
 ---
@@ -430,8 +453,17 @@ What the agent can and cannot see, verified by direct test:
 | `.gitignore`d files present in the clone | no |
 | `.gitignore`d files readable via `/run/sandbox/source` | **yes** |
 | Anything outside the workspace — other repos, SSH keys, browser profiles | unreachable |
+| Host directories mounted into the mound at all | **exactly four** |
+| …of those, writable from inside | **one** — the shared skills store |
 
-> ### The one real trap
+Only four host paths cross the boundary: your working tree at `/run/sandbox/source` (read-only),
+`/etc/resolv.conf` and `/etc/hosts` (read-only), and `~/.claude/skills` — which is **read-write**.
+`/mnt/c`, `/c/Users`, your other repositories and your host SSH keys are all simply absent.
+
+Two things in that table are worth stopping on, because both are the *opposite* of what the summary
+above would lead you to expect.
+
+> ### Trap 1 — what the agent can read
 > **`.gitignore` hides files from git, not from the filesystem.** An untracked `.env`,
 > `secrets.env` or `credentials.json` sitting in your project folder is fully readable by the agent
 > through the read-only mount, even though it is absent from the agent's clone. It cannot be
@@ -439,6 +471,24 @@ What the agent can and cannot see, verified by direct test:
 >
 > This is what `dr-scan` is for, and why `DRAUGR_SCAN_FAIL=block` is the default. Real credentials
 > do not belong in a directory you hand to an agent.
+
+And the mirror image — not what the agent can read, but what it can write:
+
+> ### Trap 2 — the skills store is a writable door out
+> `~/.claude/skills` is mounted **read-write** from the host — it lives at
+> `…\DockerSandboxes\sandboxes\state\agent-skills\` and is deliberately shared, so that skills
+> survive `sbx rm` and are available to every sandbox. Verified by direct test: a file written
+> inside the mound appeared on the host immediately.
+>
+> That is a useful feature and a real consequence. It is the one path by which a sandbox can put
+> bytes on your machine, it is **shared across all your mounds**, and it **outlives the sandbox that
+> wrote it**. Since skills are instructions loaded into agent context, a sandbox can in principle
+> leave something behind that a later, unrelated sandbox reads and follows.
+>
+> Nothing here is broken — it is how `sbx skills` is designed to work. But "the sandbox cannot write
+> to the host" is too strong a sentence, and this is the exception. `dr-skills` will treat the store
+> as a reviewable artifact rather than a dumping ground, and `dr-scan` gains a check for skills that
+> appeared without you putting them there.
 
 Two more, worth knowing before they bite you:
 

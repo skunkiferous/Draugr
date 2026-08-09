@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# dr-stop - shut the mound down without destroying it.
+#
+# The clone, the agent's history and anything installed inside all survive; a
+# later dr-go starts it back up in a few seconds rather than rebuilding it. This
+# is what you want at the end of the day. dr-rm is the one that destroys things.
+#
+#   dr-stop            stop this repo's mound
+#   dr-stop <name>     stop one by name
+set -euo pipefail
+
+DR_PROG=dr-stop
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# A bare word is a sandbox name; without one we fall back to this repo's mound.
+name=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) dr_die "unknown option: $1" "Try: dr-stop --help" ;;
+        *) name=$1 ;;
+    esac
+    shift
+done
+
+# A name on the command line means we do not need to be in a repo at all, which
+# is what lets you stop a mound you have wandered away from.
+if [ -z "$name" ]; then
+    dr_context
+    name=$DRAUGR_SANDBOX
+fi
+
+state=$(dr_sandbox_state "$name")
+case "$state" in
+    absent)  dr_die "$name does not exist" "See what does:  dr-ls" ;;
+    stopped) dr_ok "$name is already stopped"; exit 0 ;;
+esac
+
+dr_sbx stop "$name" >/dev/null || dr_die "could not stop $name"
+dr_ok "stopped $name"

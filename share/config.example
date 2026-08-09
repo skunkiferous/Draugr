@@ -16,6 +16,21 @@
 # claude | codex | copilot | cursor | droid | gemini | kiro | opencode | shell
 #DRAUGR_AGENT=claude
 
+# Arguments passed to the agent on every dr-go, as if you had typed
+#   dr-go -- <these>
+# Empty is today's behaviour: the agent starts with nothing extra. The common
+# reason to set it is to resume by default rather than starting fresh each time:
+#
+#   DRAUGR_AGENT_ARGS="--continue"
+#
+# These are the AGENT's flags, not Draugr's, so they depend on DRAUGR_AGENT -
+# "--continue" is Claude's spelling and means nothing to `shell`. Draugr does not
+# interpret them; whatever is here is split on spaces and handed over.
+#
+# To override for one run:  dr-go -- <other args>   (replaces, does not add to)
+# To pass nothing for one run:  dr-go --bare
+#DRAUGR_AGENT_ARGS=
+
 # Sandbox name. Empty derives draugr-<repo-folder-name>, which is what you want
 # unless two projects share a folder name.
 #DRAUGR_SANDBOX=

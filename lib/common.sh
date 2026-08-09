@@ -304,7 +304,7 @@ DR_TRUST_FILE="$DR_CONFIG_USER/trusted"
 # against it, and an unknown DRAUGR_* in a config file is reported rather than
 # silently ignored.
 DR_KEYS=(
-    DRAUGR_AGENT DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
+    DRAUGR_AGENT DRAUGR_AGENT_ARGS DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
     DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_PORTS DRAUGR_MOUNTS
     DRAUGR_DATA DRAUGR_DATA_PUSH DRAUGR_DATA_PULL DRAUGR_DATA_DELETE DRAUGR_DATA_CHMOD
     DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC
@@ -321,6 +321,9 @@ declare -gA DR_ORIGIN=()
 # shellcheck disable=SC2034  # these are the config surface; every dr-* reads them
 _dr_defaults() {
     DRAUGR_AGENT=claude
+    # Handed to the agent after "--" on every dr-go. Empty keeps today's
+    # behaviour exactly; set it to "--continue" to resume by default.
+    DRAUGR_AGENT_ARGS=
     DRAUGR_SANDBOX=              # empty => draugr-<repo leaf>
     DRAUGR_MEMORY=               # empty => sbx default (50% of host RAM, max 32 GiB)
     DRAUGR_CPUS=                 # empty => sbx default (all)
@@ -534,6 +537,57 @@ dr_trust_check() {
     printf '  %sThis file is shell code and sourcing it runs it.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %sReview it, then:  dr-trust %s%s\n' "$_DR_DIM" "$file" "$_DR_OFF" >&2
     return 1
+}
+
+# ---------------------------------------------------------------------------
+# The shared preamble
+# ---------------------------------------------------------------------------
+
+# dr_context - what every command that touches a mound does first.
+#
+# Sets DR_REPO (the WSL path), DR_REPO_WIN (the same repo spelled the way sbx.exe
+# insists on) and loads the config cascade, which is what fills in DRAUGR_SANDBOX.
+# Assignments here have no `local`, so they land in the caller's scope by design.
+dr_context() {
+    DR_REPO=$(dr_repo_root)
+    dr_require_win_path "$DR_REPO"
+    # shellcheck disable=SC2034  # read by the dr-* command that called us
+    DR_REPO_WIN=$(dr_path_win "$DR_REPO")
+    dr_load_config "$DR_REPO"
+}
+
+# dr_confirm <question> - ask before doing something irreversible.
+#
+# Three outcomes, matching dr-trust: --yes was passed, a human answered, or there
+# is no terminal at all. The last one refuses rather than assuming yes, because a
+# prompt that auto-accepts in a script is not a prompt.
+dr_confirm() {
+    local reply
+    if [ -n "${DR_ASSUME_YES:-}" ]; then
+        return 0
+    fi
+    if [ ! -t 0 ]; then
+        dr_die "$1" "Refusing to assume an answer without a terminal. Pass --yes if you mean it."
+    fi
+    printf '%s [y/N] ' "$1" >&2
+    read -r reply
+    case "$reply" in
+        y|Y|yes|Yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# dr_require_tty <what> - fail early, and legibly, instead of deep inside sbx.
+#
+# `sbx run` attaches an interactive session. Without a terminal it gets partway in
+# and then dies with "inspect exec: context deadline exceeded", which tells the
+# reader nothing. Verified against sbx 0.37.1.
+dr_require_tty() {
+    [ -t 0 ] && [ -t 1 ] && return 0
+    dr_die \
+        "$1 needs a terminal" \
+        "It attaches an interactive session, which cannot work from a pipe or a script." \
+        "To run one command non-interactively instead:  dr-shell -- <command>"
 }
 
 # ---------------------------------------------------------------------------

@@ -35,8 +35,31 @@ jobs:
           git config --global user.email ci@example.com
           git config --global user.name CI
           git config --global init.defaultBranch main
+
+      - name: Provide a writable /mnt/c
+        # The mound commands refuse any repo outside /mnt/<drive>, because sbx
+        # cannot mount one. That check is pure string matching, so a plain
+        # directory satisfies it and the tests stay real on a Linux runner.
+        # Without this every mound test would skip and the job would pass empty.
+        run: sudo mkdir -p /mnt/c/Temp && sudo chmod 1777 /mnt/c/Temp
+
       - name: Run tests
-        run: bats tests/
+        # One run, kept in a file, so the skip check below costs nothing extra.
+        # set -o pipefail keeps bats's exit status from being masked by tee.
+        run: |
+          set -o pipefail
+          bats tests/ | tee bats.log
+
+      - name: Fail if any test skipped
+        # A skip is invisible in a green tick: if /mnt/c ever stops being
+        # writable, every mound test turns into a no-op and the job still passes.
+        # This turns "tested nothing" into a failure.
+        run: |
+          if grep -q '# skip' bats.log; then
+            grep '# skip' bats.log
+            echo "::error::tests skipped - see docs/HACKING.md, 'Pattern: mocking sbx'"
+            exit 1
+          fi
 
   docs:
     runs-on: ubuntu-latest

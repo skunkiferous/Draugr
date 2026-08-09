@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# dr-shell - a shell inside the mound, alongside whatever the agent is doing.
+#
+# Useful for looking at what the agent actually produced without disturbing it.
+# You land in the clone, not in your working tree, so nothing you type here can
+# touch the host.
+#
+#   dr-shell                 interactive shell
+#   dr-shell -- npm test     run one command and come back (no terminal needed)
+#   dr-shell --root          as root, for installing something you forgot
+set -euo pipefail
+
+DR_PROG=dr-shell
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# Anything after "--" is the command to run, so dr-shell can be both the
+# interactive door into the mound and a way to run one thing from a script.
+as_root=
+cmd=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --root)    as_root=1 ;;
+        -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --) shift; cmd=("$@"); break ;;
+        *) dr_die "unknown option: $1" "A command to run goes after --, e.g. dr-shell -- ls" ;;
+    esac
+    shift
+done
+
+dr_context
+
+# sbx exec starts a stopped sandbox by itself, but it cannot conjure one that was
+# never created - and "no such sandbox" is a worse message than this.
+if ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
+    dr_die "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
+fi
+
+exec_args=(exec)
+[ -n "$as_root" ] && exec_args+=(-u root)
+
+# -i keeps stdin open, -t allocates a terminal; together they are what makes a
+# shell usable. Both are wrong for a piped command, hence the split: with a
+# command we stay non-interactive so dr-shell works from a script.
+if [ ${#cmd[@]} -gt 0 ]; then
+    dr_sbx "${exec_args[@]}" "$DRAUGR_SANDBOX" "${cmd[@]}"
+else
+    dr_require_tty dr-shell
+    dr_info "opening a shell in $DRAUGR_SANDBOX (exit or Ctrl-D to leave)"
+    dr_sbx "${exec_args[@]}" -it "$DRAUGR_SANDBOX" bash
+fi

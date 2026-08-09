@@ -71,6 +71,12 @@ These shape every script, so they are stated once here rather than repeated per 
 
 Checked on this machine (Windows 11 Pro, WSL2/Ubuntu, `sbx` v0.37.1) — not assumed.
 
+**This table is the ledger.** If a fact is load-bearing, it belongs in a row here even when it is
+also explained in prose elsewhere. That rule exists because it was broken once: the `git://` daemon
+being unreachable from WSL was stated in the README's first commit and in the *Prior art* section
+above, but never entered as a row — so Phase 2 re-derived it and reported it as a new discovery.
+Prose explains; the table is what the implementation is checked against.
+
 | Fact | Consequence |
 |---|---|
 | `sbx.exe` is **not on WSL's `PATH`**; it lives at `$LOCALAPPDATA/DockerSandboxes/bin/sbx.exe` | `lib/common.sh` must discover it. Cannot just call `sbx`. |
@@ -88,18 +94,57 @@ Checked on this machine (Windows 11 Pro, WSL2/Ubuntu, `sbx` v0.37.1) — not ass
 | `sbx kit add` **recreates the sandbox container**, preserving kit-owned volumes and (for `--clone`) the workspace volume; refuses on sandboxes created before the feature shipped | Changing the kit mid-session is not free. `dr-up` detects kit drift and tells you rather than silently recreating. |
 | Real kits in `sbx-kits-contrib` use `schemaVersion: "1"`, `kind: mixin`, `requires.agent`, `network.{allowedDomains,deniedDomains,publishedPorts}`, `environment.variables`, `commands.{install,startup,initFiles}` | This is the schema `dr-init` generates against. |
 | `--branch` / worktree mode is **absent** from v0.37.1 `create` and `run` | Clone mode is the only supported shape. The three-repo model has no competitor to hedge against. |
+| The `git://` daemon is published on **Windows loopback** with a **randomised port**, and WSL2 cannot reach it across its NAT — `127.0.0.1` inside WSL is the WSL VM's own loopback. *Known before this plan was written; it is one of the reasons the project exists.* Measured in Phase 2: fetching sbx's remote from WSL gives `Connection refused`, while `ssh://<name>.sbx/<mound-path>` returns refs correctly. | **This is why `DRAUGR_REMOTE` exists** and why `dr-sync` uses `ssh://`. Draugr is not duplicating sbx's remote out of preference — sbx's is unusable from where Draugr runs. |
+| The remote sbx adds is named **`sandbox-<name>` under `--clone`**, but plain **`sandbox`** without it | This was the open question, and the answer is that Draugr's own remote cannot collide with it under either name. Nothing to fight. *(Resolved in Phase 2, was flagged for Phase 3.)* |
+
+### The safety model, measured
+
+Every row in the README's *Safety model* table, tested directly in a `--clone` mound built from a
+repo containing a committed file, an uncommitted file, and a gitignored `secrets.env`. These were
+asserted in prose from the first commit and are entered here because **the entire justification for
+`dr-scan` rests on the fifth row.**
+
+| Fact | Consequence |
+|---|---|
+| The clone contains **committed history only**: `git log` intact, the uncommitted file absent | `DRAUGR_REQUIRE_CLEAN` is not paranoia — the agent genuinely cannot see uncommitted work. |
+| `.gitignore`d files are **absent from the clone** | As designed. This is the half that lulls people. |
+| The host tree is readable at **`/run/sandbox/source`**, listing *everything* — including the uncommitted and the gitignored files | The read-only mount is a second, wider window onto your repo than the clone is. |
+| **A gitignored `secrets.env` was read in full through that mount** (`AWS_SECRET_KEY=hunter2` printed in the clear) | **This is why `dr-scan` exists and why `DRAUGR_SCAN_FAIL=block` is the default.** `.gitignore` hides files from git, not from the filesystem. |
+| Writing to `/run/sandbox/source` fails with `Read-only file system`; `/proc/mounts` shows `virtiofs ro,relatime` | The read-only guarantee is kernel-enforced, not convention. Rule 2 of the mental model holds. |
+| The agent runs as **uid 1000 (`agent`)**, in groups `sudo` and `docker`, with **passwordless sudo** | `dr-up` can install rsync at creation *(Phase 5)*. Also why `sbx cp`'s `root:root` output is unusable to the agent. |
+| `rsync` is at `/usr/bin/rsync` in the `claude` image | Confirms the row above; the `tar` fallback is for other agent images. |
+| **Exactly four host paths are mounted into the mound**, per `/proc/mounts`: `/run/sandbox/source` (ro), `/etc/resolv.conf` (ro), `/etc/hosts` (ro), and **`/home/agent/.claude/skills` (rw)** | Containment otherwise holds: `/mnt/c`, `/c/Users`, `/c/Code/claude` (another repo on this machine) and host SSH keys are all absent. |
+| **The skills mount is a writable path onto the host.** A file written to `/home/agent/.claude/skills/` inside the mound appeared immediately at `…\DockerSandboxes\sandboxes\state\agent-skills\` on the host | **Corrects the README**, which said the sandbox can never write to the host. The store is shared across *all* sandboxes and survives `sbx rm` by design, so it is a cross-sandbox persistence channel — and skills are instructions loaded into agent context. `dr-scan` gains a check for unexpected skills; `dr-skills` treats the store as reviewable. *(Phase 6)* |
+
+### The rest of the boundary
+
+| Fact | Consequence |
+|---|---|
+| `sbx setup ssh` writes the **Windows** `~/.ssh/config`. Windows and WSL have two separate files; both need the `*.sbx` block | **This is why `dr-setup` exists at all** — the single step people miss. Verified: two distinct files on this machine, each with its own block. |
+| Claude Code derives its memory key from the **absolute path**, lowercasing the drive and replacing `:` and separators with `-`. Confirmed on this machine: `C:\Code\Draugr` → `c--Code-Draugr` | The same repo has a different key on each side of the boundary, so `dr-mem` must translate rather than copy. *(Phase 6)* |
+| `~/.claude/.credentials.json` exists on the Windows side (524 bytes) and holds the agent auth token | **Never mount `~/.claude`.** `dr-mem` copies the `memory` subfolder explicitly and never the parent. *(Phase 6)* |
+| Files on `/mnt/c` are mode **777** under WSL (`stat` confirms on both a file and a directory) | A naive rsync carries 777 into the mound. Hence `DRAUGR_DATA_CHMOD=D755,F644`. *(Phase 5)* |
+| `sbx exec <name> true` starts a **stopped** sandbox and returns 0 (~11 s) without attaching | This is `dr-up`'s "start". `sbx run` would also start it, but it attaches, which is `dr-go`'s job. There is no `sbx start`. |
+| `sbx run` has `--detached`/`-d`, accepted by the parser but **absent from its own `--help` flag list** | Undocumented, so not depended on. `dr-up` uses `create` + `exec true` instead, both fully documented. |
+| Without a TTY, `sbx run` attaches part-way then dies with `inspect exec: context deadline exceeded` | `dr_require_tty` fails first, with a message that names the alternative. |
+| `sbx rm` on a clone-mode sandbox reports that fetched branches are mirrored to **`refs/sandboxes/<name>/*`, which survive removal** | Directly relevant to `dr-sync` and to `dr-rm`'s unsynced-work check. *(Phase 3)* |
+| Sandbox names reject underscores (`ERROR: sandbox name cannot contain underscores`) | `dr_sandbox_name`'s charset filter is load-bearing, not cosmetic: `my_project` → `draugr-my-project`. |
 
 **Not yet verified — each has a task in the phase that needs it:**
 
-- `sbx create --clone` advertises that commits are reachable via a `sandbox-<name>` remote it adds
-  to the host repo. The experiment repo has no such remote, so either it is clone-mode-only or it is
-  added elsewhere. Draugr adds its own `ssh://` remote regardless (the auto-remote is presumably the
-  unreachable `git://` daemon URL), but we must confirm we are not fighting it. *(Phase 3)*
+- **Whether `ssh://` starts a *stopped* sandbox by itself.** The README asserts it, and `dr-sync`'s
+  ergonomics depend on it — if it does not, `dr-sync` must call `dr-up` first. The Phase 2 run was
+  ambiguous: `git ls-remote ssh://…` succeeded and printed `Connecting to sandbox …`, but the
+  sandbox's state at that instant was not pinned down, and it was stopped shortly after. Test it
+  cleanly: stop a mound, confirm `stopped`, run `git ls-remote`, re-check the state. *(Phase 3 —
+  cheap, and it decides one line of `dr-sync`.)*
 - `--no-share-skills` is referenced in `sbx skills --help` but is not a flag on `sbx create`.
   Find where skill sharing is actually toggled. *(Phase 6)*
-- Whether `sbx run` returns a usable exit status when the agent detaches, and whether Ctrl+D vs
-  a detach-key sequence are distinguishable. `DRAUGR_AUTO_SYNC` and `DRAUGR_DATA_PULL=auto` both
-  hang off "the moment you detach". *(Phase 2)*
+- Whether Ctrl+D and a detach-key sequence are distinguishable to the caller of `sbx run`. **Mostly
+  moot:** Phase 2 settled the part that mattered. `sbx run` is a foreground process, so control
+  returns to `dr-go` either way, and `dr-go` syncs on the way out without needing to know which
+  happened. Only worth revisiting if `DRAUGR_DATA_PULL=auto` turns out to need the distinction —
+  a pull is destructive in a way a fetch is not. *(Phase 5)*
 - Whether `kit.allowLocalKits` is enabled by default. Local-directory kits are gated behind it, and
   `.draugr/kit/` is useless if it defaults to off. *(Phase 4 — check first, it is load-bearing.)*
 - Which schema version this `sbx` build actually accepts. `sbx-kits-contrib/CONTRIBUTING.md`
@@ -148,6 +193,8 @@ Seven of these. They are cheap now and expensive in Phase 4.
 
 ## Phase 0 — Skeleton
 
+**Status: done** (commit `9e94f69`)
+
 **Goal:** the repo has the shape the README's *Project layout* section describes, and `dr` runs.
 
 - `bin/dr` — dispatcher: `dr go` → `exec dr-go`, `dr` alone prints the verb table, unknown verb
@@ -166,6 +213,8 @@ Seven of these. They are cheap now and expensive in Phase 4.
 ---
 
 ## Phase 1 — Config and preflight
+
+**Status: done** (commit `9e94f69`)
 
 **Goal:** every later script can ask "what is my configuration and is this machine sane" in one line.
 
@@ -201,6 +250,8 @@ Path-translation round-trips are bats-tested against a table of cases including 
 
 ## Phase 2 — The mound
 
+**Status: done** — acceptance verified against real sbx, see below.
+
 **Goal:** create, enter, leave and destroy a sandbox. No policy, no data, no memory yet.
 
 - `dr-up` — create-if-absent (`sbx create --clone --name … --kit … <winpath> <extra mounts>`), start
@@ -214,13 +265,25 @@ Path-translation round-trips are bats-tested against a table of cases including 
   is a stub that always passes, wired up properly in Phase 3).
 - The `DRAUGR_CLONE=false` confirmation prompt.
 
-**Verification task:** determine what `sbx run` returns on detach, and whether Ctrl+D is
-distinguishable from a detach-key sequence. This decides how `DRAUGR_AUTO_SYNC` fires.
+**Verification task — done.** `sbx run` is a foreground process: control returns to `dr-go` when the
+session ends, however it ended, so `DRAUGR_AUTO_SYNC` can simply run afterwards. The state machine
+does not need the exit code at all, because `sbx ls --json` reports the truth afterwards. Three
+things were learned along the way and are now in the verified-facts table: `sbx exec <name> true` is
+how you start a stopped sandbox without attaching, `sbx run` needs a TTY or dies obscurely, and the
+remote sbx adds is `sandbox-<name>` under `--clone` but plain `sandbox` without it — which was the
+open question, and settles that Draugr's own remote cannot collide with it.
 
-**Acceptance:** in a scratch repo on a Windows drive, `dr-go` creates and enters a mound; Ctrl+D
-returns to WSL; `dr-status` reports `running`; `dr-stop` then `dr-go` re-attaches without
-re-creating; `dr-rm` removes it. Running `dr-up` twice in a row produces no second sandbox. A dirty
-tree blocks `dr-go` with the "the clone only sees commits" explanation.
+The `git://`-is-unreachable-from-WSL measurement taken here was **not** a discovery: it was known
+before this plan was written. It had simply never been entered in the verified-facts table, which is
+why it got re-derived. See the note under that table.
+
+**Acceptance — met.** Verified against real sbx in a scratch repo on `C:`: `dr-up` created the mound
+(88 s, mostly image pull), a second `dr-up` produced no second sandbox, `dr-status` reported
+`running`, `dr-shell -- …` showed the clone at `/c/Temp/…` with its history intact and the host tree
+read-only at `/run/sandbox/source`, `dr-stop` then `dr-up` restarted it in 5 s without re-creating,
+a dirty tree blocked `dr-go` with the clone explanation, and `dr-rm` removed it. The interactive
+attach and Ctrl+D were not machine-testable — `dr-go` refuses without a TTY, which is that path's
+guard. 37 bats tests cover the argument construction against the mock.
 
 ---
 
@@ -263,6 +326,11 @@ the part that must run on *your* machine, where a kit cannot see.
   `/run/sandbox/source`. `DRAUGR_SCAN_FAIL=block` aborts `dr-go`. Purely host-side; nothing in the
   kit format can do this, because the danger is a file that never enters the sandbox's filesystem
   but is visible through the read-only mount.
+  Second job, from the Phase 2 measurement: **report skills that appeared in the shared store
+  without you putting them there.** That store is the only host path a mound can write to, it is
+  shared across every mound, it outlives `sbx rm`, and its contents are loaded into agent context as
+  instructions. A scan that covers what the agent can *read* but not what it can *leave behind* is
+  only half a scan.
 - `dr-kit` — `validate` (wraps `sbx kit validate`), `show` (the effective network rules), `apply`
   (`sbx kit add`, with the container-recreation consequence stated before it happens), and drift
   detection against the hash recorded at creation.
@@ -319,7 +387,11 @@ files land in the mound owned by `agent` and mode 644.
 - `DRAUGR_MEM_SYNC=auto` wired into `dr-up` (import) and the detach path (export).
 - `dr-mem import` prints a warning about imported memory being instructions, per the README's safety
   section, and requires confirmation for a store it did not write itself.
-- `dr-skills` — wrap `sbx skills import`.
+- `dr-skills` — wrap `sbx skills import`, plus `dr-skills list` and `dr-skills diff`. The store at
+  `…\DockerSandboxes\sandboxes\state\agent-skills\` is mounted **read-write into every mound**, is
+  shared between them, and survives `sbx rm` — so it is the one place a sandbox can leave something
+  behind for a later one to read. Skills are instructions, so treat the store as a reviewable
+  artifact: show what is there and what changed, do not just push into it.
 - `dr-rm` gains its "memory not exported" refusal.
 
 **Verification task:** locate the real toggle for skill sharing (`--no-share-skills` is documented in

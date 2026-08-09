@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# dr-up - make sure this repo's mound exists and is running. Does not attach.
+#
+# Idempotent: absent means create, stopped means start, running means say so and
+# stop. Creation flags (ports, memory, template, kit) only apply when the sandbox
+# is actually created - sbx bakes them into the spec, so changing one in the
+# config and re-running dr-up will NOT take effect until you dr-rm and recreate.
+#
+#   dr-up              create or start it
+#   dr-up --recreate   remove it first, so creation flags are re-applied
+#   dr-up --print      show the sbx command line, run nothing
+set -euo pipefail
+
+DR_PROG=dr-up
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# --print is a dry run and --recreate is destructive, so they are deliberately
+# separate flags rather than one clever one.
+recreate=
+print=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --recreate) recreate=1 ;;
+        --print|-n) print=1 ;;
+        -y|--yes)   DR_ASSUME_YES=1 ;;
+        -h|--help)  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) dr_die "unknown option: $1" "Try: dr-up --help" ;;
+    esac
+    shift
+done
+
+dr_context
+
+# --- assemble the creation command ------------------------------------------
+#
+# Built as an array, never as a string, so that a workspace path containing a
+# space stays one argument. Order matters only in that the agent and the paths
+# are positional and must come last: `sbx create [flags] AGENT PATH [PATH...]`.
+create_args=(create --name "$DRAUGR_SANDBOX")
+
+# The whole premise of the tool. false gives the agent your real working tree,
+# read-write; dr-go is where that gets challenged, because dr-up is also called
+# from scripts where a prompt would hang.
+if dr_is_true "$DRAUGR_CLONE"; then
+    create_args+=(--clone)
+fi
+
+# Empty means "let sbx decide", which is a better default than anything we could
+# invent, so each of these is only passed when the user actually set it.
+[ -n "$DRAUGR_MEMORY" ]   && create_args+=(-m "$DRAUGR_MEMORY")
+[ -n "$DRAUGR_CPUS" ]     && create_args+=(--cpus "$DRAUGR_CPUS")
+[ -n "$DRAUGR_TEMPLATE" ] && create_args+=(-t "$DRAUGR_TEMPLATE")
+
+# A kit is either something on this disk - in which case sbx.exe needs it spelled
+# as a Windows path - or a remote git/OCI reference, which we pass through
+# untouched. "Does it exist as a directory?" is the honest way to tell them apart,
+# rather than guessing from the syntax of a reference format we do not own.
+if [ -n "$DRAUGR_KIT" ]; then
+    kit=$DRAUGR_KIT
+    case "$kit" in
+        /*) : ;;                        # already absolute
+        *)  kit="$DR_REPO/$kit" ;;      # repo-relative, which is the documented form
+    esac
+
+    if [ -d "$kit" ]; then
+        create_args+=(--kit "$(dr_path_win "$kit")")
+    elif printf '%s' "$DRAUGR_KIT" | grep -q '[:@]'; then
+        # Contains a ":" or "@", so it looks like an OCI or git reference.
+        create_args+=(--kit "$DRAUGR_KIT")
+    elif [ "${DR_ORIGIN[DRAUGR_KIT]}" = "built-in default" ]; then
+        # Nothing there, and nobody asked for it: this is just a repo that has
+        # not opted into kits. Not worth a warning on every single dr-up.
+        dr_debug "no kit at $kit (default location, none configured)"
+    else
+        # Nothing there, but a config file explicitly pointed here - so this is a
+        # typo or a missing file, and worth saying out loud. Still not fatal: the
+        # kit is optional, and refusing to start over it would be disproportionate.
+        dr_warn "no kit at $kit - creating the mound without one"
+        printf '  %sDRAUGR_KIT came from %s%s\n' "$_DR_DIM" "${DR_ORIGIN[DRAUGR_KIT]}" "$_DR_OFF" >&2
+    fi
+fi
+
+# read -ra splits on whitespace into an array. Quoting "$DRAUGR_PORTS" here would
+# make it a single argument, and leaving it unquoted at the call site would work
+# but relies on word splitting happening to be right - this says so explicitly.
+if [ -n "$DRAUGR_PORTS" ]; then
+    read -ra _ports <<< "$DRAUGR_PORTS"
+    for _p in "${_ports[@]}"; do create_args+=(-p "$_p"); done
+fi
+
+# Positional tail: the agent, this repo, then any extra workspaces.
+create_args+=("$DRAUGR_AGENT" "$DR_REPO_WIN")
+
+# Extra mounts carry an optional ":ro" suffix that must survive translation, so
+# the suffix is split off, the path converted, and the suffix put back.
+if [ -n "$DRAUGR_MOUNTS" ]; then
+    read -ra _mounts <<< "$DRAUGR_MOUNTS"
+    for _m in "${_mounts[@]}"; do
+        _mode=
+        case "$_m" in
+            *:ro) _mode=:ro; _m=${_m%:ro} ;;
+            *:rw) _mode=:rw; _m=${_m%:rw} ;;
+        esac
+        _win=$(dr_path_win "$_m") || dr_die \
+            "extra mount is not on a Windows drive: $_m" \
+            "sbx can only mount Windows paths. See DRAUGR_MOUNTS in your config."
+        create_args+=("$_win$_mode")
+    done
+fi
+
+# Print the resolved sbx.exe rather than the bare word "sbx": it is not on WSL's
+# PATH, so a line starting "sbx create" would not run if you pasted it. %q quotes
+# each argument for bash, which is what makes the result pasteable at all - a
+# Windows path is full of backslashes and at least one of these has a space in it.
+if [ -n "$print" ]; then
+    printf '%q %s\n' "$(dr_find_sbx)" "$(printf '%q ' "${create_args[@]}")"
+    exit 0
+fi
+
+# --- act on the current state -----------------------------------------------
+
+state=$(dr_sandbox_state "$DRAUGR_SANDBOX")
+
+# --recreate exists because creation flags are frozen into the sandbox spec: the
+# only way to change a port mapping or the memory limit is to build a new mound.
+if [ -n "$recreate" ] && [ "$state" != absent ]; then
+    dr_confirm "Remove and recreate $DRAUGR_SANDBOX? Anything uncommitted inside it is lost." \
+        || dr_die "cancelled"
+    dr_sbx rm --force "$DRAUGR_SANDBOX" >/dev/null
+    dr_ok "removed the old $DRAUGR_SANDBOX"
+    state=absent
+fi
+
+case "$state" in
+running)
+    dr_ok "$DRAUGR_SANDBOX is already running"
+    ;;
+
+# Stopped sandboxes keep their state and their clone. `exec true` is the way to
+# start one without attaching: sbx starts a stopped sandbox before running the
+# command, and `true` is the cheapest possible command. (`sbx run` would start it
+# too, but it also attaches, which is dr-go's job rather than dr-up's.)
+stopped)
+    dr_info "starting $DRAUGR_SANDBOX"
+    dr_sbx exec "$DRAUGR_SANDBOX" true >/dev/null \
+        || dr_die "could not start $DRAUGR_SANDBOX" "Look at:  dr-ls"
+    dr_ok "started $DRAUGR_SANDBOX"
+    ;;
+
+# The hooks bracket creation because that is the only moment a repo can set up
+# something on the HOST side - a kit runs inside the mound and cannot reach it.
+absent)
+    dr_hook pre-create "$DR_REPO"
+    dr_info "creating $DRAUGR_SANDBOX for $DR_REPO_WIN"
+    dr_debug "sbx $(printf '%q ' "${create_args[@]}")"
+    dr_sbx "${create_args[@]}" || dr_die \
+        "could not create $DRAUGR_SANDBOX" \
+        "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
+    dr_ok "created $DRAUGR_SANDBOX"
+    dr_hook post-create "$DR_REPO"
+    ;;
+
+# dr_sandbox_state prints "unknown" when it cannot reach sbx at all, and anything
+# else here means sbx grew a state we have not seen. Neither is worth guessing at.
+*)
+    dr_die "$DRAUGR_SANDBOX is in an unexpected state: $state" \
+           "Check it with:  dr-ls"
+    ;;
+esac

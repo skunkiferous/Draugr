@@ -230,6 +230,22 @@ that sets three keys gets the blame for exactly three. That is where
 `dr-config`'s "FROM" column comes from, and it costs nothing in the config files
 themselves — they stay plain `KEY=value`.
 
+**"You asked for none" is not "you did not ask".** The same distinction turns up
+again wherever a command-line flag overrides a list-valued setting. `dr-go` keeps
+a separate `args_given` marker rather than inferring intent from an empty array:
+
+```bash
+--bare) args_given=1; agent_args=() ;;          # explicitly nothing
+--)     shift; args_given=1; agent_args=("$@") ;;
+...
+if [ -z "$args_given" ] && [ -n "$DRAUGR_AGENT_ARGS" ]; then …   # only then fall back
+```
+
+Without the marker there is no way to say "ignore what the config wants, just
+this once", because the empty array is also what you start with. Note too that
+the command line **replaces** the configured value rather than appending to it —
+same rule as everywhere else, and the only way to *drop* a configured argument.
+
 Adding a setting means touching two places: `DR_KEYS` (the list of names) and
 `_dr_defaults` (the default value). Everything else — merging, provenance,
 `dr-config`, the "no such setting" error — follows from the list.
@@ -267,6 +283,84 @@ Tests then assert on the recorded argv.
 So the rule is: **keep the decisions separate from the invocation.** Work out
 flags into a variable or array, then call `dr_sbx` once with them. A function
 that computes and invokes in the same breath cannot be tested without a microVM.
+
+There is a second requirement that is easy to miss: every mound command refuses
+a repo that is not under `/mnt/<drive>/`, so a test needs a repo on such a path.
+`dr_make_win_repo` provides one. In WSL that is the real `C:` drive; in CI it is
+a plain directory the workflow creates, because the check is pure string matching
+and no hypervisor is involved. Where neither is possible the tests `skip`.
+
+**A skip is invisible in a green tick**, so CI re-runs `tests/mound.bats` and
+fails the job if anything skipped. Otherwise a `/mnt/c` that quietly stopped
+being writable would turn 37 tests into 37 no-ops and nothing would say so.
+
+---
+
+## Pattern: the mound commands
+
+`dr-up`, `dr-go`, `dr-shell`, `dr-stop`, `dr-rm` and `dr-status` all begin with
+`dr_context`, which resolves the repo, refuses it if it is not on a Windows
+drive, and loads the config cascade:
+
+```bash
+dr_context      # sets DR_REPO, DR_REPO_WIN; fills in DRAUGR_* and DR_ORIGIN
+```
+
+Two things follow from that, and both have bitten already:
+
+- **`dr-up` owns the state machine, and nobody else implements it.** `absent` →
+  `sbx create`, `stopped` → `sbx exec <name> true`, `running` → nothing. `dr-go`
+  runs `dr-up` as a *separate process* rather than duplicating the logic, which
+  is also what keeps `dr-up --print` a truthful preview of what `dr-go` will do.
+- **Creation flags are frozen at creation.** `sbx` bakes ports, memory, template
+  and kit into the sandbox spec; changing one in your config and re-running
+  `dr-up` does nothing until the sandbox is recreated. That is why `--recreate`
+  exists, and why the header comment of `dr-up` says so out loud.
+
+Starting a stopped sandbox is `sbx exec <name> true` — there is no `sbx start`,
+and `sbx run` would attach, which is a different command's job.
+
+---
+
+## Pattern: reports go to stdout, diagnostics to stderr
+
+`dr_info`/`dr_ok`/`dr_warn`/`dr_error`/`dr_heading` all write to **stderr**, so
+that a command's real output stays pipeable. The corollary is easy to get wrong:
+**if a command's whole purpose is output, all of it belongs on stdout** — including
+its headings.
+
+`dr-status` got this wrong first time round. It printed headings with
+`dr_heading` (stderr) and rows with `printf` (stdout). On a terminal it looked
+fine; the moment it was piped, the two streams buffered independently and
+`repo` appeared *above* the `repository` heading it belonged under. `dr-status`
+now defines its own local `heading()` that writes to stdout, and there is a
+regression test that captures stdout alone and checks the ordering.
+
+So: `dr_heading` is for interactive prompts, like `dr-trust`'s file review.
+A report defines its own.
+
+---
+
+## Two traps that cost real time
+
+Neither is Draugr's doing, and both are silent.
+
+**A comment that begins with the word "shellcheck" becomes a directive.** This
+is a parse error, not a warning:
+
+```bash
+# read -ra splits on whitespace, rather than leaving it to word splitting, which
+# shellcheck (rightly) complains about
+```
+
+ShellCheck sees `# shellcheck (rightly)...` and tries to parse it as
+`# shellcheck disable=...`, then reports SC1073/SC1072 pointing at the comment.
+Reword so the line does not *start* with the tool's name.
+
+**`jq`'s `@tsv` escapes backslashes.** Every workspace Draugr handles is a
+Windows path, and `@tsv` turns `C:\Code` into `C:\\Code`. `dr-ls` uses
+`join("\t")` instead, which is safe here because none of those fields can
+contain a tab. Reach for `@tsv` only when the data cannot contain a backslash.
 
 ---
 

@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# dr-status - what is true about this repo right now.
+#
+# One screen: which mound, what state, what the host tree looks like, and what
+# the config decided. The unfetched-commits and data-drift columns arrive with
+# dr-sync in Phase 3; this reports what can be known without it.
+#
+#   dr-status
+set -euo pipefail
+
+DR_PROG=dr-status
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+case "${1:-}" in
+    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    ?*) dr_die "unknown option: $1" "dr-status takes no arguments." ;;
+esac
+
+dr_context
+
+# A two-column layout, so the labels line up and the values are scannable.
+row() { printf '  %-14s %s\n' "$1" "$2"; }
+
+# dr-status is a report: all of it is content, so all of it belongs on stdout.
+# dr_heading writes to stderr - correct for the prompts it was written for, wrong
+# here, because the two streams are buffered independently and the headings came
+# out in the wrong places the moment the output was piped anywhere.
+heading() { printf '\n%s%s%s\n' "$_DR_BOLD" "$*" "$_DR_OFF"; }
+
+heading "repository"
+row repo "$DR_REPO"
+row windows "$DR_REPO_WIN"
+row branch "$(dr_repo_branch "$DR_REPO")"
+
+# The dirty-tree line is the one people actually act on, so it says what the
+# consequence is rather than just counting files.
+if dr_repo_is_clean "$DR_REPO"; then
+    row tree "${_DR_GREEN}clean${_DR_OFF}"
+else
+    count=$(git -C "$DR_REPO" status --porcelain | wc -l | tr -d ' ')
+    row tree "${_DR_YELLOW}$count uncommitted change(s)${_DR_OFF} - the clone will not have them"
+fi
+
+# Each state names the command that changes it, so the status screen doubles as
+# the prompt for whatever you were about to look up.
+heading "mound"
+state=$(dr_sandbox_state "$DRAUGR_SANDBOX")
+case "$state" in
+    running) row state "${_DR_GREEN}running${_DR_OFF}" ;;
+    stopped) row state "${_DR_DIM}stopped${_DR_OFF} - dr-go starts it" ;;
+    absent)  row state "${_DR_DIM}does not exist${_DR_OFF} - dr-up creates it" ;;
+    *)       row state "${_DR_YELLOW}$state${_DR_OFF}" ;;
+esac
+row name "$DRAUGR_SANDBOX"
+row agent "$DRAUGR_AGENT"
+
+# Workspaces are worth showing because an extra read-only mount is easy to forget
+# and is the most likely answer to "why can the agent see that?".
+if [ "$state" != absent ]; then
+    dr_sbx ls --json 2>/dev/null | jq -r --arg n "$DRAUGR_SANDBOX" \
+        '(.sandboxes // [])[] | select(.name == $n) | (.workspaces // [])[]' \
+        | while read -r w; do row workspace "$w"; done
+fi
+
+# Only the three settings that change what the agent can reach. The rest are a
+# dr-config away, and a status screen nobody reads is worse than a short one.
+heading "settings"
+if dr_is_true "$DRAUGR_CLONE"; then
+    row clone "${_DR_GREEN}true${_DR_OFF} - the agent works on its own clone"
+else
+    row clone "${_DR_RED}false${_DR_OFF} - the agent has your real working tree, read-write"
+fi
+row kit "${DRAUGR_KIT:-${_DR_DIM}none${_DR_OFF}}"
+row remote "$DRAUGR_REMOTE"
+
+printf '\n  %sWhy any of these:  dr-config --changed%s\n' "$_DR_DIM" "$_DR_OFF"
