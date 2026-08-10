@@ -75,6 +75,14 @@ if ! dr_is_true "$DRAUGR_CLONE"; then
     dr_confirm "Continue without the mound?" || dr_die "cancelled"
 fi
 
+# Scan BEFORE the mound exists, not after: the point is to catch a credential
+# before anything can read it, and dr-up is what makes the read-only mount. With
+# DRAUGR_SCAN_FAIL=block a finding aborts here, which is the whole reason the
+# check is worth having.
+if dr_is_true "$DRAUGR_SCAN" && [ -x "$_dr_bin/dr-scan" ]; then
+    "$_dr_bin/dr-scan" --quiet
+fi
+
 # dr-up is a separate process on purpose: one implementation of the state
 # machine, and `dr-up --print` stays a truthful preview of what dr-go will do.
 "$_dr_bin/dr-up" ${DR_ASSUME_YES:+--yes}
@@ -83,11 +91,8 @@ fi
 # before complaining that it cannot attach to it.
 dr_require_tty dr-go
 
-dr_hook pre-go "$DR_REPO"
+dr_hook pre-attach "$DR_REPO"
 
-# ${arr[@]+"${arr[@]}"} expands to nothing at all when the array is empty, rather
-# than to one empty string. Needed because `set -u` treats an empty array
-# expansion as an error on bash 4.3 and earlier.
 # Name the arguments in the attach line. If DRAUGR_AGENT_ARGS is doing something
 # on your behalf you should see it, rather than wondering why the agent resumed.
 if [ ${#agent_args[@]} -gt 0 ]; then
@@ -95,6 +100,10 @@ if [ ${#agent_args[@]} -gt 0 ]; then
 else
     dr_info "attaching to $DRAUGR_SANDBOX ($DRAUGR_AGENT)"
 fi
+
+# ${arr[0]+-- "${arr[@]}"} expands to nothing at all when the array is empty,
+# rather than to one empty string - so no stray "--" reaches the agent. Needed
+# because `set -u` treats an empty array expansion as an error on bash 4.3.
 dr_sbx run --name "$DRAUGR_SANDBOX" \
     ${agent_args[0]+-- "${agent_args[@]}"} || rc=$?
 
@@ -102,17 +111,13 @@ dr_sbx run --name "$DRAUGR_SANDBOX" \
 # reported as a Draugr failure. What matters is that we are back on the host.
 rc=${rc:-0}
 dr_info "left $DRAUGR_SANDBOX (it is still running - dr-stop to shut it down)"
-dr_hook post-go "$DR_REPO"
+dr_hook post-attach "$DR_REPO"
 
-# DRAUGR_AUTO_SYNC fetches the agent's commits here. dr-sync arrives in Phase 3;
-# until it exists, say what would happen rather than silently doing nothing.
-if dr_is_true "$DRAUGR_AUTO_SYNC"; then
-    if [ -x "$_dr_bin/dr-sync" ]; then
-        "$_dr_bin/dr-sync"
-    else
-        dr_warn "DRAUGR_AUTO_SYNC is on but dr-sync is not implemented yet"
-        printf '  %sFetch the agent'"'"'s commits by hand:  git fetch sandbox%s\n' "$_DR_DIM" "$_DR_OFF" >&2
-    fi
+# Fetch what the agent committed, while you are still thinking about it. It only
+# fetches - nothing is merged and your branch does not move - so the worst case
+# is a few seconds and a remote-tracking branch you ignore.
+if dr_is_true "$DRAUGR_AUTO_SYNC" && [ -x "$_dr_bin/dr-sync" ]; then
+    "$_dr_bin/dr-sync" || dr_warn "auto-sync failed; fetch by hand with:  dr-sync"
 fi
 
 exit "$rc"

@@ -214,19 +214,18 @@ that already does this job properly, and `dr-init` generates a starter one for y
 
 ```yaml
 # .draugr/kit/spec.yaml — commit this
-schemaVersion: "1"
+schemaVersion: "2"
 kind: mixin
 name: myproject
 requires:
   agent: claude
 
-network:
-  allowedDomains:
-    - registry.npmjs.org
-    - pypi.org
-    - files.pythonhosted.org
-  deniedDomains:
-    - telemetry.example.com
+caps:
+  network:
+    allow:
+      - internal-registry.example.com   # ADDS to the defaults — see below
+    deny:
+      - telemetry.example.com           # deny wins over allow
 
 commands:
   install:                          # runs once, at creation
@@ -234,6 +233,18 @@ commands:
       user: "1000"
       description: Install dependencies
 ```
+
+> ### Your kit is not the whole allowlist
+> `sbx` ships a machine-wide policy of **~190 allow rules** — package managers, OS packages, the
+> common code hosts, the AI service endpoints — applying to every sandbox. So `npm`, `pip` and
+> `github.com` already work without appearing in any kit, and what you list above is *added to*
+> that set rather than replacing it.
+>
+> Default-deny is still real: anything matching no rule anywhere is refused, with
+> `no matching allow rule (default deny)`. But "deny by default" and "only what I listed" are
+> different claims, and it is worth knowing which one you have. `dr-policy` shows everything in
+> force with its source, `dr-policy --defaults` shows the rules you did not write, and
+> `dr-policy --check <host>` answers for one host. To narrow the defaults, add a `deny` above.
 
 This is where `npm ci`, `uv sync` and `apt-get install -y libfoo-dev` go. Commit it: it is the
 difference between a teammate cloning your repo and being productive in one command, versus half an
@@ -297,8 +308,13 @@ DRAUGR_SCAN_FAIL=block               # warn|block
 See [Safety model](#safety-model) — this one matters more than it looks.
 
 **Hooks**, if the config keys are not enough: executable scripts at
-`.draugr/hooks/{pre-up,post-up,pre-attach,post-sync,pre-rm}`. They run on the *host* (WSL) with the
-merged config in the environment.
+`.draugr/hooks/{pre-up,post-up,post-create,pre-attach,post-attach,post-sync,pre-rm}`. They run on
+the *host* (WSL) with the merged config in the environment — which is precisely what a kit's
+commands cannot do, since a kit runs inside the mound and cannot see your machine. A hook that
+exits non-zero aborts the command, so they can veto.
+
+`post-create` fires only when a sandbox is actually built; `post-up` fires on every `dr-up`,
+including the ones that just start a stopped mound.
 
 ---
 
@@ -375,10 +391,10 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 |---|---|
 | `dr-doctor` | Check every precondition and say exactly what to fix |
 | `dr-config` | The merged config, with the origin of each value |
-| `dr-scan` | Find credential-shaped files the agent would be able to read ⏳ |
-| `dr-kit` | `validate`, `show`, `apply` this project's kit — and warn when it has drifted ⏳ |
-| `dr-policy` | Show the network rules in force; `--allow <host>` for a temporary hole ⏳ |
-| `dr-ports` | Publish a port to an already-running sandbox ⏳ |
+| `dr-scan` | Find credential-shaped files the agent would be able to read |
+| `dr-kit` | `validate`, `show`, `apply` this project's kit — and warn when it has drifted |
+| `dr-policy` | Show the network rules in force; `--allow <host>` for a temporary hole |
+| `dr-ports` | Publish a port to an already-running sandbox |
 | `dr-code` | Open VS Code Remote-SSH into the mound ⏳ |
 | `dr-trust` | Accept a project config after reviewing it |
 

@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# dr-scan - find what the agent could read that you did not mean to give it.
+#
+# Two blind spots, both measured rather than assumed (see PLAN.md):
+#
+#   1. .gitignore hides files from git, not from the filesystem. An untracked
+#      .env is absent from the agent's clone but fully readable through the
+#      read-only mount at /run/sandbox/source. Verified: a gitignored
+#      secrets.env was read in the clear from inside a mound.
+#   2. The shared skills store is mounted READ-WRITE into every mound, is shared
+#      between them, and survives sbx rm. Its contents are loaded into agent
+#      context as instructions, so something left there by one sandbox is read
+#      by the next. A scan of what the agent can read, but not of what it can
+#      leave behind, is only half a scan.
+#
+#   dr-scan            check this repo and the skills store
+#   dr-scan --skills   only the skills store
+#   dr-scan --quiet    say nothing unless something is found
+set -euo pipefail
+
+DR_PROG=dr-scan
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# Exit status is the interesting output here: dr-go calls this and aborts on a
+# non-zero when DRAUGR_SCAN_FAIL=block.
+skills_only=
+quiet=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --skills)  skills_only=1 ;;
+        -q|--quiet) quiet=1 ;;
+        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) dr_die "unknown option: $1" "Try: dr-scan --help" ;;
+    esac
+    shift
+done
+
+dr_context
+
+found=0
+
+# --- credential-shaped files the clone will not contain ---------------------
+if [ -z "$skills_only" ]; then
+    # Only untracked files matter. A committed .env is already in the clone and in
+    # your history - a different problem, and not this one.
+    #
+    # `--others` alone is deliberate and easy to get wrong. Adding
+    # `--exclude-standard` would filter the gitignored files back OUT, and
+    # `--ignored --exclude-standard` lists ONLY the ignored ones - either way half
+    # the danger goes unreported. Bare `--others` is everything git is not
+    # tracking, ignored or not, which is exactly the set readable through
+    # /run/sandbox/source but absent from the clone.
+    mapfile -t candidates < <(
+        git -C "$DR_REPO" ls-files --others 2>/dev/null || true
+    )
+
+    # Match each candidate's basename against the configured globs. `case` takes
+    # one pattern at a time, so the patterns are looped rather than joined.
+    hits=()
+    for f in "${candidates[@]+"${candidates[@]}"}"; do
+        base=${f##*/}
+        for pat in $DRAUGR_SCAN_PATTERNS; do
+            # shellcheck disable=SC2254  # $pat is deliberately a glob, not a literal
+            case "$base" in
+                $pat) hits+=("$f"); break ;;
+            esac
+        done
+    done
+
+    # The message spells out the mechanism, because "a secret was found" invites
+    # "but it is gitignored" - and being gitignored is exactly the problem.
+    if [ ${#hits[@]} -gt 0 ]; then
+        found=1
+        dr_warn "${#hits[@]} credential-shaped file(s) the agent could read:"
+        for f in "${hits[@]}"; do
+            printf '    %s\n' "$f" >&2
+        done
+        printf '  %sThese are NOT in the agent'"'"'s clone - but they ARE readable at%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %s/run/sandbox/source, and can be sent anywhere the network policy allows.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+    elif [ -z "$quiet" ]; then
+        dr_ok "no credential-shaped files outside git"
+    fi
+fi
+
+# --- the skills store, which is the way OUT ---------------------------------
+#
+# Derived from sbx's own location rather than hard-coded: sbx.exe lives at
+# <root>/bin/sbx.exe and the store sits under <root>/sandboxes/state/.
+sbx_exe=$(dr_find_sbx) || sbx_exe=
+skills_dir=
+if [ -n "$sbx_exe" ]; then
+    skills_dir="$(dirname "$(dirname "$sbx_exe")")/sandboxes/state/agent-skills"
+fi
+
+if [ -z "$skills_dir" ] || [ ! -d "$skills_dir" ]; then
+    [ -n "$quiet" ] || dr_ok "no shared skills store on this machine yet"
+else
+    # Anything at all here is worth showing. This is not a heuristic about
+    # dangerous content - it is "did you put these here?", which only you know.
+    mapfile -t skills < <(find "$skills_dir" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | sort)
+
+    # Listed, never judged: whether a skill belongs there is a question only you
+    # can answer, so the job is to make the contents visible at all.
+    if [ ${#skills[@]} -eq 0 ]; then
+        [ -n "$quiet" ] || dr_ok "the shared skills store is empty"
+    else
+        dr_info "${#skills[@]} item(s) in the shared skills store:"
+        for s in "${skills[@]}"; do
+            printf '    %s\n' "$s" >&2
+        done
+        printf '  %sThis directory is mounted read-write into EVERY mound and survives sbx rm.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sIts contents become agent instructions. Anything here you did not put%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sthere was left by a sandbox:  %s%s\n' "$_DR_DIM" "$skills_dir" "$_DR_OFF" >&2
+    fi
+fi
+
+# block turns a finding into a refusal; warn reports and carries on. Only the
+# credential hits gate this - the skills listing is informational, because a
+# skill you installed on purpose is not a failure.
+if [ "$found" -ne 0 ] && [ "$DRAUGR_SCAN_FAIL" = block ]; then
+    dr_die \
+        "refusing to continue with credentials in reach" \
+        "Move them out of the repo, or set DRAUGR_SCAN_FAIL=warn to proceed anyway." \
+        "Real credentials do not belong in a directory you hand to an agent."
+fi
+
+exit 0

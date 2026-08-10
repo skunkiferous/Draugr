@@ -638,6 +638,44 @@ dr_sandbox_exists() {
 }
 
 # ---------------------------------------------------------------------------
+# Kits
+# ---------------------------------------------------------------------------
+
+# dr_kit_dir - the resolved kit directory, or empty if this project has none.
+# Prints nothing and returns 1 when DRAUGR_KIT is unset or points nowhere, so
+# callers can treat "no kit" as ordinary rather than exceptional.
+dr_kit_dir() {
+    local kit=$DRAUGR_KIT
+    [ -n "$kit" ] || return 1
+    case "$kit" in
+        /*) : ;;
+        *)  kit="$DR_REPO/$kit" ;;
+    esac
+    [ -d "$kit" ] || return 1
+    printf '%s' "$kit"
+}
+
+# dr_kit_hash <dir> - a digest of the whole kit, not just spec.yaml.
+#
+# initFiles and anything else in the directory change what the sandbox gets, so
+# they have to count. Sorted with -z and hashed pairwise so the result depends on
+# content and names but not on the order find happens to walk them in.
+dr_kit_hash() {
+    find "$1" -type f -print0 2>/dev/null \
+        | sort -z \
+        | xargs -0 sha256sum 2>/dev/null \
+        | sha256sum \
+        | cut -d' ' -f1
+}
+
+# Where dr-up records the hash it built with, so dr-kit drift is a comparison
+# rather than a guess. Inside .draugr/ because it describes this checkout, not
+# the project - dr-init gitignores it.
+dr_kit_stamp() {
+    printf '%s/.draugr/kit.applied' "$DR_REPO"
+}
+
+# ---------------------------------------------------------------------------
 # Talking to the mound over git
 # ---------------------------------------------------------------------------
 

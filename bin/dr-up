@@ -134,9 +134,29 @@ if [ -n "$recreate" ] && [ "$state" != absent ]; then
     state=absent
 fi
 
+# A sandbox that already exists was built with whatever the kit said at the time.
+# Editing the kit changes nothing until it is applied, and applying it recreates
+# the container - so say so rather than letting the difference go unnoticed.
+report_drift() {
+    local kit stamp
+    kit=$(dr_kit_dir) || return 0
+    stamp=$(dr_kit_stamp)
+    [ -f "$stamp" ] || return 0
+    [ "$(dr_kit_hash "$kit")" = "$(cat "$stamp")" ] && return 0
+    dr_warn "the kit has changed since $DRAUGR_SANDBOX was built"
+    printf '  %sThe mound still has the old rules and setup. Apply them with:%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %s  dr-kit apply      (recreates the container)%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+}
+
+# pre-up runs on every dr-up; post-create only when one is actually built. Both
+# run on the HOST, in WSL, which is precisely what a kit's commands cannot do.
+dr_hook pre-up "$DR_REPO"
+
 case "$state" in
 running)
     dr_ok "$DRAUGR_SANDBOX is already running"
+    report_drift
     ;;
 
 # Stopped sandboxes keep their state and their clone. `exec true` is the way to
@@ -148,18 +168,26 @@ stopped)
     dr_sbx exec "$DRAUGR_SANDBOX" true >/dev/null \
         || dr_die "could not start $DRAUGR_SANDBOX" "Look at:  dr-ls"
     dr_ok "started $DRAUGR_SANDBOX"
+    report_drift
     ;;
 
 # The hooks bracket creation because that is the only moment a repo can set up
 # something on the HOST side - a kit runs inside the mound and cannot reach it.
 absent)
-    dr_hook pre-create "$DR_REPO"
     dr_info "creating $DRAUGR_SANDBOX for $DR_REPO_WIN"
     dr_debug "sbx $(printf '%q ' "${create_args[@]}")"
     dr_sbx "${create_args[@]}" || dr_die \
         "could not create $DRAUGR_SANDBOX" \
         "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
     dr_ok "created $DRAUGR_SANDBOX"
+
+    # Record what the kit looked like at creation, so a later edit is detectable
+    # as drift instead of silently doing nothing.
+    if kit_dir=$(dr_kit_dir); then
+        mkdir -p "$DR_REPO/.draugr"
+        dr_kit_hash "$kit_dir" > "$(dr_kit_stamp)"
+    fi
+
     dr_hook post-create "$DR_REPO"
     ;;
 
@@ -170,3 +198,5 @@ absent)
            "Check it with:  dr-ls"
     ;;
 esac
+
+dr_hook post-up "$DR_REPO"

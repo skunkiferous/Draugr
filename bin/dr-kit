@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# dr-kit - check, show and apply this project's sbx kit.
+#
+# The kit declares what the agent gets INSIDE the mound: network rules, install
+# commands, ports, environment. Draugr does not parse it - sbx does, and these
+# are thin wrappers so the error text you get is sbx's own.
+#
+# What Draugr adds is noticing when it changes. Applying a kit recreates the
+# container, so dr-up records the kit's hash at creation and reports drift
+# instead of quietly rebuilding your sandbox.
+#
+#   dr-kit validate    check the spec, with sbx's own diagnostics
+#   dr-kit show        what it declares
+#   dr-kit drift       has it changed since the mound was built?
+#   dr-kit apply       apply it - RECREATES the container
+set -euo pipefail
+
+DR_PROG=dr-kit
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# The action is the first positional, defaulting to the harmless one. `shift ||
+# :` because with no arguments at all there is nothing to shift and set -e would
+# take that as a failure.
+action=${1:-show}
+case "$action" in
+    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    validate|show|drift|apply) shift || : ;;
+    *) dr_die "unknown action: $action" "One of: validate, show, drift, apply" ;;
+esac
+
+# -y is read by dr_confirm, which `apply` uses before recreating the container.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes) DR_ASSUME_YES=1 ;;
+        *) dr_die "unknown option: $1" "Try: dr-kit --help" ;;
+    esac
+    shift
+done
+
+dr_context
+
+[ -n "$DRAUGR_KIT" ] || dr_die \
+    "DRAUGR_KIT is empty, so this project has no kit" \
+    "Generate a starter one with:  dr-init"
+
+# dr_kit_dir resolves it exactly as dr-up does, so what this command checks is
+# what dr-up would actually pass to sbx.
+kit=$(dr_kit_dir) || dr_die \
+    "no kit directory for DRAUGR_KIT=$DRAUGR_KIT" \
+    "That value came from ${DR_ORIGIN[DRAUGR_KIT]}." \
+    "Generate a starter one with:  dr-init"
+
+kit_win=$(dr_path_win "$kit")
+hash_file=$(dr_kit_stamp)
+
+case "$action" in
+
+validate)
+    # sbx's own words, deliberately. A wrapper that reworded these would be one
+    # more thing to keep in sync with a schema we do not own.
+    dr_sbx kit validate "$kit_win" || dr_die \
+        "the kit is not valid" \
+        "The message above is sbx's own. Schema: https://docs.docker.com/ai/sandboxes/customize/kits/"
+    ;;
+
+# inspect prints what the kit asks for. The pointer matters because the kit is
+# only half the answer - the machine-wide defaults are the other half.
+show)
+    dr_sbx kit inspect "$kit_win"
+    printf '\n  %sThis is what the kit DECLARES. For what is actually in force,%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sincluding the machine-wide defaults you did not write:  dr-policy%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    ;;
+
+# Drift matters because a kit change is invisible until something behaves oddly:
+# the sandbox keeps whatever it was built with until it is recreated.
+drift)
+    now=$(dr_kit_hash "$kit")
+    if [ ! -f "$hash_file" ]; then
+        dr_warn "no record of an applied kit for this repo"
+        printf '  %sdr-up records one when it creates the mound.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        exit 0
+    fi
+    was=$(cat "$hash_file")
+    if [ "$now" = "$was" ]; then
+        dr_ok "the kit matches the one the mound was built with"
+    else
+        dr_warn "the kit has changed since the mound was built"
+        printf '  %sThe running sandbox still has the OLD rules and setup.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sApply it (recreates the container):  dr-kit apply%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        exit 1
+    fi
+    ;;
+
+# apply is the destructive one: sbx kit add rebuilds the container. Kit-owned
+# volumes and the clone survive, but anything installed by hand inside does not.
+apply)
+    dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
+        "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up  (which applies the kit)"
+
+    # Spell out the cost before asking, not after: "recreates the container" is
+    # not something to discover from a prompt you already clicked through.
+    dr_warn "applying a kit RECREATES the container"
+    printf '  %sThe agent'"'"'s clone and kit-owned volumes survive. Anything installed%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sby hand inside the mound does not, and a running agent is interrupted.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    dr_confirm "Apply $DRAUGR_KIT to $DRAUGR_SANDBOX?" || dr_die "cancelled"
+
+    dr_sbx kit add "$kit_win" --sandbox "$DRAUGR_SANDBOX" || dr_die \
+        "could not apply the kit" \
+        "sbx refuses on sandboxes created before kits shipped; dr-up --recreate rebuilds one."
+
+    mkdir -p "$DR_REPO/.draugr"
+    dr_kit_hash "$kit" > "$hash_file"
+    dr_ok "applied, and recorded the new kit hash"
+    ;;
+esac

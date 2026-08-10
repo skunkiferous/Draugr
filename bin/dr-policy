@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# dr-policy - what this mound can actually reach, and a way to open a hole now.
+#
+# The important word is *actually*. Your kit is not the whole story: sbx ships a
+# machine-wide local policy of around 190 allow rules covering package managers,
+# OS packages, the common code hosts and the AI service endpoints. So npm, pip
+# and github.com work without appearing in any kit you wrote, and a kit listing
+# one domain gets that domain IN ADDITION to all of those.
+#
+# Default-deny is still real - anything matching no rule anywhere is refused -
+# but "deny by default" and "only what I listed" are different claims, and this
+# command exists so you can see which one you have.
+#
+#   dr-policy                  everything in force for this mound
+#   dr-policy --check <host>   is this host reachable, and under which rule?
+#   dr-policy --allow <host>   open it now. TEMPORARY - see below.
+#   dr-policy --defaults       show the machine-wide rules you did not write
+set -euo pipefail
+
+DR_PROG=dr-policy
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# --check and --allow both take a host, so each shifts to consume it. Anything
+# else is a mode with no argument.
+action=list
+host=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --check) action=check; shift; host=${1:-}; [ -n "$host" ] || dr_die "--check needs a host" ;;
+        --allow) action=allow; shift; host=${1:-}; [ -n "$host" ] || dr_die "--allow needs a host" ;;
+        --defaults) action=defaults ;;
+        -y|--yes)   DR_ASSUME_YES=1 ;;
+        -h|--help)  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) dr_die "unknown option: $1" "Try: dr-policy --help" ;;
+    esac
+    shift
+done
+
+dr_context
+
+case "$action" in
+
+# The policy table names its source per row, which is the whole point: you can
+# see at a glance which rules came from your kit and which were already there.
+list)
+    dr_sbx policy ls
+    printf '\n  %sRows sourced "kit" are yours. The "local" row is the machine-wide%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sdefault set - see it with:  dr-policy --defaults%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sTest one host:  dr-policy --check <host>%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    ;;
+
+# Worth having as its own verb because the answer is frequently surprising in
+# both directions, and it names the governing rule rather than just yes or no.
+check)
+    dr_sbx policy check network "$host" --sandbox "$DRAUGR_SANDBOX"
+    ;;
+
+# The rules nobody in this project wrote. Worth a command of its own because
+# they are invisible otherwise and they are most of what is actually allowed.
+defaults)
+    dr_sbx policy inspect local-policy
+    printf '\n  %sNone of these came from your kit. They apply to every sandbox on%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sthis machine. Narrow them with sbx policy, or add a deny to your kit.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    ;;
+
+# Ad-hoc, and deliberately loud about it: a hole opened here lives in machine
+# state, not in the repo, so a teammate cloning the project does not get it and
+# you will not remember you opened it.
+allow)
+    dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
+        "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
+
+    # Said before the prompt, because the cost is not the hole itself - it is that
+    # the hole is invisible to everyone else who clones this repo.
+    dr_warn "this opens $host for $DRAUGR_SANDBOX outside the kit"
+    printf '  %sIt is machine state, not repo state: it will not travel with the%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sproject and a teammate will not get it. If the project genuinely%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sneeds it, put it in the kit instead and commit that.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    dr_confirm "Allow $host for $DRAUGR_SANDBOX?" || dr_die "cancelled"
+
+    # --sandbox scopes the rule to this mound. Without it the hole would be
+    # machine-wide, which is a much larger promise than the user just made.
+    dr_sbx policy allow network "$host" --sandbox "$DRAUGR_SANDBOX" || dr_die \
+        "could not add the rule"
+    dr_ok "allowed $host for $DRAUGR_SANDBOX"
+    printf '  %sGraduate it into the kit:  caps.network.allow in %s/spec.yaml%s\n' \
+        "$_DR_DIM" "$DRAUGR_KIT" "$_DR_OFF" >&2
+    ;;
+esac

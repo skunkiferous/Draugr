@@ -92,7 +92,10 @@ Prose explains; the table is what the implementation is checked against.
 | rsync exists at `/usr/bin/rsync` in the `claude` image; rsync-over-ssh through the ProxyCommand is **incremental** (21-byte append → 375 bytes on the wire) and lands files as `agent:agent` | `DRAUGR_DATA` is viable, and rsync-over-ssh beats `sbx cp` (which lands `root:root`). |
 | `sbx kit {validate,pack,add,inspect,push,pull}` exist in v0.37.1; a kit reference may be a **local directory**, ZIP, git ref or OCI image | `.draugr/kit/` can be a plain directory in the repo. No registry, no packaging step. |
 | `sbx kit add` **recreates the sandbox container**, preserving kit-owned volumes and (for `--clone`) the workspace volume; refuses on sandboxes created before the feature shipped | Changing the kit mid-session is not free. `dr-up` detects kit drift and tells you rather than silently recreating. |
-| Real kits in `sbx-kits-contrib` use `schemaVersion: "1"`, `kind: mixin`, `requires.agent`, `network.{allowedDomains,deniedDomains,publishedPorts}`, `environment.variables`, `commands.{install,startup,initFiles}` | This is the schema `dr-init` generates against. |
+| **Kit schema v2 is live and v1 is deprecated.** Domains moved to `caps.network.{allow,deny}`; ports moved to a **top-level** `publishedPorts`; `kind: mixin`, `requires.agent`, `environment` and `commands` did not move. v1 spellings still validate but warn on every check | `dr-init` generates `schemaVersion: "2"`. The migration is partial, so "just add caps." is wrong — verified field by field against sbx 0.37.1. |
+| A **local directory** is an accepted kit reference: `sbx kit validate .draugr/kit` → `VALID (directory)`, and `--kit <dir>` applies at creation | `.draugr/kit/` works as a plain committed directory. No packing step, no registry, no ZIP fallback. |
+| **`sbx` ships a machine-wide `local-policy` of 192 allow rules** applying to *every* sandbox — package managers, OS packages, code hosts, cert validation, AI services, plus read/write-all for the sandbox's own filesystem. A kit's `allow` list **adds to** it | Default-deny is real (`no matching allow rule (default deny)`), but a kit is not the whole allowlist: `github.com` is reachable without any kit mentioning it. `dr-policy --defaults` exists so this is visible rather than surprising. |
+| Kit policies are **scoped per sandbox** in `sbx policy ls` (`sandbox:draugr-kit` vs `sandbox:claude-claude`) | Per-project rules are genuinely isolated; `dr-policy --allow` passes `--sandbox` so an ad-hoc hole cannot leak machine-wide. |
 | `--branch` / worktree mode is **absent** from v0.37.1 `create` and `run` | Clone mode is the only supported shape. The three-repo model has no competitor to hedge against. |
 | The `git://` daemon is published on **Windows loopback** with a **randomised port**, and WSL2 cannot reach it across its NAT — `127.0.0.1` inside WSL is the WSL VM's own loopback. *Known before this plan was written; it is one of the reasons the project exists.* Measured in Phase 2: fetching sbx's remote from WSL gives `Connection refused`, while `ssh://<name>.sbx/<mound-path>` returns refs correctly. | **This is why `DRAUGR_REMOTE` exists** and why `dr-sync` uses `ssh://`. Draugr is not duplicating sbx's remote out of preference — sbx's is unusable from where Draugr runs. |
 | The remote sbx adds is named **`sandbox-<name>` under `--clone`**, but plain **`sandbox`** without it | This was the open question, and the answer is that Draugr's own remote cannot collide with it under either name. Nothing to fight. *(Resolved in Phase 2, was flagged for Phase 3.)* |
@@ -145,11 +148,6 @@ asserted in prose from the first commit and are entered here because **the entir
   returns to `dr-go` either way, and `dr-go` syncs on the way out without needing to know which
   happened. Only worth revisiting if `DRAUGR_DATA_PULL=auto` turns out to need the distinction —
   a pull is destructive in a way a fetch is not. *(Phase 5)*
-- Whether `kit.allowLocalKits` is enabled by default. Local-directory kits are gated behind it, and
-  `.draugr/kit/` is useless if it defaults to off. *(Phase 4 — check first, it is load-bearing.)*
-- Which schema version this `sbx` build actually accepts. `sbx-kits-contrib/CONTRIBUTING.md`
-  documents a v1→v2 migration (`memory:` → `agentContext:`, `kind: agent` → `kind: sandbox`,
-  `agent:` → `sandbox:`) while every shipped example is still `schemaVersion: "1"`. *(Phase 4)*
 
 > **Standing risk: `sbx kit` self-identifies as EXPERIMENTAL — "may change or be removed".** The
 > mitigation is that Draugr *generates and validates* a kit but never parses one. `dr-init` writes a
@@ -327,6 +325,8 @@ confirmation prompt is an informed one.
 
 ## Phase 4 — The guards
 
+**Status: done** — acceptance verified against a real mound, see below.
+
 **Goal:** turn a convenient workflow into a contained one. This is the phase that justifies the name.
 
 Roughly half of what this phase originally contained is now delegated to `sbx kit`. What is left is
@@ -360,11 +360,44 @@ the part that must run on *your* machine, where a kit cannot see.
 - The five hooks: `pre-up`, `post-up`, `pre-attach`, `post-sync`, `pre-rm`. These stay — they run on
   the **host**, in WSL, which is precisely what kit commands cannot do.
 
-**Acceptance:** a repo containing an untracked `secrets.env` blocks `dr-go` and names the file. A
-kit declaring one allowed domain lets `curl` reach that host inside the mound and fail on another,
-with `sbx policy ls` showing the rules scoped to this sandbox and not to `claude-claude`. Editing
-`.draugr/kit/spec.yaml` makes the next `dr-up` report drift rather than silently ignoring it.
-`dr-kit validate` rejects a deliberately malformed spec with sbx's own error text.
+**Verification task — done, and it changed two things.**
+
+1. **Local kits load.** `sbx kit validate .draugr/kit` → `VALID: .draugr/kit (directory)`, and a
+   sandbox created with `--kit <local path>` picks the rules up. The ZIP fallback is not needed.
+2. **The schema has moved, and v1 now warns.** `network.allowedDomains` →
+   **`caps.network.allow`**, `network.deniedDomains` → `caps.network.deny`, and
+   `network.publishedPorts` → a **top-level `publishedPorts`**. The migration is partial and
+   non-obvious: domains moved under `caps`, ports moved to the top level, and `commands`,
+   `environment`, `kind: mixin` and `requires.agent` did not move at all. `dr-init` now generates
+   `schemaVersion: "2"` — v1 still validates, but emits a deprecation warning on every check, and a
+   warning you are trained to ignore is worse than no warning.
+
+**Acceptance — met.** A gitignored `secrets.env` blocks `dr-go`, names the file, and explains the
+mechanism; `DRAUGR_SCAN_FAIL=warn` downgrades it. `sbx policy ls` shows the kit's rules scoped to
+`sandbox:draugr-kit` and separately to `sandbox:claude-claude`. Editing `.draugr/kit/spec.yaml`
+makes both `dr-kit drift` (exit 1) and the next `dr-up` report it. `dr-kit validate` rejects a
+malformed spec with sbx's own text (`field bogusField not found in type spec.CapsNetwork`).
+132 bats tests, none skipped.
+
+**The finding that corrects the README.** The curl half of the acceptance failed in an instructive
+way: with a kit allowing only `example.com`, `github.com` was still reachable. Cause — `sbx` ships a
+machine-wide `local-policy` of **192 rules** applying to *every* sandbox:
+
+| Rules | Group |
+|---|---|
+| 56 | `default-package-managers` |
+| 35 | `default-cloud-infrastructure` |
+| 33 | `default-code-and-containers` |
+| 30 | `default-cert-validation` |
+| 22 | `default-ai-services` |
+| 16 | `default-os-packages` |
+| 2 | `default-fs-read-allow-all`, `default-fs-write-allow-all` |
+
+Default-deny is genuinely in force — an unlisted host gives
+`Denied: … no matching allow rule (default deny)` — but a kit's `allow` list **adds to** that
+baseline rather than replacing it. "Deny by default" and "only what I listed" are different claims,
+and the README previously implied the second. Now corrected, and `dr-policy --defaults` exists so
+the rules you did not write are one command away rather than invisible.
 
 ---
 

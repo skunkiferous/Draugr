@@ -110,6 +110,37 @@ dr_fake_mound() {
     printf '%s' "$fake"
 }
 
+# --- a fake sbx installation tree ---------------------------------------------
+#
+# dr-scan finds the shared skills store by walking up from sbx.exe:
+# <root>/bin/sbx.exe -> <root>/sandboxes/state/agent-skills. Pointing DRAUGR_SBX
+# straight at tests/mocks/sbx would therefore make it look inside the repo, so
+# this puts a copy of the mock in a throwaway tree.
+#
+# Sets DR_SKILLS_DIR rather than printing it: the caller would have to write
+# $(dr_fake_sbx_root), and a command substitution is a subshell, so the
+# `export DRAUGR_SBX` would be discarded the moment it returned.
+dr_fake_sbx_root() {
+    local root="$DR_TMP/sbxroot"
+    mkdir -p "$root/bin" "$root/sandboxes/state/agent-skills"
+    cp "$DR_ROOT/tests/mocks/sbx" "$root/bin/sbx"
+    chmod +x "$root/bin/sbx"
+    export DRAUGR_SBX="$root/bin/sbx"
+    DR_SKILLS_DIR="$root/sandboxes/state/agent-skills"
+    export DR_SKILLS_DIR
+}
+
+# A gitignored secret, with the .gitignore committed so the working tree is
+# CLEAN. That matters: a dirty tree makes dr-go refuse for its own reasons, and a
+# scan test that trips the clean-tree check instead is testing nothing.
+dr_add_ignored_secret() {
+    local repo=$1 name=${2:-secrets.env}
+    printf '%s\n' "$name" >> "$repo/.gitignore"
+    git -C "$repo" add .gitignore
+    git -C "$repo" commit -qm "ignore $name"
+    printf 'AWS_SECRET=hunter2\n' > "$repo/$name"
+}
+
 # Make a commit in the stand-in, the way the agent would.
 dr_mound_commit() {
     local fake=$1 msg=${2:-agent work}

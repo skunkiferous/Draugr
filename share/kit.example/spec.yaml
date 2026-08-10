@@ -9,10 +9,14 @@
 # Worked examples: https://github.com/docker/sbx-kits-contrib
 #
 # Check it before you find out the hard way:  dr-kit validate
+# See what is actually in force, defaults included:  dr-policy
 # Applying a changed kit recreates the container, so dr-up reports drift rather
 # than doing it behind your back.
 
-schemaVersion: "1"
+# v2 spellings throughout. v1 still validates, but every field below has moved
+# and v1 now emits a deprecation warning on each check - and a warning you are
+# trained to ignore is worse than no warning. Verified against sbx 0.37.1.
+schemaVersion: "2"
 kind: mixin
 name: @NAME@
 displayName: @NAME@ development environment
@@ -21,26 +25,30 @@ description: Network rules and setup for the @NAME@ project.
 requires:
   agent: @AGENT@
 
-network:
-  # Deny-by-default: the agent reaches nothing that is not listed here. Add the
-  # registries your build actually needs and no more - this list is the whole
-  # reason for running the agent in a mound.
-  allowedDomains: []
-    # - registry.npmjs.org
-    # - pypi.org
-    # - files.pythonhosted.org
-    # - github.com
+caps:
+  network:
+    # ADDED TO the machine-wide defaults, not instead of them. sbx ships a local
+    # policy of ~190 allow rules covering package managers, OS packages, the
+    # common code hosts and the AI service endpoints - so npm, pip and github.com
+    # already work without listing anything here.
+    #
+    # Default-deny is still real: anything matching no rule anywhere is refused.
+    # Check a specific host with:  dr-policy --check <host>
+    allow: []
+      # - internal-registry.example.com
+      # - files.example.org
 
-  # deniedDomains wins over allowedDomains, for carving holes in a wildcard.
-  #deniedDomains:
-  #  - telemetry.example.com
+    # deny wins over allow, which is how you carve a hole in a wildcard or shut
+    # off something the machine-wide defaults let through.
+    #deny:
+    #  - telemetry.example.com
 
-  # Ports this project always serves. For one-off ports use dr-ports instead:
-  # editing the kit recreates the container.
-  #publishedPorts:
-  #  - container: 5173
-  #    protocol: tcp
-  #    name: dev-server
+# Ports this project always serves. Top-level in v2, NOT under network:.
+# For one-off ports use dr-ports instead - editing the kit recreates the container.
+#publishedPorts:
+#  - container: 5173
+#    protocol: tcp
+#    name: dev-server
 
 #environment:
 #  variables:

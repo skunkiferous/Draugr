@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# dr-ports - publish a port from the running mound, without rebuilding it.
+#
+# Ports declared in the kit are applied when the sandbox is created, and changing
+# the kit recreates the container. That is the wrong trade for "I just want to
+# look at the dev server for a minute", which is what this is for.
+#
+# Published ports land on WINDOWS loopback, not WSL's - so reach them from a
+# Windows browser at 127.0.0.1:<port>. From inside WSL that address is the WSL
+# VM's own loopback and will not connect; the same NAT boundary that makes
+# dr-sync use ssh applies here.
+#
+#   dr-ports                 what is published now
+#   dr-ports 5173            publish 5173 to an ephemeral host port
+#   dr-ports 8080:80         publish container 80 as host 8080
+#   dr-ports --close 8080:80 unpublish it again
+set -euo pipefail
+
+DR_PROG=dr-ports
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# A bare argument is a port spec to open; --close takes one to shut.
+close=()
+open=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --close|-c) shift; [ -n "${1:-}" ] || dr_die "--close needs a port"; close+=("$1") ;;
+        -h|--help)  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) dr_die "unknown option: $1" "Try: dr-ports --help" ;;
+        *)  open+=("$1") ;;
+    esac
+    shift
+done
+
+dr_context
+
+dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
+    "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
+
+# No arguments is a query, which is the common case and must not change anything.
+if [ ${#open[@]} -eq 0 ] && [ ${#close[@]} -eq 0 ]; then
+    dr_sbx ports "$DRAUGR_SANDBOX"
+    printf '\n  %sThese are on WINDOWS loopback - open them in a Windows browser,%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %snot with curl from WSL.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    exit 0
+fi
+
+# sbx takes --publish/--unpublish repeatably, so both lists go in one call and
+# the whole change is applied together.
+args=(ports "$DRAUGR_SANDBOX")
+for p in "${open[@]+"${open[@]}"}";  do args+=(--publish "$p"); done
+for p in "${close[@]+"${close[@]}"}"; do args+=(--unpublish "$p"); done
+
+dr_sbx "${args[@]}" || dr_die \
+    "could not change published ports" \
+    "Format:  [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTOCOL]" \
+    "See what is published now with:  dr-ports"
+
+dr_ok "ports updated"
+printf '  %sReach them from Windows at 127.0.0.1:<host port>%s\n' "$_DR_DIM" "$_DR_OFF" >&2
