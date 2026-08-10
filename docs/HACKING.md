@@ -290,9 +290,30 @@ a repo that is not under `/mnt/<drive>/`, so a test needs a repo on such a path.
 a plain directory the workflow creates, because the check is pure string matching
 and no hypervisor is involved. Where neither is possible the tests `skip`.
 
-**A skip is invisible in a green tick**, so CI re-runs `tests/mound.bats` and
-fails the job if anything skipped. Otherwise a `/mnt/c` that quietly stopped
-being writable would turn 37 tests into 37 no-ops and nothing would say so.
+**A skip is invisible in a green tick**, so CI checks the run for skips and fails
+the job if it finds any. Otherwise a `/mnt/c` that quietly stopped being writable
+would turn the mound tests into no-ops and nothing would say so.
+
+### Standing in for the mound's git repository
+
+The commands in `tests/sync.bats` talk to `ssh://<name>.sbx/<path>`, and there is
+no sandbox in a test. Rather than adding a test-only override to the production
+code, the tests use **git's own URL rewriting**:
+
+```bash
+git config "url.$fake.insteadOf" "ssh://$name.sbx$mound"
+```
+
+git then transparently redirects that exact URL to a local clone. Everything else
+is genuine — a real `git fetch`, real ref names, real commit counting — and
+`bin/dr-sync` contains no branch that exists only for tests. `dr_fake_mound` in
+`tests/helper.bash` sets this up; `dr_mound_commit` then commits there the way
+the agent would.
+
+Two things this caught that a mock would not have: `git remote get-url` applies
+the rewriting (so assertions on the configured URL must read
+`git config remote.draugr.url` instead), and the exit-status bug in
+`--check-only` where an unreachable mound reported success.
 
 ---
 
@@ -319,6 +340,42 @@ Two things follow from that, and both have bitten already:
 
 Starting a stopped sandbox is `sbx exec <name> true` — there is no `sbx start`,
 and `sbx run` would attach, which is a different command's job.
+
+---
+
+## Pattern: the git loop, and which direction is which
+
+Three repositories, and the transport is different in each direction. Getting
+this straight explains most of `bin/dr-sync`, `bin/dr-send` and `bin/dr-cp`.
+
+**Out of the mound — `ssh://`, never `git://`.** `sbx` adds its own remote
+pointing at a git daemon on `127.0.0.1`, and from WSL that is *the WSL VM's*
+loopback, not Windows'. Fetching it gives `Connection refused`. So Draugr adds
+its own remote, `$DRAUGR_REMOTE`, at `ssh://<name>.sbx/<mound path>`, which
+crosses no NAT, needs no port, and starts a stopped sandbox on connect. That is
+the whole reason `DRAUGR_REMOTE` exists; it is not duplication for its own sake.
+
+**Into the mound — not a push at all.** The obvious `git push` fails: the clone
+has that branch checked out and git refuses to update it from outside. `dr-send`
+therefore runs the transfer from the *inside*, as a fetch from the read-only host
+mount:
+
+```bash
+sbx exec <name> git -C <clone> fetch /run/sandbox/source main:refs/remotes/host/main
+```
+
+No network, no daemon, no ssh — the host repository is already mounted there. It
+lands as a remote-tracking ref rather than a branch, so nothing in the agent's
+working tree is disturbed.
+
+**Neither, for uncommitted files.** `dr-cp` wraps `sbx cp`, which writes into the
+mound as `root:root` while the agent is uid 1000 — so anything copied *in* gets
+chowned afterwards, or the agent could read it and never modify it.
+
+One rule falls out of all this: **`dr-status` must not fetch.** Reaching the
+mound starts a stopped one, and a status command with side effects is a trap. It
+reports from local refs and says "as of your last dr-sync" so the staleness is
+stated rather than implied.
 
 ---
 

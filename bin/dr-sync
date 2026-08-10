@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# dr-sync - fetch the agent's commits out of the mound onto draugr/<branch>.
+#
+# This is the direction that matters: the sandbox never pushes to you, you pull
+# from it. Nothing is merged and nothing on your branch moves - after this you
+# have a remote-tracking branch to review with dr-log and dr-diff, and dr-merge
+# accepts it when you are happy.
+#
+#   dr-sync              fetch and report
+#   dr-sync --no-fetch   report on what you already fetched, contacting nothing
+#   dr-sync --quiet      say nothing unless something is new
+#   dr-sync --check-only do not fetch; exit 0 nothing to lose, 1 unfetched
+#                        commits exist, 2 could not tell (used by dr-rm)
+set -euo pipefail
+
+DR_PROG=dr-sync
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# --check-only is what dr-rm uses before destroying a mound, so it must not
+# change anything: it asks the sandbox what it has and compares, without fetching.
+fetch=1
+check_only=
+quiet=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-fetch)   fetch= ;;
+        --check-only) check_only=1 ;;
+        -q|--quiet)   quiet=1 ;;
+        -h|--help)    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) dr_die "unknown option: $1" "Try: dr-sync --help" ;;
+    esac
+    shift
+done
+
+dr_context
+
+branch=$DRAUGR_BRANCH
+tracking=$(dr_tracking_ref)
+
+# --- check-only: would destroying the mound lose work? ----------------------
+#
+# The honest test is not "have I merged it" but "do I have the objects at all",
+# because once fetched they live in the host repo and survive dr-rm. ls-remote
+# asks the sandbox directly rather than trusting a possibly stale tracking ref.
+#
+# Three outcomes, not two: "I could not reach the mound" must not be reported as
+# "nothing to lose", which would fail open on the one command that destroys work.
+# dr-rm turns a 2 into a warning and a prompt rather than silent permission.
+if [ -n "$check_only" ]; then
+    if ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
+        exit 0
+    fi
+
+    url=$(dr_sandbox_url)
+
+    # ls-remote reaches the mound over ssh, which will start it if stopped. The
+    # timeout is a backstop so an unreachable host fails rather than hanging;
+    # `timeout` is coreutils and may be absent, hence the two branches running
+    # otherwise-identical commands.
+    #
+    # Capturing the status needs the assignment to BE the tested command. Writing
+    # `out=$(…) || out=` and then reading $? would report on the fallback
+    # assignment, which always succeeds - and unreachable would look like success.
+    rc=0
+    if command -v timeout >/dev/null 2>&1; then
+        out=$(timeout 60 git -C "$DR_REPO" ls-remote "$url" "refs/heads/$branch" 2>/dev/null) || rc=$?
+    else
+        out=$(git -C "$DR_REPO" ls-remote "$url" "refs/heads/$branch" 2>/dev/null) || rc=$?
+    fi
+    tip=$(printf '%s' "$out" | cut -f1)
+
+    # Distinguish "answered, and that branch is not there" from "never answered".
+    # ls-remote succeeds with empty output for a branch the mound does not have,
+    # which is a real answer and means the agent never committed on it.
+    if [ -n "$tip" ]; then
+        # ^{commit} forces the object to resolve as a commit; cat-file -e is a
+        # silent "do we already have this here" test.
+        if git -C "$DR_REPO" cat-file -e "$tip^{commit}" 2>/dev/null; then
+            exit 0
+        fi
+        exit 1
+    fi
+    [ "$rc" -eq 0 ] && exit 0
+    exit 2
+fi
+
+# --- the normal path --------------------------------------------------------
+
+if ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
+    dr_die "$DRAUGR_SANDBOX does not exist, so there is nothing to fetch" \
+           "Create it with:  dr-up"
+fi
+
+if [ -n "$fetch" ]; then
+    url=$(dr_remote_ensure)
+    [ -n "$quiet" ] || dr_info "fetching from $url"
+
+    # A stopped sandbox is started by the ssh connection itself, which takes a
+    # few seconds; that is why this can pause with no output.
+    git -C "$DR_REPO" fetch --prune "$DRAUGR_REMOTE" || dr_die \
+        "could not fetch from $DRAUGR_SANDBOX" \
+        "Check the mound is reachable:  dr-status" \
+        "And that WSL's ssh knows about *.sbx hosts:  dr-doctor"
+fi
+
+dr_require_tracking_ref
+
+# --- report -----------------------------------------------------------------
+#
+# Two counts, because they answer different questions: what the agent did that
+# you have not seen, and what you have that it has not been given (dr-send).
+ahead=$(git -C "$DR_REPO" rev-list --count "HEAD..$tracking" 2>/dev/null || printf 0)
+behind=$(git -C "$DR_REPO" rev-list --count "$tracking..HEAD" 2>/dev/null || printf 0)
+
+# When there is something new, list it and name the next two commands: this is
+# the moment in the loop where you decide whether to look closer or just accept.
+if [ "$ahead" -eq 0 ]; then
+    [ -n "$quiet" ] || dr_ok "nothing new in the mound - $tracking matches your branch"
+else
+    dr_ok "$ahead new commit(s) on $tracking"
+    git -C "$DR_REPO" log --oneline --no-decorate "HEAD..$tracking" | sed 's/^/  /'
+    printf '\n  %sReview:  dr-diff        Accept:  dr-merge%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+fi
+
+# Worth saying, because the agent is working from a clone that predates these and
+# will conflict with them sooner or later.
+if [ "$behind" -gt 0 ] && [ -z "$quiet" ]; then
+    dr_info "you have $behind commit(s) the mound does not - send them with:  dr-send"
+fi
+
+dr_hook post-sync "$DR_REPO"

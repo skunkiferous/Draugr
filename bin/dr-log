@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# dr-log - what the agent did that you have not seen.
+#
+# Just `git log` scoped to HEAD..draugr/<branch>, so any git log option works:
+# `dr-log -p`, `dr-log --author=…`, `dr-log -3`. Defaults to --stat, because the
+# first question about an agent's work is usually "which files did it touch".
+#
+#   dr-log             one line and a file summary per commit
+#   dr-log -p          with the full patch
+#   dr-log --oneline   just the subjects
+set -euo pipefail
+
+DR_PROG=dr-log
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+case "${1:-}" in
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+dr_context
+dr_require_tracking_ref
+tracking=$(dr_tracking_ref)
+
+# Only supply --stat when the caller has not asked for a format of their own,
+# so `dr-log --oneline` is not fighting a default it never asked for.
+if [ $# -eq 0 ]; then
+    set -- --stat
+fi
+
+# "$@" last so a caller's options win over anything above.
+exec git -C "$DR_REPO" log "HEAD..$tracking" "$@"

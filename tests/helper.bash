@@ -82,6 +82,42 @@ dr_win_root() {
     return 1
 }
 
+# --- standing in for the mound's git repository ------------------------------
+#
+# dr-sync and friends talk to ssh://<name>.sbx/<mound path>. There is no sandbox
+# in a test, so we use git's own url.<base>.insteadOf rewriting to point that URL
+# at a local clone. git then does a genuine fetch over the filesystem, which
+# means the code under test is unmodified - no test-only branch, no backdoor
+# variable, and the fetch, the ref names and the commit counting are all real.
+#
+# Prints the stand-in repo's path. Commits made there appear to Draugr exactly as
+# the agent's commits would.
+dr_fake_mound() {
+    local repo=$1 name=$2 url mound fake
+
+    # The URL Draugr will derive. It has to match exactly, so it is built the
+    # same way dr_sandbox_url builds it: /mnt is stripped to give the mound path.
+    mound=${repo#/mnt}
+    url="ssh://$name.sbx$mound"
+
+    fake="$DR_TMP/mound-$name"
+    git clone -q "$repo" "$fake"
+    git -C "$fake" config user.email agent@example.com
+    git -C "$fake" config user.name Agent
+
+    # Rewrite that exact URL to the local path, for this repo only.
+    git -C "$repo" config "url.$fake.insteadOf" "$url"
+    printf '%s' "$fake"
+}
+
+# Make a commit in the stand-in, the way the agent would.
+dr_mound_commit() {
+    local fake=$1 msg=${2:-agent work}
+    printf '%s\n' "$msg" >> "$fake/agent.txt"
+    git -C "$fake" add -A
+    git -C "$fake" commit -qm "$msg"
+}
+
 # Sets DR_WIN_TMP (removed by dr_test_teardown) and prints the repo path. Call it
 # as:  repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
 dr_make_win_repo() {

@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# dr-cp - copy files out of the mound (or into it) without going through git.
+#
+# For the things git is the wrong channel for: a log the agent produced, a
+# screenshot, a half-finished file you want to look at. Committed work should
+# come out with dr-sync instead - it keeps the history and the authorship.
+#
+# Paths inside the mound are given repo-relative and resolved against the agent's
+# clone, so `dr-cp out.log .` means "the out.log in the clone", not one in /.
+# Files and directory cannot start with a -
+#
+#   dr-cp out.log .              mound -> host
+#   dr-cp --to notes.md docs/    host  -> mound
+#   dr-cp --raw /tmp/x .         mound path taken literally, not repo-relative
+set -euo pipefail
+
+DR_PROG=dr-cp
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# Direction is a flag rather than being inferred from the paths: "does this look
+# like a sandbox path" would guess wrong the moment a host file shares a name.
+to_mound=
+raw=
+args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --to)      to_mound=1 ;;
+        --raw)     raw=1 ;;
+        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) dr_die "unknown option: $1" "Try: dr-cp --help" ;;
+        *) args+=("$1") ;;
+    esac
+    shift
+done
+
+[ ${#args[@]} -eq 2 ] || dr_die \
+    "dr-cp takes exactly two paths" \
+    "Out of the mound:  dr-cp <path-in-mound> <host-dest>" \
+    "Into the mound:    dr-cp --to <host-path> <path-in-mound>"
+
+dr_context
+
+dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
+    "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
+
+clone=$(dr_path_mound "$DR_REPO")
+
+# Resolve a mound-side path against the agent's clone unless --raw was given.
+# Absolute paths are left alone either way: they were already unambiguous.
+mound_path() {
+    case "$1" in
+        /*) printf '%s' "$1" ;;
+        *)  if [ -n "$raw" ]; then printf '%s' "$1"; else printf '%s/%s' "$clone" "$1"; fi ;;
+    esac
+}
+
+# sbx cp wants one side written as SANDBOX:PATH and the other as a plain local
+# path. Which side is which is the only difference between the two directions.
+if [ -n "$to_mound" ]; then
+    src=${args[0]}
+    dst="$DRAUGR_SANDBOX:$(mound_path "${args[1]}")"
+    [ -e "$src" ] || dr_die "no such file on the host: $src"
+else
+    src="$DRAUGR_SANDBOX:$(mound_path "${args[0]}")"
+    dst=${args[1]}
+fi
+
+dr_info "$src -> $dst"
+dr_sbx cp "$src" "$dst" || dr_die \
+    "copy failed" \
+    "Check the path exists on the source side. Inside the mound, look with:" \
+    "  dr-shell -- ls -la"
+
+# sbx cp writes to the host as whoever ran it, but *into* the mound as root:root,
+# and the agent is uid 1000 - so a file copied in would be readable and not
+# writable, which fails later in ways that look like a broken script.
+if [ -n "$to_mound" ]; then
+    target=$(mound_path "${args[1]}")
+    dr_sbx exec "$DRAUGR_SANDBOX" chown -R 1000:1000 "$target" 2>/dev/null \
+        || dr_warn "copied, but could not chown $target to the agent (uid 1000)"
+fi
+
+dr_ok "copied"

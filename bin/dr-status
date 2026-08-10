@@ -57,6 +57,28 @@ esac
 row name "$DRAUGR_SANDBOX"
 row agent "$DRAUGR_AGENT"
 
+# What dr-sync last brought back. Deliberately read from local refs only: asking
+# the mound would start a stopped one, and a status command should not have side
+# effects. So this is "as of your last dr-sync", and says so when it is empty.
+tracking=$(dr_tracking_ref)
+if git -C "$DR_REPO" rev-parse --verify --quiet "$tracking" >/dev/null; then
+    ahead=$(git -C "$DR_REPO" rev-list --count "HEAD..$tracking")
+    behind=$(git -C "$DR_REPO" rev-list --count "$tracking..HEAD")
+    if [ "$ahead" -gt 0 ]; then
+        row unmerged "${_DR_YELLOW}$ahead commit(s)${_DR_OFF} on $tracking - dr-diff, then dr-merge"
+    else
+        row unmerged "${_DR_GREEN}none${_DR_OFF} as of your last dr-sync"
+    fi
+    # Commits the agent may be working without. Phrased against the tracking ref
+    # rather than "the mound lacks these", because a dr-send since the last
+    # dr-sync would have delivered them without this ref knowing about it.
+    if [ "$behind" -gt 0 ]; then
+        row unsent "${_DR_DIM}$behind commit(s) not in $tracking - dr-send${_DR_OFF}"
+    fi
+else
+    row unmerged "${_DR_DIM}never synced${_DR_OFF} - dr-sync fetches the agent's commits"
+fi
+
 # Workspaces are worth showing because an extra read-only mount is easy to forget
 # and is the most likely answer to "why can the agent see that?".
 if [ "$state" != absent ]; then

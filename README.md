@@ -326,12 +326,12 @@ earlier on `PATH`, and call them from Makefiles and other scripts. `dr <verb>` i
 
 | Command | |
 |---|---|
-| `dr-sync` | Fetch the agent's commits onto `draugr/<branch>` ⏳ |
-| `dr-log` | What is new that you have not seen ⏳ |
-| `dr-diff` | Review it properly ⏳ |
-| `dr-merge` | Accept it (merge, or `--pick <sha>` to cherry-pick) ⏳ |
-| `dr-send` | Push *your* new host commits into the running sandbox ⏳ |
-| `dr-cp` | Pull uncommitted files out of the sandbox ⏳ |
+| `dr-sync` | Fetch the agent's commits onto `draugr/<branch>` |
+| `dr-log` | What is new that you have not seen |
+| `dr-diff` | Review it properly |
+| `dr-merge` | Accept it (merge, or `--pick <sha>` to cherry-pick) |
+| `dr-send` | Push *your* new host commits into the running sandbox |
+| `dr-cp` | Pull uncommitted files out of the sandbox |
 
 `dr-sync` uses git's `ssh://` transport, not the `git://` daemon. The daemon is published on
 Windows loopback only, which WSL cannot reach across its NAT, and its port is randomised on every

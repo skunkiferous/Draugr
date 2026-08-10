@@ -638,6 +638,63 @@ dr_sandbox_exists() {
 }
 
 # ---------------------------------------------------------------------------
+# Talking to the mound over git
+# ---------------------------------------------------------------------------
+
+# dr_sandbox_url -> ssh://<sandbox>.sbx/<mound path>
+#
+# Always ssh, never the git:// daemon sbx publishes. That daemon binds *Windows*
+# loopback, which WSL2 cannot reach across its NAT, and its port is randomised on
+# every start. ssh needs no port, crosses no NAT, matches the *.sbx block dr-setup
+# writes, and - verified - starts a stopped sandbox when you connect to it.
+#
+# Reads DR_REPO and DRAUGR_SANDBOX rather than taking them as arguments: every
+# caller is past dr_context, so parameters would only be a second way to say the
+# same thing, and a chance for the two to disagree.
+dr_sandbox_url() {
+    local mound
+    mound=$(dr_path_mound "$DR_REPO") || dr_die \
+        "$DR_REPO is not on a Windows drive, so it has no path inside the mound"
+    printf 'ssh://%s.sbx%s' "$DRAUGR_SANDBOX" "$mound"
+}
+
+# dr_remote_ensure - point $DRAUGR_REMOTE at the mound, creating it if absent.
+# Prints the URL. Set rather than left alone, because renaming the sandbox or
+# moving the repo changes it and a stale remote fails in a confusing way.
+dr_remote_ensure() {
+    local url
+    url=$(dr_sandbox_url)
+
+    # `git remote` lists names one per line; -x anchors so "draugr" cannot match
+    # a remote called "draugr-old".
+    if git -C "$DR_REPO" remote | grep -qx "$DRAUGR_REMOTE"; then
+        git -C "$DR_REPO" remote set-url "$DRAUGR_REMOTE" "$url"
+    else
+        git -C "$DR_REPO" remote add "$DRAUGR_REMOTE" "$url"
+        dr_debug "added remote $DRAUGR_REMOTE -> $url"
+    fi
+    printf '%s' "$url"
+}
+
+# dr_tracking_ref - <remote>/<branch>, the thing dr-log, dr-diff, dr-merge and
+# dr-status all compare against. Named once here so they cannot disagree.
+dr_tracking_ref() {
+    printf '%s/%s' "$DRAUGR_REMOTE" "$DRAUGR_BRANCH"
+}
+
+# dr_require_tracking_ref - fail helpfully when there is nothing fetched yet,
+# which is the normal state before the first dr-sync and reads as a git error
+# otherwise.
+dr_require_tracking_ref() {
+    local ref
+    ref=$(dr_tracking_ref)
+    git -C "$DR_REPO" rev-parse --verify --quiet "$ref" >/dev/null && return 0
+    dr_die \
+        "nothing fetched from the mound yet ($ref does not exist)" \
+        "Fetch the agent's commits first:  dr-sync"
+}
+
+# ---------------------------------------------------------------------------
 # Hooks - run on the HOST (WSL), which is exactly what a kit's commands cannot do.
 # ---------------------------------------------------------------------------
 

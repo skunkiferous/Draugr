@@ -229,7 +229,7 @@ Seven of these. They are cheap now and expensive in Phase 4.
 | `dr_load_config` | defaults → `~/.config/draugr/config` → `.draugr.conf` → `.draugr.local.conf` → `DRAUGR_*` env → flags, recording provenance per key. |
 | `dr_trust_check` | SHA-256 of each project config against `~/.config/draugr/trusted`; refuse to source an unseen one. |
 | `dr_sandbox_name` | `$DRAUGR_SANDBOX` or `draugr-<leaf>`, validated against sbx's charset. |
-| `dr_sandbox_state` | `sbx ls --json` + jq → `absent|stopped|running`. |
+| `dr_sandbox_state` | `sbx ls --json` + jq → `absent` / `stopped` / `running`. |
 | `dr_hook` | Run `.draugr/hooks/<name>` if executable, with the merged config exported. |
 
 Commands: `dr-config`, `dr-trust`, `dr-doctor`, `dr-setup`, `dr-init`.
@@ -289,6 +289,8 @@ guard. 37 bats tests cover the argument construction against the mock.
 
 ## Phase 3 — Moving code · **the daily loop closes here**
 
+**Status: done** — the loop was executed verbatim against a real mound, see below.
+
 **Goal:** the five-command loop on the front page works.
 
 - `dr-sync` — port `tmp/sbx-sync.sh`: derive the `ssh://<name>.sbx<mound-path>` URL, add-or-set-url
@@ -302,12 +304,24 @@ guard. 37 bats tests cover the argument construction against the mock.
 - `dr-status` gains its unfetched-commit and drift columns.
 - `DRAUGR_AUTO_SYNC` wired into `dr-go`'s detach path.
 
-**Verification task:** confirm whether `sbx create --clone` adds its own `sandbox-<name>` remote to
-the host repo, and that Draugr's `draugr` remote coexists with it.
+**Verification task — done.** `sbx create --clone` does add `sandbox-<name>`, pointing at the
+unreachable `git://` daemon; Draugr's `draugr` remote is a separate name with a working `ssh://` URL
+and the two coexist without interfering. Also settled: **`ssh://` does start a stopped sandbox** —
+measured `stopped` → `git ls-remote` (4.4 s) → `running`, which closes the last open item from
+Phase 2 and is what lets `dr-sync` work without calling `dr-up` first.
 
-**Acceptance:** the README's daily loop, executed verbatim against a scratch repo, produces a commit
-made inside the mound that ends up merged on the host branch. `dr-sync` on a stopped sandbox starts
-it via ssh, as designed. `dr-rm` now genuinely refuses while `HEAD..draugr/main` is non-empty.
+**Acceptance — met.** Against a real mound: a commit made *inside* the microVM (`implement solver`)
+came out through `dr-sync`, was reviewed with `dr-log` and `dr-diff`, and `dr-merge` put it on the
+host branch at the same hash with the agent's authorship intact. `dr-send` moved a host commit the
+other way through `/run/sandbox/source`, `dr-send --merge` fast-forwarded the clone onto it, and
+`dr-cp` pulled an uncommitted file out. `dr-rm` refused while `draugr/main` held unfetched work and
+proceeded once it was fetched. 105 bats tests, none skipped.
+
+**One design change against the plan.** `--check-only` returns **three** values, not two: 0 nothing
+to lose, 1 unfetched commits exist, **2 could not tell**. Collapsing "unreachable" into 0 would fail
+open on the one command that destroys work, and into 1 would make `dr-rm` unusable on a broken
+sandbox — which is a common reason to reach for it. `dr-rm` turns a 2 into a warning so the
+confirmation prompt is an informed one.
 
 ---
 

@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# dr-merge - accept the agent's work onto your branch.
+#
+# Treat it the way you would a colleague's branch: this is an ordinary git merge
+# of draugr/<branch>, and anything git can do afterwards - amend, rebase, reset -
+# still applies. Nothing is pushed anywhere; publishing stays your `git push`.
+#
+#   dr-merge                 merge draugr/<branch>
+#   dr-merge --pick <sha>    cherry-pick one commit instead
+#   dr-merge --ff-only       refuse anything that would create a merge commit
+set -euo pipefail
+
+DR_PROG=dr-merge
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# Anything not recognised is passed to git merge, so --squash, --no-ff and
+# friends work without dr-merge having to know about them.
+pick=
+git_args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --pick) shift; pick=${1:-}; [ -n "$pick" ] || dr_die "--pick needs a commit" ;;
+        -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) git_args+=("$1") ;;
+    esac
+    shift
+done
+
+dr_context
+
+# Merging into a dirty tree is how people lose work they had not committed. git
+# would refuse some of these itself, but not all, and its message does not say
+# what to do about it.
+if ! dr_repo_is_clean "$DR_REPO"; then
+    dr_error "your working tree has uncommitted changes"
+    git -C "$DR_REPO" status --short >&2
+    dr_die "refusing to merge into it" \
+        "Commit or stash them first - a merge on top of uncommitted work is hard to unpick."
+fi
+
+dr_require_tracking_ref
+tracking=$(dr_tracking_ref)
+
+# --pick takes one commit rather than the whole branch, for when the agent did
+# three useful things and one you do not want.
+if [ -n "$pick" ]; then
+    dr_info "cherry-picking $pick onto $(dr_repo_branch "$DR_REPO")"
+    git -C "$DR_REPO" cherry-pick "$pick" || dr_die \
+        "cherry-pick failed" \
+        "Resolve it, then:  git cherry-pick --continue" \
+        "Or abandon it with:  git cherry-pick --abort"
+    dr_ok "picked $pick"
+    exit 0
+fi
+
+# Nothing to do is worth saying plainly rather than letting git print
+# "Already up to date." and leaving you wondering if dr-sync ran.
+if [ "$(git -C "$DR_REPO" rev-list --count "HEAD..$tracking")" -eq 0 ]; then
+    dr_ok "nothing to merge - $tracking has nothing your branch does not"
+    exit 0
+fi
+
+dr_info "merging $tracking into $(dr_repo_branch "$DR_REPO")"
+git -C "$DR_REPO" merge "${git_args[@]+"${git_args[@]}"}" "$tracking" || dr_die \
+    "merge failed" \
+    "Resolve the conflicts, then:  git commit" \
+    "Or back out entirely with:  git merge --abort"
+
+dr_ok "merged"
+printf '  %sPublish it the way you always do:  git push%s\n' "$_DR_DIM" "$_DR_OFF" >&2

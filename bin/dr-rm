@@ -7,7 +7,8 @@
 #
 #   dr-rm              destroy this repo's mound
 #   dr-rm <name>       destroy one by name
-#   dr-rm --yes        do not ask
+#   dr-rm --yes        skip the confirmation prompt
+#   dr-rm --force      also skip the unfetched-commits check. This throws work away.
 set -euo pipefail
 
 DR_PROG=dr-rm
@@ -18,11 +19,18 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # A bare word is a sandbox name, which is how you remove one belonging to a repo
 # you have since deleted - the commonest reason to reach for dr-rm by name.
+#
+# --yes and --force are deliberately different. --yes means "stop asking me", and
+# still refuses to destroy work you have not fetched. --force means "I know there
+# is unfetched work and I want it gone" - two separate decisions, so answering
+# one does not silently answer the other.
 name=
+force=
 while [ $# -gt 0 ]; do
     case "$1" in
-        -y|--yes)  DR_ASSUME_YES=1 ;;
-        -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -y|--yes)   DR_ASSUME_YES=1 ;;
+        -f|--force) force=1; DR_ASSUME_YES=1 ;;
+        -h|--help)  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) dr_die "unknown option: $1" "Try: dr-rm --help" ;;
         *) name=$1 ;;
     esac
@@ -40,15 +48,26 @@ fi
 
 [ "$(dr_sandbox_state "$name")" != absent ] || dr_die "$name does not exist" "See what does:  dr-ls"
 
-# Phase 3 replaces this with a real comparison against the sandbox remote, which
-# is the only way to know whether the agent committed something you never
-# fetched. Until dr-sync exists there is nothing truthful to compare, so the
-# check reports what it can and defers to the confirmation prompt below.
-if [ -n "$repo" ] && [ -x "$_dr_bin/dr-sync" ]; then
-    "$_dr_bin/dr-sync" --check-only || dr_die \
-        "$name has commits you have not fetched" \
-        "Fetch them first with:  dr-sync" \
-        "Or discard them with:  dr-rm --yes"
+# Ask the mound what it has before destroying it. This costs a few seconds and
+# will start a stopped sandbox, because the only way to know whether the agent
+# committed something you never fetched is to ask it - a local tracking ref only
+# says what was true at the last dr-sync. Worth it: the alternative is losing
+# work permanently. Skipped when a bare name was given, since without a repo
+# there is nothing to compare against.
+if [ -z "$force" ] && [ -n "$repo" ] && [ -x "$_dr_bin/dr-sync" ]; then
+    check=0
+    "$_dr_bin/dr-sync" --check-only || check=$?
+    case "$check" in
+        1) dr_die \
+               "$name has commits you have not fetched" \
+               "Fetch them first with:  dr-sync" \
+               "Then dr-rm again. To throw them away instead:  dr-rm --force" ;;
+        # Could not reach the mound. Not proof that it is safe, so say so and let
+        # the confirmation below be an informed one rather than a formality.
+        2) dr_warn "could not reach $name to check for unfetched commits"
+           printf '  %sIf the agent committed something you never fetched, this destroys it.%s\n' \
+               "$_DR_DIM" "$_DR_OFF" >&2 ;;
+    esac
 fi
 
 dr_confirm "Destroy $name and its clone? Any commits you have not fetched are lost." \

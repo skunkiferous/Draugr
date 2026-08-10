@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# dr-send - make your newest host commits available inside the mound.
+#
+# The obvious implementation - push from the host into the clone - does not work:
+# the clone has that branch checked out, and git refuses to update a checked-out
+# branch from outside. So this runs the transfer from the *inside* instead, as a
+# fetch from the read-only host mount at /run/sandbox/source. No network, no
+# daemon, no ssh: the repository is simply already there.
+#
+# It fetches; it does not merge, because the agent may be mid-edit in that clone.
+#
+#   dr-send            fetch your commits into the mound as host/<branch>
+#   dr-send --merge    also merge them, if the agent's tree is clean
+set -euo pipefail
+
+DR_PROG=dr-send
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# --merge is opt-in because the agent may be mid-edit in that clone; the default
+# makes the commits available and lets whoever is inside decide when to take them.
+merge=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --merge)   merge=1 ;;
+        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) dr_die "unknown option: $1" "Try: dr-send --help" ;;
+    esac
+    shift
+done
+
+dr_context
+
+dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
+    "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
+
+# Only committed work can travel: the mount shows the agent your files, but a
+# fetch moves commits, so anything uncommitted here simply is not in the transfer.
+if ! dr_repo_is_clean "$DR_REPO"; then
+    dr_warn "you have uncommitted changes; only committed work is sent"
+    git -C "$DR_REPO" status --short >&2
+fi
+
+branch=$DRAUGR_BRANCH
+clone=$(dr_path_mound "$DR_REPO")
+
+# refs/remotes/host/<branch> rather than a local branch name, so nothing inside
+# the clone is overwritten and the agent sees it as a remote to merge from.
+dr_info "sending $branch into $DRAUGR_SANDBOX"
+dr_sbx exec "$DRAUGR_SANDBOX" \
+    git -C "$clone" fetch /run/sandbox/source "$branch:refs/remotes/host/$branch" \
+    || dr_die \
+        "could not fetch inside the mound" \
+        "Is the mound running, and is $clone the agent's clone?  dr-status"
+
+dr_ok "your commits are on host/$branch inside the mound"
+
+# Stopping here is the normal case, so name both ways forward rather than leaving
+# the reader to work out what "available inside the mound" gets them.
+if [ -z "$merge" ]; then
+    printf '  %sThe agent can take them with:  git merge host/%s%s\n' \
+        "$_DR_DIM" "$branch" "$_DR_OFF" >&2
+    printf '  %sOr do it now with:  dr-send --merge%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    exit 0
+fi
+
+# --merge is opt-in and still refuses on a dirty clone, because the agent may be
+# part-way through an edit in there and a merge would tangle it.
+if ! dr_sbx exec "$DRAUGR_SANDBOX" git -C "$clone" diff --quiet HEAD 2>/dev/null; then
+    dr_die \
+        "the agent's tree has uncommitted changes; not merging into it" \
+        "Ask the agent to commit, then re-run:  dr-send --merge" \
+        "Or leave it - the commits are already there as host/$branch."
+fi
+
+dr_sbx exec "$DRAUGR_SANDBOX" git -C "$clone" merge --ff-only "host/$branch" \
+    || dr_die \
+        "could not fast-forward the mound to host/$branch" \
+        "The agent has commits of its own, so this needs a real merge." \
+        "Fetch its work first with dr-sync, or merge inside:  dr-shell"
+
+dr_ok "the mound is now at your $branch"

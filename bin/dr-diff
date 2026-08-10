@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# dr-diff - review what the agent actually changed, properly.
+#
+# Uses the three-dot form, HEAD...draugr/<branch>, which diffs from where the two
+# diverged. That matters once you have committed on the host as well: two-dot
+# would also show your own commits, inverted, as though the agent had reverted
+# them. Three-dot shows only the agent's work.
+#
+#   dr-diff                  the whole change
+#   dr-diff --stat           just the shape of it
+#   dr-diff -- src/foo.py    one path
+set -euo pipefail
+
+DR_PROG=dr-diff
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+case "${1:-}" in
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+dr_context
+dr_require_tracking_ref
+tracking=$(dr_tracking_ref)
+
+exec git -C "$DR_REPO" diff "HEAD...$tracking" "$@"
