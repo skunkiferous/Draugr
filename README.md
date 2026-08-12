@@ -357,9 +357,9 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 
 | Command | |
 |---|---|
-| `dr-data status` | Dry run, both directions: what would move, and how much ⏳ |
-| `dr-data push` | Host → sandbox, for paths matching `DRAUGR_DATA` ⏳ |
-| `dr-data pull` | Sandbox → host, same paths ⏳ |
+| `dr-data status` | Dry run, both directions: what would move, and how much |
+| `dr-data push` | Host → sandbox, for paths matching `DRAUGR_DATA` |
+| `dr-data pull` | Sandbox → host, same paths |
 
 ### Context
 

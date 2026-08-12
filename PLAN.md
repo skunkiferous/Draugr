@@ -403,6 +403,8 @@ the rules you did not write are one command away rather than invisible.
 
 ## Phase 5 — Moving data
 
+**Status: done** — acceptance verified against a real mound, see below.
+
 **Goal:** `DRAUGR_DATA` as documented, including the exemption from the clean-tree check.
 
 - `dr-data status|push|pull` — rsync over the `*.sbx` ssh transport, `--chmod=$DRAUGR_DATA_CHMOD`,
@@ -417,10 +419,32 @@ the rules you did not write are one command away rather than invisible.
 - rsync presence check in the mound at creation, with `apt-get install -y rsync` and a `tar`-over-ssh
   fallback.
 
-**Acceptance:** a repo with a gitignored `data/` tree pushes on `dr-up`; a file the agent writes
-comes back on `dr-data pull`; a second push after a small edit transfers kilobytes, not gigabytes
-(assert on `--stats`); `dr-go` succeeds with `data/` dirty and still fails with a source file dirty;
-files land in the mound owned by `agent` and mode 644.
+**Acceptance — met**, against a real mound with a gitignored `tmp/` tree:
+
+| Criterion | Result |
+|---|---|
+| pushes on `dr-up` | `DRAUGR_DATA_PUSH=auto` fired during creation, 4 files, 3 MB |
+| owned by `agent`, mode 644 | `-rw-r--r-- 1 agent agent 3000000 big.bin` |
+| a small edit transfers kilobytes | appended **21 bytes** to a 3 MB file → **7,884 bytes on the wire** |
+| the agent's file comes back | `dr-data pull` returned `tmp/out/result.txt` |
+| source files untouched | `app.py` appears in neither direction of `dr-data status` |
+| `dr-go` tolerates dirty data, not dirty source | unit-tested both ways |
+
+**The bug this phase nearly shipped.** `for entry in $DRAUGR_DATA` performs word splitting *and
+pathname expansion*, so `tmp/**` was silently replaced by whatever `tmp/` happened to contain in the
+current directory. Run from Draugr's own root it expanded to six real filenames, turning a pattern
+into a snapshot of today's files — dependent on the working directory, and blind to anything created
+later. `read -ra` splits without globbing and is now used for both consumers. The test caught it
+because the filter rules are checked against **real rsync** rather than against a reimplementation
+of what rsync is believed to do.
+
+**Filter rules, verified against rsync itself.** Three entry shapes, one recipe:
+`--include='*/'` to descend, then the entries, then `--exclude='*'`, with `-m` to prune the empty
+directories that the first rule would otherwise leave behind. A trailing `/` needs *two* includes
+(the directory and its contents); an entry containing `/` is anchored with a leading `/`; an entry
+without one stays unanchored so `*.parquet` matches at every depth. `dr_data_filters` and
+`dr_data_matches` sit next to each other in `lib/common.sh` because they must agree — a file that
+transfers but still blocks `dr-go` would be a long afternoon.
 
 ---
 

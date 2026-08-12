@@ -199,4 +199,11 @@ absent)
     ;;
 esac
 
+# Data goes in after the mound is up but before the agent starts, so the files
+# are already there when it looks. Push is host-wins, which is the safe default
+# direction: the host copy is the one you can still recover from git or backup.
+if [ "$DRAUGR_DATA_PUSH" = auto ] && [ -n "$DRAUGR_DATA" ] && [ -x "$_dr_bin/dr-data" ]; then
+    "$_dr_bin/dr-data" push --yes || dr_warn "auto data push failed; retry with:  dr-data push"
+fi
+
 dr_hook post-up "$DR_REPO"

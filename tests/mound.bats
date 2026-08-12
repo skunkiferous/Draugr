@@ -156,6 +156,24 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     [[ "$output" != *"clone only contains commits"* ]]
 }
 
+@test "dr-go: a dirty DRAUGR_DATA file does not block" {
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-go
+    # Data churn is exempt, so it gets past the clean check to the terminal one.
+    [[ "$output" != *"clone only contains commits"* ]]
+    [[ "$output" == *"needs a terminal"* ]]
+}
+
+@test "dr-go: a dirty source file still blocks even with DRAUGR_DATA set" {
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    printf 'wip\n' > "$REPO/source.py"
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-go
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"clone only contains commits"* ]]
+}
+
 @test "dr-go: refuses to attach without a terminal" {
     DR_MOCK_STATE=running run dr-go
     [ "$status" -ne 0 ]

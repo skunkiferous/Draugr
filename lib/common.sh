@@ -638,6 +638,149 @@ dr_sandbox_exists() {
 }
 
 # ---------------------------------------------------------------------------
+# DRAUGR_DATA - files that travel beside git rather than through it
+#
+# One list, two consumers with different syntaxes: rsync filter rules (dr-data)
+# and shell glob matching (the clean-tree exemption in dr-go). They must agree,
+# or a file would be transferred but still block dr-go, so both interpretations
+# of an entry are defined here, together, in one place.
+#
+#   ending in "/"     a directory: that prefix and everything under it
+#   containing "/"    a path pattern, anchored at the repo root
+#   neither           a bare name or extension, matched ANYWHERE in the tree
+# ---------------------------------------------------------------------------
+
+# _dr_data_entries - split DRAUGR_DATA into an array WITHOUT globbing it.
+#
+# `for entry in $DRAUGR_DATA` looks like the obvious way to do this and is wrong.
+# Unquoted expansion performs word splitting *and pathname expansion*, so
+# "tmp/**" is silently replaced by whatever tmp/ happens to contain in the
+# current directory - turning a pattern into a snapshot of today's filenames,
+# dependent on the working directory, and missing anything created later.
+#
+# `read -ra` splits on IFS and does not glob, which is what we actually want.
+_dr_data_entries() {
+    read -ra _DR_DATA_ENTRIES <<< "${DRAUGR_DATA:-}"
+}
+
+# dr_data_matches <repo-relative-path> - is this path covered by DRAUGR_DATA?
+#
+# Everything below turns on one rule: a `case` pattern is a GLOB, and QUOTING is
+# what decides which parts of it are wildcards. Quoted text is literal; unquoted
+# text is a pattern; and a single pattern can mix the two. So
+#
+#     case "$path" in "$entry")  …   # matches a file literally named *.parquet
+#     case "$path" in  $entry )  …   # matches every .parquet file
+#
+# are completely different tests. Both forms are used deliberately below.
+dr_data_matches() {
+    local path=$1 entry
+    [ -n "${DRAUGR_DATA:-}" ] || return 1
+
+    local _DR_DATA_ENTRIES=()
+    _dr_data_entries
+    for entry in "${_DR_DATA_ENTRIES[@]}"; do
+        case "$entry" in
+            */)
+                # A directory, e.g. "scratch/raw/". The pattern is built from
+                # three pieces:
+                #
+                #   "${entry%/}"   QUOTED, so literal. "%" trims from the back,
+                #                  removing the trailing slash: -> scratch/raw
+                #   /              a literal slash
+                #   *              UNQUOTED, so a wildcard: anything at all
+                #
+                # The mandatory slash is what makes this precise: scratch/raw/r1
+                # matches, scratch/rawdata/r1 does not. Keeping the entry quoted
+                # also means a directory name containing [ or * is treated as
+                # the characters the user typed.
+                case "$path" in
+                    "${entry%/}"/*) return 0 ;;
+                esac
+                ;;
+            */*)
+                # A path pattern, e.g. "tmp/**". Unquoted, so it globs.
+                #
+                # Worth knowing: in `case` - unlike filename globbing - "*"
+                # matches slashes too, because no filesystem is involved. So
+                # tmp/* would already match tmp/deep/y.bin, and here "**" is
+                # exactly equivalent to "*". The "**" spelling is carried
+                # through for rsync's benefit (dr_data_filters), where the two
+                # genuinely differ.
+                # shellcheck disable=SC2254  # unquoted on purpose: it IS a pattern
+                case "$path" in
+                    $entry) return 0 ;;
+                esac
+                ;;
+            *)
+                # A bare name or extension, e.g. "*.parquet".
+                #
+                # ${path##*/} is basename: "##" deletes the LONGEST prefix
+                # matching */, so src/lib/b.parquet -> b.parquet. Matching the
+                # basename is what lets one extension rule cover every depth.
+                # shellcheck disable=SC2254  # unquoted on purpose: it IS a pattern
+                case "${path##*/}" in
+                    $entry) return 0 ;;
+                esac
+                ;;
+        esac
+    done
+    return 1
+}
+
+# dr_data_filters - the same list as rsync filter rules, one per line.
+#
+# The order is the classic recipe and matters, because rsync takes the FIRST
+# rule that matches: descend into every directory, then include what we want,
+# then exclude everything else. dr-data pairs this with -m (--prune-empty-dirs)
+# so the "*/" include does not leave a skeleton of empty directories behind.
+dr_data_filters() {
+    local entry
+    printf '%s\n' '--include=*/'
+
+    # Split without globbing - see _dr_data_entries. Getting this wrong here
+    # would hand rsync a list of literal filenames instead of the patterns.
+    local _DR_DATA_ENTRIES=()
+    _dr_data_entries
+    for entry in "${_DR_DATA_ENTRIES[@]}"; do
+        case "$entry" in
+            # A directory needs both rules: the directory itself, and its contents.
+            */)  printf -- '--include=/%s\n--include=/%s**\n' "$entry" "$entry" ;;
+            # A leading "/" anchors the pattern at the transfer root, i.e. the repo.
+            */*) printf -- '--include=/%s\n' "$entry" ;;
+            # No slash: unanchored, so it matches at any depth.
+            *)   printf -- '--include=%s\n' "$entry" ;;
+        esac
+    done
+    printf '%s\n' '--exclude=*'
+}
+
+# dr_data_dirty_only <repo> - true when every uncommitted change is a data file.
+#
+# This is the DRAUGR_REQUIRE_CLEAN exemption: churning a parquet file must not
+# stop you starting a session, because that file is not travelling through git
+# anyway. A single dirty *source* file still blocks, which is the point.
+dr_data_dirty_only() {
+    local repo=${1:-$PWD} line path
+    [ -n "${DRAUGR_DATA:-}" ] || return 1
+
+    # --porcelain gives "XY path"; the status letters are always the first two
+    # columns, so cutting from the fourth character leaves the path.
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        path=${line:3}
+
+        # A rename reads "old -> new"; judge it by the destination.
+        case "$path" in
+            *" -> "*) path=${path##* -> } ;;
+        esac
+
+        dr_data_matches "$path" || return 1
+    done < <(git -C "$repo" status --porcelain 2>/dev/null)
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Kits
 # ---------------------------------------------------------------------------
 

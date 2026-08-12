@@ -56,7 +56,10 @@ fi
 # simply not in it. Without this check the agent quietly builds on stale code and
 # you find out an hour later. --dirty is the escape hatch when that is fine.
 if dr_is_true "$DRAUGR_REQUIRE_CLEAN" && [ -z "$dirty" ] && dr_is_true "$DRAUGR_CLONE"; then
-    if ! dr_repo_is_clean "$DR_REPO"; then
+    # DRAUGR_DATA files are exempt: they travel by rsync rather than through git,
+    # so churning a parquet file is not the mistake this check exists to catch.
+    # A single dirty *source* file still blocks, which is the point.
+    if ! dr_repo_is_clean "$DR_REPO" && ! dr_data_dirty_only "$DR_REPO"; then
         dr_error "your working tree has uncommitted changes"
         git -C "$DR_REPO" status --short >&2
         dr_die "the agent would not see them" \
@@ -118,6 +121,13 @@ dr_hook post-attach "$DR_REPO"
 # is a few seconds and a remote-tracking branch you ignore.
 if dr_is_true "$DRAUGR_AUTO_SYNC" && [ -x "$_dr_bin/dr-sync" ]; then
     "$_dr_bin/dr-sync" || dr_warn "auto-sync failed; fetch by hand with:  dr-sync"
+fi
+
+# A pull overwrites host files with the sandbox's, so it is opt-in per the
+# config and never the default. --yes because you are being handed back a
+# terminal, not asked a question you were expecting.
+if [ "$DRAUGR_DATA_PULL" = auto ] && [ -n "$DRAUGR_DATA" ] && [ -x "$_dr_bin/dr-data" ]; then
+    "$_dr_bin/dr-data" pull --yes || dr_warn "auto data pull failed; retry with:  dr-data pull"
 fi
 
 exit "$rc"

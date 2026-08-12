@@ -150,6 +150,53 @@ esac
 same language as filename globbing, not regular expressions. `|` separates
 alternative patterns. Matching stops at the first branch that fits.
 
+Note the asymmetry: the word after `case` is an ordinary **string**, the words
+after `in` are **patterns**. `case "$path" in` is quoted because `$path` is data.
+
+### Quoting is what makes something a wildcard
+
+This is the part that catches people, and `dr_data_matches` depends on it
+entirely. Inside a pattern, quoted text is **literal** and unquoted text is a
+**pattern** — and one pattern can mix both:
+
+```bash
+entry='*.parquet'
+case "$p" in  $entry ) …    # unquoted: matches a.parquet, lib/b.parquet, …
+case "$p" in "$entry") …    # quoted:   matches ONLY a file called *.parquet
+```
+
+So a variable holding a pattern must be left unquoted to work as one — which is
+exactly what ShellCheck's SC2254 asks about, and why the two places that want it
+carry a targeted `disable` rather than being "fixed".
+
+Mixing the two is how `dr_data_matches` handles a directory entry:
+
+```bash
+case "$path" in "${entry%/}"/*) return 0 ;; esac
+```
+
+Three fragments: `"${entry%/}"` is quoted so it is literal (with `%` trimming the
+trailing slash, `scratch/raw/` → `scratch/raw`), then a literal `/`, then an
+unquoted `*`. The mandatory slash is what makes `scratch/raw/r1` match while
+`scratch/rawdata/r1` does not, and the quoting means a directory called
+`odd[name]` is taken as the characters the user typed.
+
+### `*` crosses `/` here, but not when globbing filenames
+
+Same character, two different engines, and the difference is genuinely
+surprising:
+
+```bash
+ls tmp/*                          # tmp/deep  tmp/x.bin   — stopped at the slash
+case tmp/deep/y.bin in tmp/*)     # MATCHES               — crossed it
+```
+
+Pathname expansion walks the filesystem one directory at a time, so `*` cannot
+span a separator. `case` is pure string matching with no disk involved, so it
+can. One consequence worth stating out loud: in a `case` pattern `**` is
+**identical** to `*`. Draugr writes `tmp/**` anyway because the same string is
+handed to rsync, where the two really do differ.
+
 The colon-wrapping idiom in `install.sh` is worth knowing:
 
 ```bash
@@ -395,6 +442,51 @@ regression test that captures stdout alone and checks the ordering.
 
 So: `dr_heading` is for interactive prompts, like `dr-trust`'s file review.
 A report defines its own.
+
+---
+
+## Pattern: one list, two syntaxes
+
+`DRAUGR_DATA` is read by two things that speak different languages — rsync filter
+rules (`dr-data`) and shell glob matching (the clean-tree exemption in `dr-go`).
+They must agree, or a file transfers correctly and *still* blocks `dr-go`, which
+is a genuinely confusing afternoon. So both interpretations live together in
+`lib/common.sh`, with the three entry shapes documented once:
+
+| Entry | Means | `case` form | rsync form |
+|---|---|---|---|
+| `scratch/raw/` | that directory and everything under it | `"${entry%/}"/*` | two rules: the dir and `/**` |
+| `tmp/**` | a pattern, anchored at the repo root | `$entry` unquoted | `--include=/tmp/**` |
+| `*.parquet` | a bare name, matched at **any** depth | `$entry` vs the basename | unanchored `--include=*.parquet` |
+
+The `case` column is explained under *Quoting is what makes something a
+wildcard* above; the short version is that quoted fragments are literal and
+unquoted ones are patterns, and `dr_data_matches` mixes both on purpose.
+
+The rsync recipe is `--include='*/'` to descend, then the entries, then
+`--exclude='*'`, with `-m` to prune the empty directories the first rule leaves.
+Order matters: rsync takes the *first* matching rule.
+
+**Splitting the list will glob it if you let it.** This looks right and is not:
+
+```bash
+for entry in $DRAUGR_DATA; do …      # don't
+```
+
+Unquoted expansion does word splitting **and pathname expansion**, so `tmp/**`
+is replaced by whatever `tmp/` contains in the current directory — a pattern
+silently becomes a snapshot of today's filenames, varying with `$PWD` and blind
+to anything created later. Use `read -ra`, which splits on `IFS` and does not
+glob:
+
+```bash
+read -ra entries <<< "$DRAUGR_DATA"  # do
+```
+
+This shipped as far as the test suite before being caught, and only because the
+filter rules are tested against **real rsync** rather than against a
+reimplementation of what rsync is assumed to do. When the language is someone
+else's, test against their implementation.
 
 ---
 

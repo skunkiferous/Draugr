@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# dr-data - move DRAUGR_DATA files between host and mound, beside git.
+#
+# Git is the right channel for source and the wrong one for a half-processed 4 GB
+# parquet file. This is the second channel: rsync over the same ssh transport
+# dr-sync uses, landing files at the SAME repo-relative path on both sides, so a
+# script reading tmp/raw/2024.parquet works unchanged in either place.
+#
+# One direction at a time, always. There is no merge algorithm for a parquet
+# file: if both sides changed it, any bidirectional sync silently picks a winner
+# and destroys the other version. So each transfer declares a source of truth.
+#
+#   dr-data status   dry run, BOTH directions - what would move, and how much
+#   dr-data push     host -> mound  (the host wins)
+#   dr-data pull     mound -> host  (the sandbox wins)
+set -euo pipefail
+
+DR_PROG=dr-data
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# status is the default because it is the only one that changes nothing, and the
+# usual first question is "which way do I actually want to go".
+action=${1:-status}
+case "$action" in
+    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    status|push|pull) shift || : ;;
+    *) dr_die "unknown action: $action" "One of: status, push, pull" ;;
+esac
+
+# --delete is refused unless the config asked for it AND this run confirms, so a
+# tidy-up on one side cannot quietly wipe the other side's generated output.
+delete=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes)   DR_ASSUME_YES=1 ;;
+        --delete)   delete=1 ;;
+        *) dr_die "unknown option: $1" "Try: dr-data --help" ;;
+    esac
+    shift
+done
+
+dr_context
+
+[ -n "$DRAUGR_DATA" ] || dr_die \
+    "DRAUGR_DATA is empty, so there is nothing to move" \
+    "Set it to repo-relative globs, e.g.  DRAUGR_DATA=\"tmp/** *.parquet\"" \
+    "It came from ${DR_ORIGIN[DRAUGR_DATA]}."
+
+dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
+    "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
+
+# The rules live in lib/common.sh beside dr_data_matches, because the two have to
+# agree: a file that transfers but still blocks dr-go, or the reverse, would be a
+# bug you could stare at for a long time. mapfile reads them one per line.
+mapfile -t filters < <(dr_data_filters)
+
+mound=$(dr_path_mound "$DR_REPO")
+remote="$DRAUGR_SANDBOX.sbx:$mound/"
+local_dir="$DR_REPO/"
+
+# -a keeps permissions and times; -m prunes the empty directories; --chmod
+# normalises modes on the way in, because everything on /mnt/c is mode 777 under
+# WSL and that would otherwise be carried into the mound.
+common=(-a -m --chmod="$DRAUGR_DATA_CHMOD" "${filters[@]}")
+
+# rsync's own summary is more honest than anything we could compute: it reports
+# what actually moved on the wire, which is the number that shows the delta
+# algorithm is working across the boundary.
+run_rsync() {
+    local label=$1 src=$2 dst=$3
+    shift 3
+    dr_info "$label"
+    rsync "${common[@]}" "$@" "$src" "$dst" || dr_die \
+        "rsync failed" \
+        "Is the mound reachable?  dr-status" \
+        "Is rsync installed inside it?  dr-shell -- command -v rsync"
+}
+
+case "$action" in
+
+# Both directions, neither applied. This is the command to run before deciding
+# which way you actually want to go.
+status)
+    dr_heading "host -> mound (dr-data push would transfer)"
+    run_rsync "dry run" "$local_dir" "$remote" --dry-run --stats
+    dr_heading "mound -> host (dr-data pull would transfer)"
+    run_rsync "dry run" "$remote" "$local_dir" --dry-run --stats
+    ;;
+
+push|pull)
+    # Deletion propagates only when both the config and this invocation agree.
+    # DRAUGR_DATA_DELETE alone is not enough, because the destructive case is
+    # the one where you tidied one side and forgot the other has your only copy.
+    del=()
+    if [ -n "$delete" ] || dr_is_true "$DRAUGR_DATA_DELETE"; then
+        dr_warn "--delete: files missing on the source will be REMOVED on the destination"
+        dr_confirm "Propagate deletions?" || dr_die "cancelled"
+        del=(--delete)
+    fi
+
+    # Same rsync either way; only the argument order differs. Naming the
+    # direction in the message matters because getting it backwards overwrites
+    # whichever side you meant to keep.
+    if [ "$action" = push ]; then
+        run_rsync "pushing $DRAUGR_DATA -> $DRAUGR_SANDBOX" \
+            "$local_dir" "$remote" --stats "${del[@]+"${del[@]}"}"
+    else
+        run_rsync "pulling $DRAUGR_DATA <- $DRAUGR_SANDBOX" \
+            "$remote" "$local_dir" --stats "${del[@]+"${del[@]}"}"
+    fi
+    dr_ok "$action complete"
+    ;;
+esac
