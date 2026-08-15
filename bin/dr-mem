@@ -1,0 +1,402 @@
+#!/usr/bin/env bash
+# dr-mem - carry the agent's memory across dr-rm, translating the project key.
+#
+# The mound's disk image survives dr-stop and dies with dr-rm, so everything the
+# agent learned about your project dies with it unless it was exported first.
+# The catch is that memory is filed under a key derived from the project's
+# absolute path, and that path differs on every side of the boundary - so a
+# straight copy lands in a directory the agent silently never reads. This
+# translates. See "Memory, and the project-key translation" in lib/common.sh.
+#
+#   dr-mem status              where memory is on each side, and how much
+#   dr-mem export              mound -> $DRAUGR_MEM_STORE. Do this before dr-rm
+#   dr-mem import              store -> mound. Do this before launching the agent
+#   dr-mem import --from-host  your own host Claude memory -> mound (the migration)
+#   dr-mem import --source D   some other directory -> mound
+#   dr-mem import --if-empty   import only into a mound that has no memory yet
+#   dr-mem diff                what each side knows that the other does not
+#   dr-mem check               would dr-rm lose anything? (for scripts)
+#
+# diff exits 1 when the two sides differ, so it can be used as a test. check
+# exits 0 when the store has everything the mound has, 1 when the mound holds
+# memory that was never exported, and 2 when it could not be reached at all -
+# the same three answers dr-sync --check-only gives, for the same reason.
+#
+# shellcheck disable=SC2016
+# Single-quoted "$1" appears throughout and is deliberate: those strings are
+# scripts for the MOUND's shell, and the whole point is that the host does not
+# expand them. See the mound_sh comment below for how the arguments get there.
+set -euo pipefail
+
+DR_PROG=dr-mem
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# status is the default because it is the only one that moves nothing, and
+# "which side has what" is the question you actually have first.
+action=${1:-status}
+case "$action" in
+    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    status|export|import|diff|check) shift || : ;;
+    *) dr_die "unknown action: $action" "One of: status, export, import, diff, check" ;;
+esac
+
+source_dir=
+from_host=
+if_empty=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes)     DR_ASSUME_YES=1 ;;
+        --from-host)  from_host=1 ;;
+        --if-empty)   if_empty=1 ;;
+        --source)     shift; source_dir=${1:-} ;;
+        --source=*)   source_dir=${1#--source=} ;;
+        *) dr_die "unknown option: $1" "Try: dr-mem --help" ;;
+    esac
+    shift
+done
+
+dr_context
+
+# Memory layout is agent-specific and this knows exactly one: Claude Code's.
+# Saying so beats copying directories another agent will never look at.
+[ "$DRAUGR_AGENT" = claude ] || dr_warn \
+    "dr-mem knows Claude Code's memory layout; DRAUGR_AGENT is $DRAUGR_AGENT"
+
+mound_dir=$(dr_mem_mound_dir "$DR_REPO")
+store_dir=$(dr_mem_store_dir "$DR_REPO")
+marker="$store_dir/.draugr-export"
+
+# This is a report as much as a command, so its output is content and belongs on
+# stdout. dr_heading writes to stderr - right for prompts, wrong here, because
+# the two streams buffer independently and headings land in the wrong places the
+# moment the output is piped anywhere.
+heading() { printf '\n%s%s%s\n' "$_DR_BOLD" "$*" "$_DR_OFF"; }
+
+# --- talking to the mound ---------------------------------------------------
+#
+# `sh -c 'script' sh ARG` makes ARG the script's $1. Passing paths as arguments
+# rather than splicing them into the script text means nothing in a path can be
+# re-read as shell syntax, and it keeps the scripts single-quoted and legible.
+
+# Quiet: for probes and listings, where a failure is an answer rather than a
+# fault and sbx's own message would only be noise.
+mound_sh() {
+    local script=$1; shift
+    dr_sbx exec "$DRAUGR_SANDBOX" -- sh -c "$script" sh "$@" 2>/dev/null
+}
+
+# Loud: for the calls that change something, where the reason matters.
+mound_run() {
+    local script=$1; shift
+    dr_sbx exec "$DRAUGR_SANDBOX" -- sh -c "$script" sh "$@"
+}
+
+require_mound() {
+    dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
+        "$DRAUGR_SANDBOX does not exist" \
+        "Create it with:  dr-up"
+}
+
+# The project key we computed is a prediction. If the mound disagrees, say so
+# and show what is actually there: a wrong key is the exact failure this command
+# exists to prevent, so it must never be the silent kind.
+mound_has_project() {
+    local present
+    mound_sh 'test -d "$1"' "$mound_dir" && return 0
+    present=$(mound_sh 'ls -1 "$1" 2>/dev/null' "$DR_MOUND_HOME/.claude/projects" | head -20)
+    if [ -n "$present" ]; then
+        dr_warn "no project directory at $mound_dir, but the mound does have:"
+        printf '%s\n' "$present" | sed "s/^/    /" >&2
+        printf '  %sIf one of those is this repo, dr_mem_key needs a case it does not%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %shandle yet - worth reporting, with the repo path.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+    fi
+    return 1
+}
+
+# --- listing both sides in one shape ----------------------------------------
+#
+# Both produce sha256sum's own "<hash>  <name>" lines, names relative to the
+# memory directory, so the two are directly comparable.
+#
+# find -printf '%P' prints the path with the starting directory stripped, and
+# xargs -r declines to run sha256sum at all when there are no files - without
+# it, an empty directory would leave sha256sum reading stdin forever.
+list_local() {
+    local dir=$1
+    [ -d "$dir" ] || return 0
+    ( cd "$dir" && find . -type f -printf '%P\0' | sort -z | xargs -0 -r sha256sum )
+}
+
+# The mound's half of that, with one extra precaution: keep only lines that
+# really are sha256sum output - 64 hex digits, two spaces, a name.
+#
+# Anything else on stdout would otherwise be read as a file. Nothing in sbx
+# 0.37.1 does that (its "Sandbox … started successfully" banner goes to stderr,
+# checked), but the cost of being wrong here is silent and expensive: one stray
+# line and every comparison sees a file that does not exist, so dr-rm refuses to
+# destroy a mound over memory that was never there. Cheaper to insist on shape.
+#
+# The listing failing and the listing being empty are different answers, so the
+# sbx failure is passed through while grep's "no lines matched" is not.
+list_mound() {
+    local out
+    out=$(mound_sh 'cd "$1" 2>/dev/null || exit 0
+                    find . -type f -printf "%P\0" | sort -z | xargs -0 -r sha256sum' \
+                   "$mound_dir/memory") || return 1
+    printf '%s\n' "$out" | grep -E '^[0-9a-f]{64}  ' || true
+}
+
+# grep -c prints 0 and exits 1 on no match, which set -e would treat as fatal.
+count_lines() { grep -c . || true; }
+
+case "$action" in
+
+# --- status -----------------------------------------------------------------
+status)
+    heading "keys"
+    printf '  %-6s %s\n' host  "$(dr_mem_key_win "$DR_REPO")"
+    printf '  %-6s %s\n' wsl   "$(dr_mem_key_wsl "$DR_REPO")"
+    printf '  %-6s %s\n' mound "$(dr_mem_key_mound "$DR_REPO")"
+
+    heading "memory"
+    printf '  %-6s %3s file(s)  %s\n' store \
+        "$(list_local "$store_dir/memory" | count_lines)" "$store_dir/memory"
+
+    if host_dir=$(dr_mem_host_dir "$DR_REPO"); then
+        printf '  %-6s %3s file(s)  %s\n' host \
+            "$(list_local "$host_dir" | count_lines)" "$host_dir"
+    else
+        printf '  %-6s %s\n' host "no host Claude memory for this repo"
+    fi
+
+    if dr_sandbox_exists "$DRAUGR_SANDBOX"; then
+        printf '  %-6s %3s file(s)  %s\n' mound \
+            "$(list_mound | count_lines)" "$mound_dir/memory"
+    else
+        printf '  %-6s %s\n' mound "$DRAUGR_SANDBOX does not exist"
+    fi
+
+    if [ -f "$marker" ]; then
+        heading "last export"
+        sed 's/^/  /' "$marker"
+    fi
+    ;;
+
+# --- export -----------------------------------------------------------------
+export)
+    require_mound
+
+    # Nothing to export is an ordinary state, not a failure: with
+    # DRAUGR_MEM_SYNC=auto this runs on every detach, including the ones before
+    # the agent has ever written a memory.
+    if ! mound_has_project || ! mound_sh 'test -d "$1"' "$mound_dir/memory"; then
+        dr_ok "no memory in $DRAUGR_SANDBOX yet - nothing to export"
+        printf '  %sClaude creates it the first time it writes one.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        exit 0
+    fi
+
+    # Staging, because sbx cp will not write to a WSL path - see dr_stage.
+    dr_stage
+    trap 'rm -rf "$DR_STAGE"' EXIT
+
+    dr_info "exporting $DRAUGR_SANDBOX memory"
+    dr_sbx cp "$DRAUGR_SANDBOX:$mound_dir/memory" "$DR_STAGE_WIN" \
+        || dr_die "sbx cp failed" "Is the mound running?  dr-status"
+    [ -d "$DR_STAGE/memory" ] || dr_die \
+        "sbx cp reported success but produced no memory directory" \
+        "Looked in: $DR_STAGE"
+
+    # Land it by renaming, never by writing in place, so an export interrupted
+    # halfway cannot leave the store holding part of this copy and part of the
+    # last one. The copy being replaced is kept as memory.previous rather than
+    # deleted: an export always overwrites, and the case that stings is a mound
+    # that started empty overwriting a store that was not - one `mv` back.
+    mkdir -p "$store_dir"
+    rm -rf "$store_dir/memory.incoming"
+    mv "$DR_STAGE/memory" "$store_dir/memory.incoming"
+    if [ -d "$store_dir/memory" ]; then
+        rm -rf "$store_dir/memory.previous"
+        mv "$store_dir/memory" "$store_dir/memory.previous"
+    fi
+    mv "$store_dir/memory.incoming" "$store_dir/memory"
+
+    n=$(list_local "$store_dir/memory" | count_lines)
+
+    # The marker is what lets `dr-mem import` tell your own export from a
+    # directory of somebody else's memories - see the import path below.
+    {
+        printf 'repo:    %s\n' "$DR_REPO"
+        printf 'sandbox: %s\n' "$DRAUGR_SANDBOX"
+        printf 'date:    %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'files:   %s\n' "$n"
+    } > "$marker"
+
+    dr_ok "exported $n file(s) to $store_dir/memory"
+    ;;
+
+# --- import -----------------------------------------------------------------
+import)
+    require_mound
+
+    # --if-empty is what makes DRAUGR_MEM_SYNC=auto safe to run on every dr-up.
+    # Importing unconditionally would restore the store over memory the agent
+    # has since written - the store is by definition the older copy - so the
+    # automatic path only ever fills a mound that has nothing.
+    if [ -n "$if_empty" ] && [ -n "$(list_mound)" ]; then
+        dr_debug "$DRAUGR_SANDBOX already has memory; --if-empty declines to import"
+        exit 0
+    fi
+
+    # Three sources, most explicit first. --from-host is the "I used to run the
+    # agent on this machine and want the mound to know what it knew" migration.
+    trusted=
+    if [ -n "$source_dir" ]; then
+        :
+    elif [ -n "$from_host" ]; then
+        source_dir=$(dr_mem_host_dir "$DR_REPO") || dr_die \
+            "no host Claude memory for this repo" \
+            "Looked under keys $(dr_mem_key_win "$DR_REPO") and $(dr_mem_key_wsl "$DR_REPO")."
+    else
+        source_dir="$store_dir/memory"
+        # Our own marker, naming this same repo, is the one case where the
+        # content provably came from this project's own agent.
+        if [ -f "$marker" ] && grep -qxF "repo:    $DR_REPO" "$marker"; then
+            trusted=1
+        fi
+    fi
+
+    [ -d "$source_dir" ] || dr_die \
+        "no memory at $source_dir" \
+        "Export some first with:  dr-mem export" \
+        "Or bring in your host's own:  dr-mem import --from-host"
+
+    n=$(list_local "$source_dir" | count_lines)
+    [ "$n" -gt 0 ] || dr_die "$source_dir contains no files"
+
+    # Memory is not notes. Claude Code loads it into context and largely acts on
+    # it, so importing a directory is nearer to running a script than to copying
+    # data - which is why an unfamiliar source is confirmed every single time.
+    dr_warn "memory is instructions, not just notes"
+    printf '  %sImported files are loaded into the agent'\''s context and largely%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %strusted. Import your own freely; read anyone else'\''s first.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    if [ -z "$trusted" ]; then
+        dr_confirm "Import $n file(s) from $source_dir into $DRAUGR_SANDBOX?" \
+            || dr_die "cancelled"
+    fi
+
+    dr_stage
+    trap 'rm -rf "$DR_STAGE"' EXIT
+    cp -a "$source_dir" "$DR_STAGE/memory"
+
+    # The project directory must exist before cp will place "memory" inside it.
+    mound_run 'mkdir -p "$1"' "$mound_dir" \
+        || dr_die "could not create $mound_dir in the mound"
+    mound_sh 'rm -rf "$1"' "$mound_dir/memory" || :
+
+    dr_info "importing $n file(s) into $DRAUGR_SANDBOX"
+    dr_sbx cp "$DR_STAGE_WIN\\memory" "$DRAUGR_SANDBOX:$mound_dir/" \
+        || dr_die "sbx cp failed" "Is the mound running?  dr-status"
+
+    # sbx cp lands files as root:root while the agent runs as uid 1000. Without
+    # this the agent can read the imported memories but never update them, and
+    # cannot create new ones in that directory either - which shows up as memory
+    # that mysteriously stops growing.
+    mound_sh 'sudo -n chown -R agent:agent "$1" && sudo -n chmod -R u+rwX "$1"' \
+        "$mound_dir/memory" \
+        || dr_warn "chown failed - the agent may be unable to update these memories"
+
+    dr_ok "imported $n file(s) into $mound_dir/memory"
+    ;;
+
+# --- diff -------------------------------------------------------------------
+diff)
+    require_mound
+    # A mound with no project directory yet is not an error here: it compares as
+    # empty, and "everything is only in the store" is a useful thing to be told.
+    # mound_has_project still gets its say, because if the projects directory has
+    # some OTHER entry, that is the key rule being wrong and you need to know.
+    mound_has_project || :
+
+    # Two name->hash maps, then three questions. An associative array beats
+    # sorting and comm here because it keeps whole lines intact: `read hash name`
+    # puts everything after the hash into $name, so a filename with a space in it
+    # survives, which a cut-on-space pipeline would not.
+    declare -A in_mound=() in_store=()
+    while read -r hash name; do
+        [ -n "$name" ] && in_mound[$name]=$hash
+    done <<< "$(list_mound)"
+    while read -r hash name; do
+        [ -n "$name" ] && in_store[$name]=$hash
+    done <<< "$(list_local "$store_dir/memory")"
+
+    only_mound=() only_store=() changed=()
+    # ${arr[$k]+set} is "set" only when that key exists - the test that works
+    # under set -u, and the reason an empty value is not mistaken for absence.
+    if [ ${#in_mound[@]} -gt 0 ]; then
+        for name in "${!in_mound[@]}"; do
+            if [ -z "${in_store[$name]+set}" ]; then
+                only_mound+=("$name")
+            elif [ "${in_mound[$name]}" != "${in_store[$name]}" ]; then
+                changed+=("$name")
+            fi
+        done
+    fi
+    if [ ${#in_store[@]} -gt 0 ]; then
+        for name in "${!in_store[@]}"; do
+            [ -z "${in_mound[$name]+set}" ] && only_store+=("$name")
+        done
+    fi
+
+    if [ $((${#only_mound[@]} + ${#only_store[@]} + ${#changed[@]})) -eq 0 ]; then
+        dr_ok "$DRAUGR_SANDBOX and the store hold the same memory"
+        exit 0
+    fi
+
+    # Associative arrays have no order at all, so sort for a stable report.
+    show() {
+        local label=$1; shift
+        [ $# -gt 0 ] || return 0
+        printf '%s\n' "$@" | sort | sed "s/^/  $label /"
+    }
+
+    heading "memory differences"
+    show "only in mound:" ${only_mound[0]+"${only_mound[@]}"}
+    show "only in store:" ${only_store[0]+"${only_store[@]}"}
+    show "changed:      " ${changed[0]+"${changed[@]}"}
+    exit 1
+    ;;
+
+# --- check ------------------------------------------------------------------
+#
+# The question dr-rm needs answered before destroying a mound, and only that
+# question: is there memory in there that no export has captured? Asymmetric on
+# purpose - a store holding files the mound lacks is not a reason to refuse,
+# because destroying the mound does not touch the store.
+check)
+    dr_sandbox_exists "$DRAUGR_SANDBOX" || exit 0
+
+    # Unreachable is not the same as safe, and must not be reported as either.
+    if ! mound_list=$(list_mound); then exit 2; fi
+    [ -n "$mound_list" ] || exit 0
+
+    declare -A in_store=()
+    while read -r hash name; do
+        [ -n "$name" ] && in_store[$name]=$hash
+    done <<< "$(list_local "$store_dir/memory")"
+
+    while read -r hash name; do
+        [ -n "$name" ] || continue
+        [ -n "${in_store[$name]+set}" ] || exit 1
+        [ "${in_store[$name]}" = "$hash" ] || exit 1
+    done <<< "$mound_list"
+    exit 0
+    ;;
+esac

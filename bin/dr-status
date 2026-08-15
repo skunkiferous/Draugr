@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # dr-status - what is true about this repo right now.
 #
-# One screen: which mound, what state, what the host tree looks like, and what
-# the config decided. The unfetched-commits and data-drift columns arrive with
-# dr-sync in Phase 3; this reports what can be known without it.
+# One screen: which mound, what state, what the host tree looks like, what is
+# waiting to be reviewed, and what the config decided.
+#
+# Nothing here starts a stopped mound. Anything that would have to ask the
+# sandbox is either read from local state instead, or reported only when the
+# mound is already running - a command people run to decide whether to do
+# something must not itself be the thing that does something.
 #
 #   dr-status
 set -euo pipefail
@@ -85,6 +89,42 @@ if [ "$state" != absent ]; then
     dr_sbx ls --json 2>/dev/null | jq -r --arg n "$DRAUGR_SANDBOX" \
         '(.sandboxes // [])[] | select(.name == $n) | (.workspaces // [])[]' \
         | while read -r w; do row workspace "$w"; done
+fi
+
+# Memory is the other thing a mound holds that exists nowhere else, so it gets
+# the same treatment as unfetched commits: say whether dr-rm would lose any.
+# Skipped entirely under DRAUGR_MEM_SYNC=off, which is what that value is for -
+# a section reporting on something you have said you do not use is just noise.
+if [ "$DRAUGR_MEM_SYNC" != off ]; then
+    heading "memory"
+    store_dir=$(dr_mem_store_dir "$DR_REPO")
+    marker="$store_dir/.draugr-export"
+    if [ -d "$store_dir/memory" ]; then
+        stored=$(find "$store_dir/memory" -type f 2>/dev/null | wc -l | tr -d ' ')
+        if [ -f "$marker" ]; then
+            row store "$stored file(s), exported $(sed -n 's/^date:  *//p' "$marker")"
+        else
+            row store "$stored file(s) in $store_dir/memory"
+        fi
+    else
+        row store "${_DR_DIM}nothing exported yet${_DR_OFF}"
+    fi
+
+    # Only when it is already up: dr-mem check runs a command inside the mound,
+    # and that would start a stopped one. Stopped is not "no memory", so it says
+    # which of the two it is rather than implying there is nothing to lose.
+    case "$state" in
+    running)
+        mcheck=0
+        "$_dr_bin/dr-mem" check >/dev/null 2>&1 || mcheck=$?
+        case "$mcheck" in
+            0) row mound "${_DR_GREEN}nothing unexported${_DR_OFF}" ;;
+            1) row mound "${_DR_YELLOW}has memory not in the store${_DR_OFF} - dr-mem export" ;;
+            *) row mound "${_DR_DIM}could not be read${_DR_OFF}" ;;
+        esac
+        ;;
+    stopped) row mound "${_DR_DIM}not checked${_DR_OFF} - would have to start the mound" ;;
+    esac
 fi
 
 # Only the three settings that change what the agent can reach. The rest are a

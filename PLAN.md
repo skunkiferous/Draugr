@@ -117,7 +117,12 @@ asserted in prose from the first commit and are entered here because **the entir
 | The agent runs as **uid 1000 (`agent`)**, in groups `sudo` and `docker`, with **passwordless sudo** | `dr-up` can install rsync at creation *(Phase 5)*. Also why `sbx cp`'s `root:root` output is unusable to the agent. |
 | `rsync` is at `/usr/bin/rsync` in the `claude` image | Confirms the row above; the `tar` fallback is for other agent images. |
 | **Exactly four host paths are mounted into the mound**, per `/proc/mounts`: `/run/sandbox/source` (ro), `/etc/resolv.conf` (ro), `/etc/hosts` (ro), and **`/home/agent/.claude/skills` (rw)** | Containment otherwise holds: `/mnt/c`, `/c/Users`, `/c/Code/claude` (another repo on this machine) and host SSH keys are all absent. |
-| **The skills mount is a writable path onto the host.** A file written to `/home/agent/.claude/skills/` inside the mound appeared immediately at `…\DockerSandboxes\sandboxes\state\agent-skills\` on the host | **Corrects the README**, which said the sandbox can never write to the host. The store is shared across *all* sandboxes and survives `sbx rm` by design, so it is a cross-sandbox persistence channel — and skills are instructions loaded into agent context. `dr-scan` gains a check for unexpected skills; `dr-skills` treats the store as reviewable. *(Phase 6)* |
+| **The skills mount is a writable path onto the host.** A file written to `/home/agent/.claude/skills/` inside the mound appeared immediately at `…\DockerSandboxes\sandboxes\state\agent-skills\` on the host | **Corrects the README**, which said the sandbox can never write to the host. The store is shared across *all* sandboxes and survives `sbx rm` by design, so it is a cross-sandbox persistence channel — and skills are instructions loaded into agent context. `dr-scan` lists it; `dr-skills accept`/`diff` make it reviewable. |
+| **`--no-share-skills` is real but hidden.** It is absent from `sbx create --help` and `sbx run --help` until `sbx settings set feature.shareSkills true`; the binary carries `feature.shareSkills`, `DOCKER_SANDBOXES_FEATURE_SHARE_SKILLS` and `json:"share_skills"`. Enabling it makes the flag appear on both commands | The `sbx skills --help` text ("use `--no-share-skills` to opt out") describes something a stock install does not have. `dr-skills list` reports which state the machine is in. *(Phase 6 verification task — answered)* |
+| **With the feature off — the default — the rw skills mount is there anyway.** `/proc/mounts` shows `/home/agent/.claude/skills virtiofs rw` | So on a stock install no visible CLI switch closes the mound's one write path. *(Phase 6)* |
+| **With the feature on, `--no-share-skills` genuinely works.** A sandbox created with it has zero `skills` lines in `/proc/mounts` and no `~/.claude/skills` directory; a sandbox created without it, on the same machine, still has the mount | The flag is hidden, not inert — an earlier draft of the README implied the latter and was wrong. It applies **at creation time only**, so an existing mound must be recreated to lose the mount. *(Phase 6)* |
+| sbx feature flags can have source **`remote`** — `feature.ssh` is `enabled:true` from `remote` on this machine, not from any local setting | A flag's value can change without anyone touching this machine, so "the opt-out is unavailable" is a statement about today. `dr-skills list` reads it live rather than caching it. *(Phase 6)* |
+| `sbx settings` is an **undocumented top-level command** (absent from `sbx --help`); `sbx settings list --all` reveals the `feature.*` keys | How the above was established. *(Phase 6)* |
 
 ### The rest of the boundary
 
@@ -132,6 +137,11 @@ asserted in prose from the first commit and are entered here because **the entir
 | Without a TTY, `sbx run` attaches part-way then dies with `inspect exec: context deadline exceeded` | `dr_require_tty` fails first, with a message that names the alternative. |
 | `sbx rm` on a clone-mode sandbox reports that fetched branches are mirrored to **`refs/sandboxes/<name>/*`, which survive removal** | Directly relevant to `dr-sync` and to `dr-rm`'s unsynced-work check. *(Phase 3)* |
 | Sandbox names reject underscores (`ERROR: sandbox name cannot contain underscores`) | `dr_sandbox_name`'s charset filter is load-bearing, not cosmetic: `my_project` → `draugr-my-project`. |
+| **`sbx cp` host paths must be *Windows* paths.** `sbx cp <name>:/tmp/x /home/me/dest` and `… /mnt/c/Code/dest` both fail with `GetFileAttributesEx \home\me: The system cannot find the path specified` — sbx turns the leading `/` into `\` and looks on the current drive. `C:\…` works | `$DRAUGR_MEM_STORE` may sit anywhere, including WSL's ext4 where sbx cannot reach at all, so every `dr-mem` transfer stages through `.draugr/tmp/` in the repo — which `dr_require_win_path` has already guaranteed is on a Windows drive. *(Phase 6)* |
+| `sbx cp` **does** report failure by exit code (1 for both a bad destination and a missing source) | The staged copy is still verified afterwards, because "reported success" and "produced a directory" are different claims. *(Phase 6)* |
+| sbx's `Sandbox … started successfully` banner goes to **stderr**, not stdout | Listings piped out of the mound are not corrupted by it. `dr-mem` filters to sha256sum's exact shape anyway: one stray stdout line would invent a memory file, and `dr-rm` would then refuse forever over something that does not exist. *(Phase 6)* |
+| **The three project-key forms confirmed side by side on one machine**, for one repo: host `c--Code-claude`, mound `-c-Code-claude` | Not inferred from the encoding rule — both directories were listed. `dr_mem_key` is tested against these literals. *(Phase 6)* |
+| The mound's agent home is **`/home/agent`**, uid 1000, `sudo -n` works | `dr-mem import` chowns after `sbx cp`, and the live run confirmed the imported file ends up `agent agent` rather than `root root`. *(Phase 6)* |
 
 **Not yet verified — each has a task in the phase that needs it:**
 
@@ -141,8 +151,6 @@ asserted in prose from the first commit and are entered here because **the entir
   sandbox's state at that instant was not pinned down, and it was stopped shortly after. Test it
   cleanly: stop a mound, confirm `stopped`, run `git ls-remote`, re-check the state. *(Phase 3 —
   cheap, and it decides one line of `dr-sync`.)*
-- `--no-share-skills` is referenced in `sbx skills --help` but is not a flag on `sbx create`.
-  Find where skill sharing is actually toggled. *(Phase 6)*
 - Whether Ctrl+D and a detach-key sequence are distinguishable to the caller of `sbx run`. **Mostly
   moot:** Phase 2 settled the part that mattered. `sbx run` is a foreground process, so control
   returns to `dr-go` either way, and `dr-go` syncs on the way out without needing to know which
@@ -448,7 +456,7 @@ transfers but still blocks `dr-go` would be a long afternoon.
 
 ---
 
-## Phase 6 — Context
+## Phase 6 — Context ✅
 
 **Goal:** the agent remembers, across `dr-rm`.
 
@@ -468,9 +476,51 @@ transfers but still blocks `dr-go` would be a long afternoon.
 **Verification task:** locate the real toggle for skill sharing (`--no-share-skills` is documented in
 `sbx skills --help` but is not a `sbx create` flag).
 
+**Answered: the flag is hidden, not inert.** `--no-share-skills` is absent from `sbx create --help`
+until `sbx settings set feature.shareSkills true` — itself an undocumented command, absent from
+`sbx --help`. Once revealed the flag does exactly what it says: a sandbox created with it has no
+`skills` line in `/proc/mounts` and no `~/.claude/skills` at all, while one created without it on
+the same machine still has the mount. All three states measured rather than reasoned about, after a
+first draft of the README implied the flag was cosmetic — which was an untested claim dressed as a
+finding. It applies at creation time only, so an existing mound must be recreated to lose the
+mount. Five rows in the ledger.
+
 **Acceptance:** memory written by the agent survives `dr-mem export` → `dr-rm` → `dr-go` →
 `dr-mem import` and is read by the agent (verified by asking it, not by checking the file exists).
 `dr-mem diff` reports a one-file difference when one is introduced.
+
+**Shipped surface**, a little wider than the three verbs above: `dr-mem status|export|import|diff|check`
+with `--from-host`, `--source` and `--if-empty`, and `dr-skills list|diff|accept|import`. `check` and
+`accept` exist because the other verbs needed them — `dr-rm` has to ask a yes/no question without
+parsing a report, and "what changed" is meaningless until something records what you have seen.
+
+**Measured, against the real sandbox.** A memory written inside the mound exported to the store,
+was deleted from the mound, and came back at the *translated* key — landing as `agent agent`, not
+`root root`, so the `chown` does what the ported PowerShell said it must. `dr-mem check` went 1 → 0
+across the export and back to 1 when a file changed. `dr-mem diff` reported exactly one difference
+per introduced change, in all three categories (only-in-mound, only-in-store, changed).
+
+**One part of the acceptance is not met and is not mine to meet:** "read by the agent, verified by
+asking it". Attaching needs a terminal, so the last step is a human one — the files are in the right
+place with the right owner, but nobody has yet asked the agent what it remembers. Worth doing once,
+because it is the only check that the *key* is right rather than merely self-consistent.
+
+**Two hazards found while wiring `DRAUGR_MEM_SYNC=auto`, both now closed.** Importing on every
+`dr-up` would restore the store over memory the agent had since written — the store is by definition
+the older copy — so the automatic import is `--if-empty` and only ever fills a mound that has
+nothing. And an export always overwrites, so the copy it replaces is kept as `memory.previous`
+rather than deleted: one `mv` back if a nearly-empty mound overwrites a full store.
+
+**`off` was a documented value that did nothing.** The README offered `auto|manual|off` while the
+code only tested for `auto`, making the last two identical. They now differ: `manual` stops the
+automatic transfers but keeps `dr-rm`'s refusal and the `dr-status` section; `off` means you do not
+keep agent memory at all, and neither appears.
+
+**Also fixed here, found in passing:** `dr-init` gitignored only `.draugr.local.conf`, while
+`lib/common.sh` claimed it also gitignored `.draugr/kit.applied`. It did not — so that file showed
+up untracked, and with `DRAUGR_REQUIRE_CLEAN=true` it would have blocked `dr-go` on the second run
+of any project with a kit. The list is now checked entry by entry, so a repo initialised by an
+older Draugr picks up what it is missing.
 
 ---
 

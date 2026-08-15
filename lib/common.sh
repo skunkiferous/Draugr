@@ -798,12 +798,11 @@ dr_kit_dir() {
     printf '%s' "$kit"
 }
 
-# dr_kit_hash <dir> - a digest of the whole kit, not just spec.yaml.
+# dr_dir_hash <dir> - one digest for a whole directory tree.
 #
-# initFiles and anything else in the directory change what the sandbox gets, so
-# they have to count. Sorted with -z and hashed pairwise so the result depends on
-# content and names but not on the order find happens to walk them in.
-dr_kit_hash() {
+# Sorted with -z and hashed pairwise, so the result depends on the contents and
+# the names but not on the order find happened to walk them in.
+dr_dir_hash() {
     find "$1" -type f -print0 2>/dev/null \
         | sort -z \
         | xargs -0 sha256sum 2>/dev/null \
@@ -811,11 +810,151 @@ dr_kit_hash() {
         | cut -d' ' -f1
 }
 
+# dr_kit_hash <dir> - a digest of the whole kit, not just spec.yaml, because
+# initFiles and anything else in the directory change what the sandbox gets.
+dr_kit_hash() { dr_dir_hash "$1"; }
+
 # Where dr-up records the hash it built with, so dr-kit drift is a comparison
 # rather than a guess. Inside .draugr/ because it describes this checkout, not
-# the project - dr-init gitignores it.
+# the project - dr-init gitignores it, along with .draugr/tmp/.
 dr_kit_stamp() {
     printf '%s/.draugr/kit.applied' "$DR_REPO"
+}
+
+# ---------------------------------------------------------------------------
+# The shared skills store
+#
+# Measured in Phase 2 and re-checked in Phase 6: this one directory is mounted
+# READ-WRITE into every mound, at /home/agent/.claude/skills, and it survives
+# sbx rm. It is the only path by which anything inside a sandbox can leave
+# something behind for a later one - so it is the exception to "the sandbox
+# cannot write to the host", and it holds agent instructions.
+# ---------------------------------------------------------------------------
+
+# dr_skills_dir - where that store lives, derived from sbx's own location rather
+# than hard-coded: sbx.exe sits at <root>/bin/sbx.exe and the store under
+# <root>/sandboxes/state/. Prints the path whether or not it exists yet, and
+# returns 1 only when sbx cannot be found at all.
+dr_skills_dir() {
+    local sbx_exe
+    sbx_exe=$(dr_find_sbx) || return 1
+    printf '%s/sandboxes/state/agent-skills' "$(dirname "$(dirname "$sbx_exe")")"
+}
+
+# ---------------------------------------------------------------------------
+# Memory, and the project-key translation
+#
+# Claude Code keeps per-project memory at
+#     <home>/.claude/projects/<PROJECT-KEY>/memory/
+# and derives PROJECT-KEY from the project's ABSOLUTE PATH. One repository
+# therefore has a different key on each side of the boundary:
+#
+#   Windows   C:\Code\Draugr       c--Code-Draugr
+#   WSL       /mnt/c/Code/Draugr   -mnt-c-Code-Draugr
+#   Mound     /c/Code/Draugr       -c-Code-Draugr
+#
+# Measured rather than assumed: on this machine one repo really does appear as
+# c--Code-claude on the host and -c-Code-claude inside its mound.
+#
+# Copy the directory across without renaming and you get one the agent silently
+# never reads. No error, no warning, just an agent that has forgotten
+# everything - and that silence is the entire reason dr-mem exists.
+# ---------------------------------------------------------------------------
+
+# dr_mem_key <absolute-path> - encode a path the way Claude Code names its folder.
+#
+# Lowercase a Windows drive letter, then turn every "/", "\" and ":" into "-".
+# A leading separator therefore yields a leading "-", which is why the WSL and
+# mound forms start with one, and why the Windows form has "--" where "C:\" was.
+#
+# Only those three characters are known to be substituted; the rest of the path
+# keeps its case, as "c--Code-Draugr" shows. What a space or other punctuation in
+# a repo name does is NOT established, so dr_mem_mound_dir checks its answer
+# against the mound instead of trusting it.
+dr_mem_key() {
+    local p=$1
+    # Lowercase the drive letter only - "Code" and "Draugr" keep their capitals.
+    case "$p" in
+        [A-Za-z]:*) p="$(printf '%s' "${p:0:1}" | tr '[:upper:]' '[:lower:]')${p:1}" ;;
+    esac
+    # In single quotes '\\' is two characters, which tr reads as one escaped
+    # backslash - so SET1 is the three characters / \ : and SET2 is three
+    # hyphens. Not bash escaping, which is why shellcheck needs telling.
+    # shellcheck disable=SC1003
+    printf '%s' "$p" | tr '/\\:' '---'
+}
+
+# The same repo, keyed for each side. Each takes the WSL path, because that is
+# the one every dr-* command already has in DR_REPO.
+dr_mem_key_wsl()   { dr_mem_key "$1"; }
+dr_mem_key_win()   { dr_mem_key "$(dr_path_win "$1")"; }
+dr_mem_key_mound() { dr_mem_key "$(dr_path_mound "$1")"; }
+
+# Inside the mound the agent is uid 1000 with home /home/agent - verified, not
+# assumed: `sbx exec … id` reports uid=1000(agent) and $HOME=/home/agent.
+DR_MOUND_HOME=/home/agent
+
+# dr_mem_mound_dir <repo> - the project directory inside the mound.
+dr_mem_mound_dir() {
+    printf '%s/.claude/projects/%s' "$DR_MOUND_HOME" "$(dr_mem_key_mound "$1")"
+}
+
+# dr_mem_store_dir <repo> - this repo's corner of $DRAUGR_MEM_STORE.
+#
+# Named with the WINDOWS key for two reasons: it has no leading "-", so it can
+# never be mistaken for an option by a command you type at it, and it is the
+# name a host-side Claude install would use for the same repo, so the store
+# stays recognisable when you go looking through it by hand.
+dr_mem_store_dir() {
+    printf '%s/%s' "${DRAUGR_MEM_STORE%/}" "$(dr_mem_key_win "$1")"
+}
+
+# dr_mem_host_dir <repo> - the host's own live Claude memory for this repo, if
+# any. Two installs are possible and they use different keys: Claude Code run
+# under Windows, and Claude Code run inside WSL. Prints the first that exists
+# and returns 1 when neither does.
+dr_mem_host_dir() {
+    local repo=$1 userprofile candidate
+
+    # Windows first: on a WSL host $HOME is ext4 and usually has no Claude
+    # install at all, while the Windows profile normally does.
+    if command -v cmd.exe >/dev/null 2>&1; then
+        userprofile=$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')
+        if [ -n "$userprofile" ] && [ "$userprofile" != '%USERPROFILE%' ]; then
+            candidate="$(dr_path_from_win "$userprofile")/.claude/projects/$(dr_mem_key_win "$repo")/memory"
+            [ -d "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+        fi
+    fi
+
+    candidate="$HOME/.claude/projects/$(dr_mem_key_wsl "$repo")/memory"
+    [ -d "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+
+    return 1
+}
+
+# dr_stage - a scratch directory that sbx.exe can actually see.
+#
+# `sbx cp` is a Windows binary and its HOST argument must be a WINDOWS path.
+# Measured against sbx 0.37.1: both of these fail,
+#
+#   sbx cp <name>:/tmp/x /home/you/dest      ERROR: … GetFileAttributesEx \home\you
+#   sbx cp <name>:/tmp/x /mnt/c/Code/dest    ERROR: … GetFileAttributesEx \mnt\c\Code
+#
+# because sbx turns the leading "/" into "\" and looks for it on the current
+# drive. Only C:\… works. $DRAUGR_MEM_STORE may sit anywhere, including WSL's
+# own ext4 where sbx cannot reach at all, so every transfer hops through here:
+# .draugr/tmp/ inside the repo, which dr_require_win_path has already
+# guaranteed is on a Windows drive.
+#
+# Sets DR_STAGE (the WSL path) and DR_STAGE_WIN (the same directory spelled for
+# sbx). The caller is expected to trap-remove DR_STAGE: it holds memory files,
+# which is exactly the sort of thing not to leave lying around after a crash.
+dr_stage() {
+    DR_STAGE="$DR_REPO/.draugr/tmp/$$"
+    rm -rf "$DR_STAGE"
+    mkdir -p "$DR_STAGE"
+    # shellcheck disable=SC2034  # read by the dr-* command that called us
+    DR_STAGE_WIN=$(dr_path_win "$DR_STAGE")
 }
 
 # ---------------------------------------------------------------------------

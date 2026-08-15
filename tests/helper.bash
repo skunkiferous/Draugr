@@ -130,6 +130,27 @@ dr_fake_sbx_root() {
     export DR_SKILLS_DIR
 }
 
+# --- standing in for the mound's filesystem ----------------------------------
+#
+# The companion to dr_fake_mound: that one stands in for the mound's git repo,
+# this one for its disk. Sets DR_MOCK_MOUND, which makes the mock sbx run 'exec'
+# and 'cp' against a real directory tree, and DR_MEMDIR, where this repo's
+# memory lives inside it.
+#
+# Sets rather than prints, for the same reason dr_fake_sbx_root does: writing
+# $(dr_mound_memory_dir …) would run it in a subshell and throw the export away.
+#
+# The project key is derived here independently of dr_mem_key - strip /mnt, then
+# every "/" becomes "-". If the two ever disagree the tests fail, which is the
+# entire value: a translation that only agrees with itself is untested.
+dr_mound_memory_dir() {
+    local repo=$1 key
+    key=$(printf '%s' "${repo#/mnt}" | tr '/' '-')
+    export DR_MOCK_MOUND="$DR_TMP/mound-fs"
+    DR_MEMDIR="$DR_MOCK_MOUND/home/agent/.claude/projects/$key/memory"
+    export DR_MEMDIR
+}
+
 # A gitignored secret, with the .gitignore committed so the working tree is
 # CLEAN. That matters: a dirty tree makes dr-go refuse for its own reasons, and a
 # scan test that trips the clean-tree check instead is testing nothing.

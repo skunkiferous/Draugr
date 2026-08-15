@@ -362,6 +362,29 @@ the rewriting (so assertions on the configured URL must read
 `git config remote.draugr.url` instead), and the exit-status bug in
 `--check-only` where an unreachable mound reported success.
 
+### Standing in for the mound's filesystem
+
+`dr-mem` moves *files* rather than commits, so it needed the same treatment one
+layer down. Setting `DR_MOCK_MOUND` makes the mock stop pretending: `exec` and
+`cp` really run, against a directory stationed on the host.
+
+- `exec` rewrites every **absolute argument** into that tree and runs the rest
+  verbatim. The script itself is passed through untouched — it is meant for the
+  mound's shell, and rewriting inside it would mean parsing it.
+- `cp` implements sbx's own semantics, including that a host path must be a
+  *Windows* path. The mock converts `C:\…` back to `/mnt/c/…` **independently**
+  of `dr_path_win` rather than by calling it. That is the point: if the
+  translation under test is wrong, the mock cannot find the file, instead of two
+  matching bugs agreeing with each other.
+
+`dr_mound_memory_dir` sets it up. Like `dr_fake_sbx_root` it *sets* variables
+rather than printing them — `$(…)` is a subshell and would throw the `export`
+away, which is a mistake worth making only once.
+
+The payoff is that the project-key translation is exercised for real: the file
+has to land under `-c-Code-…` for the test to find it, and a wrong key produces a
+missing file rather than a passing assertion about a string.
+
 ---
 
 ## Pattern: the mound commands

@@ -70,6 +70,26 @@ if [ -z "$force" ] && [ -n "$repo" ] && [ -x "$_dr_bin/dr-sync" ]; then
     esac
 fi
 
+# The same question again for the other thing a mound holds that exists nowhere
+# else. Commits at least leave a trace in the clone's reflog until it is gone;
+# memory the agent wrote is simply the disk image, and dr-rm deletes that.
+#
+# DRAUGR_MEM_SYNC=off skips it: that value means "I do not keep agent memory",
+# and refusing to remove a mound over something you have said you do not want is
+# just an obstacle. manual still checks - it only turns off the automatic half.
+if [ -z "$force" ] && [ -n "$repo" ] && [ "${DRAUGR_MEM_SYNC:-}" != off ] \
+   && [ -x "$_dr_bin/dr-mem" ]; then
+    mcheck=0
+    "$_dr_bin/dr-mem" check || mcheck=$?
+    case "$mcheck" in
+        1) dr_die \
+               "$name has memory you have not exported" \
+               "Export it first with:  dr-mem export" \
+               "Then dr-rm again. To throw it away instead:  dr-rm --force" ;;
+        2) dr_warn "could not reach $name to check for unexported memory" ;;
+    esac
+fi
+
 dr_confirm "Destroy $name and its clone? Any commits you have not fetched are lost." \
     || dr_die "cancelled"
 

@@ -206,4 +206,14 @@ if [ "$DRAUGR_DATA_PUSH" = auto ] && [ -n "$DRAUGR_DATA" ] && [ -x "$_dr_bin/dr-
     "$_dr_bin/dr-data" push --yes || dr_warn "auto data push failed; retry with:  dr-data push"
 fi
 
+# Memory, same timing and for the same reason: the agent reads it at startup, so
+# it has to be in place before dr-go attaches. --if-empty is what makes this safe
+# to run on every dr-up rather than only on the one that created the mound - the
+# store is always the older copy, so it may fill a mound that has nothing and
+# must never overwrite one that has something.
+if [ "$DRAUGR_MEM_SYNC" = auto ] && [ -x "$_dr_bin/dr-mem" ]; then
+    "$_dr_bin/dr-mem" import --if-empty --yes \
+        || dr_warn "auto memory import failed; retry with:  dr-mem import"
+fi
+
 dr_hook post-up "$DR_REPO"

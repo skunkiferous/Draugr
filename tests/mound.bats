@@ -46,7 +46,10 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     [ "$status" -eq 0 ]
     [[ "$output" == *"already running"* ]]
     [ -z "$(calls create)" ]
-    [ -z "$(calls exec)" ]
+    # "no-op" means it neither builds nor starts anything. It is not "runs no
+    # commands at all": DRAUGR_MEM_SYNC=auto looks inside the mound on every
+    # dr-up, which is an exec. The start is the specific one that must be absent.
+    [[ "$(calls exec)" != *"$SANDBOX true"* ]]
 }
 
 @test "dr-up: twice in a row creates only one sandbox" {

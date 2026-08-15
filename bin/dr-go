@@ -123,6 +123,14 @@ if dr_is_true "$DRAUGR_AUTO_SYNC" && [ -x "$_dr_bin/dr-sync" ]; then
     "$_dr_bin/dr-sync" || dr_warn "auto-sync failed; fetch by hand with:  dr-sync"
 fi
 
+# Memory out, while the mound is certainly still alive. This is the half of
+# DRAUGR_MEM_SYNC that matters: the import can always be repeated, but anything
+# the agent learned this session exists only inside the mound until now, and
+# dr-rm would take it with no way to get it back.
+if [ "$DRAUGR_MEM_SYNC" = auto ] && [ -x "$_dr_bin/dr-mem" ]; then
+    "$_dr_bin/dr-mem" export --yes || dr_warn "auto memory export failed; retry with:  dr-mem export"
+fi
+
 # A pull overwrites host files with the sandbox's, so it is opt-in per the
 # config and never the default. --yes because you are being handed back a
 # terminal, not asked a question you were expecting.

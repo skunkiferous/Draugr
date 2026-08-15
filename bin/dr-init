@@ -66,9 +66,26 @@ else
     wrote=$((wrote + 1))
 fi
 
-# --- gitignore the per-user layer ------------------------------------------
+# --- gitignore what describes this checkout rather than the project ----------
+#
+# .draugr/kit/ is meant to be committed - it is the project's sandbox rules. The
+# three below are not, and each would otherwise show up as an untracked file:
+# with DRAUGR_REQUIRE_CLEAN=true that is not merely untidy, it blocks dr-go.
 ignore="$repo/.gitignore"
-if ! grep -qxF '.draugr.local.conf' "$ignore" 2>/dev/null; then
+ignore_entries=(
+    '.draugr.local.conf'    # per-user settings, never shared
+    '.draugr/kit.applied'   # which kit this checkout's mound was built from
+    '.draugr/tmp/'          # staging for sbx cp, removed after every transfer
+)
+
+# Tested one at a time rather than all-or-nothing, so a repo initialised by an
+# older Draugr picks up the entries that did not exist then.
+missing=()
+for entry in "${ignore_entries[@]}"; do
+    grep -qxF "$entry" "$ignore" 2>/dev/null || missing+=("$entry")
+done
+
+if [ ${#missing[@]} -gt 0 ]; then
     # Decide whether the file ends mid-line BEFORE opening the append redirect:
     # reading and writing the same file in one pipeline is asking for trouble.
     # $(...) strips trailing newlines, so a non-empty result means no final \n.
@@ -76,9 +93,11 @@ if ! grep -qxF '.draugr.local.conf' "$ignore" 2>/dev/null; then
     if [ -s "$ignore" ] && [ -n "$(tail -c1 "$ignore")" ]; then
         terminator=$'\n'
     fi
-    printf '%s\n# Draugr: per-user settings, never shared.\n.draugr.local.conf\n' \
-        "$terminator" >> "$ignore"
-    dr_ok "gitignored .draugr.local.conf"
+    {
+        printf '%s\n# Draugr: describes this checkout, not the project.\n' "$terminator"
+        printf '%s\n' "${missing[@]}"
+    } >> "$ignore"
+    dr_ok "gitignored ${missing[*]}"
     wrote=$((wrote + 1))
 fi
 

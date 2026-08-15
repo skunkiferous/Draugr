@@ -5,6 +5,11 @@
 #   DR_MOCK_LOG    file to append the argv to (one invocation per line)
 #   DR_MOCK_STATE  what 'ls --json' should report: absent|stopped|running
 #   DR_MOCK_FAIL   exit non-zero for any subcommand named here
+#   DR_MOCK_MOUND  a directory standing in for the mound's filesystem. When set,
+#                  'exec' and 'cp' stop pretending and really run, against that
+#                  tree - so dr-mem's project keys, listings and cp arguments are
+#                  exercised for real rather than asserted about. Same reasoning
+#                  as dr_fake_mound doing an honest git fetch.
 set -euo pipefail
 
 if [ -n "${DR_MOCK_LOG:-}" ]; then
@@ -46,7 +51,70 @@ ls)
 EOF
     fi
     ;;
-create|run|exec|stop|rm|ports|policy|kit|skills|cp)
+# With DR_MOCK_MOUND set, run the command for real against that tree. Absolute
+# arguments are rewritten into it, which is how "/home/agent/.claude/..." becomes
+# a directory this process may actually create. The script itself is passed
+# through untouched: it is meant for the mound's shell, and rewriting inside it
+# would be guessing at its syntax.
+exec)
+    if [ -z "${DR_MOCK_MOUND:-}" ]; then
+        printf 'mock sbx: %s\n' "$*"
+        exit 0
+    fi
+    shift                              # "exec"
+    shift                              # the sandbox name
+    if [ "${1:-}" = -- ]; then shift; fi   # the optional separator
+
+    argv=()
+    for a in "$@"; do
+        case "$a" in
+            /*) argv+=("$DR_MOCK_MOUND$a") ;;
+            *)  argv+=("$a") ;;
+        esac
+    done
+    "${argv[@]}"
+    ;;
+
+# sbx cp semantics, both directions. "cp SRC DEST" with DEST an existing
+# directory places SRC *inside* it, which is plain cp -a's behaviour too.
+cp)
+    if [ -z "${DR_MOCK_MOUND:-}" ]; then
+        printf 'mock sbx: %s\n' "$*"
+        exit 0
+    fi
+    shift
+
+    # Three kinds of argument, and the first two both contain a colon:
+    #   C:\Code\x        a Windows path - exactly one letter before the colon
+    #   name:/some/path  inside the sandbox
+    #   /some/path       an ordinary host path
+    #
+    # The Windows case is un-translated here rather than by sourcing common.sh:
+    # the mock reversing it independently is the point, because then a wrong
+    # dr_path_win produces a path this cannot find, instead of two matching bugs.
+    translate() {
+        # In single quotes '\\' below is two characters, which tr reads as one
+        # escaped backslash - not bash escaping, hence the disable, which has to
+        # sit in front of the whole case rather than one of its branches.
+        # shellcheck disable=SC1003
+        case "$1" in
+            [A-Za-z]:*)
+                printf '/mnt/%s%s' \
+                    "$(printf '%s' "${1:0:1}" | tr '[:upper:]' '[:lower:]')" \
+                    "$(printf '%s' "${1:2}" | tr '\\' '/')"
+                ;;
+            *:*) printf '%s%s' "$DR_MOCK_MOUND" "${1#*:}" ;;
+            *)   printf '%s' "$1" ;;
+        esac
+    }
+
+    src=$(translate "$1")
+    dst=$(translate "$2")
+    [ -e "$src" ] || { printf 'mock sbx: path %s not found\n' "$1" >&2; exit 1; }
+    cp -a "$src" "$dst"
+    ;;
+
+create|run|stop|rm|ports|policy|kit|skills)
     printf 'mock sbx: %s\n' "$*"
     ;;
 *)

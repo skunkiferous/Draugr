@@ -297,6 +297,13 @@ DRAUGR_MEM_SYNC=auto                 # auto|manual|off
 DRAUGR_MEM_STORE=~/.local/share/draugr/memory
 ```
 
+`auto` imports on `dr-up` and exports when you leave the agent. `manual` does neither, but `dr-rm`
+still refuses to destroy unexported memory and `dr-status` still reports it. `off` means you do not
+keep agent memory at all: no transfers, no refusal, no memory section.
+
+The store may live anywhere, including WSL's own filesystem as above — Draugr stages transfers
+through the repo because `sbx cp` is a Windows binary that will not write to a WSL path.
+
 **Safety rails**
 
 ```bash
@@ -333,7 +340,7 @@ earlier on `PATH`, and call them from Makefiles and other scripts. `dr <verb>` i
 | `dr-up` | Create-or-start the mound: kit, ports, memory. Idempotent, no attach |
 | `dr-go` | `dr-up`, then attach and launch the agent — **the command you run every day** |
 | `dr-shell` | An extra shell in the mound, alongside the running agent |
-| `dr-status` | This repo: sandbox state, unfetched commits, dirty tree, data and memory drift |
+| `dr-status` | This repo: sandbox state, unfetched commits, dirty tree, unexported memory |
 | `dr-ls` | All Draugr mounds on this machine |
 | `dr-stop` | Shut down. Filesystem, login and memory all survive |
 | `dr-rm` | **Destroy.** Refuses unless commits are synced and memory exported (`--force` to override) |
@@ -365,10 +372,22 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 
 | Command | |
 |---|---|
-| `dr-mem export` | Sandbox memory → `$DRAUGR_MEM_STORE`. Do this before `dr-rm` ⏳ |
-| `dr-mem import` | Host memory → sandbox. Do this *before* launching the agent ⏳ |
-| `dr-mem diff` | What each side knows that the other does not ⏳ |
-| `dr-skills` | Push a skill directory into the shared, `sbx rm`-proof skills mount ⏳ |
+| `dr-mem status` | Where memory is on each side, and how much of it |
+| `dr-mem export` | Sandbox memory → `$DRAUGR_MEM_STORE`. Do this before `dr-rm` |
+| `dr-mem import` | Store → sandbox. Do this *before* launching the agent |
+| `dr-mem import --from-host` | Your own host Claude memory → sandbox — the migration |
+| `dr-mem diff` | What each side knows that the other does not |
+| `dr-mem check` | Would `dr-rm` lose memory? For scripts: `0` no, `1` yes, `2` unreachable |
+| `dr-skills list` | What is in the shared skills store, and whether it can be declined |
+| `dr-skills diff` | What has appeared or changed in it since you last accepted |
+| `dr-skills accept` | Record the store's current contents as reviewed |
+| `dr-skills import` | Seed the store from your own host skill directories |
+
+`dr-mem import` refuses to run unattended against a store Draugr did not write itself. Its own
+export carries a marker naming the repo; anything else is somebody's instructions and gets a
+prompt. With `DRAUGR_MEM_SYNC=auto` the import happens on `dr-up` and the export on detach — the
+import only ever fills a mound that has *no* memory, since the store is by definition the older
+copy and must never overwrite what the agent has learned since.
 
 > ### The project-key trap, handled
 > Claude Code derives its memory folder name from the project's **absolute path**, so the same
@@ -502,9 +521,29 @@ And the mirror image — not what the agent can read, but what it can write:
 > leave something behind that a later, unrelated sandbox reads and follows.
 >
 > Nothing here is broken — it is how `sbx skills` is designed to work. But "the sandbox cannot write
-> to the host" is too strong a sentence, and this is the exception. `dr-skills` will treat the store
-> as a reviewable artifact rather than a dumping ground, and `dr-scan` gains a check for skills that
-> appeared without you putting them there.
+> to the host" is too strong a sentence, and this is the exception. `dr-skills` treats the store as a
+> reviewable artifact rather than a dumping ground: `dr-skills accept` records what is there,
+> `dr-skills diff` reports anything that has appeared or changed since, and `dr-scan` lists the store
+> on every `dr-go`.
+>
+> **The documented way to opt out works — but it is hidden.** `sbx skills --help` says "use
+> `--no-share-skills` to opt out", and that flag does not appear on `sbx create` or `sbx run` at all
+> until a feature flag that is off by default, and absent from `sbx --help`, is switched on:
+>
+> ```bash
+> sbx settings set feature.shareSkills true    # now the flag exists
+> sbx create --no-share-skills claude .        # and this mound has no skills mount
+> ```
+>
+> All three states measured on sbx 0.37.1. With the feature off — the default — the store is mounted
+> read-write and no visible option removes it. With the feature on, the flag appears **and does the
+> job**: a mound created with it has *no* `skills` line in `/proc/mounts` and no `~/.claude/skills`
+> directory at all. The real catch is that it applies **at creation time only**, so closing the door
+> on a mound you already have means recreating it.
+>
+> So the door can be shut; you just have to know about an undocumented setting to find the handle.
+> `dr-skills list` reports which of the two states this machine is in rather than making you go and
+> look.
 
 Two more, worth knowing before they bite you:
 

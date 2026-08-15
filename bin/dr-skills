@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# dr-skills - watch, and seed, the one directory a sandbox can write to.
+#
+# The shared skills store is mounted READ-WRITE into every mound at
+# ~/.claude/skills, is shared between all of them, and survives sbx rm. That
+# makes it the single exception to "the sandbox cannot touch the host", and its
+# contents are agent instructions - so it is treated here as a reviewable
+# artifact rather than a cache: show what is there, show what changed, and let
+# you say when you have looked.
+#
+#   dr-skills list       what is in the store, and whether the mount can be refused
+#   dr-skills diff       what has appeared or changed since you last accepted
+#   dr-skills accept     record the current contents as reviewed
+#   dr-skills import     seed the store from your own host skill directories
+#
+# diff exits 1 when something has changed, so it can be used as a test.
+set -euo pipefail
+
+DR_PROG=dr-skills
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+action=${1:-list}
+case "$action" in
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    list|diff|accept|import) shift || : ;;
+    *) dr_die "unknown action: $action" "One of: list, diff, accept, import" ;;
+esac
+
+# -y is ours - it answers the confirmation below. Everything else is left alone
+# and handed to sbx on the import path, so --dry-run and --force keep working
+# without this having to know what they mean or track sbx growing more of them.
+passthrough=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes) DR_ASSUME_YES=1 ;;
+        *)        passthrough+=("$1") ;;
+    esac
+    shift
+done
+
+# No dr_context: the store is machine-wide, so this is one of the few commands
+# that has nothing to do with the repository you happen to be standing in.
+skills_dir=$(dr_skills_dir) || dr_die \
+    "cannot find sbx.exe" \
+    "The skills store is located relative to it." \
+    "Point Draugr at it:  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
+
+# What you last said you had looked at. In the user config directory rather than
+# the repo, because the store is not a property of any one project.
+seen_file="$DR_CONFIG_USER/skills.seen"
+
+# A report: content on stdout, so it survives being piped. See dr-status.
+heading() { printf '\n%s%s%s\n' "$_DR_BOLD" "$*" "$_DR_OFF"; }
+
+# "<hash>  <name>" per skill, one line each. A skill is a directory, so the hash
+# covers everything inside it - a changed file within a skill is a changed skill.
+current() {
+    local d name
+    [ -d "$skills_dir" ] || return 0
+    for d in "$skills_dir"/*/; do
+        [ -d "$d" ] || continue          # no match leaves the glob unexpanded
+        name=${d%/}; name=${name##*/}
+        printf '%s  %s\n' "$(dr_dir_hash "$d")" "$name"
+    done
+}
+
+# --- can the mount even be declined? ----------------------------------------
+#
+# `sbx skills --help` says "use --no-share-skills to opt out", but that flag is
+# hidden behind a feature flag which is OFF by default - so on a stock install
+# the store is mounted into every mound and no visible flag turns it off.
+#
+# All three states measured against sbx 0.37.1: with feature.shareSkills false
+# the mount is there regardless; with it true the flag appears AND works, giving
+# a mound with no skills line in /proc/mounts at all. So the message below says
+# "can be declined" only when that is true of this machine, and the flag only
+# ever bites at creation time - an existing mound keeps whatever it was born
+# with. Worth reporting, because the help text implies the flag is always there.
+report_optout() {
+    local out
+    out=$(dr_sbx settings get feature.shareSkills 2>/dev/null) || {
+        printf '  %scould not read feature.shareSkills from sbx%s\n' "$_DR_DIM" "$_DR_OFF"
+        return 0
+    }
+    case "$out" in
+        *'"enabled":true'*)
+            printf '  the mount CAN be declined:  sbx create --no-share-skills\n'
+            printf '  %s(only at create time - it is not retrofitted to an existing mound)%s\n' \
+                "$_DR_DIM" "$_DR_OFF"
+            ;;
+        *)
+            printf '  the mount cannot be declined on this machine\n'
+            printf '  %s--no-share-skills is hidden until you run:%s\n' "$_DR_DIM" "$_DR_OFF"
+            printf '  %s  sbx settings set feature.shareSkills true%s\n' "$_DR_DIM" "$_DR_OFF"
+            printf '  %sand it applies only to mounds created afterwards.%s\n' "$_DR_DIM" "$_DR_OFF"
+            ;;
+    esac
+}
+
+case "$action" in
+
+list)
+    heading "shared skills store"
+    printf '  %s\n' "$skills_dir"
+    if [ ! -d "$skills_dir" ]; then
+        printf '  not created yet - sbx makes it on demand\n'
+    else
+        n=$(current | grep -c . || true)
+        if [ "$n" -eq 0 ]; then
+            printf '  empty\n'
+        else
+            current | while read -r _ name; do printf '    %s\n' "$name"; done
+        fi
+    fi
+
+    heading "reach"
+    printf '  mounted read-write into every mound, at ~/.claude/skills\n'
+    printf '  shared between mounds, and survives dr-rm\n'
+    report_optout
+    ;;
+
+# --- diff, against what you last accepted -----------------------------------
+diff)
+    now=$(current)
+
+    # A missing baseline is not "nothing has changed" - it means nobody has
+    # looked yet, and saying so is the more useful answer.
+    if [ ! -f "$seen_file" ]; then
+        if [ -z "$now" ]; then
+            dr_ok "the shared skills store is empty"
+            exit 0
+        fi
+        dr_warn "you have never accepted the contents of the skills store"
+        printf '%s\n' "$now" | while read -r _ name; do printf '  new: %s\n' "$name"; done
+        printf '  %sReview them, then record them with:  dr-skills accept%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        exit 1
+    fi
+
+    declare -A was=()
+    while read -r hash name; do
+        [ -n "$name" ] && was[$name]=$hash
+    done < "$seen_file"
+
+    changes=0
+    while read -r hash name; do
+        [ -n "$name" ] || continue
+        if [ -z "${was[$name]+set}" ]; then
+            printf '  new:     %s\n' "$name"; changes=$((changes + 1))
+        elif [ "${was[$name]}" != "$hash" ]; then
+            printf '  changed: %s\n' "$name"; changes=$((changes + 1))
+        fi
+        unset "was[$name]"
+    done <<< "$now"
+
+    # Whatever is left in $was was accepted once and is not there now.
+    for name in "${!was[@]}"; do
+        printf '  gone:    %s\n' "$name"; changes=$((changes + 1))
+    done
+
+    if [ "$changes" -eq 0 ]; then
+        dr_ok "the skills store is as you last accepted it"
+        exit 0
+    fi
+    printf '  %sSkills are instructions and every mound reads them. Review, then:%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %s  dr-skills accept%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    exit 1
+    ;;
+
+accept)
+    mkdir -p "$DR_CONFIG_USER"
+    current > "$seen_file"
+    n=$(grep -c . < "$seen_file" || true)
+    dr_ok "recorded $n skill(s) as reviewed"
+    ;;
+
+# --- import -----------------------------------------------------------------
+#
+# sbx does the copying; the value added here is saying what it means first, and
+# re-baselining afterwards so the next dr-skills diff is about the NEXT change
+# rather than about the import you just performed deliberately.
+import)
+    dr_warn "skills are instructions, and every mound will read them"
+    printf '  %sThe store is shared: a skill imported for one project is in reach of%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %severy sandbox on this machine, including ones created later.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    dr_confirm "Import host skills into the shared store?" || dr_die "cancelled"
+
+    dr_sbx skills import ${passthrough[0]+"${passthrough[@]}"} \
+        || dr_die "sbx skills import failed"
+
+    # --dry-run copied nothing, so re-baselining would record a state that was
+    # never reached. Checking the flag beats checking the store for changes.
+    case " ${passthrough[*]-} " in
+        *" --dry-run "*) ;;
+        *) mkdir -p "$DR_CONFIG_USER"; current > "$seen_file"
+           dr_ok "imported, and recorded the result as reviewed" ;;
+    esac
+    ;;
+esac

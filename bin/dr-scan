@@ -89,13 +89,8 @@ fi
 
 # --- the skills store, which is the way OUT ---------------------------------
 #
-# Derived from sbx's own location rather than hard-coded: sbx.exe lives at
-# <root>/bin/sbx.exe and the store sits under <root>/sandboxes/state/.
-sbx_exe=$(dr_find_sbx) || sbx_exe=
-skills_dir=
-if [ -n "$sbx_exe" ]; then
-    skills_dir="$(dirname "$(dirname "$sbx_exe")")/sandboxes/state/agent-skills"
-fi
+# Located by lib/common.sh, so dr-skills and this agree on where it is.
+skills_dir=$(dr_skills_dir) || skills_dir=
 
 if [ -z "$skills_dir" ] || [ ! -d "$skills_dir" ]; then
     [ -n "$quiet" ] || dr_ok "no shared skills store on this machine yet"
