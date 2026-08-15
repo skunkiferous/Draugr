@@ -12,14 +12,27 @@ In Norse folklore a *draugr* is an undead creature that guards its burial mound.
 strong, and it never leaves. That is the deal here: the agent is powerful inside the mound and has
 no reach outside it.
 
-> **Status: early.** The design below is settled and the underlying mechanics are verified on
-> Windows 11 + WSL2 + `sbx` v0.37.1. The `dr-*` scripts are being written against this document —
-> README-driven development: this file is the specification, and the code follows it.
-> Commands marked ⏳ in the tables below are not built yet. Everything else is, and has tests.
+**WARNING:** This entire project has been "vibe-coded" by [Claude Code](https://claude.ai).
+
+> **Status: 0.1.0 — ready to be used rather than read.** Every command in the tables below exists
+> and has tests; the mechanics are verified against `sbx` v0.37.1 on Windows 11 + WSL2. It has not
+> yet been used by anyone but its author, so expect rough edges in the places nobody has walked.
 >
-> **Reading the source?** Start with [docs/HACKING.md](docs/HACKING.md), not with a script. It
-> explains the handful of bash constructs this code leans on and the rules every command follows,
-> and it will save you working them out one file at a time.
+> This file is the specification: it was written before the code, and where the two disagree the
+> code is the bug.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/SETUP.md](docs/SETUP.md) | From a bare machine to a working session |
+| [docs/WORKFLOW.md](docs/WORKFLOW.md) | The daily loop, review, data, memory, skills |
+| [docs/CONFIG.md](docs/CONFIG.md) | Every `DRAUGR_*` key, and what happens if you get it wrong |
+| [docs/SECURITY.md](docs/SECURITY.md) | What the agent can and cannot reach, and how that was measured |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptoms, causes, fixes |
+| [docs/DESIGN.md](docs/DESIGN.md) | Why it is shaped this way, including what was tried and rejected |
+| [docs/HACKING.md](docs/HACKING.md) | **Reading the source? Start here**, not with a script |
+| [CHANGELOG.md](CHANGELOG.md) | What changed, and when |
 
 ---
 
@@ -449,7 +462,7 @@ copy and must never overwrite what the agent has learned since.
 | `dr-kit` | `validate`, `show`, `apply` this project's kit — and warn when it has drifted |
 | `dr-policy` | Show the network rules in force; `--allow <host>` for a temporary hole |
 | `dr-ports` | Publish a port to an already-running sandbox |
-| `dr-code` | Open VS Code Remote-SSH into the mound ⏳ |
+| `dr-code` | Open VS Code Remote-SSH into the mound, on the agent's clone |
 | `dr-trust` | Accept a project config after reviewing it |
 
 ---
@@ -609,9 +622,16 @@ draugr/
 │   ├── project.example     .draugr.conf starter, written by dr-init
 │   ├── kit.example/        starter sbx kit, also written by dr-init
 │   └── ssh-config.snippet  the *.sbx block dr-setup installs
-├── docs/                   setup, workflow, config reference, security, troubleshooting
+├── docs/
+│   ├── SETUP.md            bare machine → working session
+│   ├── WORKFLOW.md         the daily loop, data, memory, skills
+│   ├── CONFIG.md           every key (a test fails if one is undocumented)
+│   ├── SECURITY.md         the boundary, and how each claim was measured
+│   ├── TROUBLESHOOTING.md  symptoms → causes → fixes
+│   ├── DESIGN.md           why it is shaped this way, and what was rejected
 │   └── HACKING.md          the bash this project uses, and the house rules
 ├── tests/                  bats
+├── CHANGELOG.md
 └── install.sh
 ```
 

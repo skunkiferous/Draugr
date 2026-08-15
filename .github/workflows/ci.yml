@@ -65,21 +65,7 @@ jobs:
             exit 1
           fi
 
-  docs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Every dr-* named in the README exists in bin/
-        # Advisory until Phase 7: the README is the specification and documents
-        # commands that are not written yet, each marked with an hourglass. When
-        # the last one is gone this drops the "exit 0" and becomes blocking.
-        run: |
-          missing=0
-          for cmd in $(grep -oE '\bdr-[a-z]+' README.md | sort -u); do
-            if [ ! -f "bin/$cmd" ]; then
-              echo "not implemented yet: $cmd"
-              missing=$((missing + 1))
-            fi
-          done
-          echo "$missing README command(s) still unimplemented."
-          exit 0
+  # The documentation checks live in tests/docs.bats and run with everything
+  # else. They were a separate advisory job while the README specified commands
+  # that were not written yet; the last one shipped in 0.1.0, so they are now
+  # ordinary blocking tests and need no job of their own.

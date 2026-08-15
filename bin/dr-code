@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# dr-code - open VS Code inside the mound, on the agent's clone.
+#
+# Remote-SSH rather than a local window: the code the agent is working on lives
+# in the clone, not in your tree, and editing your tree while the agent edits its
+# clone is how people end up with two versions and no idea which is newer.
+#
+# This uses the same *.sbx host block dr-setup writes, so if dr-shell works, this
+# works. VS Code does the rest - the server installs itself into the mound on
+# first connect, which is slow once and instant afterwards.
+#
+#   dr-code                open the clone
+#   dr-code src/lib        open a subdirectory of it
+#   dr-code --print        print the folder URI instead of launching
+set -euo pipefail
+
+DR_PROG=dr-code
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# A bare word is a subdirectory to open rather than a flag, which is how `code`
+# itself behaves and therefore the shape people already expect.
+print_only=
+subdir=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --print)   print_only=1 ;;
+        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) dr_die "unknown option: $1" "Try: dr-code --help" ;;
+        *)  subdir=$1 ;;
+    esac
+    shift
+done
+
+dr_context
+
+# --- where in the mound to open ---------------------------------------------
+#
+# The clone sits at the repo's mound path, which is the Windows path with /mnt
+# stripped: /mnt/c/src/p on the host is /c/src/p inside. A subdirectory argument
+# is appended rather than resolved on the host, because it names a path in the
+# mound and the host may not have the same thing at that spot.
+target=$(dr_path_mound "$DR_REPO")
+if [ -n "$subdir" ]; then
+    target="$target/${subdir#/}"
+fi
+
+# VS Code's remote URI format. The authority is ssh-remote+<host>, and the host
+# is the same <name>.sbx that dr-setup taught WSL about - so this needs no
+# separate configuration of its own, and breaks in exactly the same way dr-shell
+# would if the SSH block were missing.
+uri="vscode-remote://ssh-remote+$DRAUGR_SANDBOX.sbx$target"
+
+if [ -n "$print_only" ]; then
+    printf '%s\n' "$uri"
+    exit 0
+fi
+
+# The mound has to exist before VS Code tries to connect: its own failure here is
+# a spinner and then a timeout, which says nothing about what went wrong.
+if ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
+    dr_die "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
+fi
+
+# Started, too. Unlike sbx exec, an SSH connection will not start a stopped
+# sandbox for us, so a stopped mound would just refuse the connection.
+if [ "$(dr_sandbox_state "$DRAUGR_SANDBOX")" != running ]; then
+    dr_info "starting $DRAUGR_SANDBOX"
+    "$_dr_bin/dr-up" >/dev/null || dr_die "could not start $DRAUGR_SANDBOX"
+fi
+
+# `code` may be the WSL build or the Windows one on PATH; either understands
+# --folder-uri, and both hand off to the same running VS Code instance.
+code=$(command -v code || command -v code.exe) || dr_die \
+    "cannot find the 'code' command" \
+    "Install VS Code, then run 'Shell Command: Install code command in PATH'." \
+    "Or open this URI by hand:  $uri"
+
+dr_info "opening $target in $DRAUGR_SANDBOX"
+"$code" --folder-uri "$uri" || dr_die \
+    "VS Code did not open the mound" \
+    "Is the Remote-SSH extension installed?" \
+    "Check the connection first with:  dr-shell"
+
+# Said every time rather than once, because it is the mistake this command makes
+# easy: two windows, two repositories, and only one of them is the one the agent
+# is changing.
+printf '  %sThat window edits the AGENT'\''s clone. Your own tree is a separate%s\n' \
+    "$_DR_DIM" "$_DR_OFF" >&2
+printf '  %srepository - use dr-status to see which commits are where.%s\n' \
+    "$_DR_DIM" "$_DR_OFF" >&2

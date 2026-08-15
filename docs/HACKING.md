@@ -597,9 +597,14 @@ often the clearest option, but it does not satisfy the checker — the rule stay
 mechanical and unarguable that way.
 
 ```bash
-./tests/lint-comments.sh lib/common.sh install.sh bin/* tests/mocks/sbx
+./tests/lint-comments.sh              # everything CI checks - use this form
 MAX=8 ./tests/lint-comments.sh …      # relax it while refactoring
 ```
+
+Run it with **no arguments**. The file list lives in the script so that a local
+run checks exactly what CI checks; it used to be spelled out in the workflow,
+and the bare local invocation quietly checked nothing at all, which is a green
+tick that means less than no tick.
 
 CI runs it on every push. If it fires on a block where a comment genuinely adds
 nothing, that is usually a sign the block wants splitting with a blank line
@@ -624,3 +629,40 @@ for real typos.
 `tests/mocks/sbx` stands in for the real binary: it records the argv it was
 called with and replays canned `ls --json` output, so tests can assert on the
 command line Draugr built without a hypervisor anywhere near them.
+
+---
+
+## Testing strategy
+
+Two tiers, because most of this cannot be exercised without a hypervisor and all
+of it has to be checkable in CI.
+
+**Unit (bats, runs anywhere, runs in CI).** Everything that is *argument
+construction* — and that is most of Draugr — is tested by asserting on the argv
+the mock recorded. Path translation, config merge order and provenance,
+glob→rsync-filter conversion, project-key encoding and trust hashing are pure
+functions with table tests. Where someone else's language is involved, the tests
+go against their implementation rather than our belief about it: the
+`DRAUGR_DATA` filters run through **real rsync**, and the repo-creation modes
+through **real git**. That is the only reason the `.git`-over-the-clone bug and
+the pattern-globbing bug were ever found.
+
+**Live (against a real sandbox, never in CI).** Each phase's acceptance check was
+performed by hand against a real mound — creating one, measuring `/proc/mounts`,
+round-tripping memory, timing an rsync delta — and the results recorded in
+[DESIGN.md](DESIGN.md) and [SECURITY.md](SECURITY.md) rather than left in
+someone's terminal history. When a claim in the docs says "measured", that is
+what it means.
+
+Three rules that came out of getting this wrong:
+
+1. **A test that passes for the wrong reason is worse than no test.** One scan
+   test passed because it tripped the clean-tree check first, testing nothing.
+   When a guard test goes green, confirm it goes red when you break the thing.
+2. **A check that examines nothing reports success.** The comment linter exited 0
+   on an empty file list; the exec-bit guard read `git ls-files`, which lists only
+   tracked files, and so never saw the untracked script that broke CI. Ask what
+   the check would have to see to fail.
+3. **A skip is invisible in a green tick.** CI greps the bats output for skips and
+   fails the job if it finds any, because the mound tests skip without a writable
+   `/mnt/<drive>` and would otherwise turn into a silent no-op.
