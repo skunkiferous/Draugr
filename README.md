@@ -329,7 +329,9 @@ The two other values let it create the repository for you, and they are for diff
 The second is the one to use for a folder of documents or data. Nothing is ever committed, so the
 dirty-tree check can never fire and there is no commit-before-each-session discipline to remember —
 but you also give up `dr-diff` and `dr-merge`, because there are no commits to compare. Review means
-`dr-data status`, which tells you *which* files differ rather than what changed inside them.
+`dr-data status` for which files differ and `dr-data diff` for what changed inside them — a real
+unified diff for text files, names and sizes for binaries and anything over
+[`DRAUGR_DATA_DIFF_MAX`](docs/CONFIG.md#draugr_data_diff_max).
 
 Only `dr-init` and `dr-up` will create a repository. `dr-status`, `dr-scan` and the rest still
 refuse, for the same reason `dr-status` will not start a stopped mound: a command you run to find
@@ -413,6 +415,7 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 | Command | |
 |---|---|
 | `dr-data status` | Dry run, both directions: what would move, and how much |
+| `dr-data diff` | What a pull would **change**, as a real diff where it can |
 | `dr-data push` | Host → sandbox, for paths matching `DRAUGR_DATA` |
 | `dr-data pull` | Sandbox → host, same paths |
 

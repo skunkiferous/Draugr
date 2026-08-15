@@ -143,6 +143,61 @@ Two things still rest on review alone:
 The general rule: Draugr will not *execute* anything from your repository that you have not accepted
 by hash, but it cannot tell a good setting from a bad one. Read what you merge.
 
+## The data channel has no commit to read
+
+Everything above concerns what the agent can *read*. `DRAUGR_DATA` is the other direction:
+`dr-data pull` writes agent-authored bytes into your working directory over rsync.
+
+Git content gets reviewed because `dr-merge` makes you look at a commit first. A pull has no commit.
+rsync reports `12 files, 4.1 MB` — a receipt, not a review — and then the bytes are on your disk.
+Three things follow, and the second one surprised us.
+
+**Pulled files land executable, and `DRAUGR_DATA_CHMOD` does not stop it.** The transfer passes
+`--chmod=D755,F644`, which looks like it normalises modes in both directions. It does not. A Draugr
+repo must live on a Windows drive, and DrvFs ignores `chmod` — measured, a file rsync'd onto `/mnt/c`
+with that flag lands `-rwxrwxrwx`, passes `test -x`, and runs. The key is doing its real job on the
+way *in* (host modes are 0777 and should not be carried into the mound); on the way *out* it is
+decorative. Nothing here is exploitable on its own — Draugr never executes a data file — but "it
+arrives read-only" would have been a false comfort, so it is not claimed.
+
+**So the name is what gets flagged.** Since the mode carries no signal, `dr-data status` and
+`dr-data pull` classify incoming files by name and warn about anything shaped like something you or a
+build step might run — `.sh`, `.py`, `.ps1`, `.exe`, `.so`, `Makefile`, `Dockerfile` and friends. A
+pull with one of those in it asks before transferring. It asks rather than refuses: a project whose
+data legitimately contains scripts would otherwise be unable to pull at all, and a guard you cannot
+satisfy is a guard people switch off. The list is deliberately narrow — `.bin`, `.ts` and `.dat` are
+left out — because a warning that fires on every parquet file is one you learn to scroll past.
+
+**`dr-data diff` is the review step.** It fetches what a pull would write into `.draugr/tmp`, which is
+excluded from every transfer, and shows a real unified diff against your copy. Text files up to
+[`DRAUGR_DATA_DIFF_MAX`](CONFIG.md#draugr_data_diff_max) (256 KB) are shown in full; larger ones and
+binaries are reported by name and size, because a diff of a 4 GB CSV helps nobody. It is a separate
+command rather than part of `pull` for the same reason: fetching every changed file to compare it is
+real work and real bytes, so you ask for it.
+
+### Paths are checked by Draugr, not only by rsync
+
+Both auto-writes — `dr-mem export` via `sbx cp`, and `dr-data pull` via rsync — copy sandbox-authored
+content onto the host, and both rely on the copy tool to be traversal-safe. Modern rsync strips a
+leading `/` and refuses `..`; `sbx cp` recreates symlinks rather than dereferencing them, and Windows
+blocks the symlink creation without privilege, so the worst observed case is a failed export rather
+than an escape.
+
+That residual risk lives in `sbx` and `rsync`, not in Draugr's logic. But "the copy tool probably
+handles it" is a dependency, not a guarantee, so `dr-data` checks the names itself before writing:
+absolute paths, any `..` component, and control characters are refused, and a pull that sees one
+stops entirely rather than prompting. Control characters are in that list for a second reason — a
+newline in a filename would truncate the line-per-file listing the review itself is built on, and a
+review that silently shows you less than what is arriving is worse than none.
+
+### Nothing rides out on the ssh transport
+
+The `*.sbx` block `dr-setup` installs uses `SendEnv LANG LC_*`, an allowlist. It previously said
+`SendEnv *`, which offered every variable in your WSL environment to the sandbox. Measured against
+`sbx 0.37.1` that leaked nothing — the proxy honours no `AcceptEnv` at all, so not even `LANG`
+crosses — which made the wildcard pure downside: it forwarded nothing while standing ready to forward
+your tokens the day a future `sbx` starts accepting them. A test fails if it ever comes back.
+
 ---
 
 ## Two more, worth knowing before they bite
@@ -195,6 +250,8 @@ can silence permanently is unclear.
 | `dr-rm` with memory you have not exported | `dr-rm --force` |
 | `dr-merge` onto a dirty tree | commit or stash first |
 | Sourcing a project config you have not accepted | `dr-trust` |
+| `dr-data pull` with runnable-looking files incoming | confirm at the prompt, after `dr-data diff` |
+| `dr-data pull` offering an absolute or `..` path | none — inspect the mound |
 | A repo that is not on a Windows drive | none — `sbx` cannot mount it |
 | A directory that is not a git repository | [`DRAUGR_ON_MISSING_REPO`](CONFIG.md#draugr_on_missing_repo) |
 

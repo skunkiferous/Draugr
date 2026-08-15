@@ -102,6 +102,7 @@ unchanged in either place.
 | | |
 |---|---|
 | `dr-data status` | dry run, both directions: what would move, and how much |
+| `dr-data diff` | what a pull would **change**, as a real diff where it can |
 | `dr-data push` | host → sandbox, the host wins |
 | `dr-data pull` | sandbox → host, the sandbox wins |
 

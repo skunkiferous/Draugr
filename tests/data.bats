@@ -197,3 +197,110 @@ tmp/x.bin" ]
     printf 'edit\n' >> README.md
     ! dr_data_dirty_only "$repo"
 }
+
+# --- reviewing what a pull would land ----------------------------------------
+#
+# dr-data pull writes agent-authored bytes onto the host with no commit to read
+# first, so these three helpers are what stands between "rsync said 12 files" and
+# a reviewer who has actually seen what is arriving.
+
+@test "dr_data_path_safe: an ordinary repo-relative path is fine" {
+    dr_data_path_safe "tmp/out/report.csv"
+}
+
+@test "dr_data_path_safe: an absolute path is refused" {
+    ! dr_data_path_safe "/etc/passwd"
+}
+
+@test "dr_data_path_safe: a leading .. is refused" {
+    ! dr_data_path_safe "../escape"
+}
+
+@test "dr_data_path_safe: a .. buried mid-path is refused too" {
+    # The one that matters: rsync sanitises this, but Draugr is the thing doing
+    # the writing and should not need to know which rsync it got.
+    ! dr_data_path_safe "out/../../escape"
+}
+
+@test "dr_data_path_safe: a bare .. is refused" {
+    ! dr_data_path_safe ".."
+}
+
+@test "dr_data_path_safe: an empty name is refused" {
+    ! dr_data_path_safe ""
+}
+
+@test "dr_data_path_safe: a newline in a name is refused" {
+    # Not only a traversal question. Every caller parses the incoming list one
+    # name per line, so a newline would silently truncate the review itself.
+    ! dr_data_path_safe "$(printf "bad\nname")"
+}
+
+@test "dr_data_path_safe: terminal escapes in a name are refused" {
+    # A filename that repaints the screen could hide the rest of the report.
+    ! dr_data_path_safe "$(printf "esc\033[2Jgone")"
+}
+
+@test "dr_data_exec_shaped: flags interpreted scripts" {
+    dr_data_exec_shaped "build.sh"
+    dr_data_exec_shaped "out/train.py"
+    dr_data_exec_shaped "deep/nested/tool.rb"
+    dr_data_exec_shaped "setup.ps1"
+}
+
+@test "dr_data_exec_shaped: flags native binaries and libraries" {
+    dr_data_exec_shaped "agent.exe"
+    dr_data_exec_shaped "lib/helper.so"
+    dr_data_exec_shaped "lib/helper.so.6"
+}
+
+@test "dr_data_exec_shaped: flags things a toolchain runs for you" {
+    dr_data_exec_shaped "Makefile"
+    dr_data_exec_shaped "Dockerfile"
+    dr_data_exec_shaped "Dockerfile.prod"
+}
+
+@test "dr_data_exec_shaped: stays quiet on ordinary data" {
+    # The important half. A warning that fires on every parquet file is one
+    # people learn to scroll past, and then it protects nothing.
+    ! dr_data_exec_shaped "model.parquet"
+    ! dr_data_exec_shaped "report.csv"
+    ! dr_data_exec_shaped "notes.txt"
+    ! dr_data_exec_shaped "tmp/x.bin"
+    ! dr_data_exec_shaped "capture.ts"
+}
+
+@test "dr_data_exec_shaped: judges the basename, not the directory" {
+    dr_data_exec_shaped "a/b/c/run.sh"
+    ! dr_data_exec_shaped "scripts.sh/data.csv"
+}
+
+@test "dr_data_is_text: plain text is text" {
+    printf "hello\nworld\n" > "$DR_TMP/t.txt"
+    dr_data_is_text "$DR_TMP/t.txt"
+}
+
+@test "dr_data_is_text: a NUL byte means binary" {
+    printf "text\000more\n" > "$DR_TMP/t.nul"
+    ! dr_data_is_text "$DR_TMP/t.nul"
+}
+
+@test "dr_data_is_text: a real binary format is binary" {
+    printf "hello world\n" | gzip > "$DR_TMP/t.gz"
+    ! dr_data_is_text "$DR_TMP/t.gz"
+}
+
+@test "dr_data_is_text: an empty file counts as text" {
+    # So that "the agent emptied this file" shows up as a diff rather than
+    # being withheld as unreadable.
+    : > "$DR_TMP/t.empty"
+    dr_data_is_text "$DR_TMP/t.empty"
+}
+
+@test "dr_data_is_text: only the first 8 KB is judged" {
+    # A huge CSV with one stray NUL at the end should still be diffable, and
+    # reading all of a 4 GB file to decide would defeat the point.
+    head -c 20000 /dev/zero | tr "\000" "a" > "$DR_TMP/t.big"
+    printf "\000" >> "$DR_TMP/t.big"
+    dr_data_is_text "$DR_TMP/t.big"
+}

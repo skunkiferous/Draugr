@@ -15,7 +15,7 @@ Nothing yet.
 ## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 238 tests run in CI.
+Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 258 tests run in CI.
 
 ### The daily loop
 
@@ -46,6 +46,13 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 238 tests run in CI.
 - Hooks are trust-checked like configs. `.draugr/hooks/*` are scripts that run on the host, as you,
   so an agent-authored one arriving through a merge would otherwise execute at the next `dr-up`.
   `dr-trust` with no arguments offers the hooks alongside the configs.
+- `dr-data pull` is reviewed rather than merely reported. It classifies what is arriving, warns about
+  anything shaped like something you would run, and asks before transferring it. Paths are validated
+  by Draugr itself — absolute, `..` or control characters stop the pull — rather than left to rsync's
+  own sanitising.
+- The `*.sbx` ssh block sends `LANG LC_*` instead of `*`. The wildcard leaked nothing against
+  `sbx 0.37.1`, which honours no `AcceptEnv` at all, but it stood ready to forward every WSL variable
+  the day that changes.
 - `DRAUGR_REQUIRE_CLEAN` refuses to start a session with uncommitted work the clone cannot contain.
 - `dr-rm` refuses to destroy unfetched commits or unexported memory.
 - `dr-kit` wraps `sbx kit` and detects drift between the kit and the mound built from it.
@@ -56,6 +63,9 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 238 tests run in CI.
 
 - `DRAUGR_DATA` moves large or half-processed files beside git rather than through it, by `rsync`
   over the same `ssh://` transport. One direction at a time, always.
+- `dr-data diff` shows what a pull would change as a real unified diff — the review step the data
+  channel otherwise lacks, since there is no commit to read. Text files up to `DRAUGR_DATA_DIFF_MAX`
+  are shown in full; binaries and anything larger are reported by name and size.
 - `dr-mem` carries agent memory across `dr-rm`, translating the project key — which differs on
   every side of the boundary, and produces a directory the agent silently never reads if you copy
   it across untranslated.
@@ -72,8 +82,11 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 238 tests run in CI.
 
 - WSL on Windows only. The whole path story is WSL-specific.
 - `dr-code` opens VS Code against the mound but does not manage extensions inside it.
-- Review in `create-data-only` mode is `dr-data status`, which reports *which* files differ rather
-  than what changed inside them. There are no commits to diff.
+- Review in `create-data-only` mode is `dr-data status` and `dr-data diff` rather than `dr-diff` and
+  `dr-merge`; there are no commits, so there is no history to compare against and no partial accept.
+- `DRAUGR_DATA_CHMOD` cannot keep a pulled file non-executable. DrvFs ignores `chmod`, so anything
+  landing on a Windows drive is mode 0777 — which is why `dr-data` flags runnable-looking files by
+  name instead.
 - One repository per mound.
 
 [Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.1.0...HEAD

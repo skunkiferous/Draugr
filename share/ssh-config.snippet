@@ -16,5 +16,11 @@ Host *.sbx
     ControlPath none
     UserKnownHostsFile "@KNOWN_HOSTS@"
     StrictHostKeyChecking accept-new
-    SendEnv *
+    # An allowlist, never "SendEnv *". Measured against sbx 0.37.1: the proxy
+    # honours no AcceptEnv at all, so nothing crosses today - not even LANG.
+    # That made the wildcard pure downside. It forwarded nothing, while standing
+    # ready to forward every variable in the WSL environment - AWS_SECRET_ACCESS_KEY
+    # and friends included - the day a future sbx starts accepting them. Locale is
+    # the only thing worth sending to a sandbox, and it cannot grow into a leak.
+    SendEnv LANG LC_*
 # <<< draugr (managed) <<<

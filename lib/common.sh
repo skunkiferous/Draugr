@@ -313,6 +313,7 @@ DR_KEYS=(
     DRAUGR_AGENT DRAUGR_AGENT_ARGS DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
     DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_PORTS DRAUGR_MOUNTS
     DRAUGR_DATA DRAUGR_DATA_PUSH DRAUGR_DATA_PULL DRAUGR_DATA_DELETE DRAUGR_DATA_CHMOD
+    DRAUGR_DATA_DIFF_MAX
     DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC DRAUGR_ON_MISSING_REPO
     DRAUGR_MEM_SYNC DRAUGR_MEM_STORE
     DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL
@@ -344,6 +345,12 @@ _dr_defaults() {
     DRAUGR_DATA_PULL=manual
     DRAUGR_DATA_DELETE=false
     DRAUGR_DATA_CHMOD=D755,F644
+
+    # Per-file ceiling for `dr-data diff`, in bytes. Data files are routinely
+    # enormous, and a real diff of a 4 GB CSV helps nobody - so anything larger
+    # is reported by name and size instead of by content. 256 KB covers the
+    # scripts and config that are worth reading closely.
+    DRAUGR_DATA_DIFF_MAX=262144
 
     DRAUGR_BRANCH=               # empty => the branch currently checked out
     DRAUGR_REMOTE=draugr
@@ -967,6 +974,64 @@ dr_data_filters() {
         esac
     done
     printf '%s\n' '--exclude=*'
+}
+
+# dr_data_path_safe <path> - a name we are willing to write under the repo?
+#
+# rsync sanitises paths itself: modern versions strip a leading "/" and refuse a
+# "..". But "the copy tool handles it" is a dependency, not a guarantee, and the
+# sending side here is by definition the agent. The names are cheap to check and
+# we are the ones writing the files, so we check them.
+#
+# Rejected: absolute paths, any ".." component, and control characters - the last
+# because a newline in a filename also breaks the line-per-file parsing that every
+# caller of this relies on, which would be a silently truncated review.
+dr_data_path_safe() {
+    local path=$1
+    case "$path" in
+        ''|/*)             return 1 ;;
+        ..|../*|*/../*|*/..) return 1 ;;
+        *[[:cntrl:]]*)     return 1 ;;
+    esac
+    return 0
+}
+
+# dr_data_exec_shaped <path> - would anyone ever RUN this file?
+#
+# Names only, and deliberately so. The instinct is to ask "did it arrive with the
+# execute bit set", but that question has no useful answer here: a Draugr repo
+# must live on a Windows drive, DrvFs reports every file as 0777, and --chmod is
+# silently ignored there. Measured - a file rsync'd onto /mnt/c with
+# --chmod=D755,F644 lands -rwxrwxrwx and runs. So the mode tells you nothing and
+# the name is the only signal left.
+#
+# Kept narrow on purpose. A warning that fires on ordinary data is one people
+# learn to scroll past, so extensions that are as often data as code - .bin, .ts,
+# .run, .dat - are left out even though any of them could in principle be run.
+dr_data_exec_shaped() {
+    case "${1##*/}" in
+        *.sh|*.bash|*.zsh|*.ksh|*.fish|*.py|*.pl|*.rb|*.lua|*.php)        return 0 ;;
+        *.js|*.mjs|*.cjs|*.ps1|*.psm1|*.bat|*.cmd|*.vbs|*.wsf)            return 0 ;;
+        *.exe|*.dll|*.so|*.so.*|*.dylib|*.msi|*.scr|*.jar)                return 0 ;;
+        *.appimage|*.AppImage|*.desktop|*.service)                        return 0 ;;
+        Makefile|makefile|GNUmakefile|*.mk|Dockerfile|Dockerfile.*)       return 0 ;;
+    esac
+    return 1
+}
+
+# dr_data_is_text <path> - no NUL byte in the first 8 KB.
+#
+# The same heuristic git uses - and, more to the point, the same one `diff` uses,
+# so this never promises a diff that diff will then refuse to print. It also needs
+# no `file` binary, which is one less thing to be missing inside a stripped-down
+# mound. An empty file counts as text: there is nothing in it to be binary, and
+# calling it binary would hide the one diff that matters, "this file was emptied".
+dr_data_is_text() {
+    local total stripped
+    [ -s "$1" ] || return 0
+    total=$(head -c 8192 "$1" | wc -c)
+    stripped=$(head -c 8192 "$1" | LC_ALL=C tr -d '\000' | wc -c)
+    [ "$total" = "$stripped" ]
 }
 
 # dr_data_dirty_only <repo> - true when every uncommitted change is a data file.

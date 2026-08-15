@@ -84,8 +84,16 @@
 # tidied a directory would otherwise delete the agent's generated output.
 #DRAUGR_DATA_DELETE=false
 
-# /mnt/c is mode 777 under WSL; normalise on the way in.
+# /mnt/c is mode 777 under WSL; normalise on the way in. Note that this cannot
+# work on the way OUT: DrvFs ignores chmod, so a pulled file is executable on a
+# Windows drive whatever you put here. dr-data flags runnable-looking names
+# instead - see docs/SECURITY.md.
 #DRAUGR_DATA_CHMOD=D755,F644
+
+# Per-file ceiling for `dr-data diff`, in bytes. Bigger text files are reported
+# by name and size instead of content; binaries always are. Raise it when you
+# have a large generated file you genuinely need to read before accepting it.
+#DRAUGR_DATA_DIFF_MAX=262144
 
 # --- Git behaviour ----------------------------------------------------------
 

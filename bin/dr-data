@@ -10,7 +10,13 @@
 # file: if both sides changed it, any bidirectional sync silently picks a winner
 # and destroys the other version. So each transfer declares a source of truth.
 #
+# A pull is the direction nobody reviews. dr-merge hands you a commit to read;
+# rsync hands you a filename and a byte count and then the bytes are on your
+# disk. So `dr-data diff` shows the content a pull would write, and every pull
+# names what is about to land and flags anything shaped like something you run.
+#
 #   dr-data status   dry run, BOTH directions - what would move, and how much
+#   dr-data diff     what a pull would CHANGE, as a real diff where it can
 #   dr-data push     host -> mound  (the host wins)
 #   dr-data pull     mound -> host  (the sandbox wins)
 set -euo pipefail
@@ -25,9 +31,9 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # usual first question is "which way do I actually want to go".
 action=${1:-status}
 case "$action" in
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    status|push|pull) shift || : ;;
-    *) dr_die "unknown action: $action" "One of: status, push, pull" ;;
+    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    status|diff|push|pull) shift || : ;;
+    *) dr_die "unknown action: $action" "One of: status, diff, push, pull" ;;
 esac
 
 # --delete is refused unless the config asked for it AND this run confirms, so a
@@ -79,6 +85,87 @@ run_rsync() {
         "Is rsync installed inside it?  dr-shell -- command -v rsync"
 }
 
+# --- reviewing what a pull would land ---------------------------------------
+#
+# A pull writes agent-authored bytes into your working directory. Everything in
+# this section exists because rsync's own summary - "12 files, 4.1 MB" - is a
+# receipt, not a review, and a receipt is not enough for content you did not
+# write and cannot see.
+
+# Bytes at a glance. Comparing 4823 against 5104 is work; 4.7 KB against 4.9 KB
+# is not, and the exact figure is never the interesting part of this report.
+human() {
+    local b=$1
+    if   [ "$b" -ge 1073741824 ]; then printf '%d.%d GB' "$((b/1073741824))" "$(((b%1073741824)*10/1073741824))"
+    elif [ "$b" -ge 1048576 ];    then printf '%d.%d MB' "$((b/1048576))"    "$(((b%1048576)*10/1048576))"
+    elif [ "$b" -ge 1024 ];       then printf '%d.%d KB' "$((b/1024))"       "$(((b%1024)*10/1024))"
+    else                               printf '%d B' "$b"
+    fi
+}
+
+# The repo-relative names a pull would write, one per line, directories dropped.
+# A dry run is the only honest source for this: it applies the same filter rules
+# and the same delta algorithm as the real transfer, so the list cannot drift
+# from what actually happens a moment later.
+incoming_names() {
+    rsync "${common[@]}" --dry-run --out-format='%n' "$remote" "$local_dir" \
+        2>/dev/null | grep -v '/$' || true
+}
+
+# Sort an incoming list into three buckets. Sets arrays instead of printing,
+# because each caller wants a different one: diff fetches the safe names, pull
+# stops on the executable ones, and all of them report the rejected ones.
+DR_IN_SAFE=(); DR_IN_EXEC=(); DR_IN_UNSAFE=()
+classify_incoming() {
+    local f
+    DR_IN_SAFE=(); DR_IN_EXEC=(); DR_IN_UNSAFE=()
+    for f in "$@"; do
+        # Refused outright rather than sorted further: a name we will not write
+        # is not a name we should be reading the size of either.
+        if ! dr_data_path_safe "$f"; then
+            DR_IN_UNSAFE+=("$f")
+            continue
+        fi
+        DR_IN_SAFE+=("$f")
+        if dr_data_exec_shaped "$f"; then DR_IN_EXEC+=("$f"); fi
+    done
+    return 0
+}
+
+# Print the verdict. Returns 1 when something executable-shaped is arriving, so
+# that a caller can turn the report into a question.
+report_incoming() {
+    local f rc=0
+
+    # A path we refuse is a fact about the sandbox, not a preference. rsync would
+    # very likely have sanitised it too - but "the copy tool probably handles it"
+    # is not a sentence this project is willing to print.
+    if [ ${#DR_IN_UNSAFE[@]} -gt 0 ]; then
+        dr_error "${#DR_IN_UNSAFE[@]} incoming path(s) REFUSED as unsafe:"
+        for f in "${DR_IN_UNSAFE[@]}"; do printf '    %q\n' "$f" >&2; done
+        printf '  %sAbsolute, containing .., or holding control characters. Draugr will%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %snot write these. Look at the mound before trusting the rest of the set.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        rc=1
+    fi
+
+    # The one that motivated all of this. The mode is not the signal - see
+    # dr_data_exec_shaped - so the name is what gets flagged, and loudly.
+    if [ ${#DR_IN_EXEC[@]} -gt 0 ]; then
+        dr_warn "${#DR_IN_EXEC[@]} incoming file(s) look RUNNABLE:"
+        for f in "${DR_IN_EXEC[@]}"; do printf '    %s\n' "$f" >&2; done
+        printf '  %sThe agent wrote these and you have not read them. On a Windows drive%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %severy file lands mode 0777 whatever DRAUGR_DATA_CHMOD says, so they%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %swill be executable. Read them first:  dr-data diff%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        rc=1
+    fi
+    return "$rc"
+}
+
 case "$action" in
 
 # Both directions, neither applied. This is the command to run before deciding
@@ -88,6 +175,87 @@ status)
     run_rsync "dry run" "$local_dir" "$remote" --dry-run --stats
     dr_heading "mound -> host (dr-data pull would transfer)"
     run_rsync "dry run" "$remote" "$local_dir" --dry-run --stats
+
+    # Only the inbound direction gets judged. What you send the agent is yours
+    # already; what it sends back is the half you have not read.
+    mapfile -t names < <(incoming_names)
+    if [ ${#names[@]} -gt 0 ]; then
+        classify_incoming "${names[@]}"
+        report_incoming || true
+    fi
+    ;;
+
+# The review step for a pull. Separate from `pull` on purpose: fetching every
+# changed file to compare it is real work and real bytes, so it happens when you
+# ask for it, not silently before every transfer.
+diff)
+    mapfile -t names < <(incoming_names)
+    if [ ${#names[@]} -eq 0 ]; then
+        dr_ok "nothing to pull - the mound's data matches yours"
+        exit 0
+    fi
+    classify_incoming "${names[@]}"
+    report_incoming || true
+
+    # Staged in .draugr/tmp, which dr_data_filters excludes from every transfer,
+    # so these copies can never be swept into a later push. --files-from names
+    # the files explicitly, so the filter rules are neither needed nor wanted -
+    # and the names it is given are the ones dr_data_path_safe already accepted.
+    dr_stage
+    trap 'rm -rf "$DR_STAGE"' EXIT
+    if [ ${#DR_IN_SAFE[@]} -gt 0 ]; then
+        printf '%s\n' "${DR_IN_SAFE[@]}" \
+            | rsync -a --files-from=- "$remote" "$DR_STAGE/" || dr_die \
+                "could not fetch the incoming files for comparison" \
+                "Is the mound reachable?  dr-status"
+    fi
+
+    dr_heading "${#DR_IN_SAFE[@]} file(s) a pull would write"
+    for f in "${DR_IN_SAFE[@]+"${DR_IN_SAFE[@]}"}"; do
+        new="$DR_STAGE/$f"
+        # A name can be listed and still not arrive - a directory, a symlink, or
+        # something the agent removed between the two round trips.
+        [ -f "$new" ] || continue
+        old="$DR_REPO/$f"
+        newsize=$(stat -c %s "$new")
+        oldsize=0
+        [ -f "$old" ] && oldsize=$(stat -c %s "$old")
+
+        # The header carries the sizes even when the body does not, because
+        # "1.2 GB became 4 B" is itself a review finding.
+        if [ -f "$old" ]; then
+            printf '\n%s--- %s%s  %s(%s -> %s)%s\n' \
+                "$_DR_BOLD" "$f" "$_DR_OFF" "$_DR_DIM" \
+                "$(human "$oldsize")" "$(human "$newsize")" "$_DR_OFF" >&2
+        else
+            printf '\n%s+++ %s%s  %s(new, %s)%s\n' \
+                "$_DR_BOLD" "$f" "$_DR_OFF" "$_DR_DIM" "$(human "$newsize")" "$_DR_OFF" >&2
+        fi
+
+        # Two reasons to withhold content, and they are different: binary is
+        # unreadable, oversized is unhelpful. Say which, so that raising
+        # DRAUGR_DATA_DIFF_MAX is an obvious move when it is the right one.
+        if ! dr_data_is_text "$new"; then
+            printf '  %sbinary - content not shown%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+            continue
+        fi
+        if [ "$newsize" -gt "$DRAUGR_DATA_DIFF_MAX" ]; then
+            printf '  %s%s exceeds DRAUGR_DATA_DIFF_MAX (%s) - content not shown%s\n' \
+                "$_DR_DIM" "$(human "$newsize")" "$(human "$DRAUGR_DATA_DIFF_MAX")" "$_DR_OFF" >&2
+            continue
+        fi
+
+        # The diff itself goes to stdout while the framing goes to stderr, so
+        # `dr-data diff > review.patch` keeps the patch and leaves the commentary
+        # on screen. --label spells the two sides a/ and b/ the way git does,
+        # instead of leaking the staging directory into every header - and it
+        # keeps the result applicable with `patch -p1`.
+        if [ -f "$old" ]; then
+            diff -u --label "a/$f" --label "b/$f" -- "$old" "$new" || true
+        else
+            diff -u --label /dev/null --label "b/$f" -- /dev/null "$new" || true
+        fi
+    done
     ;;
 
 push|pull)
@@ -99,6 +267,35 @@ push|pull)
         dr_warn "--delete: files missing on the source will be REMOVED on the destination"
         dr_confirm "Propagate deletions?" || dr_die "cancelled"
         del=(--delete)
+    fi
+
+    # A pull is reviewed here or nowhere. The report prints even under --yes -
+    # which is what dr-go passes on an auto-pull - because the point is the
+    # record of what arrived, not only the chance to say no.
+    if [ "$action" = pull ]; then
+        mapfile -t names < <(incoming_names)
+        if [ ${#names[@]} -gt 0 ]; then
+            classify_incoming "${names[@]}"
+
+            # An unsafe path stops the whole transfer rather than prompting.
+            # rsync would very probably have neutralised it, but a mound that is
+            # offering "../.." is not one to take the rest of the set from on a
+            # yes/no answer.
+            if [ ${#DR_IN_UNSAFE[@]} -gt 0 ]; then
+                report_incoming || true
+                dr_die "refusing to pull" \
+                    "The mound offered a path Draugr will not write to your host." \
+                    "Inspect it before going further:  dr-shell"
+            fi
+
+            # Executable-shaped content is a question, not a refusal: a project
+            # whose data legitimately includes scripts would otherwise be unable
+            # to pull at all, and a guard you cannot satisfy gets disabled.
+            if ! report_incoming; then
+                dr_confirm "Pull them anyway?" || dr_die "cancelled" \
+                    "Read them before deciding:  dr-data diff"
+            fi
+        fi
     fi
 
     # Same rsync either way; only the argument order differs. Naming the

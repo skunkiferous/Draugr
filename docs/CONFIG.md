@@ -191,7 +191,18 @@ only copy.
 
 ### `DRAUGR_DATA_CHMOD`
 Default `D755,F644`. Files on `/mnt/c` are mode 777 under WSL, and a naive transfer carries that into
-the mound. This normalises on the way in.
+the mound. This normalises on the way **in**.
+
+It does nothing on the way **out**, and it is worth knowing why: DrvFs ignores `chmod`, so a file
+pulled onto `/mnt/c` lands `-rwxrwxrwx` whatever this is set to. Measured — the pulled file passes
+`test -x` and runs. Do not read this key as a guard against the sandbox landing something executable
+on your host; [`dr-data diff`](SECURITY.md#the-data-channel-has-no-commit-to-read) is that guard.
+
+### `DRAUGR_DATA_DIFF_MAX`
+Default `262144` (256 KB). The per-file ceiling for `dr-data diff`. Text files at or under it are
+shown as a real unified diff; anything larger is reported by name and size instead, because a diff of
+a 4 GB CSV helps nobody. Binary files are never shown regardless of size. Raise it when you have a
+large generated file you genuinely need to read.
 
 ---
 

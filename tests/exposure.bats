@@ -214,3 +214,23 @@ teardown() { dr_test_teardown; }
     run git -C "$repo" check-ignore .draugr.local.conf
     [ "$status" -eq 0 ]
 }
+
+# --- what leaves the host on the ssh transport --------------------------------
+
+@test "ssh snippet: no wildcard SendEnv" {
+    # "SendEnv *" would offer every variable in the WSL environment to the
+    # sandbox. Measured against sbx 0.37.1 the proxy accepts none of them, so it
+    # leaked nothing - but that is a property of today's sbx, not of the config,
+    # and the config is the half this project controls.
+    run grep -E "^[[:space:]]*SendEnv" "$BATS_TEST_DIRNAME/../share/ssh-config.snippet"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"SendEnv *"* ]]
+}
+
+@test "ssh snippet: SendEnv is an explicit allowlist" {
+    # Locale is the only thing worth forwarding to a sandbox, and an allowlist
+    # cannot quietly grow into a credential leak the way a wildcard can.
+    run grep -E "^[[:space:]]*SendEnv[[:space:]]+LANG[[:space:]]+LC_\*[[:space:]]*$" \
+        "$BATS_TEST_DIRNAME/../share/ssh-config.snippet"
+    [ "$status" -eq 0 ]
+}
