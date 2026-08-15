@@ -577,6 +577,49 @@ Named so nobody has to wonder whether they were forgotten: multi-repo mounds; Li
 that pushes to `origin` on your behalf; and any form of bidirectional data sync, for the reason
 given in the README.
 
+### Directories that are not repositories — supported, via `DRAUGR_ON_MISSING_REPO`
+
+Measured first: `sbx create` does **not** require a git repository; only `--clone` does, and it says
+so plainly (`--clone requires a Git repository, but … is not in a Git repository`). Without
+`--clone` a plain directory is bind-mounted read-write and there is no `/run/sandbox/source` — the
+agent's write to `report.md` went straight through to the host file. That mode is `DRAUGR_CLONE=false`,
+which the README makes you confirm every time, so "just drop the git requirement" means giving up the
+property the whole project is built on.
+
+The way out is to keep clone mode and give it a repository to clone. `DRAUGR_ON_MISSING_REPO`:
+
+- `fail` (default) — refuse, naming the two alternatives.
+- `create-add-all` — `git init` plus a commit of everything. For "I forgot to `git init`". Seeds
+  `.gitignore` from `DRAUGR_SCAN_PATTERNS` and `DRAUGR_DATA` **first**, which is a safety fix and not
+  tidiness: `dr-scan` only reports *untracked* files, so committing a credential would put it in the
+  agent's clone and in history while silencing the scan that exists to catch it.
+- `create-data-only` — `git init` with a `.gitignore` of `*`. Nothing is tracked, so `git status` is
+  empty permanently, `DRAUGR_REQUIRE_CLEAN` can never fire, and every file travels by `DRAUGR_DATA`.
+
+Three properties of the data-only repo, each verified with real git: the clone contains only the
+committed setup files and none of the user's; the tree is clean and stays clean through edits; and
+`git ls-files --others` still lists a `secrets.env`, so `dr-scan` keeps working under a `.gitignore`
+of `*`. That last one is luck earned earlier — bare `--others` was chosen in Phase 4 precisely
+because it lists ignored files, and it pays off in a mode it was not written for.
+
+**The two modes are not symmetric, and the docs say so.** `create-data-only` is self-sustaining.
+`create-add-all` only fixes the first session: the next edit dirties the tree and the discipline
+returns — which is correct for a code project and wrong for a folder of documents.
+
+**Two bugs found while building it.** `dr_repo_branch` ran `git rev-parse --abbrev-ref HEAD`, which
+exits 128 outside a repository, and `dr_load_config` calls it to default `DRAUGR_BRANCH` — so under
+`set -e` the whole command died silently with 128 before any of the new code ran. And `dr-init`
+writes `.draugr.conf` and the kit *after* the repository exists, leaving the repo it had just created
+dirty; `dr_repo_commit_setup` now commits them, because "the tree is always clean" is the entire
+selling point of data-only and breaking it on the very first command would be a poor introduction.
+
+**Deliberately narrow:** only `dr-init` and `dr-up` may create a repository. Every other command
+keeps refusing, for the reason `dr-status` will not start a stopped mound — and `dr_context_create`
+is separate from `dr_context` so that is enforced by which function a command calls, not by care.
+The ordering there is the fiddly part: the policy lives in the config, the config lives in the
+directory, and `dr_load_config` must run **exactly once** — a second call would capture the values
+the first computed and treat them as environment overrides, outranking every config file.
+
 ### Repos on ext4, via a `subst` drive — tested, rejected
 
 The obvious objection to "your repo must live on a Windows drive" is that a WSL path can be *made*

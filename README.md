@@ -298,6 +298,33 @@ DRAUGR_AUTO_SYNC=true                # dr-sync automatically when you detach
 stale code. **Paths matching `DRAUGR_DATA` are exempt from the check** — they are handled by a
 different mechanism and are never expected to be committed.
 
+**Directories that are not repositories**
+
+```bash
+DRAUGR_ON_MISSING_REPO=fail          # fail|create-add-all|create-data-only
+```
+
+`sbx --clone` requires a git repository, and clone mode is what makes the host tree read-only — so
+by default Draugr refuses a plain directory rather than quietly falling back to something less safe.
+The two other values let it create the repository for you, and they are for different situations:
+
+| | |
+|---|---|
+| `create-add-all` | *"this is a code project I forgot to `git init`."* Commits what is there and hands you an ordinary repo — including the dirty-tree check on every session after. Credential-shaped names and `DRAUGR_DATA` patterns are gitignored first, never committed. |
+| `create-data-only` | *"this is not a code project."* Creates a repo whose `.gitignore` is a single `*`, so git tracks nothing and `git status` is empty forever. Your files travel by `dr-data` instead, and `DRAUGR_DATA="*"` is written for you. |
+
+The second is the one to use for a folder of documents or data. Nothing is ever committed, so the
+dirty-tree check can never fire and there is no commit-before-each-session discipline to remember —
+but you also give up `dr-diff` and `dr-merge`, because there are no commits to compare. Review means
+`dr-data status`, which tells you *which* files differ rather than what changed inside them.
+
+Only `dr-init` and `dr-up` will create a repository. `dr-status`, `dr-scan` and the rest still
+refuse, for the same reason `dr-status` will not start a stopped mound: a command you run to find
+out what is going on must not change what is going on.
+
+> Creating a repository in a directory writes real files into it — `.git/`, a `.gitignore`, and a
+> `.draugr.conf`. That is why the default is `fail`: it should be something you asked for.
+
 **Memory**
 
 ```bash

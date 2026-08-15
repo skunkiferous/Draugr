@@ -28,10 +28,12 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-repo=$(dr_repo_root)
-dr_require_win_path "$repo"
-
-dr_load_config "$repo"
+# dr-init and dr-up are the only two commands that may create a repository, and
+# this is the more natural of the two to do it from: setting a project up is
+# exactly what you came here for. Honours DRAUGR_ON_MISSING_REPO; refuses as
+# before when that is "fail", which is the default.
+dr_context_create
+repo=$DR_REPO
 [ -n "$agent" ] && DRAUGR_AGENT=$agent
 name=$(dr_sandbox_name "$repo")
 name=${name#draugr-}
@@ -41,7 +43,15 @@ wrote=0
 # --- .draugr.conf ----------------------------------------------------------
 conf="$repo/.draugr.conf"
 if [ -f "$conf" ] && [ -z "$force" ]; then
-    dr_info "kept existing .draugr.conf"
+    # "kept existing" would be a lie in the create modes: dr_repo_create writes
+    # a .draugr.conf of its own moments earlier, and reporting that as something
+    # you had already is the sort of small dishonesty that makes people stop
+    # reading the output.
+    if [ -n "${DR_REPO_CREATED:-}" ]; then
+        dr_info "using the .draugr.conf just written for this directory"
+    else
+        dr_info "kept existing .draugr.conf"
+    fi
 else
     {
         cat "$DRAUGR_SHARE/project.example"
@@ -79,11 +89,16 @@ ignore_entries=(
 )
 
 # Tested one at a time rather than all-or-nothing, so a repo initialised by an
-# older Draugr picks up the entries that did not exist then.
+# older Draugr picks up the entries that did not exist then. In data-only mode
+# there is nothing to add: that .gitignore is a single "*", which already covers
+# these and everything else, and three redundant lines under it would only
+# invite the question of what they are for.
 missing=()
-for entry in "${ignore_entries[@]}"; do
-    grep -qxF "$entry" "$ignore" 2>/dev/null || missing+=("$entry")
-done
+if [ "${DR_REPO_CREATED:-}" != create-data-only ]; then
+    for entry in "${ignore_entries[@]}"; do
+        grep -qxF "$entry" "$ignore" 2>/dev/null || missing+=("$entry")
+    done
+fi
 
 if [ ${#missing[@]} -gt 0 ]; then
     # Decide whether the file ends mid-line BEFORE opening the append redirect:
@@ -106,6 +121,12 @@ fi
 # The prompt exists to stop a *cloned* config running unread; it would be theatre
 # here, and theatre is how people learn to click through real warnings.
 dr_trust_add "$conf"
+
+# If this repository did not exist when dr-init started, everything above is an
+# uncommitted change in it. Committing them here is what makes "dr-init leaves
+# you with a clean tree" true in the modes that create a repo; it does nothing
+# in the ordinary case, where the repo was yours all along.
+dr_repo_commit_setup "$repo"
 
 # Say plainly whether anything changed: re-running dr-init is harmless, and you
 # should be able to tell the difference without diffing your own repo.

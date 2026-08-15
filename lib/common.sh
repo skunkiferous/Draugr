@@ -273,12 +273,18 @@ dr_repo_root() {
     root=$(git rev-parse --show-toplevel 2>/dev/null) || dr_die \
         "$PWD is not a git repository" \
         "Draugr works on one repository at a time: the sandbox gets a clone of it." \
-        "Run 'git init' here, or cd into your project."
+        "Run 'git init' here, or cd into your project." \
+        "To have Draugr create one for you, set DRAUGR_ON_MISSING_REPO and run dr-init."
     printf '%s' "$root"
 }
 
+# Empty, and successful, when there is no repository or no commit yet. git exits
+# 128 in both cases, and every caller here treats "no branch" as an answer rather
+# than a fault - so without the `|| true` this aborts any caller running under
+# `set -e`, which is all of them. That is precisely what it used to do when
+# dr-init was pointed at a directory that was not a repository yet.
 dr_repo_branch() {
-    git -C "${1:-$PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null
+    git -C "${1:-$PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || true
 }
 
 dr_repo_is_clean() {
@@ -307,7 +313,7 @@ DR_KEYS=(
     DRAUGR_AGENT DRAUGR_AGENT_ARGS DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
     DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_PORTS DRAUGR_MOUNTS
     DRAUGR_DATA DRAUGR_DATA_PUSH DRAUGR_DATA_PULL DRAUGR_DATA_DELETE DRAUGR_DATA_CHMOD
-    DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC
+    DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC DRAUGR_ON_MISSING_REPO
     DRAUGR_MEM_SYNC DRAUGR_MEM_STORE
     DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL
 )
@@ -343,6 +349,15 @@ _dr_defaults() {
     DRAUGR_REMOTE=draugr
     DRAUGR_REQUIRE_CLEAN=true
     DRAUGR_AUTO_SYNC=true
+
+    # What to do when you point Draugr at a directory that is not a repository.
+    # "fail" by default: creating a git repo in somebody's folder is a real side
+    # effect and not something to do because they mistyped a path.
+    #   fail              refuse, and say what the alternatives are
+    #   create-add-all    init and commit everything - "I forgot to git init"
+    #   create-data-only  init with a .gitignore of "*", so nothing is tracked
+    #                     and every file travels by DRAUGR_DATA instead
+    DRAUGR_ON_MISSING_REPO=fail
 
     DRAUGR_MEM_SYNC=auto
     DRAUGR_MEM_STORE="${XDG_DATA_HOME:-$HOME/.local/share}/draugr/memory"
@@ -554,6 +569,181 @@ dr_context() {
     # shellcheck disable=SC2034  # read by the dr-* command that called us
     DR_REPO_WIN=$(dr_path_win "$DR_REPO")
     dr_load_config "$DR_REPO"
+}
+
+# dr_context_create - dr_context, for the two commands allowed to make a repo.
+#
+# Only dr-up and dr-init call this. Everything else keeps dr_context and its
+# refusal, for the same reason dr-status will not start a stopped mound: a
+# command you run to find out what is going on must not change what is going on.
+#
+# The awkward part is ordering. The policy lives in the config, the project
+# config lives in the directory, and the directory is not a repository yet - so
+# the config has to be loaded against a plain path first, and dr_load_config has
+# to be called EXACTLY ONCE. A second call would see the values the first one
+# computed, decide they came from the environment, and give them precedence over
+# every config file. Hence one load, then act.
+dr_context_create() {
+    local dir
+    dir=$(git rev-parse --show-toplevel 2>/dev/null) || dir=$PWD
+    dr_require_win_path "$dir"
+    dr_load_config "$dir"
+
+    if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+        dr_repo_create "$dir"
+    fi
+
+    DR_REPO=$dir
+    # shellcheck disable=SC2034  # read by the dr-* command that called us
+    DR_REPO_WIN=$(dr_path_win "$dir")
+}
+
+# dr_repo_create <dir> - act on DRAUGR_ON_MISSING_REPO. Fatal for "fail".
+# Sets DR_REPO_CREATED to the mode used, so the caller knows it is standing in a
+# repository that did not exist a moment ago and that anything it writes next is
+# its to commit. Empty when the repo was already there.
+DR_REPO_CREATED=
+
+dr_repo_create() {
+    local dir=$1 mode=${DRAUGR_ON_MISSING_REPO:-fail}
+
+    # Validated before anything is written, so a typo in the setting is a clean
+    # refusal rather than half a repository.
+    case "$mode" in
+        fail) dr_die \
+            "$dir is not a git repository" \
+            "Draugr works on one repository at a time: the sandbox gets a clone of it." \
+            "Run 'git init' here, or set DRAUGR_ON_MISSING_REPO to have Draugr do it:" \
+            "  create-add-all     commit what is here, then work in git as usual" \
+            "  create-data-only   track nothing; files travel by DRAUGR_DATA instead" ;;
+        create-add-all|create-data-only) : ;;
+        *) dr_die "DRAUGR_ON_MISSING_REPO is '$mode'" \
+                  "Expected one of: fail, create-add-all, create-data-only." \
+                  "It came from ${DR_ORIGIN[DRAUGR_ON_MISSING_REPO]}." ;;
+    esac
+
+    git -C "$dir" init -q -b "${DRAUGR_BRANCH:-main}" \
+        || dr_die "could not create a git repository in $dir"
+
+    # A commit needs an identity, and someone whose machine has no global one
+    # would otherwise get git's four-line lecture from inside a Draugr command.
+    # Set it locally, on this throwaway repo only, and say so.
+    if ! git -C "$dir" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+        git -C "$dir" config user.name Draugr
+        git -C "$dir" config user.email draugr@localhost
+        dr_info "no git identity configured; set one locally for this repo"
+    fi
+
+    case "$mode" in
+    create-data-only)
+        # The dummy repo: one tracked file, which ignores everything including
+        # itself - so `git status` is empty from now on and DRAUGR_REQUIRE_CLEAN
+        # never has anything to complain about. -f is required precisely because
+        # the pattern already covers .gitignore.
+        printf '%s\n' '# Draugr data-only mode: git tracks nothing here.' '*' \
+            > "$dir/.gitignore"
+        git -C "$dir" add -f .gitignore
+        git -C "$dir" commit -qm "Draugr: data-only repository"
+
+        # The mode is inert without something for dr-data to carry, so seed it.
+        # Set in this shell as well as on disk: re-loading the config to pick it
+        # up is exactly the double-load dr_context_create must not do.
+        if [ ! -f "$dir/.draugr.conf" ]; then
+            printf '%s\n' \
+                '# Written by Draugr for a directory that had no git repository.' \
+                '# Nothing is tracked by git here; these patterns decide what' \
+                '# actually travels to and from the mound. See dr-data --help.' \
+                'DRAUGR_DATA="*"' \
+                'DRAUGR_ON_MISSING_REPO=create-data-only' > "$dir/.draugr.conf"
+            dr_trust_add "$dir/.draugr.conf"
+        fi
+        [ -n "${DRAUGR_DATA:-}" ] || {
+            DRAUGR_DATA='*'
+            DR_ORIGIN[DRAUGR_DATA]="data-only mode"
+        }
+        DR_REPO_CREATED=$mode
+        dr_ok "created a data-only repository in $dir"
+        ;;
+
+    create-add-all)
+        # Everything is committed, so anything that must NOT be committed has to
+        # be ignored first. Two sets matter, and the first is a safety fix rather
+        # than tidiness: dr-scan only reports UNTRACKED files, so committing a
+        # credential would put it in the agent's clone and in history, and
+        # silence the scan that exists to catch it.
+        if [ ! -f "$dir/.gitignore" ]; then
+            local pat pats=()
+            printf '%s\n' '# Written by Draugr. Credential-shaped names first:' \
+                > "$dir/.gitignore"
+            read -ra pats <<< "${DRAUGR_SCAN_PATTERNS:-}"
+            [ ${#pats[@]} -eq 0 ] || printf '%s\n' "${pats[@]}" >> "$dir/.gitignore"
+
+            # Draugr's own per-checkout files. Without these the very next dr-up
+            # writes .draugr/kit.applied, the tree is dirty, and the dr-go after
+            # that refuses - in a repo Draugr created and called clean.
+            printf '\n%s\n%s\n%s\n%s\n' \
+                '# Draugr: describes this checkout, not the project.' \
+                '.draugr.local.conf' '.draugr/kit.applied' '.draugr/tmp/' \
+                >> "$dir/.gitignore"
+
+            # Then the data patterns: those travel by rsync, and the README is
+            # explicit that they are expected to be gitignored on both sides.
+            read -ra pats <<< "${DRAUGR_DATA:-}"
+            if [ ${#pats[@]} -gt 0 ]; then
+                printf '\n%s\n' '# DRAUGR_DATA travels beside git, not through it:' \
+                    >> "$dir/.gitignore"
+                for pat in "${pats[@]}"; do printf '%s\n' "$pat" >> "$dir/.gitignore"; done
+            fi
+        fi
+
+        # Says what was committed and what changes from here, because this mode
+        # hands back an ordinary git repo - with the dirty-tree check that comes
+        # with one - and that surprises people who wanted the other mode.
+        git -C "$dir" add -A
+        git -C "$dir" commit -qm "Draugr: initial commit" \
+            || dr_die "could not make the initial commit in $dir"
+        DR_REPO_CREATED=$mode
+        dr_ok "created a git repository in $dir and committed what was there"
+        printf '  %sIt is an ordinary repo now: commit before each session, or%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %suse dr-go --dirty. Check what was committed before you rely on it.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        ;;
+    esac
+}
+
+# dr_repo_commit_setup <dir> - commit the files dr-init wrote after the repo.
+#
+# dr-init writes .draugr.conf and the kit *after* the repository exists, so
+# without this the repo it just created is dirty the moment it hands back. In
+# data-only mode that is not merely untidy: "the tree is always clean" is the
+# entire point of the mode, and breaking it on the first command would be a poor
+# way to introduce it. Does nothing unless dr_repo_create just ran.
+dr_repo_commit_setup() {
+    local dir=$1
+    [ -n "$DR_REPO_CREATED" ] || return 0
+
+    case "$DR_REPO_CREATED" in
+    create-data-only)
+        # Named paths and -f, because .gitignore says "*" and covers these too.
+        # Deliberately not `add -A`: tracking the user's own files is the one
+        # thing this mode exists not to do.
+        local p paths=()
+        for p in .gitignore .draugr.conf .draugr/kit; do
+            if [ -e "$dir/$p" ]; then paths+=("$p"); fi
+        done
+        if [ ${#paths[@]} -gt 0 ]; then git -C "$dir" add -f "${paths[@]}"; fi
+        ;;
+    create-add-all)
+        git -C "$dir" add -A
+        ;;
+    esac
+
+    # An empty stage is a fine outcome: it means dr-init found everything
+    # already in place and wrote nothing. --quiet exits 1 when there IS
+    # something staged, which is why the commit hangs off the failure.
+    git -C "$dir" diff --cached --quiet \
+        || git -C "$dir" commit -qm "Draugr: project setup"
 }
 
 # dr_confirm <question> - ask before doing something irreversible.

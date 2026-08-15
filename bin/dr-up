@@ -32,7 +32,11 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-dr_context
+# Creating a mound implies creating whatever the mound is *of*, so this is the
+# other command allowed to make a repository - and the one that lets `dr-go`
+# work in a fresh directory. Identical to dr_context unless
+# DRAUGR_ON_MISSING_REPO says otherwise, and that defaults to refusing.
+dr_context_create
 
 # --- assemble the creation command ------------------------------------------
 #

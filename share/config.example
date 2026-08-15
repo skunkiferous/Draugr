@@ -102,6 +102,18 @@
 # Run dr-sync automatically when you detach.
 #DRAUGR_AUTO_SYNC=true
 
+# What to do when you point Draugr at a directory that is not a git repository.
+# Clone mode needs one, and clone mode is what keeps your files read-only to the
+# agent - so the default is to refuse rather than quietly do something weaker.
+#
+#   fail              refuse, and name these alternatives
+#   create-add-all    commit what is there; an ordinary repo from then on
+#   create-data-only  track nothing (.gitignore of "*"); files travel by
+#                     DRAUGR_DATA instead. For folders of documents or data.
+#
+# Only dr-init and dr-up ever create one.
+#DRAUGR_ON_MISSING_REPO=fail
+
 # --- Memory -----------------------------------------------------------------
 
 # auto | manual | off
