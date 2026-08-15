@@ -91,6 +91,60 @@ from source `remote` here — so this is a statement about today.
 
 ---
 
+## What the read-only mount actually contains — including `.git`
+
+`/run/sandbox/source` is your **entire working directory**, not a filtered view of it. That includes
+`.git`: verified from inside a mound, the directory is there with `refs/`, `objects/` and the reflog.
+
+Three consequences, none of them obvious:
+
+- **Your whole history is readable**, not just the current checkout. A secret committed and later
+  removed is still in the object store, and still readable.
+- **Stashes are readable.** A stash is an ordinary commit. `git clone` does *not* copy
+  `refs/stash`, so stashed work is genuinely absent from the agent's clone — but the mount is not
+  the clone, and `git --git-dir=/run/sandbox/source/.git stash show -p` recovers the contents in
+  full. Measured both ways.
+- **Stashing hides a file from `dr-scan`.** The scan lists files git is not tracking; stashing
+  removes the file from the working tree, so it stops being reported — while remaining exactly as
+  readable to the agent as before.
+
+That last one matters because stashing is the obvious thing to do when `DRAUGR_REQUIRE_CLEAN`
+refuses a session. It is not a way to hide something from the agent. `dr-scan` now reports the
+number of stashes and says so, rather than going quiet and appearing to give you the all-clear.
+
+**If you need something genuinely out of reach, move it out of the repository directory.** Nothing
+inside it is hidden from the agent by any git operation — commit, stash, ignore or delete-but-not-yet-gc.
+
+## Can the agent weaken Draugr's own configuration?
+
+The agent works in a clone. Nothing it writes reaches your host until you `dr-merge` it, and
+`dr-diff` shows you what you are accepting. That is the primary defence and it is a human one.
+
+Behind it, `.draugr.conf` has a second: **trust is per content**. Draugr records the hash of each
+project config you accept, so a config that arrives changed — from a merge, a pull, or anything
+else — is refused until you run `dr-trust`. Verified: a `.draugr.conf` with `DRAUGR_SCAN=false` and
+`DRAUGR_CLONE=false` appended is not sourced, and both settings fall back to their built-in defaults
+rather than the weakened ones.
+
+`.draugr/hooks/*` gets the same check. A hook is a script that runs on the host, as you, with the
+merged config in its environment — strictly more dangerous than the config file beside it. An agent
+that wrote `.draugr/hooks/pre-up` and got it merged would execute code on your machine at the next
+`dr-up`. That gap was real until it was measured and closed, which is why the check exists.
+
+Two things still rest on review alone:
+
+- **The kit** (`.draugr/kit/`) is not trust-checked. It cannot run anything on your host — it
+  configures the inside of the mound — but it does declare the network allowlist, so a merged change
+  could widen what the agent can reach. `dr-up` warns when the kit differs from the one the mound was
+  built with, and applying it is an explicit `dr-kit apply`.
+- **`.draugr.local.conf`** is gitignored, so it cannot travel through a merge at all. That is the
+  place to put anything you do not want a repository able to influence.
+
+The general rule: Draugr will not *execute* anything from your repository that you have not accepted
+by hash, but it cannot tell a good setting from a bad one. Read what you merge.
+
+---
+
 ## Two more, worth knowing before they bite
 
 - **Never mount `~/.claude` into a sandbox.** It contains `.credentials.json` — your agent

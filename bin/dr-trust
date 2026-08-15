@@ -55,15 +55,25 @@ if [ "$action" = list ]; then
     exit 0
 fi
 
-# Default to this repo's configs.
+# Default to everything in this repo that Draugr will execute on your machine.
+# Hooks belong in that set as much as the configs do - they are scripts that run
+# on the HOST, as you, and they arrive with a clone just as a config does.
 if [ ${#files[@]} -eq 0 ]; then
     repo=$(dr_repo_root)
     for f in "$repo/.draugr.conf" "$repo/.draugr.local.conf"; do
         [ -f "$f" ] && files+=("$f")
     done
+
+    # Only the hooks that would actually run: dr_hook ignores a non-executable
+    # one, so trusting it would record a promise about a file nothing reads.
+    for f in "$repo"/.draugr/hooks/*; do
+        [ -x "$f" ] && files+=("$f")
+    done
+
     [ ${#files[@]} -gt 0 ] || dr_die \
-        "no .draugr.conf in $repo" \
-        "Create one with:  dr-init"
+        "nothing to trust in $repo" \
+        "Draugr executes .draugr.conf, .draugr.local.conf and .draugr/hooks/*." \
+        "Create a config with:  dr-init"
 fi
 
 # --revoke: filter the path out of the trust file. Entries are keyed by absolute

@@ -1238,6 +1238,24 @@ dr_hook() {
 
     # No hook, or not executable: silently fine. Hooks are opt-in.
     [ -x "$hook" ] || return 0
+
+    # Trusted first, and for exactly the reason .draugr.conf is. A hook is a
+    # script that runs on the HOST, as you - strictly more dangerous than the
+    # config file sitting beside it, which has been trust-checked since Phase 1.
+    #
+    # It lives in the repository, so it arrives with a clone and can arrive with
+    # a `dr-merge` of the agent's own commits. Without this check, an agent that
+    # writes .draugr/hooks/pre-up and gets it merged executes code on your
+    # machine at the next dr-up - measured, before this line existed.
+    #
+    # Refusing rather than prompting: dr_hook is called mid-command, often after
+    # a mound has been created, and "your hook did not run" is a safer surprise
+    # than "something you have not read just ran".
+    dr_trust_check "$hook" || dr_die \
+        "refusing to run an untrusted hook: $hook" \
+        "Hooks run on your machine, as you, with the config in their environment." \
+        "Read it, then:  dr-trust $hook"
+
     dr_debug "running hook $name"
 
     # A hook is a separate process, so the merged config has to be exported to

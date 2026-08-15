@@ -133,7 +133,7 @@ is a git repository.
 > — fails: git resolves the drive back to the UNC path and rejects it for dubious ownership, and
 > once you allow that, the container itself refuses to start, because the microVM cannot bind-mount
 > a path behind the Windows network redirector. Measured end to end; the full sequence is in
-> [PLAN.md](PLAN.md#repos-on-ext4-via-a-subst-drive--tested-rejected).
+> [docs/DESIGN.md](docs/DESIGN.md#repos-on-ext4-via-a-subst-drive).
 
 ---
 

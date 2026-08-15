@@ -62,9 +62,14 @@ if dr_is_true "$DRAUGR_REQUIRE_CLEAN" && [ -z "$dirty" ] && dr_is_true "$DRAUGR_
     if ! dr_repo_is_clean "$DR_REPO" && ! dr_data_dirty_only "$DR_REPO"; then
         dr_error "your working tree has uncommitted changes"
         git -C "$DR_REPO" status --short >&2
+        # Not "stash them": a stash is still in .git, and .git is inside the
+        # read-only mount, so stashing hides the change from the agent's clone
+        # AND from dr-scan while leaving it readable. Committing or reverting
+        # are the two that mean what people think stashing means here.
         dr_die "the agent would not see them" \
             "The sandbox gets a CLONE of this repo, and a clone only contains commits." \
-            "Commit them, stash them, or run:  dr-go --dirty"
+            "Commit them, put them aside outside the repo, or run:  dr-go --dirty" \
+            "(Stashing works too, but the stash stays readable at /run/sandbox/source.)"
     fi
 fi
 

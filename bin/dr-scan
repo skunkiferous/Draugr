@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dr-scan - find what the agent could read that you did not mean to give it.
 #
-# Two blind spots, both measured rather than assumed (see PLAN.md):
+# Two blind spots, both measured rather than assumed (see docs/SECURITY.md):
 #
 #   1. .gitignore hides files from git, not from the filesystem. An untracked
 #      .env is absent from the agent's clone but fully readable through the
@@ -84,6 +84,30 @@ if [ -z "$skills_only" ]; then
             "$_DR_DIM" "$_DR_OFF" >&2
     elif [ -z "$quiet" ]; then
         dr_ok "no credential-shaped files outside git"
+    fi
+
+    # --- stashes, which this scan cannot see into ---------------------------
+    #
+    # The read-only mount is the whole working tree, `.git` included - verified:
+    # /run/sandbox/source/.git exists in the mound, refs and objects and all. A
+    # stash is an ordinary commit in there, so `git stash show -p` recovers its
+    # contents from inside the sandbox.
+    #
+    # That matters here because stashing a file REMOVES it from the working tree
+    # and therefore from `git ls-files --others`, which is the list scanned
+    # above. So the one action people take to get past the dirty-tree check is
+    # also the one that makes a secret invisible to this scan while leaving it
+    # perfectly readable to the agent. Counted, not read: what is in your stashes
+    # is your business, and the point is to say that the scan stopped at the door.
+    stashes=$(git -C "$DR_REPO" stash list 2>/dev/null | grep -c . || true)
+    if [ "$stashes" -gt 0 ]; then
+        dr_warn "$stashes stash(es) - their contents are readable and NOT scanned"
+        printf '  %sThe read-only mount includes .git, so a stash is recoverable from%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sinside the mound with git stash show -p. Stashing a secret hides it%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sfrom this scan without hiding it from the agent.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
     fi
 fi
 

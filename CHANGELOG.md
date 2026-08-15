@@ -15,7 +15,7 @@ Nothing yet.
 ## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 215 tests run in CI.
+Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 238 tests run in CI.
 
 ### The daily loop
 
@@ -40,7 +40,12 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 215 tests run in CI.
 
 - `dr-scan` finds credential-shaped files the agent could read through the read-only mount.
   `DRAUGR_SCAN_FAIL=block` is the default, because `.gitignore` hides files from git, not from the
-  filesystem.
+  filesystem. It also reports how many stashes exist, which it cannot see into: the read-only mount
+  includes `.git`, so stashing a file removes it from the scan without removing it from the agent's
+  reach.
+- Hooks are trust-checked like configs. `.draugr/hooks/*` are scripts that run on the host, as you,
+  so an agent-authored one arriving through a merge would otherwise execute at the next `dr-up`.
+  `dr-trust` with no arguments offers the hooks alongside the configs.
 - `DRAUGR_REQUIRE_CLEAN` refuses to start a session with uncommitted work the clone cannot contain.
 - `dr-rm` refuses to destroy unfetched commits or unexported memory.
 - `dr-kit` wraps `sbx kit` and detects drift between the kit and the mound built from it.
