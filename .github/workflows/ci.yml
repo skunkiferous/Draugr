@@ -22,7 +22,11 @@ jobs:
       - name: Comment density
         # Draugr's premise is that you can read a file before you trust it, so
         # an uncommented block is a defect like any other. See docs/HACKING.md.
-        run: ./tests/lint-comments.sh lib/common.sh install.sh bin/* tests/mocks/sbx tests/helper.bash tests/lint-comments.sh
+        #
+        # No arguments on purpose: the file list lives in the script, so that
+        # running it locally checks exactly what CI checks. It used to be spelled
+        # out here, and the bare local invocation silently checked nothing.
+        run: ./tests/lint-comments.sh
 
   test:
     runs-on: ubuntu-latest

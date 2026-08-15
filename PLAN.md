@@ -137,6 +137,9 @@ asserted in prose from the first commit and are entered here because **the entir
 | Without a TTY, `sbx run` attaches part-way then dies with `inspect exec: context deadline exceeded` | `dr_require_tty` fails first, with a message that names the alternative. |
 | `sbx rm` on a clone-mode sandbox reports that fetched branches are mirrored to **`refs/sandboxes/<name>/*`, which survive removal** | Directly relevant to `dr-sync` and to `dr-rm`'s unsynced-work check. *(Phase 3)* |
 | Sandbox names reject underscores (`ERROR: sandbox name cannot contain underscores`) | `dr_sandbox_name`'s charset filter is load-bearing, not cosmetic: `my_project` → `draugr-my-project`. |
+| **A `subst` drive does not rescue a repo on ext4.** `subst W: \\wsl.localhost\Ubuntu\home\me` succeeds on Windows 11 and `sbx create claude W:\repo` really works in bind-mount mode — the workspace appears at `/w/repo` and its files are readable | But `--clone` refuses it, and clone mode is the entire premise. See the two rows below for why. *(Tested and rejected — see "Deliberately not in v1")* |
+| **`subst` is transparent to git, and git rejects the UNC form for dubious ownership.** `git -C W:\repo rev-parse` fails with `detected dubious ownership in repository at '//wsl.localhost/Ubuntu/home/me/repo'` — ownership across the WSL redirector does not match the Windows user. sbx reports this as `--clone requires a Git repository, but W:\repo is not in a Git repository` | sbx's error names the wrong cause, which is worth knowing if anyone hits it for another reason. |
+| **Allowing the ownership does not save it either.** With `safe.directory` set, git accepts the path and sbx gets as far as pulling the image, then fails with `500 Internal Server Error: failed to run sandbox container` | The microVM cannot bind-mount a path behind the Windows network redirector. This is the wall, and it is below the level anything Draugr does. |
 | **`sbx cp` host paths must be *Windows* paths.** `sbx cp <name>:/tmp/x /home/me/dest` and `… /mnt/c/Code/dest` both fail with `GetFileAttributesEx \home\me: The system cannot find the path specified` — sbx turns the leading `/` into `\` and looks on the current drive. `C:\…` works | `$DRAUGR_MEM_STORE` may sit anywhere, including WSL's ext4 where sbx cannot reach at all, so every `dr-mem` transfer stages through `.draugr/tmp/` in the repo — which `dr_require_win_path` has already guaranteed is on a Windows drive. *(Phase 6)* |
 | `sbx cp` **does** report failure by exit code (1 for both a bad destination and a missing source) | The staged copy is still verified afterwards, because "reported success" and "produced a directory" are different claims. *(Phase 6)* |
 | sbx's `Sandbox … started successfully` banner goes to **stderr**, not stdout | Listings piped out of the mound are not corrupted by it. `dr-mem` filters to sha256sum's exact shape anyway: one stray stdout line would invent a memory file, and `dr-rm` would then refuse forever over something that does not exist. *(Phase 6)* |
@@ -454,6 +457,14 @@ without one stays unanchored so `*.parquet` matches at every depth. `dr_data_fil
 `dr_data_matches` sit next to each other in `lib/common.sh` because they must agree — a file that
 transfers but still blocks `dr-go` would be a long afternoon.
 
+**Fixed later: unanchored entries reached into `.git`.** Precisely because a slashless entry matches
+at every depth, `DRAUGR_DATA="*.sample"` collected git's own `.git/hooks/*.sample`, and
+`DRAUGR_DATA="*"` pushed the host's entire `.git` over the mound clone's — replacing the agent's git
+metadata, remote and all. Both confirmed against real rsync. `--exclude=.git` and `--exclude=.draugr`
+now lead the rule list, since rsync takes the first match, and `dr_data_matches` refuses the same two
+so the pair keeps agreeing. Found while working out whether a repo could be a *dummy* one holding
+nothing but a `.gitignore` — a mode that would have made `DRAUGR_DATA="*"` the normal case.
+
 ---
 
 ## Phase 6 — Context ✅
@@ -565,6 +576,52 @@ Named so nobody has to wonder whether they were forgotten: multi-repo mounds; Li
 (the whole path story is WSL-specific); running the agent non-interactively for CI; a TUI; anything
 that pushes to `origin` on your behalf; and any form of bidirectional data sync, for the reason
 given in the README.
+
+### Repos on ext4, via a `subst` drive — tested, rejected
+
+The obvious objection to "your repo must live on a Windows drive" is that a WSL path can be *made*
+to look like a Windows one:
+
+```cmd
+subst W: \\wsl.localhost\Ubuntu\home\me
+```
+
+It is a good idea and it very nearly works. Measured end to end, in order:
+
+1. `subst` accepts the UNC path on Windows 11 — it historically did not, so this is worth knowing.
+2. `sbx create claude W:\repo` **succeeds** in bind-mount mode. The workspace appears inside the
+   mound at `/w/repo` and its contents are readable.
+3. `sbx create --clone …` **refuses**: *"requires a Git repository, but `W:\repo` is not in a Git
+   repository"* — though it plainly is one.
+4. The real cause is not sbx. `subst` is transparent to git, which resolves the drive back to
+   `//wsl.localhost/Ubuntu/home/me/repo` and refuses it for **dubious ownership**: file ownership
+   across the WSL redirector does not match the Windows user.
+5. Add a `safe.directory` exception and git accepts it — then sbx pulls the image and dies with
+   `500 Internal Server Error: failed to run sandbox container`. **The microVM cannot bind-mount a
+   path behind the Windows network redirector.** That is the wall, and it sits below anything
+   Draugr could work around.
+
+So the mode that survives is exactly `DRAUGR_CLONE=false` — a read-write bind mount of your real
+tree, the setting the README makes you confirm every single time because it undoes the point of the
+project. The mode Draugr is built on is the one that fails.
+
+**And it would not have simplified the code even if it had worked**, which is the part worth
+recording, because the appeal of the idea is that it looks like a simplification:
+
+- **Path translation gets worse.** `/mnt/c/x ↔ C:\x` is a deterministic pure function, which is why
+  `tests/paths.bats` runs in CI on machines with no WSL at all. A `subst` mapping is machine-local,
+  user-created, discovered at runtime, ambiguous in reverse (two letters may map to overlapping
+  trees), and absent by default — a new failure mode with a confusing error.
+- **The project-key translation is unchanged in size.** Still three forms, just spelled
+  `w--repo` / `-home-me-repo` / `-w-repo`.
+- **`sbx cp` still demands a Windows path**, so `dr_stage` and its staging hop stay exactly as they
+  are.
+- **Files still arrive mode 777** over that path, so `DRAUGR_DATA_CHMOD` is still needed.
+
+What it would have bought is not simplicity but **speed**: a repo on ext4 gets native-speed git from
+WSL, which is the one genuine cost of the current design. Worth revisiting only if a future `sbx`
+can mount a WSL path directly — at which point the win is performance, and the translation code gets
+more complicated rather than less.
 
 ---
 

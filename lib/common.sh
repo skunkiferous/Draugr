@@ -677,6 +677,15 @@ dr_data_matches() {
     local path=$1 entry
     [ -n "${DRAUGR_DATA:-}" ] || return 1
 
+    # The same plumbing dr_data_filters excludes, excluded here too - these two
+    # have to give the same answer. A path that matched here but did not transfer
+    # would be exempted from the clean-tree check and then never sent, which is
+    # exactly the "one says yes, the other says no" bug the pairing exists to
+    # prevent.
+    case "$path" in
+        .git|.git/*|.draugr|.draugr/*) return 1 ;;
+    esac
+
     local _DR_DATA_ENTRIES=()
     _dr_data_entries
     for entry in "${_DR_DATA_ENTRIES[@]}"; do
@@ -736,6 +745,21 @@ dr_data_matches() {
 # so the "*/" include does not leave a skeleton of empty directories behind.
 dr_data_filters() {
     local entry
+
+    # Plumbing first, because rsync takes the FIRST rule that matches and these
+    # must win over anything DRAUGR_DATA says.
+    #
+    # .git is the one that bites. A slashless entry is unanchored and matches at
+    # every depth, so DRAUGR_DATA="*.sample" quietly picks up .git/hooks/*.sample,
+    # and DRAUGR_DATA="*" pushes the host's entire .git over the mound clone's -
+    # replacing the agent's git metadata, remote and all. Neither is a pattern
+    # anyone would expect to reach into a repository's internals.
+    #
+    # .draugr is ours: the kit belongs to git, and .draugr/tmp holds the staging
+    # copies dr-mem makes, which would otherwise be swept into the agent's tree.
+    # Written without a trailing slash so a `.git` *file* - what a submodule or a
+    # worktree leaves behind - is excluded too, not just a directory.
+    printf '%s\n' '--exclude=.git' '--exclude=.draugr'
     printf '%s\n' '--include=*/'
 
     # Split without globbing - see _dr_data_entries. Getting this wrong here

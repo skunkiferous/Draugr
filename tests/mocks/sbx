@@ -65,6 +65,9 @@ exec)
     shift                              # the sandbox name
     if [ "${1:-}" = -- ]; then shift; fi   # the optional separator
 
+    # Only absolute arguments are rewritten. A script body, a flag or a relative
+    # word is passed through as typed - the mound's paths are the things that
+    # have to land inside the stand-in tree, and nothing else is ours to touch.
     argv=()
     for a in "$@"; do
         case "$a" in
@@ -114,9 +117,13 @@ cp)
     cp -a "$src" "$dst"
     ;;
 
+# Everything else only ever needs to have its argv recorded: the tests assert on
+# the command line Draugr built, which is the part worth checking.
 create|run|stop|rm|ports|policy|kit|skills)
     printf 'mock sbx: %s\n' "$*"
     ;;
+# Loudly, and with sbx's own exit code for an unknown command - a mock that
+# silently succeeds on a subcommand it does not model is worse than no mock.
 *)
     printf 'mock sbx: unhandled subcommand: %s\n' "$sub" >&2
     exit 127

@@ -43,6 +43,9 @@ case "$action" in
     *) dr_die "unknown action: $action" "One of: status, export, import, diff, check" ;;
 esac
 
+# --source and --from-host both name where memory comes from, and --if-empty
+# decides whether to import at all; they are read here rather than per-action
+# because only `import` uses them and rejecting them elsewhere would be noise.
 source_dir=
 from_host=
 if_empty=
@@ -167,6 +170,8 @@ status)
     printf '  %-6s %3s file(s)  %s\n' store \
         "$(list_local "$store_dir/memory" | count_lines)" "$store_dir/memory"
 
+    # Absent is reported as a sentence rather than "0 file(s)": no host install
+    # and an empty one are different situations, and only the first is normal.
     if host_dir=$(dr_mem_host_dir "$DR_REPO"); then
         printf '  %-6s %3s file(s)  %s\n' host \
             "$(list_local "$host_dir" | count_lines)" "$host_dir"
@@ -174,6 +179,8 @@ status)
         printf '  %-6s %s\n' host "no host Claude memory for this repo"
     fi
 
+    # Same distinction for the mound, and the reason status never creates one:
+    # you run this to decide whether to bother, not to make something happen.
     if dr_sandbox_exists "$DRAUGR_SANDBOX"; then
         printf '  %-6s %3s file(s)  %s\n' mound \
             "$(list_mound | count_lines)" "$mound_dir/memory"
@@ -205,6 +212,9 @@ export)
     dr_stage
     trap 'rm -rf "$DR_STAGE"' EXIT
 
+    # The result is checked rather than trusted: "sbx cp exited 0" and "there is
+    # a memory directory here now" are different claims, and only the second one
+    # makes the rename below safe.
     dr_info "exporting $DRAUGR_SANDBOX memory"
     dr_sbx cp "$DRAUGR_SANDBOX:$mound_dir/memory" "$DR_STAGE_WIN" \
         || dr_die "sbx cp failed" "Is the mound running?  dr-status"
@@ -367,6 +377,9 @@ diff)
         printf '%s\n' "$@" | sort | sed "s/^/  $label /"
     }
 
+    # ${arr[0]+"${arr[@]}"} expands to nothing at all when the array is empty,
+    # rather than to one empty string - so show() sees no arguments and returns
+    # instead of printing a blank line under a heading.
     heading "memory differences"
     show "only in mound:" ${only_mound[0]+"${only_mound[@]}"}
     show "only in store:" ${only_store[0]+"${only_store[@]}"}
@@ -387,11 +400,15 @@ check)
     if ! mound_list=$(list_mound); then exit 2; fi
     [ -n "$mound_list" ] || exit 0
 
+    # The store as a lookup table, so the mound can be walked once against it.
     declare -A in_store=()
     while read -r hash name; do
         [ -n "$name" ] && in_store[$name]=$hash
     done <<< "$(list_local "$store_dir/memory")"
 
+    # One miss is enough to answer the question, so this exits on the first
+    # rather than counting. A herestring loop runs in this shell, not a
+    # subshell, which is what makes that exit the command's exit.
     while read -r hash name; do
         [ -n "$name" ] || continue
         [ -n "${in_store[$name]+set}" ] || exit 1

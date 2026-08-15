@@ -38,6 +38,63 @@ transferred() {
         "$DR_TMP/src/" "$DR_TMP/dst/" | grep -v '/$' | sort
 }
 
+# --- plumbing that must never travel, whatever DRAUGR_DATA says ---------------
+
+@test "data filters: .git never travels, even for DRAUGR_DATA=*" {
+    make_tree
+    # A real .git, because the bug is that rsync walks into it like any directory.
+    mkdir -p "$DR_TMP/src/.git/hooks" "$DR_TMP/src/.draugr/tmp"
+    touch "$DR_TMP/src/.git/config" "$DR_TMP/src/.git/hooks/pre-commit.sample" \
+          "$DR_TMP/src/.draugr/tmp/leaked-memory.md"
+
+    DRAUGR_DATA="*"
+    run transferred
+    # Pushing the host's .git over the mound clone's would replace the agent's
+    # git metadata, remote and all.
+    [[ "$output" != *".git/"* ]]
+    [[ "$output" != *".draugr/"* ]]
+    # The actual data still moves - the guard is narrow, not a blanket refusal.
+    [[ "$output" == *"a.parquet"* ]]
+    [[ "$output" == *"tmp/x.bin"* ]]
+}
+
+@test "data filters: an innocent extension pattern cannot reach into .git" {
+    make_tree
+    mkdir -p "$DR_TMP/src/.git/hooks"
+    touch "$DR_TMP/src/.git/hooks/pre-commit.sample" "$DR_TMP/src/keep.sample"
+
+    # Slashless entries are unanchored and match at every depth, so this used to
+    # collect git's own hook templates.
+    DRAUGR_DATA="*.sample"
+    run transferred
+    [[ "$output" != *".git"* ]]
+    [[ "$output" == *"keep.sample"* ]]
+}
+
+@test "dr_data_matches: agrees with the filters about the plumbing" {
+    DRAUGR_DATA="*"
+    # Matching here but not transferring would exempt a path from the clean-tree
+    # check and then never send it - the disagreement the two functions exist to
+    # avoid. Checked for both, because "*" matches absolutely everything else.
+    run dr_data_matches ".git/config"
+    [ "$status" -ne 0 ]
+    run dr_data_matches ".draugr/kit.applied"
+    [ "$status" -ne 0 ]
+    run dr_data_matches ".gitignore"
+    [ "$status" -eq 0 ]
+}
+
+@test "data filters: .gitignore is not caught by the .git exclusion" {
+    make_tree
+    touch "$DR_TMP/src/.gitignore"
+
+    # rsync patterns match whole names, not prefixes - worth pinning, because
+    # .gitignore is a file you might legitimately want on both sides.
+    DRAUGR_DATA="*"
+    run transferred
+    [[ "$output" == *".gitignore"* ]]
+}
+
 # --- the filter rules, against real rsync ------------------------------------
 
 @test "data filters: a directory entry takes its contents and nothing beside it" {

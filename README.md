@@ -113,6 +113,14 @@ is a git repository.
 > on ext4. Reaching the same files from Windows is native NTFS access and costs nothing, so a
 > Windows-side editor or `git.exe` is unaffected. The agent's clone lives on ext4 *inside* the
 > microVM, so the side doing the compiling is unaffected either way.
+>
+> **And no, a `subst` drive does not get you out of it.** Mapping `W:` to
+> `\\wsl.localhost\Ubuntu\home\me` does give a WSL directory a Windows-looking path, and `sbx` will
+> even create a *bind-mount* sandbox on it. But `--clone` — the mode this entire project is built on
+> — fails: git resolves the drive back to the UNC path and rejects it for dubious ownership, and
+> once you allow that, the container itself refuses to start, because the microVM cannot bind-mount
+> a path behind the Windows network redirector. Measured end to end; the full sequence is in
+> [PLAN.md](PLAN.md#repos-on-ext4-via-a-subst-drive--tested-rejected).
 
 ---
 

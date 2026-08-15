@@ -22,6 +22,8 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
+# list is the default because looking is free and the other three all assume you
+# already know what is in there.
 action=${1:-list}
 case "$action" in
     -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -103,6 +105,9 @@ report_optout() {
 case "$action" in
 
 list)
+    # Three distinct states, and they are not the same news: no store at all
+    # (nothing has ever used skills on this machine), a store with nothing in it,
+    # and a store with contents you are being asked to recognise.
     heading "shared skills store"
     printf '  %s\n' "$skills_dir"
     if [ ! -d "$skills_dir" ]; then
@@ -112,6 +117,7 @@ list)
         if [ "$n" -eq 0 ]; then
             printf '  empty\n'
         else
+            # read -r _ name drops the hash and keeps the name, spaces included.
             current | while read -r _ name; do printf '    %s\n' "$name"; done
         fi
     fi
@@ -145,6 +151,9 @@ diff)
         [ -n "$name" ] && was[$name]=$hash
     done < "$seen_file"
 
+    # Walk what is there now against what you accepted, deleting each match from
+    # $was as it is handled. That is what leaves the "gone" set behind below,
+    # without a second pass or a third array.
     changes=0
     while read -r hash name; do
         [ -n "$name" ] || continue
@@ -161,6 +170,8 @@ diff)
         printf '  gone:    %s\n' "$name"; changes=$((changes + 1))
     done
 
+    # Exit 1 on any difference, so this works as a test. The closing advice names
+    # the command that clears it, because a report you cannot act on is a nag.
     if [ "$changes" -eq 0 ]; then
         dr_ok "the skills store is as you last accepted it"
         exit 0
@@ -171,6 +182,8 @@ diff)
     exit 1
     ;;
 
+# Records hashes, not names, so that an edit inside a skill you already accepted
+# still shows up as a change next time.
 accept)
     mkdir -p "$DR_CONFIG_USER"
     current > "$seen_file"
