@@ -107,6 +107,88 @@ teardown() { dr_test_teardown; }
     [ "$status" -ne 0 ]
 }
 
+# --- reporting a layer that was skipped ---------------------------------------
+#
+# A refused config is the one failure mode that looks like nothing happening: the
+# table shows built-in defaults, which is exactly what it would show if the file
+# said nothing at all. Anyone running dr-config is asking why something is not
+# behaving, so the refusal has to survive to the bottom of the output.
+
+@test "DR_UNTRUSTED names the layer that was skipped" {
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
+    dr_load_config "$repo" 2>/dev/null
+    [ "${#DR_UNTRUSTED[@]}" -eq 1 ]
+    [ "${DR_UNTRUSTED[0]}" = "$repo/.draugr.conf" ]
+}
+
+@test "DR_UNTRUSTED is empty when every layer is trusted" {
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
+    dr_trust_add "$repo/.draugr.conf"
+    dr_load_config "$repo"
+    [ "${#DR_UNTRUSTED[@]}" -eq 0 ]
+}
+
+@test "DR_UNTRUSTED does not accumulate across loads" {
+    # It is reset per load rather than appended to, so a second dr_load_config in
+    # the same process cannot report the same file twice.
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
+    dr_load_config "$repo" 2>/dev/null
+    dr_load_config "$repo" 2>/dev/null
+    [ "${#DR_UNTRUSTED[@]}" -eq 1 ]
+}
+
+@test "dr-config: the refusal is the LAST thing printed" {
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
+    cd "$repo"
+    run dr-config
+    [[ "${lines[${#lines[@]}-1]}" == *"dr-trust"* ]]
+    [[ "$output" == *"NOT sourced"* ]]
+    [[ "$output" == *"$repo/.draugr.conf"* ]]
+}
+
+@test "dr-config: it counts them, and still exits 0" {
+    # An ignored config is not a failure - nothing errored, and dr-config is fed
+    # to grep too often to start returning non-zero. It is loud, not fatal.
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT=gemini\n'  > "$repo/.draugr.conf"
+    printf 'DRAUGR_AGENT=codex\n'   > "$repo/.draugr.local.conf"
+    cd "$repo"
+    run dr-config
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"2 config files were NOT sourced"* ]]
+}
+
+@test "dr-config: nothing is said when there is nothing to say" {
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
+    dr_trust_add "$repo/.draugr.conf"
+    cd "$repo"
+    run dr-config
+    [[ "$output" != *"NOT sourced"* ]]
+}
+
+@test "dr-config --changed: the refusal survives there too" {
+    # --changed is where it matters most: a refused file makes the view empty,
+    # which reads as "you have configured nothing" rather than "it was ignored".
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
+    cd "$repo"
+    run dr-config --changed
+    [[ "$output" == *"NOT sourced"* ]]
+}
+
+@test "dr-config --files: an untrusted file is marked as not sourced" {
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
+    cd "$repo"
+    run dr-config --files
+    [[ "$output" == *"NO - not sourced"* ]]
+}
+
 @test "the user's own config needs no trust" {
     printf 'DRAUGR_AGENT=codex\n' > "$DRAUGR_CONFIG_HOME/config"
     run dr_trust_check "$DRAUGR_CONFIG_HOME/config"

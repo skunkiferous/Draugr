@@ -64,9 +64,12 @@ if [ "$mode" = files ]; then
             # Your own config is never subject to trust; project files are.
             case "$f" in
                 "$DR_CONFIG_USER"/*) t="n/a (yours)" ;;
-                *) if dr_trust_is_trusted "$f"; then t="yes"; else t="NO - run dr-trust"; fi ;;
+                # Red, because a "no" here means the file is being ignored
+                # wholesale - the one thing in this table worth noticing.
+                *) if dr_trust_is_trusted "$f"; then t="yes"
+                   else t="${_DR_RED}NO - not sourced, run dr-trust${_DR_OFF}"; fi ;;
             esac
-            printf '%-46s %-9s %s\n' "$f" "yes" "$t"
+            printf '%-46s %-9s %b\n' "$f" "yes" "$t"
         else
             printf '%-46s %-9s %s\n' "$f" "-" "-"
         fi
@@ -99,3 +102,29 @@ for k in "${DR_KEYS[@]}"; do
     # a string containing terminal escape codes that need interpreting.
     printf '%-26s %-34b %s%s%s\n' "$k" "$value" "$_DR_DIM" "$origin" "$_DR_OFF"
 done
+
+# A config file that was refused is reported when it happens, at the top - which
+# is the wrong end of a thirty-row table to put the one line that explains why
+# the table is wrong. Anyone running dr-config is asking why something is not
+# behaving, so say it again at the bottom, in red, where it will be read.
+#
+# It is an error in appearance rather than in exit status: nothing has failed,
+# and dr-config is piped into grep too often to start returning non-zero.
+n=${#DR_UNTRUSTED[@]}
+if [ "$n" -gt 0 ]; then
+    printf '\n' >&2
+    if [ "$n" -eq 1 ]; then
+        dr_error "1 config file was NOT sourced, because it is untrusted:"
+        them=it
+    else
+        dr_error "$n config files were NOT sourced, because they are untrusted:"
+        them=them
+    fi
+    for f in "${DR_UNTRUSTED[@]}"; do
+        printf '  %s%s%s\n' "$_DR_BOLD" "$f" "$_DR_OFF" >&2
+    done
+    # Deliberately not dimmed. The version of this at the top of the output is,
+    # and being easy to skip is exactly what went wrong.
+    printf '  Nothing set there appears above. If a setting is not what you\n' >&2
+    printf '  wrote, that is why. Review %s, then:  dr-trust\n' "$them" >&2
+fi

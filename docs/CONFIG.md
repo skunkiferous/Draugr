@@ -29,6 +29,25 @@ only what differs from the defaults. Use it before assuming anything on this pag
 > code. Draugr records the hash of each project config the first time you accept it and refuses to
 > source one it has not seen. Editing your own re-prompts once. Run `dr-trust` to accept.
 
+**A refused config is the failure mode that looks like nothing happening.** Trust is per *content*,
+so editing a file you already accepted revokes it — and from then on the table shows built-in
+defaults, which is indistinguishable from a file that set nothing. `dr-config` therefore says so
+twice: once where it happens, and again in red at the very bottom, which is the end you actually
+read.
+
+```
+DRAUGR_STOP_ON_EXIT        false                              built-in default
+
+dr-config: 1 config file was NOT sourced, because it is untrusted:
+  /mnt/c/src/myproject/.draugr.conf
+  Nothing set there appears above. If a setting is not what you
+  wrote, that is why. Review it, then:  dr-trust
+```
+
+It is loud rather than fatal: nothing has failed, so the exit status stays `0`. `dr-config --files`
+answers the same question as a table, and `dr-trust` with no arguments offers every unaccepted config
+and hook at once.
+
 ---
 
 ## The agent and the mound

@@ -15,7 +15,7 @@ Nothing yet.
 ## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 347 tests run in CI.
+Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 355 tests run in CI.
 
 ### The daily loop
 
@@ -36,6 +36,10 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 347 tests run in CI.
 - `dr-config` prints the merged result with the origin of every value.
 - Trust on first use: a project config is executed when sourced, so its hash is recorded in
   `~/.config/draugr/trusted` and an unseen one is refused until `dr-trust` accepts it.
+- A refused config is reported again, in red, at the **bottom** of `dr-config`. It was already
+  warned about at the top, which is the wrong end of a thirty-row table to put the one line
+  explaining why the table is wrong — and a skipped layer is otherwise indistinguishable from one
+  that set nothing. Exit status stays `0`: nothing failed. `--files` marks it too.
 - 28 keys, all documented in [docs/CONFIG.md](docs/CONFIG.md), with a test that fails if a key
   exists in code but not in the documentation.
 - `DRAUGR_STOP_ON_EXIT` stops the mound when you leave the agent — last of all, after the sync, the

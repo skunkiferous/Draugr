@@ -395,6 +395,12 @@ DR_KEYS=(
 # an *indexed* array subscript, i.e. arithmetic on the string ".draugr/kit".
 declare -gA DR_ORIGIN=()
 
+# Config layers that exist on disk but were NOT sourced, because they are
+# untrusted. A skipped layer is otherwise indistinguishable from one that set
+# nothing, so dr-config reads this to say so out loud rather than leaving you to
+# wonder why the value you wrote is not in the table. Same -g reasoning as above.
+declare -ga DR_UNTRUSTED=()
+
 # shellcheck disable=SC2034  # these are the config surface; every dr-* reads them
 _dr_defaults() {
     DRAUGR_AGENT=claude
@@ -519,6 +525,7 @@ dr_load_config() {
     _dr_defaults
     local key
     for key in "${DR_KEYS[@]}"; do DR_ORIGIN[$key]="built-in default"; done
+    DR_UNTRUSTED=()
 
     # STEP 3 - source each config file in turn, lowest precedence first, taking
     # a before/after snapshot around each so we know which keys it touched.
@@ -537,8 +544,9 @@ dr_load_config() {
         fi
         # Refuse to source a project config we have not been shown. Note this
         # `continue`s rather than dying: an untrusted file is skipped, and the
-        # run carries on with the layers below it.
-        dr_trust_check "$layer" || continue
+        # run carries on with the layers below it. Remember which ones, so the
+        # skip can be reported again at the end, where it will be read.
+        dr_trust_check "$layer" || { DR_UNTRUSTED+=("$layer"); continue; }
 
         _dr_snapshot_into _DR_PREV_
         dr_debug "sourcing $layer"
