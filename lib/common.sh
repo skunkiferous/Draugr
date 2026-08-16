@@ -1500,6 +1500,30 @@ dr_tracking_ref() {
     printf '%s/%s' "$DRAUGR_REMOTE" "$DRAUGR_BRANCH"
 }
 
+# dr_other_branches - fetched mound branches holding commits your HEAD does not.
+#
+# The remote's refspec is +refs/heads/*:refs/remotes/<remote>/*, so dr-sync has
+# always fetched EVERY branch. Only the report was narrow: it looked at
+# draugr/$DRAUGR_BRANCH and nothing else. An agent that works on a branch of its
+# own - which agents habitually do - was therefore invisible. The commits were
+# already on this disk and dr-sync, dr-log and dr-diff all said there was nothing
+# there. That is how a session's work went missing for a day.
+#
+# Prints "<ref> <count>" per line. The tracked branch is excluded because its
+# caller reports it separately, and HEAD because it is a symref to one of these.
+dr_other_branches() {
+    local tracked ref count
+    tracked=$(dr_tracking_ref)
+    while IFS= read -r ref; do
+        [ "$ref" = "$tracked" ] && continue
+        case "$ref" in */HEAD) continue ;; esac
+        count=$(git -C "$DR_REPO" rev-list --count "HEAD..$ref" 2>/dev/null || printf 0)
+        if [ "$count" -gt 0 ]; then printf '%s %s\n' "$ref" "$count"; fi
+    done < <(git -C "$DR_REPO" for-each-ref --format='%(refname:short)' \
+                 "refs/remotes/$DRAUGR_REMOTE/" 2>/dev/null)
+    return 0
+}
+
 # dr_require_tracking_ref - fail helpfully when there is nothing fetched yet,
 # which is the normal state before the first dr-sync and reads as a git error
 # otherwise.

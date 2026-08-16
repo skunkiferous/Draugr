@@ -15,7 +15,7 @@ Nothing yet.
 ## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 320 tests run in CI.
+Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 334 tests run in CI.
 
 ### The daily loop
 
@@ -59,7 +59,15 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 320 tests run in CI.
   `sbx 0.37.1`, which honours no `AcceptEnv` at all, but it stood ready to forward every WSL variable
   the day that changes.
 - `DRAUGR_REQUIRE_CLEAN` refuses to start a session with uncommitted work the clone cannot contain.
-- `dr-rm` refuses to destroy unfetched commits or unexported memory.
+- `dr-rm` refuses to destroy unfetched commits or unexported memory, checking **every** branch in the
+  mound. It previously asked about `DRAUGR_BRANCH` alone, so an agent that committed to a branch of
+  its own — which agents habitually do — was reported as "nothing to lose".
+- `dr-sync` and `dr-status` name any mound branch holding commits you have not merged. The fetch
+  always covered every branch (`+refs/heads/*`); only the report was narrow, which made a session's
+  work appear to vanish while it sat fetched on the host's own disk. Review one with
+  `DRAUGR_BRANCH=<name> dr-diff`.
+- `dr-sync --no-fetch` no longer requires the mound to exist, so "what did I keep?" is answerable
+  after `dr-rm`.
 - `dr-kit` wraps `sbx kit` and detects drift between the kits and the mound built from them.
 - The kit `name:` `dr-init` writes is a slug of the project name, because `sbx` requires lowercase
   alphanumeric with hyphens. A repository called `TabuLua` previously produced a kit that failed at

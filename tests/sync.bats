@@ -223,3 +223,142 @@ teardown() { dr_test_teardown; }
     run git log -1 --format='%an %s'
     [[ "$output" == "Agent the agent's contribution" ]]
 }
+
+# --- branches the agent invented ----------------------------------------------
+#
+# The remote refspec is +refs/heads/*, so dr-sync always fetched EVERY branch.
+# Only the report was narrow - it looked at draugr/$DRAUGR_BRANCH and nothing
+# else. An agent that works on a branch of its own is ordinary behaviour, and it
+# made a whole session's work appear to vanish: the commits were on the host's
+# disk while dr-sync, dr-log and dr-status all said there was nothing there.
+#
+# Worse, --check-only asked about that one branch too, and dr-rm believes it
+# before destroying a mound.
+
+# The agent inventing a branch name, which is what agents habitually do.
+mound_branch_commit() {
+    git -C "$MOUND" checkout -q -b "$1" 2>/dev/null || git -C "$MOUND" checkout -q "$1"
+    dr_mound_commit "$MOUND" "${2:-work on $1}"
+}
+
+@test "dr-sync: does not double-report the branch it already tracks" {
+    # The tracked branch is reported as "ahead". Listing it a second time under
+    # "not tracking" would make the ordinary case look like the alarming one.
+    dr_mound_commit "$MOUND" "on the tracked branch"
+    run dr-sync
+    [[ "$output" == *"1 new commit(s)"* ]]
+    [[ "$output" != *"not tracking"* ]]
+    [[ "$output" != *"NOT tracking"* ]]
+}
+
+@test "dr-sync: silent about other branches when the agent stayed on one" {
+    # A report that fires on every session is one people stop reading, and this
+    # one has to be believed on the day it matters.
+    dr_mound_commit "$MOUND" "ordinary work"
+    run dr-sync
+    [[ "$output" != *"tracking"* ]]
+}
+
+@test "dr-sync: names a branch you are not tracking" {
+    mound_branch_commit sbx-kit-lua-deps
+    run dr-sync
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"sbx-kit-lua-deps"* ]]
+    [[ "$output" == *"NOT tracking"* ]]
+}
+
+@test "dr-sync: tells you how to review it, and the hint works" {
+    mound_branch_commit feature-x
+    run dr-sync
+    [[ "$output" == *"DRAUGR_BRANCH=feature-x dr-diff"* ]]
+
+    # The suggestion has to be paste-able: DRAUGR_BRANCH is an ordinary config
+    # key, so the environment overrides it for one command and no new flag is
+    # needed. If this breaks, the report is pointing at nothing.
+    DRAUGR_BRANCH=feature-x run dr-log
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"work on feature-x"* ]]
+}
+
+@test "dr-sync: says the commits are already on your disk" {
+    # The sentence that would have saved a day: they are fetched, not stranded.
+    mound_branch_commit feature-x
+    run dr-sync
+    [[ "$output" == *"already fetched"* ]]
+}
+
+@test "dr-sync: an invented branch is a warning when the tracked one is empty" {
+    # "nothing new in the mound" immediately followed by a quiet note would read
+    # as reassurance. When the tracked branch has nothing, this IS the news.
+    mound_branch_commit feature-x
+    run dr-sync
+    [[ "$output" == *"nothing new in the mound"* ]]
+    [[ "$output" == *"NOT tracking"* ]]
+}
+
+# --- the hole dr-rm trusted ---------------------------------------------------
+
+@test "dr-sync --check-only: 1 when work exists only on another branch" {
+    # The guard had a hole exactly where agents actually behave: it asked the
+    # mound about refs/heads/$DRAUGR_BRANCH and nothing else, so this answered
+    # "nothing to lose" while two commits sat on a branch of the agent's own.
+    mound_branch_commit feature-x
+    run dr-sync --check-only
+    [ "$status" -eq 1 ]
+}
+
+@test "dr-sync --check-only: 0 again once that branch is fetched" {
+    mound_branch_commit feature-x
+    dr-sync >/dev/null 2>&1
+    run dr-sync --check-only
+    [ "$status" -eq 0 ]
+}
+
+@test "dr-rm: refuses while an invented branch holds unfetched commits" {
+    mound_branch_commit feature-x
+    run dr-rm
+    [ "$status" -ne 0 ]
+}
+
+@test "dr-rm: proceeds once that branch has been fetched" {
+    mound_branch_commit feature-x
+    dr-sync >/dev/null 2>&1
+    run dr-rm --yes
+    [ "$status" -eq 0 ]
+}
+
+# --- reporting without a mound ------------------------------------------------
+
+@test "dr-sync --no-fetch: works after the mound is gone" {
+    # The moment you most want this report - after dr-rm, asking "what did I
+    # keep?" - was the one moment it refused to answer.
+    mound_branch_commit feature-x
+    dr-sync >/dev/null 2>&1
+    DR_MOCK_STATE=absent run dr-sync --no-fetch
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"feature-x"* ]]
+}
+
+@test "dr-sync: still refuses to FETCH from a mound that is gone" {
+    # Only the reporting was loosened; fetching genuinely needs a sandbox.
+    DR_MOCK_STATE=absent run dr-sync
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--no-fetch"* ]]
+}
+
+@test "dr-status: shows a branch you are not tracking" {
+    mound_branch_commit feature-x
+    dr-sync >/dev/null 2>&1
+    run dr-status
+    [[ "$output" == *"untracked"* ]]
+    [[ "$output" == *"feature-x"* ]]
+}
+
+@test "dr-status: the command it suggests has no stray count in it" {
+    # "DRAUGR_BRANCH=feature-x 2 dr-diff" is not a command. The line is
+    # "<ref> <count>", so both halves have to be split off before use.
+    mound_branch_commit feature-x
+    dr-sync >/dev/null 2>&1
+    run dr-status
+    [[ "$output" == *"DRAUGR_BRANCH=feature-x dr-diff"* ]]
+}

@@ -37,7 +37,8 @@ done
 
 dr_context
 
-branch=$DRAUGR_BRANCH
+# No $branch here any more: --check-only used to ask the mound about one named
+# branch, and now asks about all of them.
 tracking=$(dr_tracking_ref)
 
 # --- check-only: would destroying the mound lose work? ----------------------
@@ -64,24 +65,30 @@ if [ -n "$check_only" ]; then
     # Capturing the status needs the assignment to BE the tested command. Writing
     # `out=$(…) || out=` and then reading $? would report on the fallback
     # assignment, which always succeeds - and unreachable would look like success.
+    # EVERY branch, not just the tracked one. Asking only about refs/heads/$branch
+    # meant an agent that committed on a branch of its own was reported as
+    # "nothing to lose" - and dr-rm believes this answer before destroying the
+    # mound. The guard had a hole exactly where agents actually behave.
     rc=0
     if command -v timeout >/dev/null 2>&1; then
-        out=$(timeout 60 git -C "$DR_REPO" ls-remote "$url" "refs/heads/$branch" 2>/dev/null) || rc=$?
+        out=$(timeout 60 git -C "$DR_REPO" ls-remote --heads "$url" 2>/dev/null) || rc=$?
     else
-        out=$(git -C "$DR_REPO" ls-remote "$url" "refs/heads/$branch" 2>/dev/null) || rc=$?
+        out=$(git -C "$DR_REPO" ls-remote --heads "$url" 2>/dev/null) || rc=$?
     fi
-    tip=$(printf '%s' "$out" | cut -f1)
 
-    # Distinguish "answered, and that branch is not there" from "never answered".
-    # ls-remote succeeds with empty output for a branch the mound does not have,
-    # which is a real answer and means the agent never committed on it.
-    if [ -n "$tip" ]; then
-        # ^{commit} forces the object to resolve as a commit; cat-file -e is a
-        # silent "do we already have this here" test.
-        if git -C "$DR_REPO" cat-file -e "$tip^{commit}" 2>/dev/null; then
-            exit 0
-        fi
-        exit 1
+    # Distinguish "answered, and there is nothing there" from "never answered".
+    # ls-remote succeeds with empty output for a mound with no branches at all,
+    # which is a real answer and means the agent never committed anything.
+    if [ -n "$out" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            tip=${line%%	*}
+            # ^{commit} forces the object to resolve as a commit; cat-file -e is a
+            # silent "do we already have this here" test. One missing tip on any
+            # branch is enough to answer "yes, this would lose work".
+            git -C "$DR_REPO" cat-file -e "$tip^{commit}" 2>/dev/null || exit 1
+        done <<< "$out"
+        exit 0
     fi
     [ "$rc" -eq 0 ] && exit 0
     exit 2
@@ -89,8 +96,13 @@ fi
 
 # --- the normal path --------------------------------------------------------
 
-if ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
+# Only fetching needs a mound. --no-fetch reports on refs that are already on
+# this disk, and refusing it without a sandbox made the one moment you most want
+# that report - after dr-rm, asking "what did I keep?" - the one moment it would
+# not answer.
+if [ -n "$fetch" ] && ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
     dr_die "$DRAUGR_SANDBOX does not exist, so there is nothing to fetch" \
+           "Report on what you already fetched:  dr-sync --no-fetch" \
            "Create it with:  dr-up"
 fi
 
@@ -129,6 +141,33 @@ fi
 # will conflict with them sooner or later.
 if [ "$behind" -gt 0 ] && [ -z "$quiet" ]; then
     dr_info "you have $behind commit(s) the mound does not - send them with:  dr-send"
+fi
+
+# --- the branches nobody was looking at -------------------------------------
+#
+# Reported unconditionally, including under --quiet, because this is the case
+# that used to be silent: the fetch brought these down, and every command then
+# claimed there was nothing new. An agent inventing its own branch name is
+# ordinary behaviour, not an error - so this informs rather than warns, except
+# when the tracked branch is empty and these are the only work there is.
+mapfile -t _others < <(dr_other_branches)
+if [ ${#_others[@]} -gt 0 ]; then
+    if [ "$ahead" -eq 0 ]; then
+        dr_warn "the agent worked on ${#_others[@]} branch(es) you are NOT tracking:"
+    else
+        dr_info "the agent also worked on ${#_others[@]} branch(es) you are not tracking:"
+    fi
+    for _entry in "${_others[@]}"; do
+        printf '    %-44s %s commit(s)\n' "${_entry% *}" "${_entry##* }" >&2
+    done
+
+    # DRAUGR_BRANCH is an ordinary config key, so the environment overrides it
+    # for one command. No new flag is needed to review one of these.
+    _first=${_others[0]%% *}
+    printf '  %sReview one with:  DRAUGR_BRANCH=%s dr-diff%s\n' \
+        "$_DR_DIM" "${_first#"$DRAUGR_REMOTE"/}" "$_DR_OFF" >&2
+    printf '  %sThese are already fetched - they are on your disk, not only the mound.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
 fi
 
 dr_hook post-sync "$DR_REPO"

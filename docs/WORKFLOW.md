@@ -209,4 +209,49 @@ seconds and loses nothing.
 
 `dr-rm` throws away the agent's clone permanently. It asks first, and checks the mound rather than
 trusting a local tracking ref — which costs a few seconds and starts a stopped sandbox, because the
-only way to know whether the agent committed something you never fetched is to ask it.
+only way to know whether the agent committed something you never fetched is to ask it. It checks
+**every** branch, not just the one you track.
+
+---
+
+## What is durable, and what is not
+
+**The mound's clone is disposable. Your repository is the durable copy.** That is the whole design,
+and it is worth saying out loud because the consequences are not obvious.
+
+`DRAUGR_AUTO_SYNC` defaults to `true`, so leaving the agent runs `dr-sync` for you, and `dr-sync`
+fetches with the refspec `+refs/heads/*` — **every branch**, not only the one you track. By the time
+your shell prompt comes back, everything the agent committed is on your disk. That is what makes the
+mound safe to lose.
+
+And it can be lost. Measured: a host reboot with a mound still running left five zero-length objects
+in the sandbox's `.git`, enough that `git status` inside it printed
+`error: object file … is empty`. The microVM had the writes in page cache and the reboot took them.
+Nothing was lost, because auto-sync had already pulled every branch out — but the clone itself was
+unrecoverable.
+
+Two things follow:
+
+- **Do not set `DRAUGR_AUTO_SYNC=false` unless you run `dr-sync` yourself.** It is the mechanism, not
+  a convenience. Without it the mound is the only copy of the agent's work.
+- **The exposed window is between the agent's last commit and your next sync.** A crash there costs
+  that session. `dr-stop` when you are done with a mound rather than leaving it running is the cheap
+  way to shrink it.
+
+`dr-sync --no-fetch` reports on what you have already fetched and needs no sandbox at all, so
+"what did I keep?" is answerable after `dr-rm`.
+
+### Agents invent branch names
+
+An agent will frequently commit to a branch of its own — `sbx-kit-lua-deps`, `feature/x` — rather
+than the one you started on. Those branches are fetched like any other, but `dr-log`, `dr-diff` and
+`dr-merge` all work against `draugr/$DRAUGR_BRANCH`, so they will not show you work that landed
+elsewhere.
+
+`dr-sync` and `dr-status` now name any branch carrying commits you have not merged. To review one,
+override the branch for a single command — `DRAUGR_BRANCH` is an ordinary config key:
+
+```bash
+DRAUGR_BRANCH=sbx-kit-lua-deps dr-diff
+DRAUGR_BRANCH=sbx-kit-lua-deps dr-merge
+```

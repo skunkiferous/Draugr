@@ -83,6 +83,20 @@ else
     row unmerged "${_DR_DIM}never synced${_DR_OFF} - dr-sync fetches the agent's commits"
 fi
 
+# Branches other than the tracked one. dr-sync fetches every branch, but only the
+# tracked one was ever reported - so an agent working on a branch of its own was
+# invisible here too, and "unmerged: none" was actively misleading.
+# Each line is "<ref> <count>", so both halves are split off before use: taking
+# the branch name straight out of the whole line leaves the count inside the
+# suggested command, which then does not work when pasted.
+mapfile -t other_branches < <(dr_other_branches)
+for entry in "${other_branches[@]+"${other_branches[@]}"}"; do
+    ob_ref=${entry% *}
+    ob_count=${entry##* }
+    row "${_DR_YELLOW}untracked${_DR_OFF}" \
+        "$ob_count commit(s) on $ob_ref - DRAUGR_BRANCH=${ob_ref#"$DRAUGR_REMOTE"/} dr-diff"
+done
+
 # Workspaces are worth showing because an extra read-only mount is easy to forget
 # and is the most likely answer to "why can the agent see that?".
 if [ "$state" != absent ]; then
