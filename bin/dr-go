@@ -118,7 +118,7 @@ dr_sbx run --name "$DRAUGR_SANDBOX" \
 # The agent exiting is normal, and so is a non-zero code from it, so neither is
 # reported as a Draugr failure. What matters is that we are back on the host.
 rc=${rc:-0}
-dr_info "left $DRAUGR_SANDBOX (it is still running - dr-stop to shut it down)"
+dr_info "left $DRAUGR_SANDBOX"
 dr_hook post-attach "$DR_REPO"
 
 # Fetch what the agent committed, while you are still thinking about it. It only
@@ -141,6 +141,26 @@ fi
 # terminal, not asked a question you were expecting.
 if [ "$DRAUGR_DATA_PULL" = auto ] && [ -n "$DRAUGR_DATA" ] && [ -x "$_dr_bin/dr-data" ]; then
     "$_dr_bin/dr-data" pull --yes || dr_warn "auto data pull failed; retry with:  dr-data pull"
+fi
+
+# Last of all, because everything above needs the mound alive: the sync, the
+# memory export and the data pull all talk to it. Stopping first would turn each
+# of them into a four-second restart, or a failure.
+#
+# Off by default. Stopping is hygiene rather than durability - what protects the
+# agent's work is the sync that has just run - and it silently kills anything the
+# kit starts through publishedPorts or startup commands. Worth opting into for a
+# project that serves nothing; the mound holds around 1.4 GB while it idles.
+if dr_is_true "$DRAUGR_STOP_ON_EXIT"; then
+    # Not fatal. The session is over and the work is already fetched, so a mound
+    # that will not stop is untidy rather than dangerous.
+    if dr_sbx stop "$DRAUGR_SANDBOX" >/dev/null 2>&1; then
+        dr_ok "stopped $DRAUGR_SANDBOX (DRAUGR_STOP_ON_EXIT)"
+    else
+        dr_warn "could not stop $DRAUGR_SANDBOX - it is still running"
+    fi
+else
+    dr_info "$DRAUGR_SANDBOX is still running - dr-stop to shut it down"
 fi
 
 exit "$rc"

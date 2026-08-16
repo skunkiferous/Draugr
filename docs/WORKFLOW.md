@@ -202,6 +202,7 @@ is visible. See [SECURITY.md](SECURITY.md#trap-2--the-skills-store-is-a-writable
 | | |
 |---|---|
 | `dr-stop` | shut the mound down. Filesystem, login and memory all survive |
+| `dr-stop --all` | stop **every** running sandbox on the machine, after listing them |
 | `dr-rm` | **destroy it.** Refuses unless commits are synced and memory exported |
 
 `dr-stop` is what you want when you just wish it would stop using memory. Starting it again is
@@ -236,7 +237,25 @@ Two things follow:
   a convenience. Without it the mound is the only copy of the agent's work.
 - **The exposed window is between the agent's last commit and your next sync.** A crash there costs
   that session. `dr-stop` when you are done with a mound rather than leaving it running is the cheap
-  way to shrink it.
+  way to shrink it, and `dr-stop --all` sweeps the machine before you shut it down.
+  [`DRAUGR_STOP_ON_EXIT=true`](CONFIG.md#draugr_stop_on_exit) makes `dr-go` do it for you, after the
+  sync. It is off by default: an idle mound holds ~1.4 GB, but stopping costs four seconds on the way
+  back in and kills anything the kit serves through `publishedPorts`.
+
+### Why there is no WSL shutdown hook
+
+The obvious idea is to hang `dr-stop --all` off WSL shutting down. It would not work, and it is worth
+knowing why before you build it.
+
+`sandboxd` is a **Windows** process — `sbx.exe daemon start`, on the named pipe
+`\\.\pipe\docker_kaname_sandboxd`, with the mounds as Hyper-V microVMs under `vmcompute`. WSL is only
+a client that shells out to `sbx.exe`. Shutting WSL down therefore stops nothing: every mound keeps
+running, and a hook there would fire at the one moment it cannot help.
+
+The exposure is a *Windows* shutdown, so any automatic sweep has to live on the Windows side — a
+shutdown script or a scheduled task calling `sbx stop`. That is outside a WSL bash project, and
+worth weighing against the fact that it buys little: `dr-go` has already synced every branch to your
+repository by the time you get your prompt back. Stopping is hygiene, not durability.
 
 `dr-sync --no-fetch` reports on what you have already fetched and needs no sandbox at all, so
 "what did I keep?" is answerable after `dr-rm`.

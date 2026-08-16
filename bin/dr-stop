@@ -5,8 +5,14 @@
 # later dr-go starts it back up in a few seconds rather than rebuilding it. This
 # is what you want at the end of the day. dr-rm is the one that destroys things.
 #
+# Stopping is hygiene, not durability. What protects the agent's work is dr-sync
+# having fetched it, which dr-go does for you on the way out. Stopping reclaims
+# the memory a running microVM holds, and leaves less to go wrong if the host
+# goes down unexpectedly.
+#
 #   dr-stop            stop this repo's mound
 #   dr-stop <name>     stop one by name
+#   dr-stop --all      stop every running sandbox on this machine
 set -euo pipefail
 
 DR_PROG=dr-stop
@@ -17,14 +23,49 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # A bare word is a sandbox name; without one we fall back to this repo's mound.
 name=
+all=
 while [ $# -gt 0 ]; do
     case "$1" in
+        --all|-a)  all=1 ;;
+        -y|--yes)  DR_ASSUME_YES=1 ;;
         -h|--help) dr_help "$0"; exit 0 ;;
         -*) dr_die "unknown option: $1" "Try: dr-stop --help" ;;
         *) name=$1 ;;
     esac
     shift
 done
+
+# --- every running sandbox --------------------------------------------------
+#
+# No dr_context: this is a machine-level command and the usual moment to want it
+# is on your way out of a terminal that is not in any repository.
+if [ -n "$all" ]; then
+    [ -z "$name" ] || dr_die "--all takes no sandbox name" "Try: dr-stop --help"
+
+    mapfile -t running < <(dr_sandboxes_running)
+    if [ ${#running[@]} -eq 0 ]; then
+        dr_ok "nothing is running"
+        exit 0
+    fi
+
+    # Listed and confirmed rather than assumed, because this reaches past the
+    # sandboxes Draugr created to any that sbx knows about - including ones from
+    # a plain `sbx run` that Draugr has no business stopping without asking.
+    dr_info "${#running[@]} running sandbox(es):"
+    for s in "${running[@]}"; do printf '    %s\n' "$s" >&2; done
+    printf '  %sStopping keeps every clone and anything installed inside. It does NOT%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sfetch the agents'"'"' commits - dr-sync does that, per repository.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    dr_confirm "Stop all ${#running[@]}?" || dr_die "cancelled"
+
+    # sbx stop takes several names at once, so this is one call and one failure
+    # to report rather than a partial sweep that stops halfway.
+    dr_sbx stop "${running[@]}" >/dev/null || dr_die \
+        "could not stop them all" "See what is left:  dr-ls"
+    dr_ok "stopped ${#running[@]} sandbox(es)"
+    exit 0
+fi
 
 # A name on the command line means we do not need to be in a repo at all, which
 # is what lets you stop a mound you have wandered away from.

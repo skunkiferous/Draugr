@@ -384,6 +384,7 @@ DR_KEYS=(
     DRAUGR_DATA DRAUGR_DATA_PUSH DRAUGR_DATA_PULL DRAUGR_DATA_DELETE DRAUGR_DATA_CHMOD
     DRAUGR_DATA_DIFF_MAX
     DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC DRAUGR_ON_MISSING_REPO
+    DRAUGR_STOP_ON_EXIT
     DRAUGR_MEM_SYNC DRAUGR_MEM_STORE
     DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL
 )
@@ -429,6 +430,14 @@ _dr_defaults() {
     DRAUGR_REMOTE=draugr
     DRAUGR_REQUIRE_CLEAN=true
     DRAUGR_AUTO_SYNC=true
+
+    # Off, because leaving it running is what people expect and stopping breaks
+    # a workflow the kit format explicitly supports: publishedPorts and startup
+    # commands exist so a mound can SERVE something, and that dies with it.
+    # Measured on one machine: a running mound holds ~1.4 GB, and a cold start
+    # costs 4.2s against 0.36s when it is already up. Worth opting into for
+    # projects that serve nothing; not worth imposing.
+    DRAUGR_STOP_ON_EXIT=false
 
     # What to do when you point Draugr at a directory that is not a repository.
     # "fail" by default: creating a git repo in somebody's folder is a real side
@@ -905,6 +914,20 @@ dr_sandbox_state() {
 
 dr_sandbox_exists() {
     [ "$(dr_sandbox_state "$1")" != "absent" ]
+}
+
+# dr_sandboxes_running - the name of every running sandbox, one per line.
+#
+# Every sandbox, not only the ones Draugr named. A mound holds a Hyper-V microVM
+# open whoever created it, and the reason to want this list - reclaiming memory,
+# or tidying up before shutting the machine down - does not care which tool made
+# them. dr-stop --all lists what it found and asks before acting, rather than
+# quietly reaching past its own sandboxes.
+dr_sandboxes_running() {
+    local json
+    json=$(dr_sbx ls --json 2>/dev/null) || return 1
+    printf '%s' "$json" | jq -r \
+        '(.sandboxes // [])[] | select(.status == "running") | .name' 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------

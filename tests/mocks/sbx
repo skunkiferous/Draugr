@@ -28,17 +28,24 @@ version)
     ;;
 
 # The only output any test actually parses. DR_MOCK_STATE=absent yields an empty
-# list; anything else yields one sandbox in that state.
+# list; anything else yields one sandbox per name in that state.
+#
+# DR_MOCK_NAMES (space separated) stands in for a machine running several at
+# once, which is what dr-stop --all is about and what a single-sandbox mock
+# could not express.
 ls)
     state=${DR_MOCK_STATE:-stopped}
     if [ "$state" = absent ]; then
         printf '{\n  "sandboxes": []\n}\n'
     else
-        cat <<EOF
-{
-  "sandboxes": [
+        read -ra _names <<< "${DR_MOCK_NAMES:-${DR_MOCK_NAME:-draugr-testrepo}}"
+        printf '{\n  "sandboxes": [\n'
+        _sep=
+        for _n in "${_names[@]}"; do
+            printf '%s' "$_sep"
+            cat <<EOF
     {
-      "name": "${DR_MOCK_NAME:-draugr-testrepo}",
+      "name": "$_n",
       "id": "00000000-0000-0000-0000-000000000000",
       "agent": "claude",
       "status": "$state",
@@ -46,9 +53,10 @@ ls)
         "C:\\\\Code\\\\testrepo"
       ]
     }
-  ]
-}
 EOF
+            _sep=','
+        done
+        printf '  ]\n}\n'
     fi
     ;;
 # With DR_MOCK_MOUND set, run the command for real against that tree. Absolute

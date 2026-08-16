@@ -117,8 +117,17 @@
 # there and the agent would quietly build on stale code. This catches that.
 #DRAUGR_REQUIRE_CLEAN=true
 
-# Run dr-sync automatically when you detach.
+# Run dr-sync automatically when you detach. This is the mechanism that makes
+# the mound safe to lose, not a convenience - leave it on unless you intend to
+# run dr-sync yourself.
 #DRAUGR_AUTO_SYNC=true
+
+# Stop the mound when you leave the agent, after the sync has run. Off because a
+# running mound is what people expect, and because stopping kills anything the
+# kit serves through publishedPorts or startup commands. An idle mound holds
+# around 1.4 GB; restarting one costs about four seconds. Turn it on for projects
+# that serve nothing.
+#DRAUGR_STOP_ON_EXIT=false
 
 # What to do when you point Draugr at a directory that is not a git repository.
 # Clone mode needs one, and clone mode is what keeps your files read-only to the

@@ -382,3 +382,120 @@ go_argv() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"dr-up creates it"* ]]
 }
+
+# --- dr-stop --all ------------------------------------------------------------
+#
+# A machine-level sweep. Deliberately NOT limited to sandboxes Draugr named: a
+# running mound holds a Hyper-V microVM open whoever created it, and the reason
+# to want this - reclaiming memory, or tidying up before shutting the machine
+# down - does not care which tool made them. So it lists what it found and asks.
+
+@test "dr-stop --all: stops every running sandbox in one call" {
+    DR_MOCK_NAMES="draugr-one draugr-two other-tool" DR_MOCK_STATE=running \
+        run dr-stop --all --yes
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"3 running sandbox(es)"* ]]
+    # One sbx call carrying all three, rather than a partial sweep that stops
+    # halfway and leaves you guessing which.
+    line=$(grep "^stop " "$DR_MOCK_LOG")
+    [[ "$line" == *"draugr-one"* ]]
+    [[ "$line" == *"draugr-two"* ]]
+    [[ "$line" == *"other-tool"* ]]
+}
+
+@test "dr-stop --all: reaches past Draugr's own sandboxes, and says so first" {
+    # The listing is the consent: you cannot approve a sweep you cannot see.
+    DR_MOCK_NAMES="other-tool" DR_MOCK_STATE=running run dr-stop --all --yes
+    [[ "$output" == *"other-tool"* ]]
+}
+
+@test "dr-stop --all: nothing running is success, not an error" {
+    DR_MOCK_STATE=stopped run dr-stop --all --yes
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing is running"* ]]
+    [ -z "$(grep "^stop " "$DR_MOCK_LOG" || true)" ]
+}
+
+@test "dr-stop --all: an absent list is not an error either" {
+    DR_MOCK_STATE=absent run dr-stop --all --yes
+    [ "$status" -eq 0 ]
+}
+
+@test "dr-stop --all: refuses to assume consent without a terminal" {
+    DR_MOCK_NAMES="draugr-one draugr-two" DR_MOCK_STATE=running run dr-stop --all
+    [ "$status" -ne 0 ]
+    [ -z "$(grep "^stop " "$DR_MOCK_LOG" || true)" ]
+}
+
+@test "dr-stop --all: says stopping is not syncing" {
+    # The trap this command invites: stopping feels like putting work somewhere
+    # safe, and it does nothing of the sort. dr-sync is what fetches commits.
+    DR_MOCK_NAMES="draugr-one" DR_MOCK_STATE=running run dr-stop --all --yes
+    [[ "$output" == *"dr-sync"* ]]
+}
+
+@test "dr-stop --all: rejects a sandbox name alongside it" {
+    run dr-stop --all draugr-one
+    [ "$status" -ne 0 ]
+}
+
+@test "dr-stop --all: works outside any repository" {
+    # The usual moment to want this is on the way out of a terminal that is not
+    # in a project, so it must not go through dr_context.
+    cd "$DR_TMP" || return 1
+    DR_MOCK_NAMES="draugr-one" DR_MOCK_STATE=running run dr-stop --all --yes
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"stopped 1"* ]]
+}
+
+# --- DRAUGR_STOP_ON_EXIT ------------------------------------------------------
+#
+# Off by default. Stopping is hygiene, not durability - the dr-sync that has just
+# run is what protects the agent's work - and it silently kills anything the kit
+# serves through publishedPorts or startup commands. Measured: an idle mound
+# holds ~1.4 GB, and a cold start costs 4.2s against 0.36s to attach to a live
+# one, so this is a real trade rather than a free win either way.
+
+# dr-go needs a terminal before it will attach, so these go through a pty the
+# same way go_argv does - but keeping the OUTPUT rather than the recorded argv.
+go_output() {
+    DR_MOCK_STATE=running script -qec "dr-go $*" /dev/null 2>&1 || true
+}
+
+@test "dr-go: leaves the mound running by default, and says so" {
+    run go_output
+    [[ "$output" == *"still running"* ]]
+    [ -z "$(calls stop)" ]
+}
+
+@test "dr-go: DRAUGR_STOP_ON_EXIT=true stops it" {
+    export DRAUGR_STOP_ON_EXIT=true
+    run go_output
+    [[ "$(calls stop)" == *"$SANDBOX"* ]]
+    [[ "$output" == *"stopped $SANDBOX"* ]]
+}
+
+@test "dr-go: the stop is the LAST thing it does" {
+    # Everything on the way out - the sync, the memory export, the data pull -
+    # talks to the mound. Stopping first would turn each into a cold start or an
+    # outright failure, so the ordering is load-bearing rather than cosmetic.
+    export DRAUGR_STOP_ON_EXIT=true
+    run go_output
+    [[ "$(tail -1 "$DR_MOCK_LOG")" == stop* ]]
+}
+
+@test "dr-go: a mound that will not stop warns rather than failing" {
+    # The session is over and the work is already fetched, so this is untidy
+    # rather than dangerous - and dying here would mask the agent's exit code.
+    export DRAUGR_STOP_ON_EXIT=true DR_MOCK_FAIL=stop
+    run go_output
+    [[ "$output" == *"could not stop"* ]]
+    [[ "$output" == *"still running"* ]]
+}
+
+@test "dr-go: an off-by-default key stays off when set to anything but true" {
+    # dr_is_true is the gate, so "yes" and "1" and typos all mean "leave it".
+    export DRAUGR_STOP_ON_EXIT=maybe
+    run go_output
+    [ -z "$(calls stop)" ]
+}

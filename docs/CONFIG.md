@@ -164,6 +164,25 @@ code. `dr-go --dirty` overrides for one run.
 Paths matching `DRAUGR_DATA` are exempt: they travel by a different mechanism and are never expected
 to be committed.
 
+### `DRAUGR_STOP_ON_EXIT`
+Default `false`. When true, `dr-go` stops the mound after you leave the agent — last of all, once the
+sync, the memory export and the data pull have run, because each of those needs it alive.
+
+Off by default for two reasons. Stopping silently kills anything the kit starts through
+`publishedPorts` or `startup` commands, which is a workflow the kit format exists to support; and
+`dr-go` is re-entered constantly, where a cold start costs measurably more than an attach.
+
+| measured on one machine | |
+|---|---|
+| RAM a running mound holds | ~1.4 GB, fully recovered on stop |
+| cold start (`stopped → running`) | 4.2 s |
+| attach to a running mound | 0.36 s |
+
+Worth turning on per-project for anything that serves nothing, or in `~/.config/draugr/config` if you
+would rather pay the four seconds. It is **not** a durability measure — what protects the agent's
+work is the `dr-sync` that has already run. See
+[the durability model](WORKFLOW.md#what-is-durable-and-what-is-not).
+
 ### `DRAUGR_AUTO_SYNC`
 Default `true`. Runs `dr-sync` when you leave the agent. It only fetches — nothing is merged and your
 branch does not move — so the worst case is a few seconds and a remote-tracking branch you ignore.
