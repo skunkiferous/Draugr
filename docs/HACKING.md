@@ -42,8 +42,18 @@ Line by line:
 | `.` | short for `source`: run that file **in this shell**, so its functions and variables stick around |
 | `# shellcheck source=…` | tells the linter where the library is; it cannot work that out from a runtime variable |
 
-The comment block after the description is reprinted by `--help` (via
-`sed -n '2,9p' "$0"`), so usage lives in exactly one place.
+The comment block after the description **is** the help text: `dr_help "$0"` prints from line 2 to
+the first line that is not a comment, so usage lives in exactly one place and cannot drift from it.
+
+Write the header as one contiguous block of `#` lines, using a bare `#` for blank lines rather than a
+truly empty one — an empty line ends the block. A `# shellcheck` directive also ends it, so a
+file-wide `disable=` can sit in the header (where it has to be, to apply at all) without appearing in
+`--help`.
+
+> This used to be `sed -n '2,Np' "$0"` with `N` counted by hand, and `N` had gone stale in **17 of 27
+> commands** — every one of them ending its `--help` with a stray `set -euo pipefail`, while
+> `dr-status` had the opposite problem and truncated mid-sentence. A test now fails if any command's
+> help contains a line of code. Prefer deleting this class of upkeep over getting it right.
 
 ---
 

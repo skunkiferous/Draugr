@@ -26,7 +26,7 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # already know what is in there.
 action=${1:-list}
 case "$action" in
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) dr_help "$0"; exit 0 ;;
     list|diff|accept|import) shift || : ;;
     *) dr_die "unknown action: $action" "One of: list, diff, accept, import" ;;
 esac

@@ -31,7 +31,7 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # usual first question is "which way do I actually want to go".
 action=${1:-status}
 case "$action" in
-    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) dr_help "$0"; exit 0 ;;
     status|diff|push|pull) shift || : ;;
     *) dr_die "unknown action: $action" "One of: status, diff, push, pull" ;;
 esac

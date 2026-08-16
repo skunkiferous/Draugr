@@ -32,7 +32,7 @@ while [ $# -gt 0 ]; do
         --dirty)   dirty=1 ;;
         -y|--yes)  DR_ASSUME_YES=1 ;;
         --bare)    args_given=1; agent_args=() ;;
-        -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) dr_help "$0"; exit 0 ;;
         --) shift; args_given=1; agent_args=("$@"); break ;;
         *) dr_die "unknown option: $1" "Agent arguments go after --, e.g. dr-go -- --continue" ;;
     esac

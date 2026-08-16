@@ -40,9 +40,16 @@ while [ $# -gt 0 ]; do
         --prefix)    bindir=$2; shift ;;   # consume the value too
 
         # Print the usage block at the top of this file rather than keeping a
-        # second copy in sync with it. `sed -n '2,7p'` prints only lines 2-7,
-        # and the second sed strips the leading "# " from each.
-        -h|--help)   sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        # second copy in sync with it: skip the shebang, print comment lines,
+        # stop at the first line that is not one, and strip the leading "# ".
+        #
+        # This is dr_help from lib/common.sh, inlined. The installer is the one
+        # script that cannot source the library - it runs before anything is
+        # installed - and a hand-counted line range is what this replaced
+        # everywhere else, after it silently went stale in 17 of 27 commands.
+        -h|--help)
+            awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+            exit 0 ;;
 
         # >&2 sends this to stderr, so it still shows up when stdout is piped.
         *) printf 'install.sh: unknown option %s\n' "$1" >&2; exit 1 ;;

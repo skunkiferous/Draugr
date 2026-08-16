@@ -132,3 +132,89 @@ teardown() { dr_test_teardown; }
     # once a release is tagged.
     ! grep -q '⏳' "$DR_ROOT/README.md"
 }
+
+# --- --help is the header comment, and only that -----------------------------
+#
+# Every command's help used to be `sed -n '2,Np' "$0"` with N counted by hand.
+# N had gone stale in 17 of 27 commands, each ending its --help with a stray
+# `set -euo pipefail`; dr-status had drifted the other way and truncated its own
+# help mid-sentence. dr_help removed the counting, and these keep it removed.
+
+@test "dr_help: prints the header and stops at the code" {
+    printf '#!/usr/bin/env bash\n# tool - does a thing.\n#\n#   tool --flag\nset -euo pipefail\necho hi\n' \
+        > "$DR_TMP/tool"
+    # Compared as one string, not through $lines: bats builds that array with
+    # IFS=newline, and newline is IFS *whitespace*, so runs of them collapse and
+    # a blank line simply disappears from the array.
+    run dr_help "$DR_TMP/tool"
+    [ "$output" = "tool - does a thing.
+
+  tool --flag" ]
+}
+
+@test "dr_help: the shebang is never part of the help" {
+    printf '#!/usr/bin/env bash\n# tool - x\nset -e\n' > "$DR_TMP/tool"
+    run dr_help "$DR_TMP/tool"
+    [[ "$output" != *"usr/bin/env"* ]]
+}
+
+@test "dr_help: a shellcheck directive ends the block" {
+    # A file-wide disable has to sit above the first command to apply at all, so
+    # it lives in the header - but it is metadata, not something --help asked for.
+    printf '#!/usr/bin/env bash\n# tool - x\n#\n# shellcheck disable=SC2016\n# because reasons\nset -e\n' \
+        > "$DR_TMP/tool"
+    run dr_help "$DR_TMP/tool"
+    [ "$output" = "tool - x" ]
+}
+
+@test "dr_help: no trailing blank line" {
+    printf '#!/usr/bin/env bash\n# tool - x\n#\nset -e\n' > "$DR_TMP/tool"
+    run dr_help "$DR_TMP/tool"
+    [ "$output" = "tool - x" ]
+}
+
+@test "dr_help: blank lines inside the block are kept" {
+    # Only the TRAILING ones are dropped. A header's internal spacing is what
+    # makes usage readable, so losing it would be a different bug.
+    printf '#!/usr/bin/env bash\n# a\n#\n# b\nset -e\n' > "$DR_TMP/tool"
+    run dr_help "$DR_TMP/tool"
+    [ "$output" = "a
+
+b" ]
+}
+
+@test "every command's --help contains no line of code" {
+    # The regression this whole change exists for. Checked across every command
+    # at once, because the failure mode was 17 of them at the same time.
+    local bad=()
+    for f in "$DR_ROOT"/bin/* "$DR_ROOT/install.sh"; do
+        out=$("$f" --help 2>&1) || true
+        if printf '%s' "$out" | grep -qE '^(set -|DR_PROG=|_dr_bin=|\. "|awk |shellcheck)'; then
+            bad+=("${f##*/}")
+        fi
+    done
+    [ "${#bad[@]}" -eq 0 ] || {
+        printf 'help leaks code: %s\n' "${bad[*]}" >&2
+        return 1
+    }
+}
+
+@test "every command's --help opens with a description line" {
+    # Cheap proof the block was found at all: an empty or truncated help would
+    # not open with "<something> - <description>". Matched on the dash rather
+    # than the command name because `dr`, the dispatcher, opens with
+    # "Draugr <version> - ..." and is right to.
+    local bad=()
+    for f in "$DR_ROOT"/bin/*; do
+        name=${f##*/}
+        out=$("$f" --help 2>&1) || true
+        case "${out%%$'\n'*}" in
+            *" - "*) ;;
+            *) bad+=("$name") ;;
+        esac
+    done
+    [ "${#bad[@]}" -eq 0 ] || {
+        printf 'help has no description line: %s\n' "${bad[*]}" >&2
+        return 1
+    }
+}

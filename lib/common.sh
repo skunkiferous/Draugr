@@ -103,6 +103,43 @@ dr_die() {
 
 dr_heading() { printf '\n%s%s%s\n' "$_DR_BOLD" "$*" "$_DR_OFF" >&2; }
 
+# dr_help [file] - print a script's leading comment block as its help text.
+#
+# Every command's --help IS its header comment, which is the only way to keep the
+# two from drifting. This replaced a hand-counted `sed -n '2,Np' "$0"` in each
+# script, where N had to be the last comment line: in 17 of 27 commands it was
+# one too many, so --help ended with a stray `set -euo pipefail`. Nobody had
+# miscounted twice in the same direction - the range simply goes stale the moment
+# anyone edits a header, which is exactly the kind of upkeep to delete rather
+# than to get right.
+#
+# Starts at line 2 to skip the shebang and stops at the first line that is not a
+# comment, strips one leading "# " from what is left, and stops early at a linter
+# directive. That last rule earns its place: a file-wide "disable=" pragma has to
+# sit above the first command to apply at all, so in dr-mem it lives inside the
+# header block - and it is machine-readable metadata, not something a reader
+# typing --help asked to see.
+#
+# (Note the careful wording above. A comment line STARTING with the linter's own
+# name is parsed as a malformed directive, which fails the whole file - found the
+# hard way, by writing one here.)
+# Blank lines are held back and only flushed when a real line follows, so a
+# header that ends with a "#" separator - dr-mem does, just above its shellcheck
+# directive - does not leave --help trailing into whitespace.
+dr_help() {
+    awk 'NR == 1         { next }
+         /^# shellcheck/ { exit }
+         /^#/            {
+                           sub(/^# ?/, "")
+                           if ($0 == "") { pending++; next }
+                           while (pending-- > 0) print ""
+                           pending = 0
+                           print
+                           next
+                         }
+                         { exit }' "${1:-$0}"
+}
+
 # ---------------------------------------------------------------------------
 # Locating sbx.exe
 #

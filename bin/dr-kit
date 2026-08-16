@@ -33,7 +33,7 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # take that as a failure.
 action=${1:-show}
 case "$action" in
-    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) dr_help "$0"; exit 0 ;;
     validate|show|drift|apply|list|save) shift || : ;;
     *) dr_die "unknown action: $action" "One of: validate, show, drift, apply, list, save" ;;
 esac

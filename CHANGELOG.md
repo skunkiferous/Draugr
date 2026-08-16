@@ -15,7 +15,7 @@ Nothing yet.
 ## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 303 tests run in CI.
+Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 310 tests run in CI.
 
 ### The daily loop
 
@@ -33,8 +33,13 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 303 tests run in CI.
 - `dr-config` prints the merged result with the origin of every value.
 - Trust on first use: a project config is executed when sourced, so its hash is recorded in
   `~/.config/draugr/trusted` and an unseen one is refused until `dr-trust` accepts it.
-- 25 keys, all documented in [docs/CONFIG.md](docs/CONFIG.md), with a test that fails if a key
+- 27 keys, all documented in [docs/CONFIG.md](docs/CONFIG.md), with a test that fails if a key
   exists in code but not in the documentation.
+- Every command's `--help` **is** its header comment, printed by `dr_help`, so the two cannot drift.
+  It replaced a hand-counted `sed -n '2,Np' "$0"` in each script, where `N` had gone stale in 17 of
+  27 commands — each ending its help with a stray `set -euo pipefail`, while `dr-status` had drifted
+  the other way and truncated its own help mid-sentence. A test fails if any help contains a line of
+  code.
 
 ### Safety
 
