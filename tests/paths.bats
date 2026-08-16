@@ -114,3 +114,48 @@ teardown() { dr_test_teardown; }
     [[ "$output" == *"not on a Windows drive"* ]]
     [[ "$output" == *"/mnt/c"* ]]
 }
+
+# --- kits are the one thing allowed off a Windows drive -----------------------
+#
+# A workspace on WSLs
+
+# --- kits are the one thing allowed off a Windows drive -----------------------
+#
+# A workspace on WSL's ext4 is impossible - the microVM cannot bind-mount a path
+# behind the Windows network redirector. A kit is only READ on the host and then
+# packed, so the UNC form works for it. Measured against sbx 0.37.1: a kit under
+# ~/.config validated, ran its install command inside the sandbox, and had its
+# network rule applied.
+
+@test "dr_path_win_kit: a Windows drive still gets the drive-letter form" {
+    # Always preferable when available: no network redirector involved, and no
+    # distro name to be wrong about.
+    run dr_path_win_kit /mnt/c/Code/kit
+    [ "$status" -eq 0 ]
+    [ "$output" = 'C:\Code\kit' ]
+}
+
+@test "dr_path_win_kit: an ext4 path gets the UNC form" {
+    WSL_DISTRO_NAME=Ubuntu run dr_path_win_kit /home/me/.config/draugr/kits/lua
+    [ "$status" -eq 0 ]
+    [ "$output" = '\\wsl.localhost\Ubuntu\home\me\.config\draugr\kits\lua' ]
+}
+
+@test "dr_path_win_kit: the distro name is read, not assumed" {
+    WSL_DISTRO_NAME=Debian run dr_path_win_kit /home/me/kit
+    [ "$output" = '\\wsl.localhost\Debian\home\me\kit' ]
+}
+
+@test "dr_path_win_kit: fails when there is no distro to name" {
+    # Better than inventing one: sbx would otherwise reject the path with a
+    # message about a distro the user has never heard of.
+    WSL_DISTRO_NAME= run dr_path_win_kit /home/me/kit
+    [ "$status" -ne 0 ]
+}
+
+@test "dr_path_win: stays strict, because a WORKSPACE cannot use the UNC form" {
+    # The guard that must not regress. If this ever starts succeeding, a repo on
+    # ext4 would be accepted here and then fail deep inside sbx.
+    WSL_DISTRO_NAME=Ubuntu run dr_path_win /home/me/project
+    [ "$status" -ne 0 ]
+}

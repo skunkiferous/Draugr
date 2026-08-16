@@ -225,6 +225,38 @@ dr_path_win() {
     printf '%s:\\%s' "$(printf '%s' "$drive" | tr '[:lower:]' '[:upper:]')" "$(printf '%s' "${rest#/}" | tr '/' '\\')"
 }
 
+# dr_path_win_kit <path> - a Windows spelling sbx.exe can READ, for kits only.
+#
+# A workspace and a kit are not the same problem, and this is the one place the
+# difference is worth exploiting. A workspace on WSL's own ext4 is impossible:
+# the microVM cannot bind-mount a path behind the Windows network redirector, so
+# dr_require_win_path refuses one. A kit is never bind-mounted - sbx reads it on
+# the host and packs it - so the UNC form works.
+#
+# Measured against sbx 0.37.1: a kit under ~/.config on ext4, passed as
+# \\wsl.localhost\<distro>\..., validated, had its install command run inside the
+# sandbox and its network rule applied. That is what lets the kit library default
+# to ~/.config/draugr/kits instead of forcing it onto a Windows drive.
+#
+# Do NOT use this for a workspace. dr_path_win stays strict for that reason.
+dr_path_win_kit() {
+    local p=$1 out
+
+    # A path on a Windows drive has a real drive-letter spelling, which is always
+    # preferable: no network redirector, no distro name to be wrong about.
+    if out=$(dr_path_win "$p"); then
+        printf '%s' "$out"
+        return 0
+    fi
+
+    # $WSL_DISTRO_NAME is set by WSL itself, so this stays a pure function -
+    # testable in CI on a machine with no WSL, like everything else here.
+    [ -n "${WSL_DISTRO_NAME:-}" ] || return 1
+    # shellcheck disable=SC1003  # '\\' is one escaped backslash for tr, not bash
+    printf '\\\\wsl.localhost\\%s%s' \
+        "$WSL_DISTRO_NAME" "$(printf '%s' "$p" | tr '/' '\\')"
+}
+
 # dr_path_mound /mnt/c/src/p -> /c/src/p
 # The mound path is just the WSL path with "/mnt" removed, because sbx mounts a
 # workspace at the same path it has on the Windows side.
@@ -311,7 +343,7 @@ DR_TRUST_FILE="$DR_CONFIG_USER/trusted"
 # silently ignored.
 DR_KEYS=(
     DRAUGR_AGENT DRAUGR_AGENT_ARGS DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
-    DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_PORTS DRAUGR_MOUNTS
+    DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_KIT_STORE DRAUGR_PORTS DRAUGR_MOUNTS
     DRAUGR_DATA DRAUGR_DATA_PUSH DRAUGR_DATA_PULL DRAUGR_DATA_DELETE DRAUGR_DATA_CHMOD
     DRAUGR_DATA_DIFF_MAX
     DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC DRAUGR_ON_MISSING_REPO
@@ -336,7 +368,11 @@ _dr_defaults() {
     DRAUGR_CPUS=                 # empty => sbx default (all)
     DRAUGR_CLONE=true
     DRAUGR_TEMPLATE=
+    # A LIST, space separated. sbx accepts --kit repeatedly and merges the
+    # results, so entries add to one another rather than overriding.
     DRAUGR_KIT=.draugr/kit
+    DRAUGR_KIT_STORE="$DR_CONFIG_USER/kits"
+
     DRAUGR_PORTS=
     DRAUGR_MOUNTS=
 
@@ -1063,18 +1099,113 @@ dr_data_dirty_only() {
 # Kits
 # ---------------------------------------------------------------------------
 
-# dr_kit_dir - the resolved kit directory, or empty if this project has none.
-# Prints nothing and returns 1 when DRAUGR_KIT is unset or points nowhere, so
-# callers can treat "no kit" as ordinary rather than exceptional.
-dr_kit_dir() {
-    local kit=$DRAUGR_KIT
-    [ -n "$kit" ] || return 1
-    case "$kit" in
-        /*) : ;;
-        *)  kit="$DR_REPO/$kit" ;;
+# DRAUGR_KIT is a LIST, because sbx kits compose.
+#
+# Measured against sbx 0.37.1: `--kit` takes the flag repeatedly, and two mixins
+# on one sandbox contributed BOTH their install commands and BOTH their network
+# allow rules, merged into a single policy. That is what makes a shared kit
+# worth having - "the Lua toolchain" is a fact about you, not about one repo, and
+# a library entry ADDS to the project's kit instead of replacing it.
+
+# dr_kit_store - the library of named kits, shared across repositories.
+dr_kit_store() {
+    printf '%s' "${DRAUGR_KIT_STORE%/}"
+}
+
+# dr_kit_resolve <entry> - turn one DRAUGR_KIT entry into something sbx accepts.
+#
+# Four shapes, tried most specific first:
+#
+#   /abs/path            an absolute path, used as it stands
+#   sub/dir              a directory inside the repo - the documented default
+#   name                 a directory in the kit store: a named library kit
+#   ghcr.io/org/kit:tag  anything holding ":" or "@", i.e. an OCI or git ref
+#
+# The repo is searched before the store deliberately. A project that happens to
+# contain a directory called `lua` means its own, and the more specific answer
+# winning is the same rule the whole config cascade follows.
+#
+# Prints the resolved directory - or the reference untouched - and returns 0.
+# Prints nothing and returns 1 when the entry names nothing that exists, which
+# callers treat as ordinary: a kit is optional.
+dr_kit_resolve() {
+    local entry=$1 cand
+    [ -n "$entry" ] || return 1
+
+    case "$entry" in
+    # An absolute path means exactly itself - no search, nothing to fall back to.
+    /*)
+        if [ -d "$entry" ]; then printf '%s' "$entry"; return 0; fi
+        ;;
+    # Otherwise the repo first, then the library, so a local directory of the
+    # same name always wins over a shared one.
+    *)
+        cand="$DR_REPO/$entry"
+        if [ -d "$cand" ]; then printf '%s' "$cand"; return 0; fi
+        cand="$(dr_kit_store)/$entry"
+        if [ -d "$cand" ]; then printf '%s' "$cand"; return 0; fi
+        ;;
     esac
-    [ -d "$kit" ] || return 1
-    printf '%s' "$kit"
+
+    # Nothing on this disk. A ":" or "@" means a reference format we do not own,
+    # so it goes through untouched and sbx gets to reject it in its own words.
+    case "$entry" in
+        *[:@]*) printf '%s' "$entry"; return 0 ;;
+    esac
+    return 1
+}
+
+# dr_kit_refs - every DRAUGR_KIT entry that resolved, one per line, in order.
+#
+# Order is preserved because sbx applies kits in the order it is given them, so
+# a later entry lands on top of an earlier one. Returns 1 when nothing at all
+# resolved, so "this project has no kit" stays a single cheap test.
+dr_kit_refs() {
+    local entry resolved rc=1
+    local -a entries=()
+    [ -n "${DRAUGR_KIT:-}" ] || return 1
+
+    # read -ra splits on whitespace WITHOUT globbing - the same trap documented
+    # at _dr_data_entries, where an unquoted expansion would turn a pattern into
+    # a snapshot of whatever happens to be in the current directory.
+    read -ra entries <<< "$DRAUGR_KIT"
+    for entry in "${entries[@]}"; do
+        if resolved=$(dr_kit_resolve "$entry"); then
+            printf '%s\n' "$resolved"
+            rc=0
+        fi
+    done
+    return "$rc"
+}
+
+# dr_kit_missing - the entries that resolved to nothing, one per line.
+#
+# Reported by name rather than by resolved path, because the whole difficulty of
+# a typo'd entry is that it HAS no resolved path - "no kit at /repo/lua" would
+# hide that the kit store was searched too.
+dr_kit_missing() {
+    local entry
+    local -a entries=()
+    [ -n "${DRAUGR_KIT:-}" ] || return 0
+    read -ra entries <<< "$DRAUGR_KIT"
+    for entry in "${entries[@]}"; do
+        dr_kit_resolve "$entry" >/dev/null || printf '%s\n' "$entry"
+    done
+}
+
+# dr_kit_repo_dir - the first resolved kit that lives inside this repo.
+#
+# What `dr-kit save` copies and what dr-policy points at when it suggests
+# graduating a rule into the kit: of a list that may mix project and library
+# entries, the project's own is the one a repo-scoped instruction means.
+dr_kit_repo_dir() {
+    local ref
+    while IFS= read -r ref; do
+        case "$ref" in
+            "$DR_REPO"/*) printf '%s' "$ref"; return 0 ;;
+        esac
+    done < <(dr_kit_refs)
+    return 1
 }
 
 # dr_dir_hash <dir> - one digest for a whole directory tree.
@@ -1092,6 +1223,25 @@ dr_dir_hash() {
 # dr_kit_hash <dir> - a digest of the whole kit, not just spec.yaml, because
 # initFiles and anything else in the directory change what the sandbox gets.
 dr_kit_hash() { dr_dir_hash "$1"; }
+
+# dr_kit_hash_all - one digest covering every kit in DRAUGR_KIT, in order.
+#
+# Order is part of the digest because it is part of the meaning: the same two
+# kits applied the other way round can build a different sandbox.
+#
+# A remote reference contributes its reference STRING rather than its contents,
+# which is the only honest option - hashing it would mean fetching an OCI image
+# on every dr-up, and a mutable tag would defeat that anyway. So a tag that moved
+# under you is drift Draugr cannot see, while a changed local directory is drift
+# it can. dr-kit drift says so rather than implying it checked everything.
+dr_kit_hash_all() {
+    local ref
+    {
+        while IFS= read -r ref; do
+            if [ -d "$ref" ]; then dr_dir_hash "$ref"; else printf '%s\n' "$ref"; fi
+        done < <(dr_kit_refs)
+    } | sha256sum | cut -d' ' -f1
+}
 
 # Where dr-up records the hash it built with, so dr-kit drift is a comparison
 # rather than a guess. Inside .draugr/ because it describes this checkout, not

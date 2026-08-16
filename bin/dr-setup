@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# dr-setup - one-time machine setup: teach WSL's ssh client about *.sbx hosts.
+# dr-setup - one-time machine setup: the ssh bridge, and the kit library.
 #
 # This is the step people miss. `sbx setup ssh` configures the WINDOWS ssh client
 # only. WSL has its own ~/.ssh/config, and Draugr runs in WSL - so without a
 # matching block here, neither `ssh <name>.sbx` nor git's ssh:// transport works,
 # which means dr-sync cannot fetch the agent's commits.
 #
-#   dr-setup           write the block if it is missing
+# It also creates DRAUGR_KIT_STORE, the library of named kits shared across your
+# repositories. Both are machine-level: everything else Draugr does is per-repo.
+#
+#   dr-setup           write the block if it is missing, create the library
 #   dr-setup --force   rewrite it even if something is already there
 #   dr-setup --print   print what would be written, change nothing
 set -euo pipefail
@@ -24,11 +27,17 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --force|-f) force=1 ;;
         --print|-n) print=1 ;;
-        -h|--help)  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) dr_die "unknown option: $1" "Try: dr-setup --help" ;;
     esac
     shift
 done
+
+# No repository is involved here, and dr_load_config takes that in its stride:
+# with no repo argument it lays down the defaults and applies only the user-home
+# layer. That is the right precedence for a machine-level command, and it is what
+# makes DRAUGR_KIT_STORE readable below - including when you have moved it.
+dr_load_config
 
 sbx_exe=$(dr_find_sbx) || dr_die \
     "cannot find sbx.exe" \
@@ -57,7 +66,25 @@ snippet=$(sed \
 
 if [ -n "$print" ]; then
     printf '%s\n' "$snippet"
+    printf '\n# Would also create the kit library at %s\n' "$(dr_kit_store)"
     exit 0
+fi
+
+# The kit library, created here because this is the one command that sets up the
+# MACHINE rather than a repository - and because an empty directory is a much
+# better first encounter than `dr-kit list` explaining what a kit store is.
+#
+# Done before the ssh work so it happens even on the "already configured" exit
+# below: someone re-running dr-setup after upgrading has a working ssh block and
+# no library, which is exactly the case that would otherwise be skipped.
+store=$(dr_kit_store)
+if [ -d "$store" ]; then
+    dr_debug "kit library already at $store"
+else
+    mkdir -p "$store" || dr_die "could not create the kit library at $store"
+    dr_ok "created the kit library at $store"
+    printf '  %sPut a reusable kit there from any repo:  dr-kit save <name>%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
 fi
 
 config="$HOME/.ssh/config"

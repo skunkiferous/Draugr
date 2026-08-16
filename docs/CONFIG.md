@@ -87,15 +87,43 @@ Default empty. A container image to use instead of the agent's default.
 ## What the agent may reach
 
 ### `DRAUGR_KIT`
-Default `.draugr/kit`. A directory, ZIP, git ref or OCI image holding an
-[`sbx` kit](https://docs.docker.com/ai/sandboxes/customize/kits/).
+Default `.draugr/kit`. A **space-separated list** of directories, ZIPs, git refs or OCI images
+holding [`sbx` kits](https://docs.docker.com/ai/sandboxes/customize/kits/).
 
 **Network rules and setup commands are not Draugr keys.** They belong to the kit, which is a
 first-party declarative format that already does the job and works with plain `sbx run --kit` too.
 `dr-init` writes a starter `spec.yaml`; commit it.
 
-`dr-up` warns when the kit has changed since the mound was built, because applying it recreates the
-container — that must be a decision, not a side effect. `dr-kit apply` does it.
+It is a list because `sbx` **merges** kits rather than choosing between them — verified, two mixins on
+one sandbox contributed both their install commands and both their network rules. So a shared kit
+*adds* to the project's:
+
+```bash
+DRAUGR_KIT=".draugr/kit lua"     # this project's kit, plus the library's "lua"
+```
+
+Each entry resolves in order: absolute path → a directory in the repo → a named kit in
+`DRAUGR_KIT_STORE` → anything containing `:` or `@`, passed through as an OCI or git reference. The
+repo is searched before the library so a local directory of the same name always wins.
+
+`dr-up` warns when the list has changed since the mound was built, because applying it recreates the
+container — that must be a decision, not a side effect. `dr-kit apply` does it. A remote reference
+contributes only its *name* to that comparison; a tag that moved under you is drift Draugr cannot see,
+and `dr-kit drift` says so rather than implying a clean bill of health.
+
+### `DRAUGR_KIT_STORE`
+Default `~/.config/draugr/kits`. Your library of named kits, shared across repositories — "the Lua
+toolchain" is a fact about you, not about one repo.
+
+| | |
+|---|---|
+| `dr-kit save <name>` | copy this project's own kit into the library |
+| `dr-kit list` | what is in there, with each `displayName` |
+
+`save` copies rather than symlinks, so editing one side never silently changes the other. Editing the
+library copy does put every repo that uses it into drift until its next `dr-kit apply` — which is the
+point of drift detection, not a flaw in it. For sharing across *machines*, `sbx kit pack` and
+`sbx kit push` already work, and an OCI reference is a valid `DRAUGR_KIT` entry.
 
 ### `DRAUGR_PORTS`
 Default empty. Space-separated `HOST:SANDBOX` pairs, published to Windows loopback:

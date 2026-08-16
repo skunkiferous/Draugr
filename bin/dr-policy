@@ -89,7 +89,15 @@ allow)
     dr_sbx policy allow network "$host" --sandbox "$DRAUGR_SANDBOX" || dr_die \
         "could not add the rule"
     dr_ok "allowed $host for $DRAUGR_SANDBOX"
-    printf '  %sGraduate it into the kit:  caps.network.allow in %s/spec.yaml%s\n' \
-        "$_DR_DIM" "$DRAUGR_KIT" "$_DR_OFF" >&2
+    # The project's own kit, not the first name in DRAUGR_KIT: a rule this repo
+    # needed belongs in this repo's kit, not in a library one every other project
+    # would silently inherit it through.
+    if _kit=$(dr_kit_repo_dir); then
+        printf '  %sGraduate it into the kit:  caps.network.allow in %s/spec.yaml%s\n' \
+            "$_DR_DIM" "$_kit" "$_DR_OFF" >&2
+    else
+        printf '  %sGraduate it into a kit so it survives dr-rm:  dr-init%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+    fi
     ;;
 esac

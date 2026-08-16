@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
-# dr-kit - check, show and apply this project's sbx kit.
+# dr-kit - check, show and apply this project's sbx kits, and keep a library.
 #
-# The kit declares what the agent gets INSIDE the mound: network rules, install
+# A kit declares what the agent gets INSIDE the mound: network rules, install
 # commands, ports, environment. Draugr does not parse it - sbx does, and these
 # are thin wrappers so the error text you get is sbx's own.
 #
-# What Draugr adds is noticing when it changes. Applying a kit recreates the
-# container, so dr-up records the kit's hash at creation and reports drift
-# instead of quietly rebuilding your sandbox.
+# DRAUGR_KIT is a LIST, because sbx merges kits rather than choosing between
+# them, so a project kit and a shared "lua" kit from your library compose:
 #
-#   dr-kit validate    check the spec, with sbx's own diagnostics
-#   dr-kit show        what it declares
-#   dr-kit drift       has it changed since the mound was built?
-#   dr-kit apply       apply it - RECREATES the container
+#   DRAUGR_KIT=".draugr/kit lua"
+#
+# What Draugr adds is noticing when they change. Applying a kit recreates the
+# container, so dr-up records a hash of the whole list at creation and reports
+# drift instead of quietly rebuilding your sandbox.
+#
+#   dr-kit validate    check every kit, with sbx's own diagnostics
+#   dr-kit show        what they declare
+#   dr-kit drift       have they changed since the mound was built?
+#   dr-kit apply       apply them - RECREATES the container
+#   dr-kit list        the named kits in your library
+#   dr-kit save NAME   copy this project's kit into the library as NAME
 set -euo pipefail
 
 DR_PROG=dr-kit
@@ -26,60 +33,193 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # take that as a failure.
 action=${1:-show}
 case "$action" in
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    validate|show|drift|apply) shift || : ;;
-    *) dr_die "unknown action: $action" "One of: validate, show, drift, apply" ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    validate|show|drift|apply|list|save) shift || : ;;
+    *) dr_die "unknown action: $action" "One of: validate, show, drift, apply, list, save" ;;
 esac
 
-# -y is read by dr_confirm, which `apply` uses before recreating the container.
+# -y is read by dr_confirm, which `apply` and `save` both use. The lone
+# positional belongs to `save`; anywhere else it is a typo worth naming.
+save_name=
 while [ $# -gt 0 ]; do
     case "$1" in
         -y|--yes) DR_ASSUME_YES=1 ;;
-        *) dr_die "unknown option: $1" "Try: dr-kit --help" ;;
+        -*) dr_die "unknown option: $1" "Try: dr-kit --help" ;;
+        *)
+            [ -z "$save_name" ] || dr_die "unexpected argument: $1" "Try: dr-kit --help"
+            save_name=$1
+            ;;
     esac
     shift
 done
 
 dr_context
 
+store=$(dr_kit_store)
+
+# --- the library --------------------------------------------------------------
+#
+# These two are about the store rather than this project's kit list, so they run
+# before the checks that insist DRAUGR_KIT resolves to something. Saving a kit
+# from a repo whose own kit is fine but whose library entry is misspelled should
+# not be blocked by the misspelling.
+
+case "$action" in
+
+list)
+    # An absent store is the normal state until you save something, so it is an
+    # invitation rather than a warning.
+    if [ ! -d "$store" ]; then
+        dr_info "no kit library yet at $store"
+        printf '  %sSave this project'"'"'s kit as a reusable one:  dr-kit save <name>%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        exit 0
+    fi
+
+    # One level only: a kit is a directory of files, so anything nested inside
+    # one belongs to that kit rather than being a kit of its own.
+    mapfile -t names < <(find "$store" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)
+    if [ ${#names[@]} -eq 0 ]; then
+        dr_info "the kit library at $store is empty"
+        printf '  %sPut one there with:  dr-kit save <name>%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        exit 0
+    fi
+
+    dr_heading "${#names[@]} kit(s) in $store"
+    for n in "${names[@]}"; do
+        # displayName is the one human-written line in a spec, which makes it
+        # worth more in a listing than anything we could compute from the files.
+        desc=$(sed -n 's/^displayName:[[:space:]]*//p' "$store/$n/spec.yaml" 2>/dev/null | head -1)
+        printf '  %-20s %s%s%s\n' "$n" "$_DR_DIM" "${desc:-no displayName}" "$_DR_OFF" >&2
+    done
+    printf '\n  %sUse one by adding its name to DRAUGR_KIT - it ADDS to the project'"'"'s kit:%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %s  DRAUGR_KIT=".draugr/kit %s"%s\n' "$_DR_DIM" "${names[0]}" "$_DR_OFF" >&2
+    exit 0
+    ;;
+
+save)
+    [ -n "$save_name" ] || dr_die "dr-kit save needs a name" "e.g.  dr-kit save lua"
+
+    # The name becomes a directory AND is what a bare DRAUGR_KIT entry is matched
+    # against, so a slash or a leading dot would resolve somewhere unintended.
+    case "$save_name" in
+        */*|.*|*[!A-Za-z0-9._-]*)
+            dr_die "'$save_name' is not a usable kit name" \
+                "Letters, digits, dot, dash and underscore. No slashes." ;;
+    esac
+
+    # The project's OWN kit, not whatever happens to be first in the list: saving
+    # a library kit back into the library under a second name is not what anyone
+    # means by "save this project's kit".
+    src=$(dr_kit_repo_dir) || dr_die \
+        "this project has no kit of its own to save" \
+        "DRAUGR_KIT is '$DRAUGR_KIT', and none of it resolves inside $DR_REPO." \
+        "Generate a starter one with:  dr-init"
+
+    # Overwriting is the destructive case, and its blast radius is every OTHER
+    # repo pointing at this name - which is exactly what the prompt has to say,
+    # because the repo you are standing in is not the one that will be surprised.
+    dest="$store/$save_name"
+    if [ -d "$dest" ]; then
+        dr_warn "'$save_name' already exists in the library"
+        printf '  %s%s%s\n' "$_DR_DIM" "$dest" "$_DR_OFF" >&2
+        printf '  %sEvery repo using it would get the new version at its next dr-up.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        dr_confirm "Overwrite it?" || dr_die "cancelled"
+        rm -rf "$dest"
+    fi
+
+    # A copy, not a symlink: symlinks on a Windows drive need privilege, and a
+    # library that silently tracked one repo's edits would be a shared mutable
+    # dependency nobody asked for.
+    mkdir -p "$store"
+    cp -r "$src" "$dest" || dr_die "could not copy $src to $dest"
+    dr_ok "saved $src as '$save_name'"
+    printf '  %sUse it from any repo by adding it to DRAUGR_KIT:%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %s  DRAUGR_KIT=".draugr/kit %s"%s\n' "$_DR_DIM" "$save_name" "$_DR_OFF" >&2
+    printf '  %sThis is a COPY. Editing one does not change the other, and editing%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sthe library copy makes every repo using it drift until dr-kit apply.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    exit 0
+    ;;
+esac
+
+# --- this project's kit list --------------------------------------------------
+
 [ -n "$DRAUGR_KIT" ] || dr_die \
     "DRAUGR_KIT is empty, so this project has no kit" \
     "Generate a starter one with:  dr-init"
 
-# dr_kit_dir resolves it exactly as dr-up does, so what this command checks is
-# what dr-up would actually pass to sbx.
-kit=$(dr_kit_dir) || dr_die \
-    "no kit directory for DRAUGR_KIT=$DRAUGR_KIT" \
-    "That value came from ${DR_ORIGIN[DRAUGR_KIT]}." \
-    "Generate a starter one with:  dr-init"
+# Resolved through the same helpers dr-up uses, so what these commands check is
+# exactly what dr-up would hand to sbx - a wrapper that resolved differently
+# would be worse than no wrapper.
+mapfile -t refs < <(dr_kit_refs)
+mapfile -t missing < <(dr_kit_missing)
 
-kit_win=$(dr_path_win "$kit")
+# Named, but not fatal on its own: one entry of three failing to resolve still
+# leaves two worth checking, and the report is more useful than a refusal.
+for m in "${missing[@]+"${missing[@]}"}"; do
+    dr_warn "no kit found for '$m'"
+    printf '  %sLooked in %s and in the kit store %s%s\n' \
+        "$_DR_DIM" "$DR_REPO" "$store" "$_DR_OFF" >&2
+done
+
+[ ${#refs[@]} -gt 0 ] || dr_die \
+    "none of DRAUGR_KIT resolves to a kit" \
+    "DRAUGR_KIT is '$DRAUGR_KIT', from ${DR_ORIGIN[DRAUGR_KIT]}." \
+    "Generate a starter one with:  dr-init" \
+    "What is already in your library:  dr-kit list"
+
 hash_file=$(dr_kit_stamp)
+
+# sbx.exe needs a Windows path for a directory; a remote reference goes through
+# as it stands. Precomputed once so every action below spells them the same way.
+kit_args=()
+for r in "${refs[@]}"; do
+    # dr_path_win_kit rather than dr_path_win, so a library kit on WSL's ext4 -
+    # which is where DRAUGR_KIT_STORE points by default - gets its UNC spelling
+    # instead of being refused. Kits are read on the host, never bind-mounted.
+    if [ -d "$r" ]; then
+        kit_args+=("$(dr_path_win_kit "$r")") || dr_die \
+            "cannot spell $r in a way sbx.exe can read" \
+            "Kits outside /mnt/<drive> need \$WSL_DISTRO_NAME, which WSL sets."
+    else
+        kit_args+=("$r")
+    fi
+done
 
 case "$action" in
 
 validate)
     # sbx's own words, deliberately. A wrapper that reworded these would be one
     # more thing to keep in sync with a schema we do not own.
-    dr_sbx kit validate "$kit_win" || dr_die \
-        "the kit is not valid" \
-        "The message above is sbx's own. Schema: https://docs.docker.com/ai/sandboxes/customize/kits/"
+    for k in "${kit_args[@]}"; do
+        dr_sbx kit validate "$k" || dr_die \
+            "the kit is not valid: $k" \
+            "The message above is sbx's own. Schema: https://docs.docker.com/ai/sandboxes/customize/kits/"
+    done
     ;;
 
-# inspect prints what the kit asks for. The pointer matters because the kit is
+# inspect prints what each kit asks for. The pointer matters because the kits are
 # only half the answer - the machine-wide defaults are the other half.
 show)
-    dr_sbx kit inspect "$kit_win"
-    printf '\n  %sThis is what the kit DECLARES. For what is actually in force,%s\n' \
+    for k in "${kit_args[@]}"; do
+        dr_heading "$k"
+        dr_sbx kit inspect "$k"
+    done
+    printf '\n  %sThis is what the kits DECLARE, and they are merged rather than%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sincluding the machine-wide defaults you did not write:  dr-policy%s\n' \
+    printf '  %sranked. For what is actually in force, defaults included:  dr-policy%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     ;;
 
 # Drift matters because a kit change is invisible until something behaves oddly:
-# the sandbox keeps whatever it was built with until it is recreated.
+# the sandbox keeps whatever it was built with until it is recreated. With a list
+# that now includes a library kit somebody else's repo edited.
 drift)
-    now=$(dr_kit_hash "$kit")
+    now=$(dr_kit_hash_all)
     if [ ! -f "$hash_file" ]; then
         dr_warn "no record of an applied kit for this repo"
         printf '  %sdr-up records one when it creates the mound.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
@@ -87,11 +227,18 @@ drift)
     fi
     was=$(cat "$hash_file")
     if [ "$now" = "$was" ]; then
-        dr_ok "the kit matches the one the mound was built with"
+        dr_ok "the kit list matches what the mound was built with"
+        # Said out loud rather than implied: a moved OCI tag is drift that no
+        # local hash can see, and a clean report should not suggest otherwise.
+        for r in "${refs[@]}"; do
+            [ -d "$r" ] && continue
+            printf '  %s%s is a remote reference - only its NAME is compared.%s\n' \
+                "$_DR_DIM" "$r" "$_DR_OFF" >&2
+        done
     else
-        dr_warn "the kit has changed since the mound was built"
+        dr_warn "the kit list has changed since the mound was built"
         printf '  %sThe running sandbox still has the OLD rules and setup.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %sApply it (recreates the container):  dr-kit apply%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sApply them (recreates the container):  dr-kit apply%s\n' "$_DR_DIM" "$_DR_OFF" >&2
         exit 1
     fi
     ;;
@@ -100,7 +247,7 @@ drift)
 # volumes and the clone survive, but anything installed by hand inside does not.
 apply)
     dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
-        "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up  (which applies the kit)"
+        "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up  (which applies the kits)"
 
     # Spell out the cost before asking, not after: "recreates the container" is
     # not something to discover from a prompt you already clicked through.
@@ -109,14 +256,21 @@ apply)
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %sby hand inside the mound does not, and a running agent is interrupted.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    dr_confirm "Apply $DRAUGR_KIT to $DRAUGR_SANDBOX?" || dr_die "cancelled"
+    for k in "${kit_args[@]}"; do
+        printf '    %s\n' "$k" >&2
+    done
+    dr_confirm "Apply ${#kit_args[@]} kit(s) to $DRAUGR_SANDBOX?" || dr_die "cancelled"
 
-    dr_sbx kit add "$kit_win" --sandbox "$DRAUGR_SANDBOX" || dr_die \
-        "could not apply the kit" \
-        "sbx refuses on sandboxes created before kits shipped; dr-up --recreate rebuilds one."
+    # One at a time, in order, because that is how sbx merges them - and a
+    # failure halfway names the kit that failed rather than the whole list.
+    for k in "${kit_args[@]}"; do
+        dr_sbx kit add "$k" --sandbox "$DRAUGR_SANDBOX" || dr_die \
+            "could not apply $k" \
+            "sbx refuses on sandboxes created before kits shipped; dr-up --recreate rebuilds one."
+    done
 
     mkdir -p "$DR_REPO/.draugr"
-    dr_kit_hash "$kit" > "$hash_file"
-    dr_ok "applied, and recorded the new kit hash"
+    dr_kit_hash_all > "$hash_file"
+    dr_ok "applied ${#kit_args[@]} kit(s), and recorded the new hash"
     ;;
 esac

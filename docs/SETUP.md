@@ -69,6 +69,11 @@ git transport works from WSL — which is how `dr-sync` moves the agent's commit
 `dr-setup` writes the block with your Windows username filled in. It is idempotent, and
 `dr-setup --print` shows what it would write without writing it.
 
+It also creates [`DRAUGR_KIT_STORE`](CONFIG.md#draugr_kit_store) — `~/.config/draugr/kits` by
+default — your library of named kits. These are the two machine-level things Draugr needs;
+everything after this is per-repository. The library starts empty, and `dr-kit save <name>` from any
+project puts a reusable kit in it.
+
 ## 5. Check everything
 
 ```bash

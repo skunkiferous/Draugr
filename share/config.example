@@ -59,6 +59,16 @@
 # reference. Empty disables kit loading entirely.
 #DRAUGR_KIT=.draugr/kit
 
+# A LIST: sbx merges kits rather than choosing between them, so a shared kit
+# ADDS to the project's. Each entry is looked for as an absolute path, then in
+# the repo, then in the kit store below, then treated as an OCI/git reference.
+#DRAUGR_KIT=".draugr/kit lua"
+
+# Your library of named kits, shared across repositories. Put one there with
+# `dr-kit save lua` from the repo whose kit you want to reuse, and see what is
+# already there with `dr-kit list`.
+#DRAUGR_KIT_STORE=~/.config/draugr/kits
+
 # --- Ports and extra material -----------------------------------------------
 
 # Published to Windows loopback. Applied at creation; use dr-ports mid-session.

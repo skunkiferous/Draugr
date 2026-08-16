@@ -215,15 +215,24 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
     # The kit carries the network rules, so a missing one means the mound will
     # be built with no allow-list at all.
     dr_load_config "$repo"
+
+    # DR_REPO is what dr_kit_resolve searches for a repo-relative entry. dr-doctor
+    # reaches this point without dr_context - it deliberately keeps running where
+    # dr_context would have stopped - so it is set here rather than assumed.
+    DR_REPO=$repo
     if [ -n "$DRAUGR_KIT" ]; then
-        kit=$DRAUGR_KIT
-        case "$kit" in /*|*:*) ;; *) kit="$repo/$kit" ;; esac
-        if [ -d "$kit" ] || [ -f "$kit" ]; then
+        # Each entry is reported separately, because "the kit is missing" is the
+        # wrong sentence when two of three resolved and one name is misspelled.
+        mapfile -t _kit_missing < <(dr_kit_missing)
+        if [ ${#_kit_missing[@]} -eq 0 ]; then
             ok "kit" "$DRAUGR_KIT"
         else
-            soft "kit" "$DRAUGR_KIT does not exist" \
-                "Network rules and setup commands live in the kit." \
-                "Create a starter one with:  dr-init"
+            for _k in "${_kit_missing[@]}"; do
+                soft "kit '$_k'" "not found" \
+                    "Looked in $repo and in the kit store $(dr_kit_store)." \
+                    "Network rules and setup commands live in the kit." \
+                    "Your library:  dr-kit list      A starter kit:  dr-init"
+            done
         fi
     fi
 else

@@ -277,6 +277,30 @@ sandbox was built with, because applying it recreates the container. `dr-kit val
 before you find out the hard way. `dr-policy --allow <host>` opens a hole in a *running* sandbox
 when you need one now — treat that as temporary and graduate it into the kit.
 
+**A library of named kits**
+
+"The Lua toolchain" is a fact about *you*, not about one repository. `DRAUGR_KIT` is a space-separated
+list, and `sbx` **merges** kits rather than choosing between them — verified: two mixins on one
+sandbox contributed both their install commands and both their network rules. So a shared kit *adds*
+to the project's rather than replacing it:
+
+```bash
+dr-kit save lua                  # from the repo that already has the kit you want to reuse
+dr-kit list                      # what is in your library
+
+# then in any other Lua project's .draugr.conf:
+DRAUGR_KIT=".draugr/kit lua"     # its own kit, plus the shared one
+```
+
+The library lives at `DRAUGR_KIT_STORE`, `~/.config/draugr/kits` by default. That is on WSL's own
+ext4, which is deliberate and worth one line of explanation: a *workspace* cannot live there, because
+the microVM cannot bind-mount a path behind the Windows network redirector — but a *kit* is only read
+on the host and packed, so the UNC spelling works. Measured end to end.
+
+`save` copies rather than links, so no repo silently changes another. Editing the library copy does
+put every repo using it into drift until its next `dr-kit apply` — which is the point of drift
+detection rather than a flaw in it.
+
 **Ports and extra material**
 
 ```bash
@@ -462,7 +486,8 @@ copy and must never overwrite what the agent has learned since.
 | `dr-doctor` | Check every precondition and say exactly what to fix |
 | `dr-config` | The merged config, with the origin of each value |
 | `dr-scan` | Find credential-shaped files the agent would be able to read |
-| `dr-kit` | `validate`, `show`, `apply` this project's kit — and warn when it has drifted |
+| `dr-kit` | `validate`, `show`, `apply` this project's kits — and warn when they have drifted |
+| `dr-kit save`/`list` | keep a library of named kits, shared across repositories |
 | `dr-policy` | Show the network rules in force; `--allow <host>` for a temporary hole |
 | `dr-ports` | Publish a port to an already-running sandbox |
 | `dr-code` | Open VS Code Remote-SSH into the mound, on the agent's clone |

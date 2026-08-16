@@ -121,11 +121,14 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 
 @test "dr-up: a missing default kit is silent, a missing configured one warns" {
     DR_MOCK_STATE=absent run dr-up
-    [[ "$output" != *"no kit at"* ]]
+    [[ "$output" != *"no kit found"* ]]
 
+    # Reported by the name you wrote, not by a resolved path: a bare entry is
+    # searched for in two places, so "no kit at /repo/nope" would hide half of
+    # where Draugr actually looked.
     DRAUGR_KIT=.draugr/nope DR_MOCK_STATE=absent run dr-up
     [ "$status" -eq 0 ]
-    [[ "$output" == *"no kit at"* ]]
+    [[ "$output" == *"no kit found for '.draugr/nope'"* ]]
 }
 
 @test "dr-up: --print runs nothing" {

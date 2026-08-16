@@ -15,7 +15,7 @@ Nothing yet.
 ## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 258 tests run in CI.
+Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 303 tests run in CI.
 
 ### The daily loop
 
@@ -55,7 +55,13 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 258 tests run in CI.
   the day that changes.
 - `DRAUGR_REQUIRE_CLEAN` refuses to start a session with uncommitted work the clone cannot contain.
 - `dr-rm` refuses to destroy unfetched commits or unexported memory.
-- `dr-kit` wraps `sbx kit` and detects drift between the kit and the mound built from it.
+- `dr-kit` wraps `sbx kit` and detects drift between the kits and the mound built from them.
+- `DRAUGR_KIT` is a **list**, because `sbx` merges kits rather than choosing between them — so a
+  shared kit adds to the project's instead of replacing it. `dr-kit save <name>` and `dr-kit list`
+  keep a library of named kits at `DRAUGR_KIT_STORE` (`~/.config/draugr/kits`), which any repo can
+  name in one word. `dr-setup` creates it, alongside the ssh block — those are the only two
+  machine-level things Draugr sets up. Drift covers the whole list, so a library kit another project
+  edited shows up here.
 - `dr-policy` shows the network rules actually in force, including the ~190 machine-wide defaults
   that apply whether or not your kit mentions them.
 
