@@ -64,13 +64,24 @@ else
 fi
 
 # --- the kit ---------------------------------------------------------------
-kitdir="$repo/${DRAUGR_KIT:-.draugr/kit}"
-case "${DRAUGR_KIT:-}" in /*) kitdir=$DRAUGR_KIT ;; esac
+# DRAUGR_KIT is a list, and dr-init writes the project's OWN kit - the first
+# entry. Using the whole value would create a directory literally named
+# ".draugr/kit lua" the moment someone has added a library kit to the list.
+read -ra _kit_entries <<< "${DRAUGR_KIT:-.draugr/kit}"
+kitentry=${_kit_entries[0]:-.draugr/kit}
+kitdir="$repo/$kitentry"
+case "$kitentry" in /*) kitdir=$kitentry ;; esac
+
 if [ -f "$kitdir/spec.yaml" ] && [ -z "$force" ]; then
     dr_info "kept existing kit at ${kitdir#"$repo"/}"
 else
     mkdir -p "$kitdir"
-    sed -e "s|@NAME@|$name|g" -e "s|@AGENT@|${DRAUGR_AGENT:-claude}|g" \
+    # Two substitutions from one project name: @SLUG@ for the `name:` field,
+    # which sbx requires to be lowercase alphanumeric with hyphens, and @NAME@
+    # for the free-text fields, which should read the way you spell it.
+    sed -e "s|@SLUG@|$(dr_kit_slug "$name")|g" \
+        -e "s|@NAME@|$name|g" \
+        -e "s|@AGENT@|${DRAUGR_AGENT:-claude}|g" \
         "$DRAUGR_SHARE/kit.example/spec.yaml" > "$kitdir/spec.yaml"
     dr_ok "wrote ${kitdir#"$repo"/}/spec.yaml"
     wrote=$((wrote + 1))

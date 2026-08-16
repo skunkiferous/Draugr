@@ -15,7 +15,7 @@ Nothing yet.
 ## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 310 tests run in CI.
+Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 320 tests run in CI.
 
 ### The daily loop
 
@@ -61,6 +61,10 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 310 tests run in CI.
 - `DRAUGR_REQUIRE_CLEAN` refuses to start a session with uncommitted work the clone cannot contain.
 - `dr-rm` refuses to destroy unfetched commits or unexported memory.
 - `dr-kit` wraps `sbx kit` and detects drift between the kits and the mound built from them.
+- The kit `name:` `dr-init` writes is a slug of the project name, because `sbx` requires lowercase
+  alphanumeric with hyphens. A repository called `TabuLua` previously produced a kit that failed at
+  `dr-up` with an sbx error two steps from the cause; `displayName` keeps the original spelling.
+  `dr-up` now names `dr-kit validate` when creation fails and kits are in play.
 - `DRAUGR_KIT` is a **list**, because `sbx` merges kits rather than choosing between them — so a
   shared kit adds to the project's instead of replacing it. `dr-kit save <name>` and `dr-kit list`
   keep a library of named kits at `DRAUGR_KIT_STORE` (`~/.config/draugr/kits`), which any repo can

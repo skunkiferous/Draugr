@@ -383,3 +383,96 @@ make_kit() {
     [ "$status" -eq 0 ]
     grep -q 'Host \*\.sbx' "$HOME/.ssh/config"
 }
+
+# --- the kit name sbx will accept ---------------------------------------------
+#
+# dr-init used to drop the repository's directory name straight into the kit's
+# `name:` field. sbx requires "lowercase alphanumeric with hyphens, 1-64 chars",
+# so any project with a capital in it - TabuLua, MyApp - got a kit that failed at
+# dr-up with an sbx error two steps removed from the cause. Every slug below was
+# checked against real sbx kit validate, not against a reading of its error text.
+
+@test "dr_kit_slug: lowercases" {
+    [ "$(dr_kit_slug TabuLua)" = "tabulua" ]
+    [ "$(dr_kit_slug UPPER)" = "upper" ]
+}
+
+@test "dr_kit_slug: anything outside the permitted set becomes a hyphen" {
+    [ "$(dr_kit_slug my_project)" = "my-project" ]
+    [ "$(dr_kit_slug "My App")" = "my-app" ]
+    [ "$(dr_kit_slug "Foo.Bar-Baz")" = "foo-bar-baz" ]
+}
+
+@test "dr_kit_slug: runs of hyphens collapse" {
+    # "My  App" would otherwise give "my--app", which sbx rejects.
+    [ "$(dr_kit_slug "My  App")" = "my-app" ]
+}
+
+@test "dr_kit_slug: leading and trailing hyphens are trimmed" {
+    [ "$(dr_kit_slug ---leading)" = "leading" ]
+    [ "$(dr_kit_slug trailing---)" = "trailing" ]
+}
+
+@test "dr_kit_slug: leaves an already-valid name alone" {
+    [ "$(dr_kit_slug my-project-2)" = "my-project-2" ]
+}
+
+@test "dr_kit_slug: caps at 64 characters, without a trailing hyphen" {
+    long=$(printf 'a%.0s' $(seq 1 80))
+    out=$(dr_kit_slug "$long")
+    [ "${#out}" -eq 64 ]
+    [ "${out%-}" = "$out" ]
+}
+
+@test "dr_kit_slug: a name of pure punctuation falls back rather than emptying" {
+    # An empty name fails validation for a second, more confusing reason.
+    [ "$(dr_kit_slug ____)" = "project" ]
+    [ -n "$(dr_kit_slug ...)" ]
+}
+
+@test "dr-init: writes a kit name sbx will accept, from a capitalised repo" {
+    # The exact case that broke: a repo directory with capitals in it.
+    # Beside the repo setup already made: dr_make_win_repo is called in a command
+    # substitution, so its DR_WIN_TMP export never reaches this shell.
+    dir="$(dirname "$REPO")/TabuLua"
+    mkdir -p "$dir"
+    git -C "$dir" init -q -b main
+    git -C "$dir" config user.email t@e.com
+    git -C "$dir" config user.name T
+    printf 'x\n' > "$dir/README.md"
+    git -C "$dir" add -A
+    git -C "$dir" commit -qm first
+    cd "$dir" || return 1
+
+    dr-init >/dev/null 2>&1
+    run grep '^name:' "$dir/.draugr/kit/spec.yaml"
+    [ "$output" = "name: tabulua" ]
+}
+
+@test "dr-init: displayName keeps the original spelling" {
+    # Only `name` is constrained; the human-facing fields should read the way the
+    # project is actually spelled.
+    # Beside the repo setup already made: dr_make_win_repo is called in a command
+    # substitution, so its DR_WIN_TMP export never reaches this shell.
+    dir="$(dirname "$REPO")/TabuLua"
+    mkdir -p "$dir"
+    git -C "$dir" init -q -b main
+    git -C "$dir" config user.email t@e.com
+    git -C "$dir" config user.name T
+    printf 'x\n' > "$dir/README.md"
+    git -C "$dir" add -A
+    git -C "$dir" commit -qm first
+    cd "$dir" || return 1
+
+    dr-init >/dev/null 2>&1
+    run grep '^displayName:' "$dir/.draugr/kit/spec.yaml"
+    [[ "$output" == *"TabuLua"* ]]
+}
+
+@test "dr-init: with a DRAUGR_KIT list, writes only the first entry" {
+    # Otherwise the whole value is used as one path and dr-init creates a
+    # directory literally named ".draugr/kit lua".
+    DRAUGR_KIT=".draugr/kit lua" dr-init >/dev/null 2>&1
+    [ -f "$REPO/.draugr/kit/spec.yaml" ]
+    [ ! -e "$REPO/.draugr/kit lua" ]
+}

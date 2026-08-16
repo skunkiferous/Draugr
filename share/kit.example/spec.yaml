@@ -18,7 +18,10 @@
 # trained to ignore is worse than no warning. Verified against sbx 0.37.1.
 schemaVersion: "2"
 kind: mixin
-name: @NAME@
+# `name` is the one constrained field: sbx requires lowercase alphanumeric with
+# hyphens, so it is a slug of the project name rather than the name itself.
+# displayName and description below are free text and keep the original spelling.
+name: @SLUG@
 displayName: @NAME@ development environment
 description: Network rules and setup for the @NAME@ project.
 

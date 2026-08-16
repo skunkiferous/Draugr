@@ -1144,6 +1144,38 @@ dr_data_dirty_only() {
 # worth having - "the Lua toolchain" is a fact about you, not about one repo, and
 # a library entry ADDS to the project's kit instead of replacing it.
 
+# dr_kit_slug <text> - a string sbx will accept as a kit's `name:` field.
+#
+# sbx's rule, quoted from its own error: "must be lowercase alphanumeric with
+# hyphens, 1-64 chars". dr-init used to drop the repository's directory name in
+# unchanged, so any project with a capital letter in it - TabuLua, MyApp - wrote
+# a kit that validated as INVALID and failed at `dr-up` with an sbx error two
+# steps removed from the cause.
+#
+# Only `name:` is constrained. `displayName:` is free text and keeps the
+# capitals, which is why the two are set from different values in dr-init.
+dr_kit_slug() {
+    local s
+    # Lowercase, then anything outside the permitted set becomes a hyphen. -c is
+    # tr's complement: "every character NOT in this set".
+    s=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')
+
+    # Collapse runs of hyphens, then trim the ends: "My App" would otherwise give
+    # "my--app", and a leading or trailing hyphen is not alphanumeric.
+    while [ "$s" != "${s//--/-}" ]; do s=${s//--/-}; done
+    s=${s#-}; s=${s%-}
+
+    # Truncate before trimming again, because cutting at 64 can expose a hyphen
+    # that was in the middle a moment ago.
+    s=${s:0:64}
+    s=${s%-}
+
+    # A name made entirely of punctuation leaves nothing behind. Better a dull
+    # placeholder than an empty field that fails validation for a second reason.
+    [ -n "$s" ] || s=project
+    printf '%s' "$s"
+}
+
 # dr_kit_store - the library of named kits, shared across repositories.
 dr_kit_store() {
     printf '%s' "${DRAUGR_KIT_STORE%/}"

@@ -20,9 +20,22 @@ dr_test_setup() {
 
 dr_test_teardown() {
     [ -n "${DR_TMP:-}" ] && [ -d "$DR_TMP" ] && rm -rf "$DR_TMP"
-    # DR_WIN_TMP lives on a real drive rather than in $TMPDIR, so nothing else is
-    # going to clean it up. Only set by dr_make_win_repo.
-    [ -n "${DR_WIN_TMP:-}" ] && [ -d "$DR_WIN_TMP" ] && rm -rf "$DR_WIN_TMP"
+
+    # The Windows-drive scratch directory lives outside $TMPDIR, so nothing else
+    # is going to clean it up. Its name is DERIVED from $DR_TMP rather than
+    # remembered in a variable, because every caller writes
+    #
+    #     REPO=$(dr_make_win_repo)
+    #
+    # and a command substitution is a subshell: an `export` inside it never
+    # reaches this function. That is how 5311 directories accumulated under
+    # C:\Temp before anyone looked - roughly thirty per test run, silently.
+    if [ -n "${DR_WIN_TMP:-}" ] && [ -d "$DR_WIN_TMP" ]; then
+        rm -rf "$DR_WIN_TMP"
+    elif [ -n "${DR_TMP:-}" ]; then
+        local root
+        root=$(dr_win_root 2>/dev/null) && rm -rf "$root/draugr-test.${DR_TMP##*/}"
+    fi
     return 0
 }
 
@@ -170,15 +183,23 @@ dr_mound_commit() {
     git -C "$fake" commit -qm "$msg"
 }
 
-# Sets DR_WIN_TMP (removed by dr_test_teardown) and prints the repo path. Call it
-# as:  repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
+# Prints the repo path. Call it as:
+#   repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
+#
+# The scratch directory is named after $DR_TMP rather than made with mktemp, so
+# that dr_test_teardown can find it again by name. It cannot be handed back in a
+# variable: every caller uses a command substitution, which is a subshell, so an
+# `export` here dies with it - and the directory then lives on a real drive that
+# nothing else cleans. That leaked 5311 directories into C:\Temp before it was
+# noticed, which is the argument for deriving the name instead of passing it.
 dr_make_win_repo() {
     local root name=${1:-testrepo} dir
     root=$(dr_win_root) || return 1
 
-    # mktemp -d -p puts the directory under $root rather than under $TMPDIR, which
-    # is the whole point: the path has to begin /mnt/<letter>/ to be accepted.
-    DR_WIN_TMP=$(mktemp -d -p "$root" draugr-test.XXXXXX) || return 1
+    # Under $root rather than $TMPDIR, which is the whole point: the path has to
+    # begin /mnt/<letter>/ to be accepted.
+    DR_WIN_TMP="$root/draugr-test.${DR_TMP##*/}"
+    mkdir -p "$DR_WIN_TMP" || return 1
     export DR_WIN_TMP
     dir="$DR_WIN_TMP/$name"
 

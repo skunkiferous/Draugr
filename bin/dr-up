@@ -195,9 +195,21 @@ stopped)
 absent)
     dr_info "creating $DRAUGR_SANDBOX for $DR_REPO_WIN"
     dr_debug "sbx $(printf '%q ' "${create_args[@]}")"
-    dr_sbx "${create_args[@]}" || dr_die \
-        "could not create $DRAUGR_SANDBOX" \
-        "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
+    # A kit is the likeliest thing to have made this fail, and sbx says so in its
+    # own vocabulary two steps from the cause - "invalid name" is about a field
+    # in a YAML file you did not know it had read. So when kits are in play,
+    # name the command that checks them before offering the debug flag.
+    if dr_kit_refs >/dev/null; then
+        dr_sbx "${create_args[@]}" || dr_die \
+            "could not create $DRAUGR_SANDBOX" \
+            "The message above is sbx's own. If it mentions the kit, check it with:" \
+            "  dr-kit validate" \
+            "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
+    else
+        dr_sbx "${create_args[@]}" || dr_die \
+            "could not create $DRAUGR_SANDBOX" \
+            "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
+    fi
     dr_ok "created $DRAUGR_SANDBOX"
 
     # Record what the kit looked like at creation, so a later edit is detectable
