@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# A stand-in for the ssh client. Records its argv so tests can assert on the
+# remote command Draugr built, and returns without contacting anything.
+#
+#   DR_MOCK_LOG      file to append the argv to, prefixed "ssh " so the existing
+#                    calls() helper can pick it out alongside the sbx lines
+#   DR_MOCK_FAIL     containing "ssh" makes every connection fail
+#   DR_MOCK_SSH_RC   what to exit with otherwise, standing in for the status the
+#                    far side returned - which for dr-go is the agent's own
+#
+# There is no attempt to interpret the remote command. What matters is that the
+# string Draugr assembles is the string that would reach the mound's shell, and
+# the tests decode it themselves.
+set -euo pipefail
+
+if [ -n "${DR_MOCK_LOG:-}" ]; then
+    printf 'ssh %s\n' "$*" >> "$DR_MOCK_LOG"
+fi
+
+case " ${DR_MOCK_FAIL:-} " in
+    *" ssh "*) printf 'mock ssh: connection failed\n' >&2; exit 255 ;;
+esac
+
+exit "${DR_MOCK_SSH_RC:-0}"

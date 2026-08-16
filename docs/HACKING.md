@@ -330,12 +330,20 @@ An unknown verb suggests near matches by substring rather than just refusing.
 
 ---
 
-## Pattern: mocking `sbx`
+## Pattern: mocking `sbx` and `ssh`
 
 Almost everything Draugr does is *building a command line* for a Windows binary
 that needs a hypervisor. `tests/mocks/sbx` stands in for it: it appends its argv
 to `$DR_MOCK_LOG` and replays canned `ls --json` output shaped by `$DR_MOCK_STATE`.
 Tests then assert on the recorded argv.
+
+`tests/mocks/ssh` does the same for attaching, logging with an `ssh` prefix so
+the same `calls` helper picks it out of the one log. Two things to know when writing tests
+against it. The agent's command line arrives base64-encoded inside the rcfile, so
+tests decode it rather than asserting on the wrapper — the decoded string is what
+the mound's bash will actually run. And `git` fetches over `ssh://` too, so a test
+that cares about *which* connections happened wants `DRAUGR_AUTO_SYNC=false`, or
+`head -1`: the attach is always the first connection of a session.
 
 So the rule is: **keep the decisions separate from the invocation.** Work out
 flags into a variable or array, then call `dr_sbx` once with them. A function
@@ -627,8 +635,8 @@ rather than padding with prose.
 ```bash
 sudo apt install jq shellcheck bats     # jq is a runtime dependency; the others are for development
 
-shellcheck --external-sources --shell=bash lib/common.sh install.sh tests/mocks/sbx bin/*
-bats tests/
+shellcheck --external-sources --shell=bash lib/common.sh install.sh tests/mocks/* bin/*
+bats -j 8 tests/                        # -j 8 takes the suite from ~280s to ~70s
 ```
 
 Both must be clean before a commit. CI runs exactly these, with **no**
@@ -636,9 +644,10 @@ shellcheck exclusions — the two legitimately-unused-looking variables carry
 targeted `# shellcheck disable=SC2034` comments instead, so the check stays live
 for real typos.
 
-`tests/mocks/sbx` stands in for the real binary: it records the argv it was
-called with and replays canned `ls --json` output, so tests can assert on the
-command line Draugr built without a hypervisor anywhere near them.
+`tests/mocks/sbx` and `tests/mocks/ssh` stand in for the real binaries: they
+record the argv they were called with, and the sbx one replays canned `ls --json`
+output, so tests can assert on the command line Draugr built without a hypervisor
+anywhere near them.
 
 ---
 

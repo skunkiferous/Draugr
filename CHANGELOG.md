@@ -15,7 +15,7 @@ Nothing yet.
 ## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 355 tests run in CI.
+Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 384 tests run in CI.
 
 ### The daily loop
 
@@ -29,6 +29,22 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 355 tests run in CI.
   deliberately reaches past the ones Draugr named, because a running mound holds a Hyper-V microVM
   open whoever created it. Needs no repository.
 
+### Attaching
+
+- **Ctrl+Z works.** It suspends the agent and hands you a shell inside the mound; `fg` returns to the
+  session as you left it. One window, no second connection, no restart.
+- `dr-go` and `dr-shell` attach over **ssh** rather than `sbx run` / `sbx exec`. Those reach the
+  sandbox through `sbx.exe`, a *Windows* binary WSL runs over interop, so Ctrl+Z suspends the relay
+  instead of the agent: the keystroke never arrives, the daemon stops hearing from its client, and
+  the session dies with `inspect exec: context deadline exceeded`. Job control was the reason for
+  running in WSL at all, and the original `sbx run` attach threw it away.
+- The agent runs as a job of an interactive bash, started from `PROMPT_COMMAND`. Starting it from
+  the rcfile instead hangs — bash has not enabled job control while it is still running its startup
+  files. A normal exit is unchanged: the session ends and `dr-go` returns the agent's status, which
+  works because a suspended job leaves `$?` at 148 and an exited one does not.
+- `DRAUGR_ATTACH=sbx` keeps the old transport, without Ctrl+Z. `dr-shell --root` uses `sudo -s`
+  under ssh, since ssh authenticates as the agent and the agent has passwordless sudo.
+
 ### Configuration
 
 - Four layers — built-in defaults, `~/.config/draugr/config`, `<repo>/.draugr.conf`,
@@ -40,7 +56,7 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 355 tests run in CI.
   warned about at the top, which is the wrong end of a thirty-row table to put the one line
   explaining why the table is wrong — and a skipped layer is otherwise indistinguishable from one
   that set nothing. Exit status stays `0`: nothing failed. `--files` marks it too.
-- 28 keys, all documented in [docs/CONFIG.md](docs/CONFIG.md), with a test that fails if a key
+- 29 keys, all documented in [docs/CONFIG.md](docs/CONFIG.md), with a test that fails if a key
   exists in code but not in the documentation.
 - `DRAUGR_STOP_ON_EXIT` stops the mound when you leave the agent — last of all, after the sync, the
   memory export and the data pull, each of which needs it alive. Off by default: an idle mound holds

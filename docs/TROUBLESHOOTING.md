@@ -89,10 +89,19 @@ To run one command non-interactively:
 dr-shell -- <command>
 ```
 
-### Ctrl+Z suspends the agent and the terminal misbehaves
+### Ctrl+Z kills the session with "inspect exec: context deadline exceeded"
 
-Job control across the sandbox boundary does not work the way it does locally. Use Ctrl+D to leave
-the agent; `dr-stop` afterwards if you want the mound shut down.
+You are on `DRAUGR_ATTACH=sbx`. Check with `dr-config DRAUGR_ATTACH`; the default is `ssh`, where
+Ctrl+Z works properly.
+
+`sbx run` and `sbx exec` reach the sandbox through `sbx.exe`, a *Windows* binary that WSL runs over
+interop, so Ctrl+Z suspends the relay rather than anything inside the mound. The keystroke never
+arrives, the daemon stops hearing from its client, and a few seconds later the session dies. Nothing
+in the mound is lost — the sandbox never noticed — but the agent's terminal is gone, and anything it
+had not committed with it.
+
+On `ssh`, Ctrl+Z suspends the agent and leaves you in a shell **inside the mound**. `fg` puts you
+back, with the session as you left it.
 
 ### The agent seems to have forgotten everything
 

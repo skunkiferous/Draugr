@@ -6,6 +6,9 @@
 # DRAUGR_AGENT_ARGS and they are passed for you; --bare then means "not today".
 # Leaving the agent returns you here; the mound keeps running until you dr-stop it.
 #
+# Ctrl-Z suspends the agent and drops you into a shell INSIDE the mound; fg puts
+# you back, with the session as you left it. Ctrl-D leaves as usual.
+#
 #   dr-go                  go, with DRAUGR_AGENT_ARGS if you have set any
 #   dr-go -- --continue    go, resuming the agent's last session
 #   dr-go --bare           go with NO agent arguments, ignoring DRAUGR_AGENT_ARGS
@@ -40,6 +43,7 @@ while [ $# -gt 0 ]; do
 done
 
 dr_context
+dr_attach_check
 
 # Fall back to the configured arguments only when the command line said nothing.
 # The command line REPLACES them rather than adding to them, which is the same
@@ -109,11 +113,30 @@ else
     dr_info "attaching to $DRAUGR_SANDBOX ($DRAUGR_AGENT)"
 fi
 
-# ${arr[0]+-- "${arr[@]}"} expands to nothing at all when the array is empty,
-# rather than to one empty string - so no stray "--" reaches the agent. Needed
-# because `set -u` treats an empty array expansion as an error on bash 4.3.
-dr_sbx run --name "$DRAUGR_SANDBOX" \
-    ${agent_args[0]+-- "${agent_args[@]}"} || rc=$?
+if [ "$DRAUGR_ATTACH" = ssh ]; then
+    # The agent runs as a job of an interactive shell in the mound, so Ctrl-Z
+    # gets you that shell instead of killing the session. See dr_attach_rc.
+    mound=$(dr_path_mound "$DR_REPO") || dr_die \
+        "$DR_REPO is not on a Windows drive, so it has no path inside the mound"
+    dr_info "Ctrl-Z for a shell in the mound, fg to come back"
+
+    # DRAUGR_AGENT=shell means "no agent, just put me in there", so there is no
+    # command to start and the rcfile would have nothing to do.
+    if [ "$DRAUGR_AGENT" = shell ]; then
+        dr_ssh_attach "$mound" || rc=$?
+    else
+        # ${arr[0]+"${arr[@]}"} expands to nothing when the array is empty rather
+        # than to one empty string, which would reach the agent as a blank
+        # argument. Needed because `set -u` rejects an empty array expansion on
+        # bash 4.3.
+        dr_ssh_attach "$mound" "$DRAUGR_AGENT" ${agent_args[0]+"${agent_args[@]}"} || rc=$?
+    fi
+else
+    # ${arr[0]+-- "${arr[@]}"} expands to nothing at all when the array is empty,
+    # rather than to one empty string - so no stray "--" reaches the agent.
+    dr_sbx run --name "$DRAUGR_SANDBOX" \
+        ${agent_args[0]+-- "${agent_args[@]}"} || rc=$?
+fi
 
 # The agent exiting is normal, and so is a non-zero code from it, so neither is
 # reported as a Draugr failure. What matters is that we are back on the host.

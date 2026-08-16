@@ -16,8 +16,10 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint
-        # bin/* have no extension, so they are listed explicitly.
-        run: shellcheck --external-sources --shell=bash lib/common.sh install.sh tests/mocks/sbx bin/*
+        # bin/* and tests/mocks/* have no extension, so they are globbed rather
+        # than named - a new mock is then linted without anyone remembering to
+        # add it here.
+        run: shellcheck --external-sources --shell=bash lib/common.sh install.sh tests/mocks/* bin/*
 
       - name: Comment density
         # Draugr's premise is that you can read a file before you trust it, so
@@ -52,7 +54,7 @@ jobs:
         # set -o pipefail keeps bats's exit status from being masked by tee.
         run: |
           set -o pipefail
-          bats tests/ | tee bats.log
+          bats -j 8 tests/ | tee bats.log
 
       - name: Fail if any test skipped
         # A skip is invisible in a green tick: if /mnt/c ever stops being

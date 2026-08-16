@@ -379,7 +379,7 @@ DR_TRUST_FILE="$DR_CONFIG_USER/trusted"
 # against it, and an unknown DRAUGR_* in a config file is reported rather than
 # silently ignored.
 DR_KEYS=(
-    DRAUGR_AGENT DRAUGR_AGENT_ARGS DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
+    DRAUGR_AGENT DRAUGR_AGENT_ARGS DRAUGR_ATTACH DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
     DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_KIT_STORE DRAUGR_PORTS DRAUGR_MOUNTS
     DRAUGR_DATA DRAUGR_DATA_PUSH DRAUGR_DATA_PULL DRAUGR_DATA_DELETE DRAUGR_DATA_CHMOD
     DRAUGR_DATA_DIFF_MAX
@@ -407,6 +407,20 @@ _dr_defaults() {
     # Handed to the agent after "--" on every dr-go. Empty keeps today's
     # behaviour exactly; set it to "--continue" to resume by default.
     DRAUGR_AGENT_ARGS=
+
+    # ssh | sbx - how dr-go and dr-shell get a terminal inside the mound.
+    #
+    # ssh, because it is the only one where Ctrl-Z works. sbx.exe is a WINDOWS
+    # binary reached through WSL interop, and suspending it suspends the relay
+    # rather than anything in the sandbox: the session stops responding and dies
+    # a few seconds later with "inspect exec: context deadline exceeded".
+    # Measured against sbx 0.37.1, both ways.
+    #
+    # Over ssh the remote pty does its own job control, so Ctrl-Z stops the agent
+    # and hands you a shell in the mound, and fg puts you back. That is the
+    # reason Draugr runs in WSL at all.
+    DRAUGR_ATTACH=ssh
+
     DRAUGR_SANDBOX=              # empty => draugr-<repo leaf>
     DRAUGR_MEMORY=               # empty => sbx default (50% of host RAM, max 32 GiB)
     DRAUGR_CPUS=                 # empty => sbx default (all)
@@ -875,6 +889,122 @@ dr_require_tty() {
         "$1 needs a terminal" \
         "It attaches an interactive session, which cannot work from a pipe or a script." \
         "To run one command non-interactively instead:  dr-shell -- <command>"
+}
+
+# ---------------------------------------------------------------------------
+# Attaching
+#
+# Two transports, and they are NOT equivalent.
+#
+# `sbx run` and `sbx exec` reach the mound through sbx.exe, which is a Windows
+# binary that WSL runs over interop. The terminal you are typing at belongs to
+# WSL; the process reading it does not. Ctrl-Z therefore suspends the relay
+# rather than anything inside the sandbox: the keystroke never arrives, the
+# daemon stops hearing from its client, and a few seconds later the whole
+# session dies with "inspect exec: context deadline exceeded".
+#
+# ssh has no such seam. The client is a native Linux binary and the far end is a
+# real pty, so job control happens inside the sandbox where it belongs - Ctrl-Z
+# stops the agent and hands you the mound's own shell, fg puts you back. Both
+# measured against sbx 0.37.1; see docs/WORKFLOW.md.
+#
+# That is why DRAUGR_ATTACH defaults to ssh, and it is the reason Draugr runs in
+# WSL rather than PowerShell in the first place.
+# ---------------------------------------------------------------------------
+
+# The Host pattern dr-setup writes into ~/.ssh/config - the same one git and
+# rsync already use, so attaching needs no port, no key and no new setup.
+dr_ssh_host() { printf '%s.sbx' "$DRAUGR_SANDBOX"; }
+
+# Checked before anything is started, so a typo in the setting is a clean
+# refusal rather than a transport silently chosen for you.
+dr_attach_check() {
+    case "$DRAUGR_ATTACH" in
+        ssh|sbx) return 0 ;;
+        *) dr_die "DRAUGR_ATTACH is '$DRAUGR_ATTACH'" \
+                  "Expected ssh (job control works) or sbx (it does not)." \
+                  "It came from ${DR_ORIGIN[DRAUGR_ATTACH]:-somewhere unexpected}." ;;
+    esac
+}
+
+# printf %q over a whole argv. Bash's own quoting, produced by bash here and read
+# back by bash on the far side, which is the only pair guaranteed to agree.
+dr_shquote() {
+    local out='' a
+    for a in "$@"; do out+=" $(printf '%q' "$a")"; done
+    printf '%s' "${out# }"
+}
+
+# dr_attach_rc <command...> - the bash rcfile that starts the agent.
+#
+# The obvious spelling - putting the agent's command straight in the rcfile -
+# HANGS. Bash has not enabled job control by the time it runs its startup files,
+# so the first Ctrl-Z suspends a process that nothing is then able to resume.
+# Starting it from PROMPT_COMMAND instead defers it to the first prompt, by
+# which point the shell owns the terminal and the agent is an ordinary job.
+#
+# 148 is 128 + SIGTSTP: what $? holds after a foreground job is STOPPED rather
+# than finished. It is what keeps the two endings apart -
+#
+#   Ctrl-Z       -> 148 -> stay, and you have the mound's shell
+#   agent exits  -> its own status -> leave, exactly as `sbx run` did
+#
+# and it is not optional. A suspended job does not abandon the rest of its
+# command list, so a bare `agent; exit` ends the session on Ctrl-Z as well.
+# Measured, after writing it that way first.
+dr_attach_rc() {
+    local cmd
+    cmd=$(dr_shquote "$@")
+    # Single quotes throughout: none of this is for us to expand. It is a file to
+    # be read by a bash that has not started yet, in another machine.
+    # shellcheck disable=SC2016
+    printf '%s\n' \
+        '# Written by Draugr at attach time. Overwritten on the next dr-go.' \
+        '[ -f ~/.bashrc ] && . ~/.bashrc' \
+        '_dr_pc=${PROMPT_COMMAND-}' \
+        "PROMPT_COMMAND='PROMPT_COMMAND=\$_dr_pc; $cmd; _dr_s=\$?; [ \$_dr_s -eq 148 ] || exit \$_dr_s'"
+}
+
+# dr_attach_remote <dir> [command...] - the single string handed to ssh.
+#
+# With no command it is a plain interactive shell, which is dr-shell's job. With
+# one it is the agent, started as described above.
+#
+# The rcfile travels base64-encoded rather than as a heredoc. It passes through
+# ssh, which hands it to a remote shell, and every layer in between would
+# otherwise want its own round of quoting; base64 has no metacharacters to
+# argue about.
+dr_attach_remote() {
+    local dir=$1; shift
+    # $HOME is the MOUND's home, expanded over there by the shell ssh hands this
+    # to - which is why it stays in single quotes here.
+    # shellcheck disable=SC2016
+    local rc='$HOME/.cache/draugr/attach-rc' b64
+
+    if [ $# -eq 0 ]; then
+        printf 'cd %s && exec bash -i' "$(printf '%q' "$dir")"
+        return 0
+    fi
+
+    b64=$(dr_attach_rc "$@" | base64 | tr -d '\n')
+    # Same again: every $ in this format string belongs to the far side.
+    # shellcheck disable=SC2016
+    printf 'mkdir -p $HOME/.cache/draugr && printf %%s %s | base64 -d > %s && cd %s && exec bash --rcfile %s -i' \
+        "$b64" "$rc" "$(printf '%q' "$dir")" "$rc"
+}
+
+# dr_ssh_attach <dir> [command...] - hand the terminal over and wait.
+#
+# Returns whatever the far side returned, which the rcfile arranges to be the
+# agent's own status.
+dr_ssh_attach() {
+    local dir=$1 remote; shift
+    remote=$(dr_attach_remote "$dir" "$@")
+    dr_debug "ssh -t $(dr_ssh_host) $remote"
+    # -t because a remote command is given, and without it ssh allocates no pty
+    # at all - the agent would have no terminal to draw on. Callers have already
+    # been through dr_require_tty, so there is one to hand over.
+    ssh -t "$(dr_ssh_host)" "$remote"
 }
 
 # ---------------------------------------------------------------------------

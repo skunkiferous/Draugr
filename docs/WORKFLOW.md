@@ -23,6 +23,27 @@ applying your kit — imports memory, then attaches. Second run it just attaches
 With `DRAUGR_AUTO_SYNC=true` (the default) the `dr-sync` happens for you when you leave the agent, so
 in practice the loop is `dr-go`, then `dr-diff`, then `dr-merge`.
 
+## Ctrl+Z, and the shell you did not have to open
+
+Press **Ctrl+Z** in the agent and it suspends, leaving you at a prompt **inside the mound**, in the
+clone, with the agent's own environment:
+
+```bash
+agent@draugr-myproject:/c/src/myproject$ ls -la node_modules/.bin
+agent@draugr-myproject:/c/src/myproject$ fg      # back into the agent, exactly as you left it
+```
+
+`jobs` lists it, `fg` resumes it, and Ctrl+D from the agent leaves as it always did. One window, no
+second connection, no restart.
+
+This is the reason Draugr runs in WSL. `sbx run` reaches the sandbox through `sbx.exe`, a *Windows*
+binary — Ctrl+Z suspends the relay rather than the agent, and a few seconds later the session dies
+with `inspect exec: context deadline exceeded`. Over ssh the far end is a real pty doing its own job
+control. That is what [`DRAUGR_ATTACH`](CONFIG.md#draugr_attach) selects, and `ssh` is the default.
+
+`dr-shell` is still there for a genuinely *second* shell — one that runs alongside the agent instead
+of pausing it — and for `--root`.
+
 ## Three repositories
 
 Everything else follows from this.

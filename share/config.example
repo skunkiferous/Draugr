@@ -31,6 +31,16 @@
 # To pass nothing for one run:  dr-go --bare
 #DRAUGR_AGENT_ARGS=
 
+# ssh | sbx - how dr-go and dr-shell get a terminal inside the mound.
+#
+# ssh is the only one where Ctrl-Z works. It suspends the agent and hands you a
+# shell INSIDE the mound; fg goes back, with the session as you left it. Through
+# sbx.exe - a Windows binary WSL runs over interop - Ctrl-Z suspends the relay
+# instead, and the session dies with "inspect exec: context deadline exceeded".
+#
+# Set sbx only if a future sbx breaks its ssh proxy, or to compare the two.
+#DRAUGR_ATTACH=ssh
+
 # Sandbox name. Empty derives draugr-<repo-folder-name>, which is what you want
 # unless two projects share a folder name.
 #DRAUGR_SANDBOX=

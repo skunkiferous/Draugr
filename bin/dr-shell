@@ -5,6 +5,9 @@
 # You land in the clone, not in your working tree, so nothing you type here can
 # touch the host.
 #
+# To get a shell without a second window, press Ctrl-Z inside the agent instead:
+# it suspends the agent and leaves you here, and fg goes back.
+#
 #   dr-shell                 interactive shell
 #   dr-shell -- npm test     run one command and come back (no terminal needed)
 #   dr-shell --root          as root, for installing something you forgot
@@ -31,6 +34,7 @@ while [ $# -gt 0 ]; do
 done
 
 dr_context
+dr_attach_check
 
 # sbx exec starts a stopped sandbox by itself, but it cannot conjure one that was
 # never created - and "no such sandbox" is a worse message than this.
@@ -38,16 +42,45 @@ if ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
     dr_die "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
 fi
 
-exec_args=(exec)
-[ -n "$as_root" ] && exec_args+=(-u root)
+if [ "$DRAUGR_ATTACH" = ssh ]; then
+    # ssh lands in the mound's home directory; the clone is where the work is.
+    mound=$(dr_path_mound "$DR_REPO") || dr_die \
+        "$DR_REPO is not on a Windows drive, so it has no path inside the mound"
 
-# -i keeps stdin open, -t allocates a terminal; together they are what makes a
-# shell usable. Both are wrong for a piped command, hence the split: with a
-# command we stay non-interactive so dr-shell works from a script.
-if [ ${#cmd[@]} -gt 0 ]; then
-    dr_sbx "${exec_args[@]}" "$DRAUGR_SANDBOX" "${cmd[@]}"
+    # sudo rather than sbx's -u root: ssh authenticates as the agent, and the
+    # agent is in the sudo group with no password. Verified against sbx 0.37.1.
+    prefix=
+    [ -n "$as_root" ] && prefix="sudo "
+
+    if [ ${#cmd[@]} -gt 0 ]; then
+        # No pty and no -t, so dr-shell stays usable from a script and its output
+        # stays pipeable. The command line is built here and quoted for the far
+        # side by dr_shquote, which is what SC2029 is asking about.
+        # shellcheck disable=SC2029
+        ssh "$(dr_ssh_host)" "cd $(printf '%q' "$mound") && $prefix$(dr_shquote "${cmd[@]}")"
+    else
+        dr_require_tty dr-shell
+        dr_info "opening a shell in $DRAUGR_SANDBOX (exit or Ctrl-D to leave)"
+        if [ -n "$as_root" ]; then
+            # -s rather than -i: a login shell would move you to /root, and the
+            # reason to be root here is to fix something in the clone.
+            ssh -t "$(dr_ssh_host)" "cd $(printf '%q' "$mound") && exec sudo -s"
+        else
+            dr_ssh_attach "$mound"
+        fi
+    fi
 else
-    dr_require_tty dr-shell
-    dr_info "opening a shell in $DRAUGR_SANDBOX (exit or Ctrl-D to leave)"
-    dr_sbx "${exec_args[@]}" -it "$DRAUGR_SANDBOX" bash
+    exec_args=(exec)
+    [ -n "$as_root" ] && exec_args+=(-u root)
+
+    # -i keeps stdin open, -t allocates a terminal; together they are what makes a
+    # shell usable. Both are wrong for a piped command, hence the split: with a
+    # command we stay non-interactive so dr-shell works from a script.
+    if [ ${#cmd[@]} -gt 0 ]; then
+        dr_sbx "${exec_args[@]}" "$DRAUGR_SANDBOX" "${cmd[@]}"
+    else
+        dr_require_tty dr-shell
+        dr_info "opening a shell in $DRAUGR_SANDBOX (exit or Ctrl-D to leave)"
+        dr_sbx "${exec_args[@]}" -it "$DRAUGR_SANDBOX" bash
+    fi
 fi

@@ -112,12 +112,13 @@ else
         "sudo apt install rsync"
 fi
 
-# ssh: required. It is how commits and data cross the boundary.
+# ssh: required. Commits, data AND the agent's terminal all cross on it.
 if command -v ssh >/dev/null 2>&1; then
     ok "ssh" "$(ssh -V 2>&1 | cut -d, -f1)"
 else
     bad "ssh" "not found" \
-        "dr-sync moves commits over git's ssh:// transport." \
+        "dr-sync moves commits over git's ssh:// transport, and dr-go attaches" \
+        "over the same one - it is the only transport where Ctrl-Z works." \
         "sudo apt install openssh-client"
 fi
 
@@ -176,7 +177,8 @@ else
     bad "*.sbx block" "missing from WSL's ~/.ssh/config" \
         "This is the step people miss. 'sbx setup ssh' configures the WINDOWS" \
         "ssh client only; WSL has its own config, and without this block neither" \
-        "'ssh <name>.sbx' nor git's ssh:// transport works from here." \
+        "'ssh <name>.sbx' nor git's ssh:// transport works from here - so" \
+        "dr-go cannot attach either, not just dr-sync." \
         "Fix:  dr-setup"
 fi
 

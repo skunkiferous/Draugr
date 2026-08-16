@@ -59,6 +59,7 @@ cd /mnt/c/src/myproject
 
 dr-go                    # preflight, create-or-start the mound, attach, launch the agent
                          # ... the agent works and commits inside the sandbox ...
+                         # Ctrl+Z for a shell in the mound, fg to go back
                          # Ctrl+D when you're done
 
 dr-sync                  # fetch its commits onto draugr/main
@@ -71,6 +72,11 @@ git push                 # publish, exactly as you always did
 the agent should not see, creates the sandbox if it is missing — applying your project's kit, which
 carries its network rules and setup commands — imports your agent memory, then drops you into the
 agent. Second run, it just attaches.
+
+**Ctrl+Z works.** It suspends the agent and leaves you at a prompt inside the mound, in the clone;
+`fg` puts you back where you were. One window, no second connection. That is why Draugr runs in WSL
+and attaches over ssh rather than through `sbx.exe` — see
+[`DRAUGR_ATTACH`](docs/CONFIG.md#draugr_attach).
 
 ---
 

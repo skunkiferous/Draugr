@@ -77,6 +77,39 @@ every other setting — and it is the only way to drop a configured argument for
 These are the agent's own flags. `--continue` is Claude's spelling and means nothing to `shell`;
 Draugr passes them through without interpreting them.
 
+### `DRAUGR_ATTACH`
+Default `ssh`. How `dr-go` and `dr-shell` get a terminal inside the mound. The other value is `sbx`.
+
+**`ssh` is the only one where Ctrl+Z works**, and that is the whole reason for the setting.
+
+| | |
+|---|---|
+| `ssh` | Ctrl+Z suspends the agent and hands you a shell **in the mound**; `fg` goes back |
+| `sbx` | Ctrl+Z kills the session with `ERROR: inspect exec: context deadline exceeded` |
+
+`sbx run` and `sbx exec` reach the sandbox through `sbx.exe`, a *Windows* binary that WSL runs over
+interop. The terminal you are typing at belongs to WSL; the process reading it does not. Ctrl+Z
+therefore suspends the relay rather than anything inside the sandbox — the keystroke never arrives,
+the daemon stops hearing from its client, and a few seconds later the whole session dies. Measured
+against `sbx 0.37.1`, both ways.
+
+ssh has no such seam: a native Linux client, a real pty at the far end, and job control happening
+inside the sandbox where it belongs. It is also the transport `dr-sync` and `dr-data` already use,
+so the `*.sbx` block `dr-setup` writes is the only setup either mode needs.
+
+Over ssh the agent runs as a job of an interactive bash, started from `PROMPT_COMMAND` — putting it
+in the rcfile instead **hangs**, because bash has not enabled job control while it is still running
+its startup files. When the agent exits normally the session ends and `dr-go` returns its status,
+exactly as `sbx run` did; only Ctrl+Z is different, and that is by design:
+
+```text
+Ctrl+Z   →  $? is 148 (128 + SIGTSTP)  →  stay, and you have the mound's shell
+exit     →  the agent's own status      →  leave
+```
+
+Set `DRAUGR_ATTACH=sbx` if a future `sbx` changes its ssh proxy, or to compare behaviour. You lose
+Ctrl+Z, and `dr-shell --root` goes back to `-u root` instead of `sudo`.
+
 ### `DRAUGR_SANDBOX`
 Default `draugr-<repo folder name>`. `sbx` rejects underscores and most punctuation, so the name is
 filtered to letters, digits, `.`, `+` and `-`: `my_project` becomes `draugr-my-project`.
