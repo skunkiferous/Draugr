@@ -198,6 +198,50 @@ tmp/x.bin" ]
     ! dr_data_dirty_only "$repo"
 }
 
+# --- naming what actually blocks ---------------------------------------------
+#
+# The exemption is all-or-nothing: one dirty source file stops the session even
+# when everything else is data. That is deliberate, but the report used to be
+# `git status --short` in full, so the one file that mattered arrived at the
+# bottom of a list of exempt ones and DRAUGR_DATA looked broken.
+
+@test "dr_data_dirty_blockers: exempt files are left out" {
+    repo=$(dr_make_repo)
+    printf 'a\n' > "$repo/data.tsv"
+    printf 'b\n' > "$repo/script.sh"
+    DRAUGR_DATA="*.tsv" run dr_data_dirty_blockers "$repo"
+    [[ "$output" == *"script.sh"* ]]
+    [[ "$output" != *"data.tsv"* ]]
+}
+
+@test "dr_data_dirty_blockers: everything, when nothing is exempt" {
+    repo=$(dr_make_repo)
+    printf 'a\n' > "$repo/data.tsv"
+    printf 'b\n' > "$repo/script.sh"
+    DRAUGR_DATA= run dr_data_dirty_blockers "$repo"
+    [[ "$output" == *"data.tsv"* ]]
+    [[ "$output" == *"script.sh"* ]]
+}
+
+@test "dr_data_dirty_blockers: nothing, when the tree is only data" {
+    repo=$(dr_make_repo)
+    printf 'a\n' > "$repo/data.tsv"
+    DRAUGR_DATA="*.tsv" run dr_data_dirty_blockers "$repo"
+    [ -z "$output" ]
+}
+
+@test "dr_data_dirty_blockers: a rename is judged by its destination" {
+    # Same rule dr_data_dirty_only uses. Renaming a source file TO a data name
+    # makes it data; the reverse makes it a blocker.
+    repo=$(dr_make_repo)
+    printf 'a\n' > "$repo/data.tsv"
+    git -C "$repo" add -A
+    git -C "$repo" commit -qm data
+    git -C "$repo" mv data.tsv notes.md
+    DRAUGR_DATA="*.tsv" run dr_data_dirty_blockers "$repo"
+    [[ "$output" == *"notes.md"* ]]
+}
+
 # --- reviewing what a pull would land ----------------------------------------
 #
 # dr-data pull writes agent-authored bytes onto the host with no commit to read

@@ -1293,6 +1293,29 @@ dr_data_dirty_only() {
     return 0
 }
 
+# dr_data_dirty_blockers <repo> - the uncommitted changes that are NOT exempt.
+#
+# The companion to dr_data_dirty_only, which answers yes or no. This one answers
+# "which ones", because the yes/no version's caller printed `git status` in full:
+# a repo with fifteen churning data files and one stray script then reported
+# sixteen problems, buried the only real one, and made DRAUGR_DATA look as though
+# it were being ignored.
+dr_data_dirty_blockers() {
+    local repo=${1:-$PWD} line path
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        path=${line:3}
+        case "$path" in
+            *" -> "*) path=${path##* -> } ;;
+        esac
+        if [ -n "${DRAUGR_DATA:-}" ] && dr_data_matches "$path"; then
+            continue
+        fi
+        printf '%s\n' "$line"
+    done < <(git -C "$repo" status --porcelain 2>/dev/null)
+    return 0
+}
+
 # ---------------------------------------------------------------------------
 # Kits
 # ---------------------------------------------------------------------------

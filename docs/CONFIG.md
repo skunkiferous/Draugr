@@ -216,6 +216,17 @@ code. `dr-go --dirty` overrides for one run.
 Paths matching `DRAUGR_DATA` are exempt: they travel by a different mechanism and are never expected
 to be committed.
 
+**The exemption is all-or-nothing.** One dirty file that is *not* data still stops the session — the
+point of the check is that the agent would be working from stale code, and one stale file is enough.
+The refusal names only the files that blocked, and counts the rest:
+
+```text
+dr-go: your working tree has uncommitted changes
+?? skills.txt
+?? skills/
+dr-go: 15 more match DRAUGR_DATA and are exempt - these are not
+```
+
 ### `DRAUGR_STOP_ON_EXIT`
 Default `false`. When true, `dr-go` stops the mound after you leave the agent — last of all, once the
 sync, the memory export and the data pull have run, because each of those needs it alive.

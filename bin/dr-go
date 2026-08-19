@@ -65,7 +65,23 @@ if dr_is_true "$DRAUGR_REQUIRE_CLEAN" && [ -z "$dirty" ] && dr_is_true "$DRAUGR_
     # A single dirty *source* file still blocks, which is the point.
     if ! dr_repo_is_clean "$DR_REPO" && ! dr_data_dirty_only "$DR_REPO"; then
         dr_error "your working tree has uncommitted changes"
-        git -C "$DR_REPO" status --short >&2
+
+        # Only the files that actually block. Printing `git status --short` here
+        # listed the exempt data files too, so a repo with fifteen churning .tsv
+        # files and one stray script showed sixteen lines and read as "DRAUGR_DATA
+        # is being ignored" - which is the opposite of what had happened.
+        dr_data_dirty_blockers "$DR_REPO" >&2
+
+        # Say how many were let through, or the exemption is invisible when it
+        # works and only ever noticed when something else goes wrong.
+        if [ -n "$DRAUGR_DATA" ]; then
+            all=$(git -C "$DR_REPO" status --porcelain | wc -l)
+            blocking=$(dr_data_dirty_blockers "$DR_REPO" | wc -l)
+            if [ "$((all - blocking))" -gt 0 ]; then
+                dr_info "$((all - blocking)) more match DRAUGR_DATA and are exempt - these are not"
+            fi
+        fi
+
         # Not "stash them": a stash is still in .git, and .git is inside the
         # read-only mount, so stashing hides the change from the agent's clone
         # AND from dr-scan while leaving it readable. Committing or reverting
@@ -73,6 +89,7 @@ if dr_is_true "$DRAUGR_REQUIRE_CLEAN" && [ -z "$dirty" ] && dr_is_true "$DRAUGR_
         dr_die "the agent would not see them" \
             "The sandbox gets a CLONE of this repo, and a clone only contains commits." \
             "Commit them, put them aside outside the repo, or run:  dr-go --dirty" \
+            "Data files that are not ready to commit can go in DRAUGR_DATA instead." \
             "(Stashing works too, but the stash stays readable at /run/sandbox/source.)"
     fi
 fi

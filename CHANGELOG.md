@@ -15,7 +15,7 @@ Nothing yet.
 ## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 384 tests run in CI.
+Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 390 tests run in CI.
 
 ### The daily loop
 
@@ -113,6 +113,10 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 384 tests run in CI.
 
 - `DRAUGR_DATA` moves large or half-processed files beside git rather than through it, by `rsync`
   over the same `ssh://` transport. One direction at a time, always.
+- The `DRAUGR_REQUIRE_CLEAN` refusal names **only the files that blocked**, and says how many were
+  exempt. It printed `git status --short` in full, so a repo with fifteen churning `.tsv` files and
+  one stray script showed sixteen lines with the only real one at the bottom — and read as
+  "`DRAUGR_DATA` is being ignored" when the exemption was working exactly as intended.
 - `dr-data diff` shows what a pull would change as a real unified diff — the review step the data
   channel otherwise lacks, since there is no commit to read. Text files up to `DRAUGR_DATA_DIFF_MAX`
   are shown in full; binaries and anything larger are reported by name and size.

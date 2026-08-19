@@ -187,6 +187,26 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [[ "$output" == *"clone only contains commits"* ]]
 }
 
+@test "dr-go: the refusal names only what blocked, and counts what did not" {
+    # Listing the exempt files too - which `git status --short` does - reads as
+    # "DRAUGR_DATA is being ignored" when it is doing exactly its job. Reported
+    # against a repo with fifteen churning .tsv files and one stray script.
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    printf 'wip\n' > "$REPO/source.py"
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-go
+    [[ "$output" == *"source.py"* ]]
+    [[ "$output" != *"big.bin"* ]]
+    [[ "$output" == *"1 more match DRAUGR_DATA"* ]]
+}
+
+@test "dr-go: with no DRAUGR_DATA there is nothing to count" {
+    printf 'wip\n' > "$REPO/source.py"
+    DR_MOCK_STATE=running run dr-go
+    [[ "$output" == *"source.py"* ]]
+    [[ "$output" != *"exempt"* ]]
+}
+
 @test "dr-go: refuses to attach without a terminal" {
     DR_MOCK_STATE=running run dr-go
     [ "$status" -ne 0 ]
