@@ -38,9 +38,24 @@ dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
 
 # Only committed work can travel: the mount shows the agent your files, but a
 # fetch moves commits, so anything uncommitted here simply is not in the transfer.
+#
+# DRAUGR_DATA files are left out of that warning. They were never going to travel
+# this way and they have their own command, so listing them here implied dr-send
+# had dropped them - in a repo whose content is data that was the entire message.
 if ! dr_repo_is_clean "$DR_REPO"; then
-    dr_warn "you have uncommitted changes; only committed work is sent"
-    git -C "$DR_REPO" status --short >&2
+    _blocking=$(dr_data_dirty_blockers "$DR_REPO")
+    if [ -n "$_blocking" ]; then
+        dr_warn "you have uncommitted changes; only committed work is sent"
+        printf '%s\n' "$_blocking" >&2
+    fi
+
+    # Said once, quietly, rather than not at all: "dr-send moved everything" is
+    # the wrong thing to walk away believing when data moves on its own schedule.
+    _data=$(( $(git -C "$DR_REPO" status --porcelain | wc -l) - $(printf '%s' "$_blocking" | grep -c . || true) ))
+    if [ "$_data" -gt 0 ]; then
+        printf '  %s%s data file(s) travel separately:  dr-data push%s\n' \
+            "$_DR_DIM" "$_data" "$_DR_OFF" >&2
+    fi
 fi
 
 branch=$DRAUGR_BRANCH

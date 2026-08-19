@@ -362,3 +362,96 @@ mound_branch_commit() {
     run dr-status
     [[ "$output" == *"DRAUGR_BRANCH=feature-x dr-diff"* ]]
 }
+
+# --- delivered, but not merged -----------------------------------------------
+#
+# dr-send leaves your commits at refs/remotes/host/<branch> INSIDE the mound and
+# deliberately does not move the agent's branch. draugr/<branch> therefore stays
+# behind afterwards, which used to make dr-sync answer "send them with dr-send"
+# for ever: you sent, it still said send, re-sending was a no-op, and there was
+# no way out of the loop from the messages alone.
+#
+# The mound's own host/* refs are mirrored into refs/draugr/sent/* so the host can
+# tell the two states apart. These assert on what the commands SAY, because that
+# is the thing that was wrong - the internals are reached through them.
+
+# What dr-send does, minus the sbx: put the host branch on the mound's
+# refs/remotes/host/. The mound's own main is deliberately left where it was.
+deliver() { git -C "$MOUND" fetch -q "$REPO" "main:refs/remotes/host/main"; }
+
+host_commit() {
+    printf '%s\n' "${1:-host work}" >> "$REPO/README.md"
+    git -C "$REPO" commit -aqm "${1:-host commit}"
+}
+
+@test "dr-sync: says send when the mound has never seen them" {
+    host_commit
+    run dr-sync
+    [[ "$output" == *"send them with"* ]]
+    [[ "$output" != *"not merged"* ]]
+}
+
+@test "dr-sync: says merge, not send, once they are delivered" {
+    host_commit
+    deliver
+    run dr-sync
+    [[ "$output" == *"not merged"* ]]
+    [[ "$output" == *"dr-send --merge"* ]]
+    [[ "$output" != *"send them with"* ]]
+}
+
+@test "dr-sync: mirrors the mound's host ref so the host can see it" {
+    host_commit
+    deliver
+    run dr-sync
+    [ "$(git -C "$REPO" rev-parse refs/draugr/sent/main)" = "$(git -C "$REPO" rev-parse HEAD)" ]
+}
+
+@test "dr-sync: a commit made AFTER the send is unsent again" {
+    # Ancestry, not equality. Delivering once must not make everything committed
+    # afterwards look delivered too.
+    host_commit first
+    deliver
+    host_commit second
+    run dr-sync
+    [[ "$output" == *"send them with"* ]]
+    [[ "$output" != *"not merged"* ]]
+}
+
+@test "dr-status: names --merge rather than repeating dr-send" {
+    host_commit
+    deliver
+    dr-sync >/dev/null 2>&1
+    run dr-status
+    [[ "$output" == *"delivered, not merged"* ]]
+    [[ "$output" == *"dr-send --merge"* ]]
+}
+
+@test "dr-status: still says dr-send when nothing has been delivered" {
+    host_commit
+    dr-sync >/dev/null 2>&1
+    run dr-status
+    [[ "$output" == *"not in draugr/main - dr-send"* ]]
+    [[ "$output" != *"delivered"* ]]
+}
+
+@test "the mirrored ref is not mistaken for a branch to review" {
+    # refs/draugr/sent/* is deliberately outside refs/remotes/: everything there
+    # means "a branch in the mound", and this is the mound's copy of OUR branch.
+    # Under refs/remotes it would be reported as unreviewed agent work.
+    host_commit
+    deliver
+    dr-sync >/dev/null 2>&1
+    run dr-status
+    [[ "$output" != *"sent/main"* ]]
+
+    run dr-sync
+    [[ "$output" != *"sent/main"* ]]
+}
+
+@test "the extra refspec is added once, not once per sync" {
+    dr-sync >/dev/null 2>&1
+    dr-sync >/dev/null 2>&1
+    dr-sync >/dev/null 2>&1
+    [ "$(git -C "$REPO" config --get-all remote.draugr.fetch | grep -c 'draugr/sent')" -eq 1 ]
+}

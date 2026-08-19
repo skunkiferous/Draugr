@@ -41,11 +41,28 @@ row branch "$(dr_repo_branch "$DR_REPO")"
 
 # The dirty-tree line is the one people actually act on, so it says what the
 # consequence is rather than just counting files.
+#
+# DRAUGR_DATA files are counted apart from the rest, because "the clone will not
+# have them" is FALSE for those: they travel by rsync instead of git and arrive
+# before the agent starts. Counting them together told a repo whose content IS
+# data that it had sixteen problems, every one of which was already handled.
 if dr_repo_is_clean "$DR_REPO"; then
     row tree "${_DR_GREEN}clean${_DR_OFF}"
 else
-    count=$(git -C "$DR_REPO" status --porcelain | wc -l | tr -d ' ')
-    row tree "${_DR_YELLOW}$count uncommitted change(s)${_DR_OFF} - the clone will not have them"
+    total=$(git -C "$DR_REPO" status --porcelain | wc -l | tr -d ' ')
+    blocking=$(dr_data_dirty_blockers "$DR_REPO" | wc -l | tr -d ' ')
+
+    if [ "$blocking" -gt 0 ]; then
+        row tree "${_DR_YELLOW}$blocking uncommitted change(s)${_DR_OFF} - the clone will not have them"
+    else
+        row tree "${_DR_GREEN}clean${_DR_OFF} apart from data"
+    fi
+
+    # Named with its transport, because the answer to "why is that not blocking
+    # me" and the answer to "how does it get there" are the same answer.
+    if [ "$((total - blocking))" -gt 0 ]; then
+        row data "$((total - blocking)) changed - carried by dr-data push ($DRAUGR_DATA_PUSH), not git"
+    fi
 fi
 
 # Each state names the command that changes it, so the status screen doubles as
@@ -73,11 +90,17 @@ if git -C "$DR_REPO" rev-parse --verify --quiet "$tracking" >/dev/null; then
     else
         row unmerged "${_DR_GREEN}none${_DR_OFF} as of your last dr-sync"
     fi
-    # Commits the agent may be working without. Phrased against the tracking ref
-    # rather than "the mound lacks these", because a dr-send since the last
-    # dr-sync would have delivered them without this ref knowing about it.
+    # Commits the agent may be working without - and the two reasons it might be,
+    # which look identical from the tracking ref alone. dr-send drops them on
+    # host/<branch> inside the mound without moving the agent's branch, so
+    # "not in draugr/main - dr-send" was the standing answer even once they were
+    # delivered, and following it did nothing.
     if [ "$behind" -gt 0 ]; then
-        row unsent "${_DR_DIM}$behind commit(s) not in $tracking - dr-send${_DR_OFF}"
+        if [ "$(dr_send_state)" = unmerged ]; then
+            row unsent "${_DR_DIM}$behind commit(s) delivered, not merged - dr-send --merge${_DR_OFF}"
+        else
+            row unsent "${_DR_DIM}$behind commit(s) not in $tracking - dr-send${_DR_OFF}"
+        fi
     fi
 else
     row unmerged "${_DR_DIM}never synced${_DR_OFF} - dr-sync fetches the agent's commits"

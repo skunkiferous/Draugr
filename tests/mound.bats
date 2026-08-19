@@ -627,3 +627,98 @@ go_output() {
     run go_output
     [ -z "$(calls stop)" ]
 }
+
+# --- data is not "uncommitted work" ------------------------------------------
+#
+# A repo whose CONTENT is data - a hundred tracked .tsv files, say - has a dirty
+# tree almost all the time, and none of it is the thing the clean-tree check
+# exists to catch. Reporting the two together made every command say sixteen
+# things were wrong when nothing was, and "the clone will not have them" was
+# flatly false: data arrives by rsync before the agent starts.
+
+@test "dr-status: data files are counted apart from uncommitted work" {
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=stopped run dr-status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"clean"*"apart from data"* ]]
+    [[ "$output" == *"1 changed"* ]]
+    [[ "$output" == *"dr-data push"* ]]
+}
+
+@test "dr-status: 'the clone will not have them' is only said of files it is true of" {
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    printf 'wip\n' > "$REPO/source.py"
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=stopped run dr-status
+    [[ "$output" == *"1 uncommitted change(s)"* ]]
+    [[ "$output" == *"the clone will not have them"* ]]
+    [[ "$output" == *"1 changed"* ]]
+}
+
+@test "dr-status: no data row when nothing data-shaped is dirty" {
+    printf 'wip\n' > "$REPO/source.py"
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=stopped run dr-status
+    [[ "$output" == *"1 uncommitted change(s)"* ]]
+    [[ "$output" != *"dr-data push"* ]]
+}
+
+@test "dr-status: a clean tree says so without mentioning data at all" {
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=stopped run dr-status
+    [[ "$output" == *"clean"* ]]
+    [[ "$output" != *"apart from data"* ]]
+}
+
+@test "dr-status: with no DRAUGR_DATA every change is an uncommitted one" {
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    DR_MOCK_STATE=stopped run dr-status
+    [[ "$output" == *"1 uncommitted change(s)"* ]]
+    [[ "$output" != *"apart from data"* ]]
+}
+
+@test "dr-send: data files are not listed as work it failed to send" {
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-send
+    [[ "$output" != *"only committed work is sent"* ]]
+    [[ "$output" == *"travel separately"* ]]
+    [[ "$output" == *"dr-data push"* ]]
+}
+
+@test "dr-send: a genuine uncommitted change is still named" {
+    printf 'wip\n' > "$REPO/source.py"
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-send
+    [[ "$output" == *"only committed work is sent"* ]]
+    [[ "$output" == *"source.py"* ]]
+    [[ "$output" != *"big.bin"* ]]
+}
+
+# --- an exemption that carries nothing ---------------------------------------
+
+@test "dr-go: warns when dirty data is exempted but nothing will push it" {
+    # DRAUGR_DATA lets the session start with a dirty data file, on the grounds
+    # that dr-data carries it. With push off, nothing does - and the agent works
+    # from the copy already in the mound, which is the exact staleness
+    # DRAUGR_REQUIRE_CLEAN exists to prevent.
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    DRAUGR_DATA="tmp/**" DRAUGR_DATA_PUSH=manual DR_MOCK_STATE=running run dr-go
+    [[ "$output" == *"will not reach the mound"* ]]
+    [[ "$output" == *"dr-data push"* ]]
+}
+
+@test "dr-go: silent when push is auto, which is the default" {
+    mkdir -p "$REPO/tmp"
+    printf 'churn\n' > "$REPO/tmp/big.bin"
+    DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-go
+    [[ "$output" != *"will not reach the mound"* ]]
+}
+
+@test "dr-go: silent when push is off but no data file is dirty" {
+    printf 'wip\n' > "$REPO/source.py"
+    DRAUGR_DATA="tmp/**" DRAUGR_DATA_PUSH=off DR_MOCK_STATE=running run dr-go
+    [[ "$output" != *"will not reach the mound"* ]]
+}

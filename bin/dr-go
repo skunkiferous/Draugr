@@ -94,6 +94,27 @@ if dr_is_true "$DRAUGR_REQUIRE_CLEAN" && [ -z "$dirty" ] && dr_is_true "$DRAUGR_
     fi
 fi
 
+# Exempting a dirty data file from the clean check only makes sense if something
+# is then going to carry it. With DRAUGR_DATA_PUSH set to anything but auto, the
+# exemption lets the session start and nothing puts the file in the mound - so
+# the agent works from whatever the clone was built with, which is the exact
+# failure DRAUGR_REQUIRE_CLEAN exists to prevent, arrived at through the setting
+# that is supposed to make it safe.
+#
+# A warning rather than a refusal: "push is manual" is a choice, and someone who
+# made it may be about to run dr-data push themselves.
+if [ -n "$DRAUGR_DATA" ] && [ "$DRAUGR_DATA_PUSH" != auto ]; then
+    stale=$(( $(git -C "$DR_REPO" status --porcelain | wc -l) \
+              - $(dr_data_dirty_blockers "$DR_REPO" | wc -l) ))
+    if [ "$stale" -gt 0 ]; then
+        dr_warn "$stale changed data file(s) will not reach the mound"
+        printf '  %sDRAUGR_DATA_PUSH is %s, so nothing carries them and the agent works%s\n' \
+            "$_DR_DIM" "$DRAUGR_DATA_PUSH" "$_DR_OFF" >&2
+        printf '  %sfrom the copy already in there. Send them first with:  dr-data push%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+    fi
+fi
+
 # The other direction: DRAUGR_CLONE=false bind-mounts your real working tree
 # read-write, which is precisely the thing Draugr exists to prevent. It prompts
 # every single time, and no config key silences it - that is the point.

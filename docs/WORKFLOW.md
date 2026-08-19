@@ -97,6 +97,19 @@ dr-send
 This fetches from inside the mound through the read-only mount, so it works without giving the
 sandbox any route to your machine.
 
+**It delivers, it does not merge.** Your commits land on `host/<branch>` *inside* the clone and the
+agent's branch does not move — because the agent may be mid-edit, and a branch that jumps under it
+is how you get a tangle nobody asked for. So after a successful `dr-send`, `draugr/<branch>` is
+still behind you, and that is correct rather than a failure:
+
+| | |
+|---|---|
+| `N commit(s) not in draugr/main - dr-send` | the mound has never seen them |
+| `N commit(s) delivered, not merged - dr-send --merge` | they are in there; nobody has taken them |
+
+Left to the agent, `git merge host/main` inside the mound is the other half. `dr-send --merge` does
+it for you, and refuses on a dirty clone.
+
 To retrieve something the agent has *not* committed — a scratch file, a log:
 
 ```bash
@@ -130,8 +143,16 @@ unchanged in either place.
 Four things worth having in mind:
 
 - **They are exempt from `DRAUGR_REQUIRE_CLEAN`.** Data churn will not stop you starting a session.
-- **Keep them gitignored.** Then they are ignored in the agent's clone too, and it will not
-  accidentally commit 4 GB of scratch.
+- **Gitignore them if they are scratch.** Then they are ignored in the agent's clone too, and it
+  will not accidentally commit 4 GB of intermediate output. This is the case `DRAUGR_DATA` was
+  designed for.
+- **They do not have to be gitignored, and tracked files may match too.** In a project whose
+  *content* is data — a few hundred versioned `.tsv` files, say — `DRAUGR_DATA="*.tsv"` is doing
+  something different and still useful: the clone holds committed history only, so an uncommitted
+  edit would not reach the agent at all without a push. Here git is the review channel and rsync is
+  the transport, and the two are not in conflict as long as you know which is which. What it does
+  cost you is the clean-tree guard: those files stop blocking `dr-go`, which is safe precisely
+  *because* `DRAUGR_DATA_PUSH=auto` carries them. Turn the push off and `dr-go` says so.
 - **The delta algorithm survives the boundary.** Measured: appending 21 bytes to a 3 MB file put
   375 bytes on the wire on the next push. The first transfer of a large tree is expensive; every one
   after it is close to free.

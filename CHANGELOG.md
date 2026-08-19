@@ -20,6 +20,25 @@ people reading the source, not for people calling it.
   changed. Recorded in `.draugr/create.applied`, gitignored beside `kit.applied`.
 - A mound built before that record existed is not reported as drift. Unknown is not a change, and
   crying wolf on every `dr-up` is how a warning stops being read.
+- `dr-status` and `dr-send` count `DRAUGR_DATA` files apart from uncommitted work, the way `dr-go`
+  already did. `dr-status` was not merely noisy but **wrong**: "16 uncommitted change(s) — the clone
+  will not have them" was false of every one of those files, which arrive by rsync before the agent
+  starts. It now reads `clean apart from data` with the data on its own row, named with its
+  transport. `dr-send` no longer lists them under a warning about work it could not send, since they
+  were never travelling that way.
+- `dr-sync` and `dr-status` tell **"the mound has never seen these"** apart from **"it has them and
+  the agent has not merged them"**. `dr-send` leaves your commits at `refs/remotes/host/<branch>`
+  inside the mound and deliberately does not move the agent's branch, so `draugr/<branch>` stays
+  behind afterwards — and both commands answered "send them with `dr-send`" for ever. Sending again
+  was a no-op, so the messages had no way out of the loop. They now say `dr-send --merge` once the
+  commits are delivered. Told apart by mirroring the mound's own `host/*` refs into
+  `refs/draugr/sent/*` on the existing fetch: no extra round trip, and outside `refs/remotes/` so it
+  is never mistaken for a branch of the agent's to review.
+- `dr-go` warns when a dirty data file is exempted from the clean-tree check while
+  `DRAUGR_DATA_PUSH` is not `auto`. The exemption assumes something will carry the file; with push
+  off nothing does, and the agent silently works from whatever the clone was built with — the exact
+  staleness `DRAUGR_REQUIRE_CLEAN` exists to prevent, reached through the setting meant to make it
+  safe.
 
 ### Documented
 

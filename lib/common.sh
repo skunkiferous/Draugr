@@ -1725,7 +1725,53 @@ dr_remote_ensure() {
         git -C "$DR_REPO" remote add "$DRAUGR_REMOTE" "$url"
         dr_debug "added remote $DRAUGR_REMOTE -> $url"
     fi
+
+    # A second refspec, alongside git's default +refs/heads/*. dr-send drops your
+    # commits at refs/remotes/host/<branch> INSIDE the mound, which is a ref no
+    # amount of looking at refs/heads/* will ever show - so mirroring it back is
+    # the only way the host can tell "the mound has never seen this" apart from
+    # "the mound has it and the agent has not merged it". See dr_send_state.
+    #
+    # --add, guarded, because git remote add already wrote one and a second call
+    # must not accumulate duplicates.
+    if ! git -C "$DR_REPO" config --get-all "remote.$DRAUGR_REMOTE.fetch" \
+         | grep -qxF "$DR_SENT_REFSPEC"; then
+        git -C "$DR_REPO" config --add "remote.$DRAUGR_REMOTE.fetch" "$DR_SENT_REFSPEC"
+    fi
     printf '%s' "$url"
+}
+
+# Kept out of refs/remotes/ on purpose: everything there is "branches in the
+# mound", and this is the mound's copy of OUR branch. Under refs/remotes it would
+# turn up in git branch -r and in dr_other_branches, reported as work to review.
+DR_SENT_REFSPEC='+refs/remotes/host/*:refs/draugr/sent/*'
+
+dr_sent_ref() { printf 'refs/draugr/sent/%s' "$DRAUGR_BRANCH"; }
+
+# dr_send_state - why the mound's branch is behind yours. Two situations that are
+# indistinguishable from draugr/<branch> alone:
+#
+#   not-sent   the mound has never received these         -> dr-send
+#   unmerged   dr-send delivered them; the agent's branch  -> dr-send --merge
+#              has not merged host/<branch> yet
+#
+# Without the distinction dr-sync said "send them with dr-send" for ever: you
+# sent, it still said send, and re-sending was a no-op because the commits were
+# already sitting there. Reported by a user going round that loop twice.
+dr_send_state() {
+    local sent
+    sent=$(dr_sent_ref)
+    if ! git -C "$DR_REPO" rev-parse --verify --quiet "$sent" >/dev/null; then
+        printf 'not-sent\n'
+        return 0
+    fi
+    # Ancestor rather than equality: sending, then committing once more locally,
+    # leaves you genuinely with something new to send.
+    if git -C "$DR_REPO" merge-base --is-ancestor HEAD "$sent" 2>/dev/null; then
+        printf 'unmerged\n'
+    else
+        printf 'not-sent\n'
+    fi
 }
 
 # dr_tracking_ref - <remote>/<branch>, the thing dr-log, dr-diff, dr-merge and

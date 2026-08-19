@@ -139,8 +139,21 @@ fi
 
 # Worth saying, because the agent is working from a clone that predates these and
 # will conflict with them sooner or later.
+#
+# Which advice depends on where the commits have got to. dr-send leaves them on
+# refs/remotes/host/<branch> inside the mound and does NOT move the agent's
+# branch, so draugr/<branch> stays behind afterwards - and this used to answer
+# "send them with dr-send" every time, including immediately after a dr-send that
+# had worked. Re-sending changed nothing, so the loop had no exit.
 if [ "$behind" -gt 0 ] && [ -z "$quiet" ]; then
-    dr_info "you have $behind commit(s) the mound does not - send them with:  dr-send"
+    if [ "$(dr_send_state)" = unmerged ]; then
+        dr_info "the mound has your $behind commit(s) on host/$DRAUGR_BRANCH, not merged"
+        printf '  %sThe agent decides when to take them:  git merge host/%s%s\n' \
+            "$_DR_DIM" "$DRAUGR_BRANCH" "$_DR_OFF" >&2
+        printf '  %sOr do it for it:  dr-send --merge%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    else
+        dr_info "you have $behind commit(s) the mound does not - send them with:  dr-send"
+    fi
 fi
 
 # --- the branches nobody was looking at -------------------------------------
