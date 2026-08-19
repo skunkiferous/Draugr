@@ -10,7 +10,26 @@ people reading the source, not for people calling it.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- `dr-up` notices when a **creation-time setting** has changed since the mound was built — the mounts,
+  the ports, the memory cap, the image, the agent. Those are frozen into the sandbox spec, so editing
+  one and re-running `dr-up` was a silent no-op: you add a read-only mount for a sibling project,
+  start a session, and the directory simply is not there with nothing on screen to say why. It now
+  names the settings that differ and points at `dr-up --recreate`, or `dr-ports` when only ports
+  changed. Recorded in `.draugr/create.applied`, gitignored beside `kit.applied`.
+- A mound built before that record existed is not reported as drift. Unknown is not a change, and
+  crying wolf on every `dr-up` is how a warning stops being read.
+
+### Documented
+
+- **Where an extra mount lands**, which was nowhere in the docs and is the whole question when one
+  project depends on the one next door. It appears at the mirrored path, so `C:\Code\TabuLua` is
+  `/c/Code/TabuLua` and a sibling stays a sibling — `../TabuLua` from the clone resolves unchanged.
+  Measured, along with `:ro` actually refusing writes and host edits being visible live.
+- The mount is your **live working tree**, not a clone: uncommitted changes are readable inside the
+  mound immediately. That is the difference from packaging a dependency as a kit, which freezes it at
+  whatever you last published. Also that `dr-scan` does **not** look inside extra mounts.
 
 ## [0.1.0] — 2026-08-15
 

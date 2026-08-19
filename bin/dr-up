@@ -157,15 +157,35 @@ fi
 # Editing the kit changes nothing until it is applied, and applying it recreates
 # the container - so say so rather than letting the difference go unnoticed.
 report_drift() {
-    local stamp
-    dr_kit_refs >/dev/null || return 0
-    stamp=$(dr_kit_stamp)
-    [ -f "$stamp" ] || return 0
-    [ "$(dr_kit_hash_all)" = "$(cat "$stamp")" ] && return 0
-    dr_warn "the kit has changed since $DRAUGR_SANDBOX was built"
-    printf '  %sThe mound still has the old rules and setup. Apply them with:%s\n' \
+    local stamp changed
+    if dr_kit_refs >/dev/null; then
+        stamp=$(dr_kit_stamp)
+        if [ -f "$stamp" ] && [ "$(dr_kit_hash_all)" != "$(cat "$stamp")" ]; then
+            dr_warn "the kit has changed since $DRAUGR_SANDBOX was built"
+            printf '  %sThe mound still has the old rules and setup. Apply them with:%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %s  dr-kit apply      (recreates the container)%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        fi
+    fi
+
+    # The same silent no-op, for the settings sbx freezes into the sandbox spec.
+    # Adding a mount and running dr-go otherwise leaves you looking at a
+    # directory that is simply not there, with nothing on screen to explain it.
+    changed=$(dr_create_drift)
+    [ -n "$changed" ] || return 0
+    # tr rather than an unquoted expansion: the list is newline separated and a
+    # bare $changed would be at the mercy of whatever IFS and globbing decided.
+    dr_warn "changed since $DRAUGR_SANDBOX was built: $(printf '%s' "$changed" | tr '\n' ' ')"
+    printf '  %sThese are fixed when the mound is created, so the running one still%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %s  dr-kit apply      (recreates the container)%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %shas the old values. Rebuild it with:%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %s  dr-up --recreate%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    case "$changed" in
+        # Ports are the one that has a mid-session answer, so name it rather than
+        # sending someone to rebuild a mound for a port they could just publish.
+        *DRAUGR_PORTS*) printf '  %s  dr-ports          (ports only, no rebuild)%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2 ;;
+    esac
 }
 
 # pre-up runs on every dr-up; post-create only when one is actually built. Both
@@ -212,12 +232,14 @@ absent)
     fi
     dr_ok "created $DRAUGR_SANDBOX"
 
-    # Record what the kit looked like at creation, so a later edit is detectable
-    # as drift instead of silently doing nothing.
+    # Record what this was built from, so a later edit is detectable as drift
+    # instead of silently doing nothing. The kit stamp is written only when there
+    # are kits; the settings one always, because every mound has settings.
+    mkdir -p "$DR_REPO/.draugr"
     if dr_kit_refs >/dev/null; then
-        mkdir -p "$DR_REPO/.draugr"
         dr_kit_hash_all > "$(dr_kit_stamp)"
     fi
+    dr_create_facts > "$(dr_create_stamp)"
 
     dr_hook post-create "$DR_REPO"
     ;;

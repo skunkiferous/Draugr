@@ -153,6 +153,40 @@ the agent modifying your originals.
 
 ---
 
+## A project that depends on the one next door
+
+One repository per mound. So a project that used to reach its neighbour through `..\Sibling` cannot,
+because the neighbour is not in there.
+
+There are two ways to put it back, and they are not equivalent:
+
+| | |
+|---|---|
+| **Mount it read-only** | `DRAUGR_MOUNTS="/mnt/c/Code/Sibling:ro"` — your live working tree, uncommitted edits included |
+| **Package it as a kit** | the version you last published, frozen until you publish again |
+
+The mount lands at the **mirrored path**, so the two stay siblings inside the mound and `../Sibling`
+resolves with nothing rewritten:
+
+```text
+/c/Code/MyProject      ← the clone, writable
+/c/Code/Sibling        ← the mount, read-only
+```
+
+Use the mount when you are developing both at once — it is the case where a kit would force you to
+commit and publish the dependency before the other project could see the change. Use a kit when the
+dependency is a released thing with a version, or when the agent needs it *installed* rather than
+merely readable.
+
+Two consequences of the mount worth knowing. The agent sees your work in progress, half-finished
+refactors included. And **`dr-scan` does not look inside extra mounts** — it scans the repository you
+are standing in — so a `.env` in the mounted project is readable and unreported.
+
+Mounts are fixed when the mound is built. `dr-up` warns when the list has changed since, and
+`dr-up --recreate` rebuilds.
+
+---
+
 ## Memory
 
 The mound's disk survives `dr-stop` and dies with `dr-rm`, so anything the agent learned about your

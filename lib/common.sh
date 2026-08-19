@@ -1504,6 +1504,56 @@ dr_kit_stamp() {
 }
 
 # ---------------------------------------------------------------------------
+# Creation-time settings
+#
+# Most of what sbx needs is frozen into the sandbox when it is built: the image,
+# the agent, the memory cap, the published ports and every extra mount. Editing
+# one of those and re-running dr-up does nothing at all, because dr-up's job on
+# an existing mound is to START it, not to rebuild it.
+#
+# That is a silent no-op, which is the worst kind of no-op - you add a mount, run
+# dr-go, and the directory is simply not there, with nothing on screen to say
+# why. So dr-up records what it built with and compares, exactly as it already
+# does for kits.
+# ---------------------------------------------------------------------------
+
+# dr_create_facts - the settings that are fixed at creation, one KEY=value a line.
+#
+# DRAUGR_SANDBOX is not among them: changing it does not modify a mound, it names
+# a different one. Nor is DRAUGR_KIT, which has its own stamp and its own remedy.
+dr_create_facts() {
+    local k
+    for k in DRAUGR_AGENT DRAUGR_CLONE DRAUGR_TEMPLATE DRAUGR_MEMORY DRAUGR_CPUS \
+             DRAUGR_PORTS DRAUGR_MOUNTS
+    do
+        printf '%s=%s\n' "$k" "${!k}"
+    done
+}
+
+# Beside the kit stamp, and gitignored by dr-init for the same reason: it
+# describes this checkout's mound, not the project.
+dr_create_stamp() {
+    printf '%s/.draugr/create.applied' "$DR_REPO"
+}
+
+# dr_create_drift - names the keys that differ from what the mound was built with.
+#
+# Silent when there is no stamp. A mound built before this existed is not drift,
+# it is unknown, and guessing would cry wolf on every single dr-up. A key the
+# stamp has never heard of is skipped for the same reason: an older Draugr wrote
+# that file and did not record it.
+dr_create_drift() {
+    local stamp k
+    stamp=$(dr_create_stamp)
+    [ -f "$stamp" ] || return 0
+    while IFS='=' read -r k _; do
+        grep -q "^$k=" "$stamp" || continue
+        grep -qxF "$k=${!k}" "$stamp" || printf '%s\n' "$k"
+    done < <(dr_create_facts)
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # The shared skills store
 #
 # Measured in Phase 2 and re-checked in Phase 6: this one directory is mounted

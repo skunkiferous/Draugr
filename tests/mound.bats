@@ -144,6 +144,85 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [ -z "$(calls create)" ]
 }
 
+# --- creation-time settings drift --------------------------------------------
+#
+# Ports, mounts, memory, the image and the agent are frozen into the sandbox when
+# sbx builds it. Editing one and re-running dr-up does nothing, because dr-up's
+# job on an existing mound is to start it. That silent no-op is what these are
+# about: you add a mount, run dr-go, and the directory is simply absent.
+
+@test "dr-up: records what it built with" {
+    DRAUGR_MOUNTS="/mnt/c/Docs:ro" DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    grep -q "^DRAUGR_MOUNTS=/mnt/c/Docs:ro$" "$REPO/.draugr/create.applied"
+}
+
+@test "dr-up: a changed mount list is reported, not silently ignored" {
+    DRAUGR_MOUNTS="/mnt/c/Docs:ro" DR_MOCK_STATE=absent run dr-up
+    DRAUGR_MOUNTS="/mnt/c/Docs:ro /mnt/c/More:ro" DR_MOCK_STATE=running run dr-up
+    [[ "$output" == *"changed since"* ]]
+    [[ "$output" == *"DRAUGR_MOUNTS"* ]]
+    [[ "$output" == *"dr-up --recreate"* ]]
+}
+
+@test "dr-up: an unchanged config says nothing" {
+    DRAUGR_MOUNTS="/mnt/c/Docs:ro" DR_MOCK_STATE=absent run dr-up
+    DRAUGR_MOUNTS="/mnt/c/Docs:ro" DR_MOCK_STATE=running run dr-up
+    [[ "$output" != *"changed since"* ]]
+}
+
+@test "dr-up: ports are named as the one thing that needs no rebuild" {
+    DR_MOCK_STATE=absent run dr-up
+    DRAUGR_PORTS="8080:8080" DR_MOCK_STATE=running run dr-up
+    [[ "$output" == *"DRAUGR_PORTS"* ]]
+    [[ "$output" == *"dr-ports"* ]]
+}
+
+@test "dr-up: a mount change is not reported as a port change" {
+    DR_MOCK_STATE=absent run dr-up
+    DRAUGR_MOUNTS="/mnt/c/Docs:ro" DR_MOCK_STATE=running run dr-up
+    [[ "$output" == *"DRAUGR_MOUNTS"* ]]
+    [[ "$output" != *"dr-ports"* ]]
+}
+
+@test "dr-up: a mound built before the stamp existed is not called drift" {
+    # Unknown is not drift. Warning on every dr-up for every pre-existing mound
+    # would train people to ignore the one that matters.
+    DR_MOCK_STATE=absent run dr-up
+    rm -f "$REPO/.draugr/create.applied"
+    DRAUGR_MEMORY=8g DR_MOCK_STATE=running run dr-up
+    [[ "$output" != *"changed since"* ]]
+}
+
+@test "dr-up: --recreate refreshes the record" {
+    DRAUGR_MOUNTS="/mnt/c/Docs:ro" DR_MOCK_STATE=absent run dr-up
+    DRAUGR_MOUNTS="/mnt/c/Other:ro" DR_MOCK_STATE=running run dr-up --yes --recreate
+    [ "$status" -eq 0 ]
+    grep -q "^DRAUGR_MOUNTS=/mnt/c/Other:ro$" "$REPO/.draugr/create.applied"
+
+    # And the warning is gone, because the mound now matches the config.
+    DRAUGR_MOUNTS="/mnt/c/Other:ro" DR_MOCK_STATE=running run dr-up
+    [[ "$output" != *"changed since"* ]]
+}
+
+@test "dr_create_drift: a key the stamp never held is not drift either" {
+    # An older Draugr wrote a stamp with fewer keys. Treating an absent line as a
+    # change would make every upgrade look like drift.
+    DR_MOCK_STATE=absent run dr-up
+    grep -v '^DRAUGR_CPUS=' "$REPO/.draugr/create.applied" > "$REPO/.draugr/tmp.applied"
+    mv "$REPO/.draugr/tmp.applied" "$REPO/.draugr/create.applied"
+    DRAUGR_CPUS=4 DR_MOCK_STATE=running run dr-up
+    [[ "$output" != *"DRAUGR_CPUS"* ]]
+}
+
+@test "dr-init: the stamp is gitignored, so it cannot block dr-go" {
+    # DRAUGR_REQUIRE_CLEAN=true means an untracked file stops a session. A file
+    # Draugr writes itself must never be the thing that does it.
+    run dr-init
+    [ "$status" -eq 0 ]
+    grep -qx '\.draugr/create\.applied' "$REPO/.gitignore"
+}
+
 # --- dr-go -------------------------------------------------------------------
 
 @test "dr-go: a dirty tree blocks, and explains why" {

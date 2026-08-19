@@ -90,13 +90,14 @@ fi
 # --- gitignore what describes this checkout rather than the project ----------
 #
 # .draugr/kit/ is meant to be committed - it is the project's sandbox rules. The
-# three below are not, and each would otherwise show up as an untracked file:
+# four below are not, and each would otherwise show up as an untracked file:
 # with DRAUGR_REQUIRE_CLEAN=true that is not merely untidy, it blocks dr-go.
 ignore="$repo/.gitignore"
 ignore_entries=(
-    '.draugr.local.conf'    # per-user settings, never shared
-    '.draugr/kit.applied'   # which kit this checkout's mound was built from
-    '.draugr/tmp/'          # staging for sbx cp, removed after every transfer
+    '.draugr.local.conf'     # per-user settings, never shared
+    '.draugr/kit.applied'    # which kit this checkout's mound was built from
+    '.draugr/create.applied' # the settings it was built with - ports, mounts, memory
+    '.draugr/tmp/'           # staging for sbx cp, removed after every transfer
 )
 
 # Tested one at a time rather than all-or-nothing, so a repo initialised by an

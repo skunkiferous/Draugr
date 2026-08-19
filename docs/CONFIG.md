@@ -198,6 +198,34 @@ Paths are translated to the Windows spelling `sbx` requires, and must be on a Wi
 sandbox can read every byte of anything you mount into it** — never mount `~/.claude`, which holds
 your agent credentials.
 
+**A mount lands at the mirrored path**, the same rule the repo itself follows: `C:\Code\TabuLua`
+appears at `/c/Code/TabuLua`. So a sibling project stays a sibling, and a relative path across the
+two keeps working unchanged:
+
+```bash
+# in C:\Code\SurvivalGameData/.draugr.conf
+DRAUGR_MOUNTS="/mnt/c/Code/TabuLua:ro"
+```
+
+```text
+/c/Code/SurvivalGameData      ← the clone, writable
+/c/Code/TabuLua               ← the mount, read-only
+```
+
+`../TabuLua` resolves from inside the clone with nothing rewritten. Measured: the agent reads it,
+`echo >>` and `touch` both fail with `:ro`, and the clone stays writable.
+
+**The mount is your live working tree, not a clone.** Uncommitted edits on the host are visible
+inside the mound immediately — no commit, no push, no `dr-sync`. That is the difference from
+packaging a dependency into a kit, which would freeze it at whatever you last published.
+
+Two things follow. The agent sees your work in progress, including a half-finished refactor. And
+`dr-scan` does **not** look inside extra mounts — it scans the repository you are in — so a
+credential-shaped file in a mounted directory is readable and unreported.
+
+> **Mounts are fixed when the mound is built.** Adding one to `.draugr.conf` does nothing to a
+> sandbox that already exists. `dr-up` says so and names the setting; `dr-up --recreate` rebuilds.
+
 ---
 
 ## Moving code
