@@ -10,6 +10,16 @@ people reading the source, not for people calling it.
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Removed
+
+### Fixed
+
+## [0.1.0] — 2026-08-19
+
 ### Fixed
 
 - `dr-up` notices when a **creation-time setting** has changed since the mound was built — the mounts,
@@ -49,8 +59,6 @@ people reading the source, not for people calling it.
 - The mount is your **live working tree**, not a clone: uncommitted changes are readable inside the
   mound immediately. That is the difference from packaging a dependency as a kit, which freezes it at
   whatever you last published. Also that `dr-scan` does **not** look inside extra mounts.
-
-## [0.1.0] — 2026-08-15
 
 First release that is ready to be used rather than read. Everything below was verified against
 Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 390 tests run in CI.
