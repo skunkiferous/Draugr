@@ -236,6 +236,32 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
                     "Your library:  dr-kit list      A starter kit:  dr-init"
             done
         fi
+
+        # A kit pinned to another agent is valid, and fails only at creation -
+        # in sbx's words, about a field you did not know it had read.
+        while IFS=' ' read -r _k _want; do
+            [ -n "$_k" ] || continue
+            bad "kit agent" "$_k requires \"$_want\", not \"$DRAUGR_AGENT\"" \
+                "sbx will refuse to compose them, so dr-up cannot create the mound." \
+                "Drop the 'requires: agent:' line, or keep a $_k.$DRAUGR_AGENT/"
+        done < <(dr_kit_agent_conflicts)
+    fi
+
+    # The agent needs credentials, and they are held on the HOST by sbx rather
+    # than inside the mound - the proxy injects them per request, so nothing is
+    # baked in at creation and signing in later needs no rebuild. sbx warns about
+    # a missing one when it creates a sandbox and never again, which is the wrong
+    # moment: by the time it matters you are looking at a logged-out agent.
+    _svc=$(dr_agent_secret) || _svc=
+    if [ -n "$_svc" ]; then
+        if dr_sbx secret ls 2>/dev/null | grep -qE "^\(global\)[[:space:]]+service[[:space:]]+$_svc\b"; then
+            ok "$DRAUGR_AGENT credentials" "$_svc configured with sbx"
+        else
+            soft "$DRAUGR_AGENT credentials" "no '$_svc' secret - the agent starts logged out" \
+                "The token stays on the host; sbx's proxy injects it per request." \
+                "Sign in:  sbx secret set -g $_svc --oauth" \
+                "Or an API key:  sbx secret set -g $_svc"
+        fi
     fi
 else
     soft "git repository" "$PWD is not one" \

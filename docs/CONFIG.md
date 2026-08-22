@@ -53,10 +53,36 @@ and hook at once.
 ## The agent and the mound
 
 ### `DRAUGR_AGENT`
-Default `claude`. One of `claude`, `codex`, `copilot`, `cursor`, `droid`, `gemini`, `kiro`,
-`opencode`, `shell`. Passed to `sbx create` as the agent name.
+Default `claude`. One of `claude`, `codex`, `copilot`, `cursor`, `docker-agent`, `droid`, `gemini`,
+`kiro`, `opencode`, `shell`. Passed to `sbx create` as the agent name.
 
-Only `claude`'s memory layout is understood by `dr-mem`, which warns if you point it at another.
+Everything except **memory** works the same for all of them: attaching, Ctrl+Z, the clone, kits,
+`dr-sync`, `dr-send`, `dr-data`. Memory is each agent's own private layout, so Draugr keeps one file
+per agent in `lib/agents/` and only claims to know the ones it has measured:
+
+| | memory | `dr-mem` |
+|---|---|---|
+| `claude` | `~/.claude/projects/<PATH-KEY>/memory/`, per project | full |
+| `codex` | `$CODEX_HOME/memories/` plus its SQLite state, **not** per project, **off by default** | full |
+| anything else | not measured | refuses, and says so |
+
+An agent Draugr has no module for still works — `dr-mem` declines rather than copying a directory
+into a place the agent will never read. Turn the automatic half off with `DRAUGR_MEM_SYNC=off`.
+
+Switching this on an existing repository is reported by `dr-up` as creation drift: the agent is
+frozen into the sandbox spec, so it takes a `dr-up --recreate`. One mound holds one agent. If you
+want a Claude mound and a Codex mound for the same project at once, give them separate names and
+separate remotes in `.draugr.local.conf`:
+
+```bash
+DRAUGR_SANDBOX=draugr-myproject-codex
+DRAUGR_REMOTE=draugr-codex
+```
+
+Credentials are held by `sbx` on the host, not inside the mound — its proxy authenticates on the
+agent's behalf, so nothing is baked in at creation and signing in later needs no rebuild.
+`sbx secret set -g anthropic --oauth` for Claude, `sbx secret set -g openai --oauth` for Codex.
+`dr-doctor` reports a missing one.
 
 ### `DRAUGR_AGENT_ARGS`
 Default empty. Arguments handed to the agent after `--` on every `dr-go`, for flags you would
@@ -74,8 +100,40 @@ every other setting — and it is the only way to drop a configured argument for
 | `dr-go --bare` | pass the agent nothing |
 | `dr-go -- --model opus` | pass these instead |
 
-These are the agent's own flags. `--continue` is Claude's spelling and means nothing to `shell`;
-Draugr passes them through without interpreting them.
+These are the agent's own flags, passed through without being interpreted — so the spelling is the
+agent's, not Draugr's. "Carry on from last time" is `--continue` for Claude Code and
+`resume --last` for Codex, which is a subcommand rather than a flag and works here all the same:
+
+```bash
+DRAUGR_AGENT_ARGS="resume --last"     # dr-go resumes the last Codex thread
+```
+
+Neither means anything to `shell`.
+
+> ### Codex on a ChatGPT plan usually needs a model named here
+>
+> `sbx` writes only `model_provider = "sandboxd"` into the mound's `config.toml` and no `model`, so
+> the image's Codex falls back to its own built-in default. On a ChatGPT-plan account that default is
+> frequently not one you are entitled to, and **every prompt fails** with:
+>
+> ```text
+> ERROR: {"detail":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}
+> ```
+>
+> That is not a credentials problem, and no amount of signing in fixes it — `sbx secret ls` will
+> happily show `openai (oauth configured)` throughout. Name a model your account has instead:
+>
+> ```bash
+> DRAUGR_AGENT_ARGS="--model gpt-5.6-terra"
+> ```
+>
+> `-m/--model` is accepted by both `codex` and `codex exec`, checked against the 0.146.0 in `sbx`'s
+> image. To see what your account is offered, look at the model cache written by a Codex you have
+> logged in on the host:
+>
+> ```bash
+> jq -r '.. | .id? // empty' ~/.codex/models_cache.json | sort -u
+> ```
 
 ### `DRAUGR_ATTACH`
 Default `ssh`. How `dr-go` and `dr-shell` get a terminal inside the mound. The other value is `sbx`.
@@ -157,6 +215,25 @@ DRAUGR_KIT=".draugr/kit lua"     # this project's kit, plus the library's "lua"
 Each entry resolves in order: absolute path → a directory in the repo → a named kit in
 `DRAUGR_KIT_STORE` → anything containing `:` or `@`, passed through as an OCI or git reference. The
 repo is searched before the library so a local directory of the same name always wins.
+
+Each of those is tried twice — with `.<agent>` appended, then plain. So `.draugr/kit.codex` beats
+`.draugr/kit` under `DRAUGR_AGENT=codex`, and a library kit `lua.codex` beats `lua`. Most kits need
+nothing of the sort: network rules, install commands and ports are properties of the project, not of
+the agent running in it. An OCI or git reference gets no suffix — it is not Draugr's to invent a tag
+in somebody else's registry.
+
+A kit **may** pin itself with `requires: agent: claude`, and `sbx` then refuses to compose it with
+any other agent:
+
+```text
+ERROR: request failed: 400 Bad Request: kit_artifacts: compose:
+kit "myproject" requires base agent "claude" but was composed with "codex"
+```
+
+`sbx kit validate` accepts such a kit — the mismatch only exists at creation — so Draugr reads the
+field itself and refuses first, in `dr-up`, `dr-kit validate` and `dr-doctor`. `dr-init` does not
+write the field, because freezing today's agent into a committed file would make trying another one
+an edit rather than a setting.
 
 `dr-up` warns when the list has changed since the mound was built, because applying it recreates the
 container — that must be a decision, not a side effect. `dr-kit apply` does it. A remote reference
@@ -356,8 +433,24 @@ Default `auto`.
 | `off` | You do not keep agent memory: no transfers, no refusal, no memory section. |
 
 ### `DRAUGR_MEM_STORE`
-Default `~/.local/share/draugr/memory`. Where `dr-mem export` writes, keyed by the host form of the
-project key.
+Default `~/.local/share/draugr/memory`. Where `dr-mem export` writes: by the host form of the project
+key, then by agent.
+
+```text
+~/.local/share/draugr/memory/
+└── c--Code-TabuLua/          the project, host-keyed so it never starts with "-"
+    ├── claude/
+    │   ├── .draugr-export    what was exported, from where, when
+    │   ├── memory/           the exported copy
+    │   └── memory.previous/  the one it replaced — one `mv` from getting it back
+    └── codex/
+        └── memory/           memories/*.md, and the SQLite session state
+```
+
+Two agents' memories of one project are different things in different shapes, so they get separate
+corners; the project comes first so everything about it stays in one place. A store written before
+0.2.0 had `memory/` sitting directly in the project's corner — the first `dr-mem` or `dr-status`
+after upgrading moves it under `claude/` and says so.
 
 May live anywhere, including WSL's own filesystem — Draugr stages transfers through the repo because
 `sbx cp` is a Windows binary that will not write to a WSL path.

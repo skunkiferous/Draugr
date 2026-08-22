@@ -19,7 +19,7 @@ jobs:
         # bin/* and tests/mocks/* have no extension, so they are globbed rather
         # than named - a new mock is then linted without anyone remembering to
         # add it here.
-        run: shellcheck --external-sources --shell=bash lib/common.sh install.sh tests/mocks/* bin/*
+        run: shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh install.sh tests/mocks/* bin/*
 
       - name: Comment density
         # Draugr's premise is that you can read a file before you trust it, so

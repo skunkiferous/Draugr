@@ -164,6 +164,17 @@ dr_mound_memory_dir() {
     export DR_MEMDIR
 }
 
+# The same, for Codex - which files nothing under the project's name, so there is
+# no key and the repo is not even an argument. DR_CODEXDIR is $CODEX_HOME inside
+# the stand-in tree; the memories live one level below it, and the databases sit
+# directly in it. Spelled out here rather than derived from the module, for the
+# same reason as above: a layout that only agrees with itself is untested.
+dr_mound_codex_dir() {
+    export DR_MOCK_MOUND="$DR_TMP/mound-fs"
+    DR_CODEXDIR="$DR_MOCK_MOUND/home/agent/.codex"
+    export DR_CODEXDIR
+}
+
 # A gitignored secret, with the .gitignore committed so the working tree is
 # CLEAN. That matters: a dirty tree makes dr-go refuse for its own reasons, and a
 # scan test that trips the clean-tree check instead is testing nothing.

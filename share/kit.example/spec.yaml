@@ -25,8 +25,13 @@ name: @SLUG@
 displayName: @NAME@ development environment
 description: Network rules and setup for the @NAME@ project.
 
-requires:
-  agent: @AGENT@
+# No `requires: agent:` here, and that is deliberate. It is optional, and a kit
+# that names an agent CANNOT be composed with any other - sbx refuses outright,
+# so switching DRAUGR_AGENT would mean editing this file. Almost nothing below
+# is agent-specific: network rules, install commands and ports are properties of
+# the project. If you do need one kit per agent, put it in a directory with the
+# agent's name appended - .draugr/kit.codex/ - which Draugr prefers over this one
+# when that agent is configured.
 
 caps:
   network:

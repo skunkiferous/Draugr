@@ -103,6 +103,33 @@ had not committed with it.
 On `ssh`, Ctrl+Z suspends the agent and leaves you in a shell **inside the mound**. `fg` puts you
 back, with the session as you left it.
 
+### Codex refuses every prompt: "model is not supported ... with a ChatGPT account"
+
+```text
+ERROR: {"detail":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}
+```
+
+**This is not a login problem**, however much it looks like one — `sbx secret ls` will show
+`openai (oauth configured)` the whole time, and signing in again changes nothing. Nor does it help to
+copy anything from a Codex you have logged in under WSL: `sbx` never reads `~/.codex/auth.json` from
+either home. Its proxy authenticates on the agent's behalf with a credential it holds itself.
+
+The cause is the model. `sbx` writes `model_provider = "sandboxd"` into the mound's `config.toml` and
+no `model`, so Codex falls back to its own built-in default — and on a ChatGPT plan that default is
+often not one your account has. Name one it does:
+
+```bash
+DRAUGR_AGENT_ARGS="--model gpt-5.6-terra"      # then: dr-go
+```
+
+To see what you are entitled to, read the model cache a host Codex writes after you log in:
+
+```bash
+jq -r '.. | .id? // empty' ~/.codex/models_cache.json | sort -u
+```
+
+No recreate is needed: `DRAUGR_AGENT_ARGS` is passed at attach, not at creation.
+
 ### The agent seems to have forgotten everything
 
 Almost certainly the project-key trap: memory is filed under a key derived from the project's

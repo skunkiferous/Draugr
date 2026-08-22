@@ -35,8 +35,8 @@ status=0
 # that CI lints is a file you lint, without having to remember the incantation.
 if [ $# -eq 0 ]; then
     root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-    set -- "$root"/lib/common.sh "$root"/install.sh "$root"/bin/* \
-           "$root"/tests/mocks/sbx "$root"/tests/helper.bash \
+    set -- "$root"/lib/common.sh "$root"/lib/agents/*.sh "$root"/install.sh \
+           "$root"/bin/* "$root"/tests/mocks/sbx "$root"/tests/helper.bash \
            "$root"/tests/lint-comments.sh
 fi
 

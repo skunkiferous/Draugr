@@ -330,6 +330,53 @@ An unknown verb suggests near matches by substring rather than just refusing.
 
 ---
 
+## Pattern: agent modules
+
+`sbx` runs ten agents. Almost everything Draugr does is the same for all of them
+— attaching, the clone, kits, `dr-sync`, `dr-send`, `dr-data`, the path
+translation. What differs is where an agent keeps its **memory**, which
+credential service it signs in through, and whether it reads the skills store
+where `sbx` mounts it — and that is exactly the knowledge most likely to be
+wrong: it is undocumented by the agents themselves, arrived at by measurement,
+and changes without notice.
+
+So it lives in `lib/agents/<agent>.sh`, one file per agent, rather than in a
+`case` statement in each command that needs it:
+
+```bash
+dr_agent_load() {
+    local agent=${DRAUGR_AGENT:-claude} file
+    file="$DRAUGR_ROOT/lib/agents/$agent.sh"
+    [ -f "$file" ] || file="$DRAUGR_ROOT/lib/agents/default.sh"
+    . "$file"
+}
+```
+
+Four things about it are load-bearing:
+
+- **`lib/agents/default.sh` is the interface.** It is not a stub — it is what an
+  agent nobody has measured actually gets, and its answer to "where is the
+  memory" is an honest failure rather than a guess. `tests/agents.bats` reads the
+  function names out of it and fails if any other module omits one.
+- **Every module must define every function.** Sourcing a second module redefines
+  only what that module happens to define, so a partial one leaves the *previous*
+  agent's answers standing. That is the bug the interface test exists to catch:
+  it would put Claude's memory path into a Codex session with nothing on screen.
+- **It loads twice.** Once at the bottom of `lib/common.sh`, so a command that
+  never reads a config (`dr-skills`, `dr-setup`) still has the functions; and
+  again at the end of `dr_load_config`, which is the load that decides — the
+  module is chosen by a setting the cascade produces, so anything earlier would
+  read the agent from the wrong layer.
+- **Modules take paths as arguments, never `$HOME`.** A module that looks inside
+  the mound does it through `dr_mound_sh`, whose scripts are single-quoted and
+  run over there. A `$HOME` written into the script text expands on the *host*.
+
+To add an agent: copy `default.sh`, fill in the layout, add a case to
+`tests/agents.bats`. `dr_agent_known` picks it up from the directory listing, so
+there is no list to update.
+
+---
+
 ## Pattern: mocking `sbx` and `ssh`
 
 Almost everything Draugr does is *building a command line* for a Windows binary

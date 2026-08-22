@@ -12,11 +12,81 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- **Codex is a supported agent.** `DRAUGR_AGENT=codex` works with the commands that already exist —
+  including Ctrl+Z, verified end to end against a real mound. Everything except memory was already
+  agent-agnostic: the attach path quotes `$DRAUGR_AGENT`, and the clone, the mirrored paths,
+  `dr-sync`, `dr-send` and `dr-data` never knew which agent was in there.
+- **`lib/agents/<agent>.sh`** — one file per agent for the parts that genuinely differ, chosen by
+  `dr_agent_load` at the end of the config cascade. `lib/agents/default.sh` is both the interface and
+  what an unmeasured agent gets, and a test fails if any module omits a function: sourcing a partial
+  one would leave the previous agent's answers standing, which is how Claude's memory path ends up in
+  a Codex mound with nothing on screen to say so.
+- The other eight agents now get an honest refusal from `dr-mem` instead of a warning followed by a
+  copy into a directory that agent will never read. Everything else about them works.
+- Documented the **Codex model trap**, which fails every prompt in a way that reads as a broken
+  login: `sbx` sets `model_provider` in the mound's `config.toml` but no `model`, so Codex falls back
+  to a built-in default that a ChatGPT-plan account is often not entitled to, and the API answers
+  `The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account`. `sbx secret ls`
+  reads `openai (oauth configured)` throughout, and `sbx` never reads `~/.codex/auth.json` from
+  either home, so there is nothing to copy and nothing to sign into. The fix is
+  `DRAUGR_AGENT_ARGS="--model gpt-5.6-terra"`, applied at attach rather than at creation.
+  `~/.codex/models_cache.json` on a host Codex lists what the account actually has. Deliberately
+  *not* a `dr-doctor` check: Draugr cannot see the entitlements from outside the mound, and the only
+  check it could write would fire for everyone who never hits this.
+- `dr-doctor` reports a missing agent credential. `sbx` warns about one when it creates a sandbox and
+  never again, which is the wrong moment — by the time it matters you are looking at a logged-out
+  agent. The token stays on the host either way: sbx's proxy authenticates per request, so signing in
+  after a mound was built needs no rebuild. Measured — a claude mound reports
+  `SBX_CRED_ANTHROPIC_MODE=none` while `sbx secret ls` shows the OAuth token configured.
+
 ### Changed
 
-### Removed
+- **The memory store is now keyed by project *and agent*:** `<project-key>/<agent>/`. Two agents'
+  memories of one project are different things in different shapes — Claude Code's is a directory of
+  markdown, Codex's is markdown plus SQLite — and they must not overwrite each other. A store written
+  before this is moved under `claude/` by the first `dr-mem` or `dr-status` after upgrading, and says
+  so. Moved under `claude/` specifically, never under whatever agent is configured now.
+- **`dr-init` no longer writes `requires: agent:` into the kit it generates.** Measured: the field is
+  optional, an agent-less kit composes with any agent, and a pinned one fails at creation with
+  `400 Bad Request: … requires base agent "claude" but was composed with "codex"`. Freezing today's
+  choice into a committed file would make trying another agent an edit rather than a setting. Almost
+  nothing in a kit is agent-specific anyway — network rules, install commands and ports belong to the
+  project.
+- `DRAUGR_KIT` entries resolve `<entry>.<agent>` before `<entry>`, so `.draugr/kit.codex` beats
+  `.draugr/kit` and a library kit `lua.codex` beats `lua`. The escape hatch for kits that genuinely
+  differ, without duplicating the ninety per cent that does not. A suffix rather than a subdirectory,
+  because `.draugr/kit/codex/` would be indistinguishable from a kit that happens to contain a
+  directory of that name.
+- `dr-skills` no longer claims the store mounts at `~/.claude/skills`. There is **one** store — `sbx`
+  collapses five per-agent host directories into a single namespace, per `sbx skills import --help` —
+  and it varies only where that store appears: `~/.claude/skills` for claude, `~/.agents/skills` for
+  codex. Both are read by their agent, measured on each side by asking the agent itself to list its
+  skills with shell use forbidden. A marker sitting only in the store was named by Claude Code in a
+  claude mound and by Codex in a codex one, and a second marker added *after* the codex mound was
+  built appeared with no restart. So a skill in the store is in reach of every mound on the machine,
+  whichever agent it runs — which is what makes reviewing it worth a command of its own.
 
 ### Fixed
+
+- **`dr-skills` no longer skips hidden directories.** `list`, `diff` and `accept` globbed `*/`, which
+  does not match a name beginning with a dot — so the review commands had a blind spot exactly where
+  someone would want one. Measured against Claude Code 2.1.221: a store entry named `.hidden-probe`
+  appears in Claude's own list of available skills like any visible one, while anything a level
+  deeper is ignored. Depth is the limit, not the dot. Not hypothetical either — Codex writes
+  `.system/` into its skills directory the first time it runs.
+- `dr-up`, `dr-kit validate` and `dr-doctor` catch a kit pinned to a different agent **before**
+  creation, naming both agents. `sbx kit validate` accepts such a kit — the mismatch exists only at
+  compose time — so Draugr reading the field itself is the only thing that could catch it. Same class
+  as the kit-slug failure fixed in 0.1.0: sbx's own words, two steps from the cause.
+- That check runs **before** `dr-up --recreate` removes anything. Written the obvious way first, it
+  refused at the point of creation — which is *after* the removal, so a working mound was destroyed
+  over a problem that had been visible on disk the whole time. Found by running it, not by reading
+  it.
+- The **first `dr-up` on a new project no longer reports "auto memory import failed"**. With
+  `DRAUGR_MEM_SYNC=auto` the import runs on every `dr-up`, and a project that has never had a session
+  has nothing in the store — which is the ordinary state of affairs, not a failure. `--if-empty` now
+  treats an empty store as the no-op it is. Asked for explicitly, `dr-mem import` still says there is
+  nothing there.
 
 ## [0.1.0] — 2026-08-19
 

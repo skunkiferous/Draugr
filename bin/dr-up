@@ -143,6 +143,25 @@ fi
 
 state=$(dr_sandbox_state "$DRAUGR_SANDBOX")
 
+# A kit pinned to another agent cannot be composed with this one, and sbx says so
+# only when asked to create - in its own words, about a YAML field you did not
+# know it had read. `sbx kit validate` accepts such a kit happily, so this check
+# has to be ours.
+#
+# Run BEFORE the --recreate removal below, not at the point of creation: refusing
+# afterwards would leave you with no mound at all, having destroyed a working one
+# over a problem that was visible before it was touched. Measured, by doing
+# exactly that.
+if [ "$state" = absent ] || [ -n "$recreate" ]; then
+    while IFS=' ' read -r _kit _want; do
+        [ -n "$_kit" ] || continue
+        dr_die "kit $_kit requires agent \"$_want\", but DRAUGR_AGENT is \"$DRAUGR_AGENT\"" \
+               "sbx refuses to compose them, and would say so in its own words." \
+               "Either drop the 'requires: agent:' line from $_kit/spec.yaml," \
+               "or keep a separate kit for this agent:  $_kit.$DRAUGR_AGENT/"
+    done < <(dr_kit_agent_conflicts)
+fi
+
 # --recreate exists because creation flags are frozen into the sandbox spec: the
 # only way to change a port mapping or the memory limit is to build a new mound.
 if [ -n "$recreate" ] && [ "$state" != absent ]; then

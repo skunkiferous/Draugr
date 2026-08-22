@@ -253,6 +253,45 @@ dr-mem import --from-host
 largely trusted. Your own is fine; a colleague's or a template's is a payload you carried across the
 boundary yourself. `dr-mem import` refuses to run unattended against a store Draugr did not write.
 
+### The same commands, a different shape: Codex
+
+`dr-mem` works the same for Codex, but almost nothing underneath it does. Three differences are
+worth knowing, because each changes what you should expect:
+
+**Memory is not per project.** Codex keeps everything under `$CODEX_HOME` — `/home/agent/.codex` in
+the mound — with no directory named after the workspace. There is no key and nothing to translate.
+Draugr can still treat it as *this project's* memory only because one mound holds one repository.
+
+**Half of it is a database.** The generated memories are markdown you can read
+(`memories/MEMORY.md`, `memory_summary.md`, `raw_memories.md`, `rollout_summaries/`). The session
+history that `codex resume` reads is SQLite beside them, and `dr-mem` carries both — so a thread
+survives `dr-rm` and can be resumed in the rebuilt mound.
+
+There is no `sqlite3` in the image to take a proper backup with, so those files can only be copied
+while nothing is writing them. If Codex is still running when the export happens, `dr-mem` carries
+the markdown, skips the databases and says so. Leave the agent and run `dr-mem export` again.
+
+**It is off by default.** Codex generates no memories at all until `[features] memories = true` is
+in its config — deliberately so in the EEA, the UK and Switzerland, where building a behavioural
+profile needs a legal basis. Draugr does not turn it on behind your back: `dr-mem status` reports
+whether it is on, and `dr-mem import` enables it, because asking for memory to be there is asking
+for it to be used.
+
+```bash
+dr-shell -- codex features enable memories    # or turn it on yourself
+```
+
+### `AGENTS.md` and `CLAUDE.md` are not memory
+
+Both agents also read an instruction file from the repository — `AGENTS.md` for Codex, `CLAUDE.md`
+for Claude Code. Those are ordinary committed files, so they need nothing from Draugr at all: they
+arrive in the clone with everything else, and when the agent edits one it comes back through
+`dr-sync` and gets read in `dr-diff` like any other change.
+
+That makes them the better place for anything that must always apply. Memory is a recall layer the
+agent maintains for itself and `dr-mem` carries between mounds; `AGENTS.md` is what you decided, in
+version control, reviewed. Prefer it for project rules, and let memory be memory.
+
 ---
 
 ## Skills
@@ -260,6 +299,34 @@ boundary yourself. `dr-mem import` refuses to run unattended against a store Dra
 The shared skills store is mounted read-write into every mound and survives `sbx rm`. It is the one
 path by which a sandbox can leave something behind for a later one to read, and skills are
 instructions.
+
+One host directory, bind-mounted into each mound at a path `sbx` chooses — `~/.claude/skills` in a
+Claude mound, `~/.agents/skills` in a Codex one. Draugr does not pick that path, and does not need
+to: each agent reads the one it is given.
+
+> ### One store, two mount paths, both of them read
+>
+> `sbx` keeps a single store and varies only where it appears: `~/.claude/skills` in a claude mound,
+> `~/.agents/skills` in a codex one. Both are read by their agent — measured the same way on each
+> side, by asking the agent itself to list its skills with shell use forbidden:
+>
+> ```text
+> claude:  draugr-probe · dataviz · update-config · simplify · claude-api · …
+> codex:   imagegen · openai-docs · plugin-creator · skill-creator · skill-installer · draugr-probe
+> ```
+>
+> In both cases `draugr-probe` was a marker skill sitting in the shared store and nowhere else. A
+> second marker added to the store *after* the codex mound was built appeared immediately, with no
+> restart. So `sbx skills import --help` is telling the truth when it lists Claude and Codex as
+> supported, and a skill you put in the store is in reach of every mound on the machine.
+>
+> That cuts both ways, and it is why `dr-skills` exists: one namespace, no per-agent partition, so
+> what a codex mound leaves behind is what your claude mounds read next.
+
+The security half is unaffected by any of this. The mount is writable by the sandbox whether or not
+the agent reads it, which is why the store is reviewed rather than trusted — and `dr-skills` counts
+hidden directories, because a store entry named `.something` is a skill Claude loads like any other.
+Measured: a `.hidden-probe` in the store appears in Claude's own list of available skills.
 
 | | |
 |---|---|

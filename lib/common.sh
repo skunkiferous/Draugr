@@ -591,6 +591,57 @@ dr_load_config() {
         DRAUGR_SANDBOX=$(dr_sandbox_name "$repo")
         DR_ORIGIN[DRAUGR_SANDBOX]="derived from repo name"
     fi
+
+    # STEP 5 - now that DRAUGR_AGENT is final, load what we know about it. This
+    # has to be last: the module is chosen by a setting the cascade decides, so
+    # loading it any earlier would pick the agent from the wrong layer.
+    dr_agent_load
+}
+
+# ---------------------------------------------------------------------------
+# Agent modules
+#
+# Everything Draugr does is the same for every agent except where an agent's own
+# private layout is involved - which today means memory, and little else. That
+# knowledge lives in lib/agents/<agent>.sh rather than in a case statement in
+# each command, because it is the part most likely to be wrong: it is undocumented
+# by the agents themselves, measured rather than published, and changes without
+# notice. One file per agent means a wrong guess about one cannot break another.
+#
+# lib/agents/default.sh carries the interface and is what an agent we have not
+# measured gets - which is the honest answer for eight of sbx's ten.
+# ---------------------------------------------------------------------------
+
+# dr_agent_load - source the module for $DRAUGR_AGENT, or the default.
+#
+# Called twice: once at the bottom of this file, so that a command which never
+# reads a config still has the functions, and again at the end of dr_load_config
+# once the cascade has settled. Sourcing a second module simply redefines every
+# function, which is why each module must define ALL of them - a partial module
+# would leave one agent's answers standing in another agent's session.
+dr_agent_load() {
+    local agent=${DRAUGR_AGENT:-claude} file
+    file="$DRAUGR_ROOT/lib/agents/$agent.sh"
+    [ -f "$file" ] || file="$DRAUGR_ROOT/lib/agents/default.sh"
+    dr_debug "agent module: ${file#"$DRAUGR_ROOT"/}"
+    # shellcheck disable=SC1090  # path is only known at runtime
+    . "$file" || dr_die "could not load the agent module $file"
+}
+
+# dr_agent_known - the agents Draugr has a module for, space separated.
+#
+# Derived from the directory rather than from a list someone has to remember to
+# update, so adding lib/agents/gemini.sh is the whole of adding gemini. "default"
+# is not an agent, so it is left out of the answer.
+dr_agent_known() {
+    local file name out=''
+    for file in "$DRAUGR_ROOT"/lib/agents/*.sh; do
+        [ -f "$file" ] || continue
+        name=$(basename "$file" .sh)
+        [ "$name" = default ] && continue
+        out+=" $name"
+    done
+    printf '%s' "${out# }"
 }
 
 # dr_config_set_flag <KEY> <value> - highest precedence, for command-line flags.
@@ -1378,34 +1429,78 @@ dr_kit_store() {
 # contain a directory called `lua` means its own, and the more specific answer
 # winning is the same rule the whole config cascade follows.
 #
+# Each shape is tried twice: once with ".<agent>" appended, then plain. So under
+# DRAUGR_AGENT=codex, ".draugr/kit.codex" beats ".draugr/kit" and a library kit
+# "lua.codex" beats "lua". Most kits need nothing of the sort - network rules and
+# install commands do not care which agent runs them - but the escape hatch is
+# here for the ones that genuinely differ, and it costs one loop.
+#
+# A suffix rather than a subdirectory, deliberately: ".draugr/kit/codex/" would
+# be indistinguishable from a kit that happens to contain a directory of that
+# name, and sbx reads whole directories.
+#
 # Prints the resolved directory - or the reference untouched - and returns 0.
 # Prints nothing and returns 1 when the entry names nothing that exists, which
 # callers treat as ordinary: a kit is optional.
 dr_kit_resolve() {
-    local entry=$1 cand
+    local entry=$1 cand name
     [ -n "$entry" ] || return 1
 
-    case "$entry" in
-    # An absolute path means exactly itself - no search, nothing to fall back to.
-    /*)
-        if [ -d "$entry" ]; then printf '%s' "$entry"; return 0; fi
-        ;;
-    # Otherwise the repo first, then the library, so a local directory of the
-    # same name always wins over a shared one.
-    *)
-        cand="$DR_REPO/$entry"
-        if [ -d "$cand" ]; then printf '%s' "$cand"; return 0; fi
-        cand="$(dr_kit_store)/$entry"
-        if [ -d "$cand" ]; then printf '%s' "$cand"; return 0; fi
-        ;;
-    esac
+    for name in "$entry.${DRAUGR_AGENT:-claude}" "$entry"; do
+        case "$name" in
+        # An absolute path means exactly itself - no search beyond the suffix.
+        /*)
+            if [ -d "$name" ]; then printf '%s' "$name"; return 0; fi
+            ;;
+        # Otherwise the repo first, then the library, so a local directory of the
+        # same name always wins over a shared one.
+        *)
+            cand="$DR_REPO/$name"
+            if [ -d "$cand" ]; then printf '%s' "$cand"; return 0; fi
+            cand="$(dr_kit_store)/$name"
+            if [ -d "$cand" ]; then printf '%s' "$cand"; return 0; fi
+            ;;
+        esac
+    done
 
     # Nothing on this disk. A ":" or "@" means a reference format we do not own,
     # so it goes through untouched and sbx gets to reject it in its own words.
+    # No agent suffix here: it is not ours to graft onto somebody's registry tag.
     case "$entry" in
         *[:@]*) printf '%s' "$entry"; return 0 ;;
     esac
     return 1
+}
+
+# dr_kit_agent_conflicts - resolved kits that demand a different agent, one per
+# line as "<kit> <agent it wants>".
+#
+# A kit MAY pin itself with `requires: agent: claude`, and sbx then refuses to
+# compose it with anything else:
+#
+#   ERROR: request failed: 400 Bad Request: kit_artifacts: compose:
+#   kit "x" requires base agent "claude" but was composed with "codex"
+#
+# which arrives at `dr-up` in sbx's vocabulary, two steps from the cause - the
+# same problem the kit slug had. Worse, `sbx kit validate` passes such a kit
+# happily: the mismatch only exists at compose time, so there is nothing else
+# that could catch it before creation. Hence Draugr reading the field itself.
+#
+# Directories only. A ZIP or an OCI reference cannot be read from here, and
+# guessing at one would be worse than letting sbx answer.
+dr_kit_agent_conflicts() {
+    local ref want
+    while IFS= read -r ref; do
+        [ -d "$ref" ] || continue
+        # The field is two levels into the YAML, but "agent:" appears only under
+        # requires: in this schema, so one sed is honest enough - and a wrong
+        # read here costs a spurious warning, not a wrong mound.
+        want=$(sed -n 's/^[[:space:]]*agent:[[:space:]]*//p' "$ref/spec.yaml" 2>/dev/null | head -1)
+        [ -n "$want" ] || continue
+        [ "$want" = "${DRAUGR_AGENT:-claude}" ] && continue
+        printf '%s %s\n' "$ref" "$want"
+    done < <(dr_kit_refs)
+    return 0
 }
 
 # dr_kit_refs - every DRAUGR_KIT entry that resolved, one per line, in order.
@@ -1574,23 +1669,20 @@ dr_skills_dir() {
 }
 
 # ---------------------------------------------------------------------------
-# Memory, and the project-key translation
+# Path keys, and the memory store
 #
-# Claude Code keeps per-project memory at
-#     <home>/.claude/projects/<PROJECT-KEY>/memory/
-# and derives PROJECT-KEY from the project's ABSOLUTE PATH. One repository
-# therefore has a different key on each side of the boundary:
+# An agent that keeps per-project state names the directory after the project's
+# ABSOLUTE PATH, so one repository has a different key on each side of the
+# boundary:
 #
 #   Windows   C:\Code\Draugr       c--Code-Draugr
 #   WSL       /mnt/c/Code/Draugr   -mnt-c-Code-Draugr
 #   Mound     /c/Code/Draugr       -c-Code-Draugr
 #
-# Measured rather than assumed: on this machine one repo really does appear as
-# c--Code-claude on the host and -c-Code-claude inside its mound.
-#
-# Copy the directory across without renaming and you get one the agent silently
-# never reads. No error, no warning, just an agent that has forgotten
-# everything - and that silence is the entire reason dr-mem exists.
+# The encoding is Claude Code's, and lib/agents/claude.sh explains what a copy
+# that crosses the boundary unrenamed does to an agent's memory. The encoder
+# lives HERE rather than there because Draugr's own store uses the Windows form
+# to name each repo's corner of it, whichever agent that repo runs.
 # ---------------------------------------------------------------------------
 
 # dr_mem_key <absolute-path> - encode a path the way Claude Code names its folder.
@@ -1601,8 +1693,8 @@ dr_skills_dir() {
 #
 # Only those three characters are known to be substituted; the rest of the path
 # keeps its case, as "c--Code-Draugr" shows. What a space or other punctuation in
-# a repo name does is NOT established, so dr_mem_mound_dir checks its answer
-# against the mound instead of trusting it.
+# a repo name does is NOT established, so dr-mem checks the answer against the
+# mound instead of trusting it.
 dr_mem_key() {
     local p=$1
     # Lowercase the drive letter only - "Code" and "Draugr" keep their capitals.
@@ -1624,12 +1716,19 @@ dr_mem_key_mound() { dr_mem_key "$(dr_path_mound "$1")"; }
 
 # Inside the mound the agent is uid 1000 with home /home/agent - verified, not
 # assumed: `sbx exec … id` reports uid=1000(agent) and $HOME=/home/agent.
+# shellcheck disable=SC2034  # read by the agent modules, which shellcheck does
+# not follow from here - every dr_agent_mem_dir is built on it
 DR_MOUND_HOME=/home/agent
 
-# dr_mem_mound_dir <repo> - the project directory inside the mound.
-dr_mem_mound_dir() {
-    printf '%s/.claude/projects/%s' "$DR_MOUND_HOME" "$(dr_mem_key_mound "$1")"
-}
+# Where dr-mem assembles a transfer inside the mound. The carried set can be
+# several files in several places, so it is packed into this one directory and
+# moved in a single `sbx cp` - which is simpler, and leaves something whose
+# existence can be checked afterwards rather than trusted.
+#
+# Under .cache/ beside the attach rcfile: a scratch path the agent owns, that
+# nothing else reads, and that a wiped mound recreates.
+# shellcheck disable=SC2034  # read by dr-mem and the agent modules
+DR_MOUND_STAGE="$DR_MOUND_HOME/.cache/draugr/mem"
 
 # dr_mem_store_dir <repo> - this repo's corner of $DRAUGR_MEM_STORE.
 #
@@ -1637,31 +1736,71 @@ dr_mem_mound_dir() {
 # never be mistaken for an option by a command you type at it, and it is the
 # name a host-side Claude install would use for the same repo, so the store
 # stays recognisable when you go looking through it by hand.
+#
+# Then by agent, because two agents' memories of the same project are two
+# different things that must not overwrite one another - and because they are
+# not even the same SHAPE: Claude Code's is a directory of markdown, Codex's is
+# markdown plus SQLite. Repo first rather than agent first, so that everything
+# about one project stays in one place when you go looking by hand.
 dr_mem_store_dir() {
-    printf '%s/%s' "${DRAUGR_MEM_STORE%/}" "$(dr_mem_key_win "$1")"
+    printf '%s/%s/%s' "${DRAUGR_MEM_STORE%/}" "$(dr_mem_key_win "$1")" \
+        "${DRAUGR_AGENT:-claude}"
 }
 
-# dr_mem_host_dir <repo> - the host's own live Claude memory for this repo, if
-# any. Two installs are possible and they use different keys: Claude Code run
-# under Windows, and Claude Code run inside WSL. Prints the first that exists
-# and returns 1 when neither does.
-dr_mem_host_dir() {
-    local repo=$1 userprofile candidate
+# dr_mem_store_migrate <repo> - move a pre-0.2.0 store under its agent.
+#
+# Before the store was split by agent, this repo's memory sat directly in its
+# corner. Everything that could have written it was Claude Code, so that is
+# where it goes - NOT under whatever agent happens to be configured now, which
+# would file Claude's memories under Codex the first time you tried the new one.
+#
+# Announced rather than silent: it is the user's data moving on disk, and one
+# line saying so is cheaper than the confusion of finding it somewhere else.
+dr_mem_store_migrate() {
+    local old new entry
+    old="${DRAUGR_MEM_STORE%/}/$(dr_mem_key_win "$1")"
+    new="$old/claude"
 
-    # Windows first: on a WSL host $HOME is ext4 and usually has no Claude
-    # install at all, while the Windows profile normally does.
-    if command -v cmd.exe >/dev/null 2>&1; then
-        userprofile=$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')
-        if [ -n "$userprofile" ] && [ "$userprofile" != '%USERPROFILE%' ]; then
-            candidate="$(dr_path_from_win "$userprofile")/.claude/projects/$(dr_mem_key_win "$repo")/memory"
-            [ -d "$candidate" ] && { printf '%s' "$candidate"; return 0; }
-        fi
-    fi
+    # The old shape is memory/ sitting directly in the corner. If claude/ already
+    # exists there is nothing to do, and a corner holding neither is a store this
+    # version wrote in the first place.
+    [ -d "$old/memory" ] || return 0
+    [ -d "$new" ] && return 0
 
-    candidate="$HOME/.claude/projects/$(dr_mem_key_wsl "$repo")/memory"
-    [ -d "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+    # The export marker and the one-mv-back copy move with it, or the store
+    # arrives in its new home having forgotten that it was ever exported - which
+    # is what makes `dr-mem import` trust it without asking.
+    mkdir -p "$new"
+    for entry in memory memory.previous .draugr-export; do
+        if [ -e "$old/$entry" ]; then mv "$old/$entry" "$new/$entry"; fi
+    done
+    dr_info "moved $old into claude/ - the memory store is now per agent"
+    return 0
+}
 
-    return 1
+# ---------------------------------------------------------------------------
+# Talking to the mound
+#
+# `sh -c 'script' sh ARG` makes ARG the script's $1. Passing paths as arguments
+# rather than splicing them into the script text means nothing in a path can be
+# re-read as shell syntax, and it keeps the scripts single-quoted and legible.
+#
+# Agent modules use these, which is why they are here rather than in dr-mem
+# where they started: a module has to be able to look inside the mound to answer
+# anything about what the agent has actually written.
+# ---------------------------------------------------------------------------
+
+# Quiet: for probes and listings, where a failure is an answer rather than a
+# fault and sbx's own message would only be noise.
+dr_mound_sh() {
+    local script=$1; shift
+    dr_sbx exec "$DRAUGR_SANDBOX" -- sh -c "$script" sh "$@" 2>/dev/null
+}
+
+# Loud: for the calls that change something, where the reason matters.
+dr_mound_run() {
+    local script=$1; shift
+    dr_sbx exec "$DRAUGR_SANDBOX" -- sh -c "$script" sh "$@"
 }
 
 # dr_stage - a scratch directory that sbx.exe can actually see.
@@ -1855,3 +1994,10 @@ dr_hook() {
     # A failing hook is fatal: it exists to veto, so ignoring it would defeat it.
     "$hook" || dr_die "hook $name failed (exit $?)" "Hook: $hook"
 }
+
+# One agent module is always loaded, from the moment this file is sourced. Some
+# commands - dr-skills, dr-setup - never read a config at all, and a dr_agent_*
+# function that existed only after dr_load_config would be a trap for whoever
+# adds the next caller. dr_load_config loads it again once the cascade has had
+# its say, which is the load that decides.
+dr_agent_load

@@ -13,7 +13,12 @@
 
 # --- Which agent, and how big a mound ---------------------------------------
 
-# claude | codex | copilot | cursor | droid | gemini | kiro | opencode | shell
+# claude | codex | copilot | cursor | docker-agent | droid | gemini | kiro |
+# opencode | shell
+#
+# Everything but MEMORY works the same for all of them. Draugr knows where two
+# of them keep theirs - see lib/agents/ - and dr-mem declines for the rest
+# rather than copying into a directory the agent will never read.
 #DRAUGR_AGENT=claude
 
 # Arguments passed to the agent on every dr-go, as if you had typed
@@ -21,11 +26,19 @@
 # Empty is today's behaviour: the agent starts with nothing extra. The common
 # reason to set it is to resume by default rather than starting fresh each time:
 #
-#   DRAUGR_AGENT_ARGS="--continue"
+#   DRAUGR_AGENT_ARGS="--continue"        # Claude Code
+#   DRAUGR_AGENT_ARGS="resume --last"     # Codex
 #
-# These are the AGENT's flags, not Draugr's, so they depend on DRAUGR_AGENT -
-# "--continue" is Claude's spelling and means nothing to `shell`. Draugr does not
-# interpret them; whatever is here is split on spaces and handed over.
+# These are the AGENT's flags, not Draugr's, so they depend on DRAUGR_AGENT and
+# neither of those means anything to `shell`. Draugr does not interpret them;
+# whatever is here is split on spaces and handed over.
+#
+# Codex on a ChatGPT plan usually needs a model named here. sbx sets the provider
+# in the mound's config.toml but no model, so codex falls back to its own default
+# - and on a ChatGPT account that default is often one you are not entitled to,
+# which fails EVERY prompt with "... is not supported when using Codex with a
+# ChatGPT account". It looks like a login problem and is not. See docs/CONFIG.md.
+#DRAUGR_AGENT_ARGS="--model gpt-5.6-terra"
 #
 # To override for one run:  dr-go -- <other args>   (replaces, does not add to)
 # To pass nothing for one run:  dr-go --bare
@@ -155,6 +168,9 @@
 
 # auto | manual | off
 #DRAUGR_MEM_SYNC=auto
+
+# The store is <project key>/<agent>/ under this, because two agents' memories
+# of one project are different things in different shapes.
 #DRAUGR_MEM_STORE="$HOME/.local/share/draugr/memory"
 
 # --- Safety rails -----------------------------------------------------------

@@ -7,12 +7,14 @@
 # Put anything personal in .draugr.local.conf instead (gitignored, sourced after
 # this file, so it wins).
 
-# The agent this project expects.
+# The agent this project expects. Changing it later means dr-up --recreate: sbx
+# freezes the agent into the sandbox spec when the mound is built.
 #DRAUGR_AGENT=claude
 
-# Arguments for the agent. Set this here only if the PROJECT needs them; a habit
-# like "--continue" is yours rather than the repo's, so it belongs in
-# ~/.config/draugr/config (or .draugr.local.conf) instead of a committed file.
+# Arguments for the agent, in the agent's own spelling - "--continue" for Claude
+# Code, "resume --last" for Codex. Set this here only if the PROJECT needs them;
+# a habit like resuming by default is yours rather than the repo's, so it belongs
+# in ~/.config/draugr/config (or .draugr.local.conf) instead of a committed file.
 #DRAUGR_AGENT_ARGS=
 
 # Network rules and setup commands live in the kit, not here:

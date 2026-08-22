@@ -476,3 +476,136 @@ make_kit() {
     [ -f "$REPO/.draugr/kit/spec.yaml" ]
     [ ! -e "$REPO/.draugr/kit lua" ]
 }
+
+# --- one kit, several agents ---------------------------------------------------
+#
+# Measured against sbx 0.37.1, and the reason all of this exists:
+#
+#   requires: agent: claude  +  sbx create codex
+#     -> 400 Bad Request: kit "x" requires base agent "claude" but was composed
+#        with "codex"
+#
+# while a kit with no `requires:` block at all validates AND composes with any
+# agent. So Draugr stopped writing the field, prefers a per-agent directory when
+# there is one, and checks the field itself when somebody else wrote it.
+
+# A kit that pins itself to one agent, which sbx will then refuse to compose
+# with any other.
+make_pinned_kit() {
+    make_kit "$1"
+    printf 'requires:\n  agent: %s\n' "$2" >> "$1/spec.yaml"
+}
+
+@test "dr_kit_resolve: a per-agent directory wins over the plain one" {
+    make_kit "$REPO/.draugr/kit"
+    make_kit "$REPO/.draugr/kit.codex"
+
+    DRAUGR_AGENT=codex run dr_kit_resolve ".draugr/kit"
+    [ "$output" = "$REPO/.draugr/kit.codex" ]
+}
+
+@test "dr_kit_resolve: without one, the plain directory is still used" {
+    make_kit "$REPO/.draugr/kit"
+
+    DRAUGR_AGENT=codex run dr_kit_resolve ".draugr/kit"
+    [ "$output" = "$REPO/.draugr/kit" ]
+}
+
+@test "dr_kit_resolve: the suffix applies to library kits too" {
+    make_kit "$DRAUGR_KIT_STORE/lua"
+    make_kit "$DRAUGR_KIT_STORE/lua.codex"
+
+    DRAUGR_AGENT=codex run dr_kit_resolve "lua"
+    [ "$output" = "$DRAUGR_KIT_STORE/lua.codex" ]
+    DRAUGR_AGENT=claude run dr_kit_resolve "lua"
+    [ "$output" = "$DRAUGR_KIT_STORE/lua" ]
+}
+
+@test "dr_kit_resolve: an OCI reference gets no agent suffix grafted on" {
+    # Not ours to invent a tag in somebody else's registry.
+    DRAUGR_AGENT=codex run dr_kit_resolve "ghcr.io/org/kit:v1"
+    [ "$output" = "ghcr.io/org/kit:v1" ]
+}
+
+@test "dr-init: the generated kit does not pin an agent" {
+    run dr-init --agent codex
+    [ "$status" -eq 0 ]
+    # Pinning would make switching agents an edit to a committed file. Anchored
+    # so the comment explaining the absence does not count as the thing itself.
+    run grep -E '^[[:space:]]*(requires:|agent:)' "$REPO/.draugr/kit/spec.yaml"
+    [ "$status" -ne 0 ]
+
+    # And the check that reads it agrees there is nothing to conflict with.
+    export DRAUGR_KIT=.draugr/kit
+    DRAUGR_AGENT=gemini run dr_kit_agent_conflicts
+    [ -z "$output" ]
+}
+
+@test "kit conflicts: a kit pinned to another agent is named before creation" {
+    make_pinned_kit "$REPO/.draugr/kit" claude
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=codex
+
+    run dr_kit_agent_conflicts
+    [ "$output" = "$REPO/.draugr/kit claude" ]
+}
+
+@test "kit conflicts: a kit pinned to THIS agent is not a conflict" {
+    make_pinned_kit "$REPO/.draugr/kit" codex
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=codex
+
+    run dr_kit_agent_conflicts
+    [ -z "$output" ]
+}
+
+@test "kit conflicts: an unpinned kit is not a conflict for anyone" {
+    make_kit "$REPO/.draugr/kit"
+    export DRAUGR_KIT=.draugr/kit
+
+    DRAUGR_AGENT=codex run dr_kit_agent_conflicts
+    [ -z "$output" ]
+    DRAUGR_AGENT=gemini run dr_kit_agent_conflicts
+    [ -z "$output" ]
+}
+
+@test "dr-up: refuses rather than letting sbx fail two steps from the cause" {
+    make_pinned_kit "$REPO/.draugr/kit" claude
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=codex DR_MOCK_STATE=absent
+
+    run dr-up
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'requires agent "claude"'* ]]
+    [[ "$output" == *codex* ]]
+    # And it never got as far as trying.
+    [ -z "$(calls create)" ]
+}
+
+@test "dr-up: an unpinned kit creates the mound for any agent" {
+    make_kit "$REPO/.draugr/kit"
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=codex DR_MOCK_STATE=absent
+
+    run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$(calls create)" == *codex* ]]
+}
+
+@test "dr-kit validate: warns about a pin sbx's own validate accepts" {
+    make_pinned_kit "$REPO/.draugr/kit" claude
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=codex
+
+    run dr-kit validate
+    # sbx said yes - the mock always does - and Draugr said "yes, but".
+    [[ "$output" == *'requires agent "claude"'* ]]
+}
+
+@test "dr-up --recreate: refuses BEFORE destroying the mound it was going to replace" {
+    make_pinned_kit "$REPO/.draugr/kit" claude
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=codex DR_MOCK_STATE=running
+
+    run dr-up --recreate --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'requires agent "claude"'* ]]
+    # The whole point: a working mound is not thrown away over a problem that was
+    # visible before anything was touched.
+    [ -z "$(calls rm)" ]
+    [ -z "$(calls create)" ]
+}

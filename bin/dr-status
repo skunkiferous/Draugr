@@ -134,6 +134,11 @@ fi
 # a section reporting on something you have said you do not use is just noise.
 if [ "$DRAUGR_MEM_SYNC" != off ]; then
     heading "memory"
+    # The store gained a per-agent level in 0.2.0. Migrating here as well as in
+    # dr-mem means the first command you run after upgrading moves it, whichever
+    # one that is - rather than reporting an empty store until you happen to run
+    # the other.
+    dr_mem_store_migrate "$DR_REPO"
     store_dir=$(dr_mem_store_dir "$DR_REPO")
     marker="$store_dir/.draugr-export"
     if [ -d "$store_dir/memory" ]; then

@@ -67,7 +67,15 @@ something behind that a later, unrelated sandbox reads and follows.
 Nothing here is broken — it is how `sbx skills` is designed. But "the sandbox cannot write to the
 host" is too strong a sentence, and this is the exception. `dr-skills accept` records what is there,
 `dr-skills diff` reports anything that has appeared or changed since, and `dr-scan` lists the store
-on every `dr-go`.
+on every `dr-go`. Those three count **hidden** directories too, and that is not a formality: measured
+against Claude Code 2.1.221, a store entry named `.hidden-probe` appears in Claude's own list of
+available skills exactly like a visible one. What Claude does *not* read is anything a level deeper.
+So depth is the limit, not the dot — and a review that skipped dot-directories would have a blind
+spot precisely where someone would put one.
+
+There is **one** store, not one per agent. `sbx skills import --help` describes five per-agent host
+directories being collapsed into a single store with a single namespace; only the mount path varies
+by agent. So a skill left behind in a codex mound is in reach of your claude mounds, and vice versa.
 
 ### The opt-out works, but it is hidden
 

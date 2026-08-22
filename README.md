@@ -197,7 +197,8 @@ is always one command away.
 **Which agent, and how big a mound**
 
 ```bash
-DRAUGR_AGENT=claude                  # claude|codex|copilot|cursor|droid|gemini|kiro|opencode|shell
+DRAUGR_AGENT=claude                  # claude|codex|copilot|cursor|docker-agent|droid|gemini|
+                                     # kiro|opencode|shell
 DRAUGR_AGENT_ARGS=                   # passed to the agent every time, e.g. "--continue"
 DRAUGR_SANDBOX=                      # default: draugr-<repo-folder-name>
 DRAUGR_MEMORY=8g                     # default: 50% of host RAM, capped at 32 GiB
@@ -214,9 +215,11 @@ point of the project.
 always want to pick up where you left off:
 
 ```bash
-DRAUGR_AGENT_ARGS="--continue"       # in ~/.config/draugr/config, or per project
+DRAUGR_AGENT_ARGS="--continue"       # Claude Code
+DRAUGR_AGENT_ARGS="resume --last"    # Codex — a subcommand, and it works here too
 ```
 
+These are the agent's own flags, handed over uninterpreted, so the spelling is the agent's.
 Now `dr-go` resumes by default, and the attach line says so. Two ways out of it for a single run:
 
 | | |
@@ -244,8 +247,6 @@ that already does this job properly, and `dr-init` generates a starter one for y
 schemaVersion: "2"
 kind: mixin
 name: myproject
-requires:
-  agent: claude
 
 caps:
   network:
@@ -456,7 +457,7 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 | `dr-mem status` | Where memory is on each side, and how much of it |
 | `dr-mem export` | Sandbox memory → `$DRAUGR_MEM_STORE`. Do this before `dr-rm` |
 | `dr-mem import` | Store → sandbox. Do this *before* launching the agent |
-| `dr-mem import --from-host` | Your own host Claude memory → sandbox — the migration |
+| `dr-mem import --from-host` | The agent's own memory on your host → sandbox — the migration |
 | `dr-mem diff` | What each side knows that the other does not |
 | `dr-mem check` | Would `dr-rm` lose memory? For scripts: `0` no, `1` yes, `2` unreachable |
 | `dr-skills list` | What is in the shared skills store, and whether it can be declined |
@@ -484,6 +485,18 @@ copy and must never overwrite what the agent has learned since.
 > reads — no error, no warning, just an agent that has forgotten everything. `dr-mem` translates.
 > It also fixes ownership afterwards, because `sbx cp` lands files as `root:root` while the agent
 > runs as uid 1000 and would be unable to write new memories.
+
+**Memory is the one thing that differs per agent**, so it lives in `lib/agents/<agent>.sh` — one
+file each, and `lib/agents/default.sh` for an agent nobody has measured. Codex is a different shape
+entirely: not filed per project, half markdown and half SQLite, and off until you enable it. The
+same four commands cover it. Everything else — attaching, Ctrl+Z, the clone, kits, `dr-sync`,
+`dr-send`, `dr-data` — never knew which agent was in the mound and still does not. See
+[docs/WORKFLOW.md](docs/WORKFLOW.md#memory).
+
+Both agents also read an instruction file from the repo — `AGENTS.md` for Codex, `CLAUDE.md` for
+Claude Code — and those need nothing from Draugr: they are committed files, so they arrive with the
+clone and come back through `dr-sync` like any other change. Prefer them for rules that must always
+apply, and let memory be memory.
 
 ### Operations
 
@@ -606,7 +619,18 @@ And the mirror image — not what the agent can read, but what it can write:
 > to the host" is too strong a sentence, and this is the exception. `dr-skills` treats the store as a
 > reviewable artifact rather than a dumping ground: `dr-skills accept` records what is there,
 > `dr-skills diff` reports anything that has appeared or changed since, and `dr-scan` lists the store
-> on every `dr-go`.
+> on every `dr-go`. Hidden directories are counted too — measured, a store entry named `.hidden-probe`
+> shows up in Claude's own list of available skills — so a review that skipped them would be looking
+> in the wrong place.
+>
+> **There is one store, not one per agent.** `sbx` collapses five per-agent host directories into a
+> single store and varies only the mount path, so what a codex mound leaves behind is in reach of
+> your claude mounds.
+>
+> **Both mount paths are read by their agent** — measured on each side by asking the agent itself to
+> list its skills. A marker sitting only in the shared store was named by Claude Code in a claude
+> mound and by Codex in a codex one, and a second marker added after the mound was built showed up
+> without a restart.
 >
 > **The documented way to opt out works — but it is hidden.** `sbx skills --help` says "use
 > `--no-share-skills` to opt out", and that flag does not appear on `sbx create` or `sbx run` at all
@@ -650,7 +674,10 @@ draugr/
 │   ├── dr-data  dr-mem  dr-skills
 │   └── dr-doctor  dr-config  dr-scan  dr-kit  dr-policy  dr-ports  dr-code  dr-setup  dr-init  dr-trust
 ├── lib/
-│   └── common.sh           config loading, path translation, guards, output
+│   ├── common.sh           config loading, path translation, guards, output
+│   └── agents/             one file per agent, for the parts that differ
+│       ├── default.sh      the interface, and the answer for an unmeasured agent
+│       └── claude.sh       where Claude Code keeps its memory
 ├── share/
 │   ├── config.example      the user-home config, fully commented
 │   ├── project.example     .draugr.conf starter, written by dr-init

@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # dr-skills - watch, and seed, the one directory a sandbox can write to.
 #
-# The shared skills store is mounted READ-WRITE into every mound at
-# ~/.claude/skills, is shared between all of them, and survives sbx rm. That
-# makes it the single exception to "the sandbox cannot touch the host", and its
-# contents are agent instructions - so it is treated here as a reviewable
-# artifact rather than a cache: show what is there, show what changed, and let
-# you say when you have looked.
+# The shared skills store is mounted READ-WRITE into every mound, is shared
+# between all of them, and survives sbx rm. That makes it the single exception to
+# "the sandbox cannot touch the host", and its contents are agent instructions -
+# so it is treated here as a reviewable artifact rather than a cache: show what
+# is there, show what changed, and let you say when you have looked.
+#
+# ONE host directory - sbx does not partition it by agent - but sbx mounts it at
+# a path that depends on the agent: ~/.claude/skills in a claude mound,
+# ~/.agents/skills in a codex one. Both measured, and the second is not a path
+# Codex reads, so Draugr composes a kit that moves the mount to the one it does.
+# This command is machine-wide and has no repository to ask, so it reports the
+# store rather than any one mound's view of it.
 #
 #   dr-skills list       what is in the store, and whether the mount can be refused
 #   dr-skills diff       what has appeared or changed since you last accepted
@@ -59,14 +65,26 @@ heading() { printf '\n%s%s%s\n' "$_DR_BOLD" "$*" "$_DR_OFF"; }
 
 # "<hash>  <name>" per skill, one line each. A skill is a directory, so the hash
 # covers everything inside it - a changed file within a skill is a changed skill.
+#
+# dotglob, in a subshell so it stays local to this walk, because a skill whose
+# directory name begins with a dot is still a skill and is still LOADED. Measured
+# against Claude Code 2.1.221: a store entry named .hidden-probe appears in its
+# own list of available skills exactly like a visible one. What Claude does not
+# read is anything a level deeper - <store>/parent/child/SKILL.md is ignored - so
+# depth is the limit, not the dot. Without dotglob the review commands would have
+# a blind spot precisely where someone would hide something.
+# Bash's dotglob still excludes . and .., so */ cannot match the store itself.
 current() {
-    local d name
     [ -d "$skills_dir" ] || return 0
-    for d in "$skills_dir"/*/; do
-        [ -d "$d" ] || continue          # no match leaves the glob unexpanded
-        name=${d%/}; name=${name##*/}
-        printf '%s  %s\n' "$(dr_dir_hash "$d")" "$name"
-    done
+    (
+        shopt -s dotglob
+        local d name
+        for d in "$skills_dir"/*/; do
+            [ -d "$d" ] || continue      # no match leaves the glob unexpanded
+            name=${d%/}; name=${name##*/}
+            printf '%s  %s\n' "$(dr_dir_hash "$d")" "$name"
+        done
+    )
 }
 
 # --- can the mount even be declined? ----------------------------------------
@@ -122,9 +140,15 @@ list)
         fi
     fi
 
+    # One store, two mount paths, and each agent reads the one it is given -
+    # measured by asking the agent itself to list its skills, in both a claude
+    # and a codex mound. So a skill put here is in reach of every mound on this
+    # machine, whichever agent it runs.
     heading "reach"
-    printf '  mounted read-write into every mound, at ~/.claude/skills\n'
-    printf '  shared between mounds, and survives dr-rm\n'
+    printf '  mounted read-write into every mound, and shared between them\n'
+    printf '  claude: ~/.claude/skills    codex: ~/.agents/skills\n'
+    printf '  both paths are read by their agent - one store, every mound\n'
+    printf '  survives dr-rm\n'
     report_optout
     ;;
 

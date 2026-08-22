@@ -200,6 +200,21 @@ validate)
             "the kit is not valid: $k" \
             "The message above is sbx's own. Schema: https://docs.docker.com/ai/sandboxes/customize/kits/"
     done
+
+    # And then the one thing sbx's validate does NOT check. A kit pinned to
+    # another agent is entirely valid; it simply cannot be composed with this
+    # one, and finding that out at dr-up is finding it out too late.
+    conflicts=0
+    while IFS=' ' read -r k want; do
+        [ -n "$k" ] || continue
+        conflicts=1
+        dr_warn "$k requires agent \"$want\", but DRAUGR_AGENT is \"$DRAUGR_AGENT\""
+        printf '  %sdr-up will refuse. Drop the "requires: agent:" line, or keep%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sa separate %s.%s/ for this agent.%s\n' \
+            "$_DR_DIM" "$k" "$DRAUGR_AGENT" "$_DR_OFF" >&2
+    done < <(dr_kit_agent_conflicts)
+    [ "$conflicts" -eq 0 ] && dr_ok "valid, and composable with $DRAUGR_AGENT"
     ;;
 
 # inspect prints what each kit asks for. The pointer matters because the kits are

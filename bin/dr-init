@@ -79,9 +79,12 @@ else
     # Two substitutions from one project name: @SLUG@ for the `name:` field,
     # which sbx requires to be lowercase alphanumeric with hyphens, and @NAME@
     # for the free-text fields, which should read the way you spell it.
+    #
+    # The agent is NOT written in. A kit that pins one cannot be composed with
+    # any other, so freezing today's choice into a committed file would make
+    # trying a different agent an edit rather than a setting.
     sed -e "s|@SLUG@|$(dr_kit_slug "$name")|g" \
         -e "s|@NAME@|$name|g" \
-        -e "s|@AGENT@|${DRAUGR_AGENT:-claude}|g" \
         "$DRAUGR_SHARE/kit.example/spec.yaml" > "$kitdir/spec.yaml"
     dr_ok "wrote ${kitdir#"$repo"/}/spec.yaml"
     wrote=$((wrote + 1))

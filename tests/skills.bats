@@ -39,6 +39,27 @@ make_skill() {
     [[ "$output" == *"review"* ]]
 }
 
+@test "dr-skills list: a hidden skill directory is not a hiding place" {
+    # Measured: Claude Code lists a store entry named .hidden-probe among its own
+    # available skills, so a dot-prefixed directory is a live instruction and has
+    # to be reported. Codex writes one - .system - the first time it runs.
+    make_skill .system
+    run dr-skills list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".system"* ]]
+    [[ "$output" != *"empty"* ]]
+}
+
+@test "dr-skills diff: a hidden skill that appeared is reported as new" {
+    make_skill deploy
+    dr-skills accept >/dev/null 2>&1
+
+    make_skill .system
+    run dr-skills diff
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"new:"*".system"* ]]
+}
+
 @test "dr-skills list: states the reach of the store, every time" {
     run dr-skills list
     # The reason this command exists: read-write, shared, and outlives the mound.
