@@ -90,6 +90,24 @@ if [ -z "$force" ] && [ -n "$repo" ] && [ "${DRAUGR_MEM_SYNC:-}" != off ] \
     esac
 fi
 
+# And the third thing that exists only here. A host opened with
+# dr-policy --allow is a rule scoped to this sandbox, and measured, it does not
+# outlive it: after sbx rm, looking the rule up by id gives "policy or rule not
+# found". So the allow list you arrived at by running the build is destroyed
+# along with the mound, with no reflog and no export to recover it from.
+#
+# Only the ones the kit does not already declare, so a project that has run
+# dr-kit adopt is never asked about this twice.
+if [ -z "$force" ] && [ -n "$repo" ]; then
+    mapfile -t _opened < <(dr_policy_unadopted)
+    if [ ${#_opened[@]} -gt 0 ]; then
+        dr_die "$name has ${#_opened[@]} host(s) opened by hand and not in the kit" \
+               "$(printf '%s ' "${_opened[@]}")" \
+               "Write them into the kit first with:  dr-kit adopt" \
+               "Then dr-rm again. To throw them away instead:  dr-rm --force"
+    fi
+fi
+
 dr_confirm "Destroy $name and its clone? Any commits you have not fetched are lost." \
     || dr_die "cancelled"
 

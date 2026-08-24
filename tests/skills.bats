@@ -170,3 +170,46 @@ make_skill() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"appeared"* ]]
 }
+
+# --- install ------------------------------------------------------------------
+#
+# Draugr's own skills. `sbx skills import` cannot place them - it scans five
+# fixed host directories and takes no path - so this copies into the store
+# directly, and is a verb you have to type for the same reason import is.
+
+@test "dr-skills install: says what it is about to put in reach of every mound" {
+    run dr-skills install
+    [ "$status" -ne 0 ]          # no terminal, no --yes: the confirmation refuses
+    [[ "$output" == *"shared store"* ]]
+    [[ "$output" == *"draugr-kit"* ]]
+}
+
+@test "dr-skills install: copies the shipped skill into the store" {
+    run dr-skills install -y
+    [ "$status" -eq 0 ]
+    [ -f "$DR_SKILLS_DIR/draugr-kit/SKILL.md" ]
+}
+
+@test "dr-skills install: re-baselines, so diff is about the NEXT change" {
+    dr-skills install -y >/dev/null 2>&1
+    run dr-skills diff
+    [ "$status" -eq 0 ]
+}
+
+@test "dr-skills install: replaces rather than merges" {
+    # A file dropped from a newer version must not linger - the rule sbx applies
+    # on import, and the reason this is rm -rf then cp rather than cp -a over.
+    dr-skills install -y >/dev/null 2>&1
+    printf 'stale\n' > "$DR_SKILLS_DIR/draugr-kit/LEFTOVER.md"
+    dr-skills install -y >/dev/null 2>&1
+    [ ! -f "$DR_SKILLS_DIR/draugr-kit/LEFTOVER.md" ]
+}
+
+@test "dr-skills install: the shipped skill is loadable by both agents" {
+    # One SKILL.md serves Claude and Codex - measured, both list a store skill by
+    # name - but only if the frontmatter is there for them to read.
+    run head -4 "$DR_ROOT/share/skills/draugr-kit/SKILL.md"
+    [[ "${lines[0]}" = "---" ]]
+    [[ "$output" == *"name: draugr-kit"* ]]
+    [[ "$output" == *"description:"* ]]
+}

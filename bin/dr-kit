@@ -20,6 +20,7 @@
 #   dr-kit apply       apply them - RECREATES the container
 #   dr-kit list        the named kits in your library
 #   dr-kit save NAME   copy this project's kit into the library as NAME
+#   dr-kit adopt       write hosts opened with dr-policy --allow into the kit
 set -euo pipefail
 
 DR_PROG=dr-kit
@@ -34,8 +35,9 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 action=${1:-show}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
-    validate|show|drift|apply|list|save) shift || : ;;
-    *) dr_die "unknown action: $action" "One of: validate, show, drift, apply, list, save" ;;
+    validate|show|drift|apply|list|save|adopt) shift || : ;;
+    *) dr_die "unknown action: $action" \
+              "One of: validate, show, drift, apply, list, save, adopt" ;;
 esac
 
 # -y is read by dr_confirm, which `apply` and `save` both use. The lone
@@ -288,4 +290,87 @@ apply)
     dr_kit_hash_all > "$hash_file"
     dr_ok "applied ${#kit_args[@]} kit(s), and recorded the new hash"
     ;;
+# --- adopt --------------------------------------------------------------------
+#
+# The end of the build-your-own-kit loop. `dr-policy --allow` opens a host on the
+# running mound so the build can be retried at once, but that rule is MACHINE
+# state scoped to this sandbox - measured, it does not outlive it: after sbx rm,
+# looking the rule up by id gives "policy or rule not found". So the set you
+# arrived at empirically is destroyed by the very recreate that would apply it.
+#
+# This writes it down instead. Only rules this repo's kit does not already
+# declare, so running it twice is a no-op rather than a duplicate list.
+adopt)
+    kit=$(dr_kit_repo_dir) || dr_die \
+        "this project has no kit of its own" \
+        "A host allowed for the mound has nowhere to be written down." \
+        "Create one:  dr-init"
+
+    dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
+        "$DRAUGR_SANDBOX does not exist" \
+        "The rules live with the mound, so there is nothing left to adopt."
+
+    mapfile -t hosts < <(dr_policy_unadopted)
+    if [ ${#hosts[@]} -eq 0 ]; then
+        dr_ok "nothing to adopt - the kit already declares everything opened by hand"
+        exit 0
+    fi
+
+    # Shown before the prompt: these become a committed promise about what the
+    # project may reach, and every teammate who clones it inherits them.
+    dr_warn "${#hosts[@]} host(s) will be written into $kit/spec.yaml"
+    printf '  %s\n' "${hosts[@]}" >&2
+    printf '  %sThey are in force for this mound now, and would be lost by a recreate.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sCommitted, they travel with the project - so read them once more.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    dr_confirm "Write ${#hosts[@]} host(s) into the kit?" || dr_die "cancelled"
+
+    # Written through a temp file and moved into place, so an interrupted run
+    # cannot leave a half-edited spec - which sbx would then refuse, in the
+    # middle of a session, about a file you did not knowingly touch.
+    tmp="$DR_REPO/.draugr/tmp"
+    mkdir -p "$tmp"
+    out="$tmp/spec.yaml.$$"
+
+    # A targeted edit rather than a YAML rewriter: find `allow:` under
+    # `network:`, take its indent, and insert the new entries as list items two
+    # spaces deeper. `allow: []` becomes `allow:` on the way past, since the two
+    # cannot both be true. Anything it does not recognise is left alone and
+    # reported below, because a kit half-written by a guess is worse than one
+    # you were asked to edit yourself.
+    awk -v add="$(printf '%s\n' "${hosts[@]}")" '
+        BEGIN { split(add, want, "\n") }
+        !done && /^[[:space:]]*network:[[:space:]]*$/ { innet = 1 }
+        !done && innet && /^[[:space:]]*allow:[[:space:]]*(\[\])?[[:space:]]*$/ {
+            match($0, /^[[:space:]]*/); ind = substr($0, 1, RLENGTH)
+            sub(/allow:.*/, "allow:")
+            print
+            for (i in want) if (want[i] != "") print ind "  - " want[i]
+            done = 1
+            next
+        }
+        { print }
+        END { if (!done) exit 3 }
+    ' "$kit/spec.yaml" > "$out" || {
+        rm -f "$out"
+        dr_warn "could not find caps.network.allow in $kit/spec.yaml"
+        printf '  %sNothing was changed. Add this block by hand:%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '\n  caps:\n    network:\n      allow:\n' >&2
+        printf '        - %s\n' "${hosts[@]}" >&2
+        exit 1
+    }
+
+    # The move is the commit point: everything above it worked on a copy, so an
+    # interrupted run leaves the kit exactly as it was rather than half-edited.
+    mv "$out" "$kit/spec.yaml"
+    dr_ok "wrote ${#hosts[@]} host(s) into $kit/spec.yaml"
+    printf '  %sCheck it, then commit it - it is the record every teammate gets:%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %s  dr-kit validate%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sThe mound already has these rules, so no recreate is needed now.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    ;;
+
 esac

@@ -248,6 +248,13 @@ toolchain" is a fact about you, not about one repo.
 |---|---|
 | `dr-kit save <name>` | copy this project's own kit into the library |
 | `dr-kit list` | what is in there, with each `displayName` |
+| `dr-kit adopt` | write hosts opened with `dr-policy --allow` into this project's kit |
+
+`adopt` is the end of the build-your-own-kit loop described in
+[WORKFLOW.md](WORKFLOW.md#letting-the-agent-build-the-kit). It reads back what was actually opened
+for the mound, skips whatever the kit already declares, and writes the rest into
+`caps.network.allow` — so nothing has to be remembered while the loop runs. It edits only that one
+block; a kit it does not recognise is reported and left untouched rather than guessed at.
 
 `save` copies rather than symlinks, so editing one side never silently changes the other. Editing the
 library copy does put every repo that uses it into drift until its next `dr-kit apply` — which is the

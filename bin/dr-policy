@@ -12,9 +12,14 @@
 # command exists so you can see which one you have.
 #
 #   dr-policy                  everything in force for this mound
+#   dr-policy --denied         what this mound tried to reach and was refused
 #   dr-policy --check <host>   is this host reachable, and under which rule?
-#   dr-policy --allow <host>   open it now. TEMPORARY - see below.
+#   dr-policy --allow <host>   open it now, on the RUNNING mound
 #   dr-policy --defaults       show the machine-wide rules you did not write
+#
+# --denied and --allow are the two halves of a loop: run the build, ask what was
+# refused, open the hosts you accept, and let the build carry on in the same
+# session. The kit is written once at the end with `dr-kit adopt`.
 set -euo pipefail
 
 DR_PROG=dr-policy
@@ -31,6 +36,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --check) action=check; shift; host=${1:-}; [ -n "$host" ] || dr_die "--check needs a host" ;;
         --allow) action=allow; shift; host=${1:-}; [ -n "$host" ] || dr_die "--allow needs a host" ;;
+        --denied) action=denied ;;
         --defaults) action=defaults ;;
         -y|--yes)   DR_ASSUME_YES=1 ;;
         -h|--help)  dr_help "$0"; exit 0 ;;
@@ -51,6 +57,41 @@ list)
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %sdefault set - see it with:  dr-policy --defaults%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %sTest one host:  dr-policy --check <host>%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    ;;
+
+# What was actually refused, from the PROXY's own log rather than from the build
+# output - which is the only way to get a straight answer. Measured against a
+# single blocked host: curl printed nothing at all, git named it exactly, and pip
+# said "Could not find a version that satisfies the requirement". Anything that
+# read build errors would be blind for one, misled by another, right by luck.
+denied)
+    mapfile -t _hosts < <(dr_policy_denied)
+
+    # Nothing refused and the record having been lost look identical from here,
+    # and only one of them means the build is fine - so say both out loud.
+    if [ ${#_hosts[@]} -eq 0 ]; then
+        dr_ok "nothing has been refused for $DRAUGR_SANDBOX"
+        printf '  %sEither the build reached everything it needed, or it has not run.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sThe log lives in the running daemon, so restarting it clears this.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        exit 0
+    fi
+
+    # The list first and bare, so it can be read or pasted; the advice after it.
+    printf '%s%d host(s) refused for %s%s\n' \
+        "$_DR_BOLD" "${#_hosts[@]}" "$DRAUGR_SANDBOX" "$_DR_OFF"
+    printf '  %s\n' "${_hosts[@]}"
+
+    # Naming the first host makes the next command copyable rather than a
+    # template, which is the difference between advice and a thing you can run.
+    printf '\n  %sOpen the ones this project genuinely needs. It takes effect at once,%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %son the running mound, so the build can simply be retried:%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %s  dr-policy --allow %s%s\n' "$_DR_DIM" "${_hosts[0]}" "$_DR_OFF" >&2
+    printf '  %sThen write them into the kit once the build is clean:  dr-kit adopt%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
     ;;
 
 # Worth having as its own verb because the answer is frequently surprising in
@@ -93,8 +134,8 @@ allow)
     # needed belongs in this repo's kit, not in a library one every other project
     # would silently inherit it through.
     if _kit=$(dr_kit_repo_dir); then
-        printf '  %sGraduate it into the kit:  caps.network.allow in %s/spec.yaml%s\n' \
-            "$_DR_DIM" "$_kit" "$_DR_OFF" >&2
+        printf '  %sWrite it into the kit when the build is clean:  dr-kit adopt%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
     else
         printf '  %sGraduate it into a kit so it survives dr-rm:  dr-init%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2

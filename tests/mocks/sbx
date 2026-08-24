@@ -125,9 +125,55 @@ cp)
     cp -a "$src" "$dst"
     ;;
 
+# The two policy reads Draugr parses rather than just prints. Everything else
+# about `policy` still falls through to the recorder below.
+#
+#   DR_MOCK_DENIED   space-separated hosts to report as blocked
+#   DR_MOCK_ADHOC    space-separated hosts allowed for this sandbox by hand
+#   DR_MOCK_KITHOST  one host allowed by the sandbox's KIT, which must never be
+#                    mistaken for an ad-hoc rule - editable:false is what tells
+#                    them apart, and that distinction is the whole of dr-kit adopt
+policy)
+    case "${2:-}" in
+    log)
+        printf 'mock sbx: %s
+' "$*" >> "${DR_MOCK_LOG:-/dev/null}"
+        printf '{"blocked_hosts":['
+        sep=
+        for h in ${DR_MOCK_DENIED:-}; do
+            printf '%s{"host":"%s:443","vm_name":"%s","count_since":1}'                 "$sep" "$h" "${DR_MOCK_NAME:-mock}"
+            sep=,
+        done
+        printf ']}
+'
+        exit 0
+        ;;
+    ls)
+        case " $* " in *" --json "*) ;; *) printf 'mock sbx: %s
+' "$*"; exit 0 ;; esac
+        printf 'mock sbx: %s
+' "$*" >> "${DR_MOCK_LOG:-/dev/null}"
+        printf '{"rules":['
+        sep=
+        for h in ${DR_MOCK_ADHOC:-}; do
+            printf '%s{"applies_to":"sandbox:%s","decision":"allow","resource_type":"network","editable":true,"resources":["%s"]}'                 "$sep" "${DR_MOCK_NAME:-mock}" "$h"
+            sep=,
+        done
+        if [ -n "${DR_MOCK_KITHOST:-}" ]; then
+            printf '%s{"applies_to":"sandbox:%s","decision":"allow","resource_type":"network","editable":false,"resources":["%s"]}'                 "$sep" "${DR_MOCK_NAME:-mock}" "$DR_MOCK_KITHOST"
+        fi
+        printf ']}
+'
+        exit 0
+        ;;
+    esac
+    printf 'mock sbx: %s
+' "$*"
+    ;;
+
 # Everything else only ever needs to have its argv recorded: the tests assert on
 # the command line Draugr built, which is the part worth checking.
-create|run|stop|rm|ports|policy|kit|skills)
+create|run|stop|rm|ports|kit|skills)
     printf 'mock sbx: %s\n' "$*"
     ;;
 # Loudly, and with sbx's own exit code for an unknown command - a mock that

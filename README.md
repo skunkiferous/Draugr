@@ -464,6 +464,7 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 | `dr-skills diff` | What has appeared or changed in it since you last accepted |
 | `dr-skills accept` | Record the store's current contents as reviewed |
 | `dr-skills import` | Seed the store from your own host skill directories |
+| `dr-skills install` | Put Draugr's own skills into the store, so agents can use them |
 
 `dr-mem import` refuses to run unattended against a store Draugr did not write itself. Its own
 export carries a marker naming the repo; anything else is somebody's instructions and gets a

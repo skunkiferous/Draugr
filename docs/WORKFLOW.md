@@ -334,6 +334,47 @@ Measured: a `.hidden-probe` in the store appears in Claude's own list of availab
 | `dr-skills diff` | what has appeared or changed since you last accepted |
 | `dr-skills accept` | record the current contents as reviewed |
 | `dr-skills import` | seed the store from your own host skill directories |
+| `dr-skills install` | put Draugr's own skills into the store |
+
+### Letting the agent build the kit
+
+A new project's kit is the one thing you cannot write in advance: you do not know
+what a build needs until it fails. Draugr ships a skill — `draugr-kit` — that teaches the agent to
+work that out, and `dr-skills install` puts it where every mound can read it.
+
+The loop turns on one measured fact: **a host opened with `dr-policy --allow` takes effect on the
+running mound.** So the build is fixed by iterating inside one session, not by a recreate per host.
+
+```bash
+dr-skills install            # once per machine
+dr-go                        # the agent builds; it fails; it stops and asks
+dr-policy --denied           # the proxy's list — correct whatever the toolchain
+dr-policy --allow <host>     # per host you accept; the agent retries immediately
+   # … until the build is clean …
+dr-diff                      # review the install commands the agent wrote
+dr-merge                     # take them out of the mound
+dr-kit adopt                 # write the hosts into the kit, from the daemon's own record
+dr-up --recreate             # the real test: commands.install only runs at create
+```
+
+**Merge before you adopt.** `dr-kit adopt` leaves the kit file modified and `dr-merge` refuses on a
+dirty tree, so the other order strands the agent's commit until you commit the adopt.
+
+`dr-policy --denied` matters because build output cannot be trusted for this. Measured against one
+blocked host: `curl` printed nothing at all, `git` named it exactly, and `pip` reported
+`Could not find a version that satisfies the requirement` — which looks like a missing package. The
+proxy logged all three identically.
+
+**The agent never grants anything.** It reports what it needs and why; you decide. That is the
+review gate, and it is deliberately not automated.
+
+**Nothing is remembered by hand.** `dr-kit adopt` reads back what was actually opened, skips whatever
+the kit already declares, and writes the rest into `caps.network.allow`. Running it twice is a no-op.
+
+> **The rules do not outlive the mound.** They are scoped to the sandbox, and after `sbx rm` looking
+> one up by id gives `policy or rule not found` — so a recreate would destroy the very list that made
+> the build work. `dr-rm` and `dr-up --recreate` therefore refuse while anything is unadopted, the
+> same way `dr-rm` already refuses over unfetched commits. `dr-kit adopt` clears it.
 
 `dr-scan` lists the store on every `dr-go`, so anything that appears without your putting it there
 is visible. See [SECURITY.md](SECURITY.md#trap-2--the-skills-store-is-a-writable-door-out).

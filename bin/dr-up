@@ -162,6 +162,23 @@ if [ "$state" = absent ] || [ -n "$recreate" ]; then
     done < <(dr_kit_agent_conflicts)
 fi
 
+# --recreate destroys the mound, and with it every host opened by dr-policy
+# --allow: those rules are scoped to the sandbox and do not outlive it. That is
+# the cruellest possible moment to lose them, because recreating is exactly what
+# you do once the build finally works - so the list that made it work would go in
+# the act of making it permanent. Same remedy as the guard in dr-rm, and checked
+# BEFORE anything is removed for the same reason the kit-agent check above is.
+if [ -n "$recreate" ] && [ "$state" != absent ]; then
+    mapfile -t _opened < <(dr_policy_unadopted)
+    if [ ${#_opened[@]} -gt 0 ]; then
+        dr_die "${#_opened[@]} host(s) are open for $DRAUGR_SANDBOX, and not in the kit" \
+               "$(printf '%s ' "${_opened[@]}")" \
+               "Recreating destroys them. Write them down first:  dr-kit adopt" \
+               "Or accept the loss:  dr-rm --force  then  dr-up"
+    fi
+fi
+
+
 # --recreate exists because creation flags are frozen into the sandbox spec: the
 # only way to change a port mapping or the memory limit is to build a new mound.
 if [ -n "$recreate" ] && [ "$state" != absent ]; then

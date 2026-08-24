@@ -12,6 +12,37 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- **The build-your-own-kit loop.** A new project's kit is the one thing you cannot write in advance,
+  because you do not know what a build needs until it fails. Three additions make working it out an
+  iteration inside one session rather than one recreate per host:
+
+  - **`dr-policy --denied`** — the hosts this mound was refused, from `sbx policy log`. That is the
+    proxy's own record, so it is right whatever the toolchain, and build output is not: measured
+    against a single blocked host, `curl` printed nothing at all, `git` named it exactly, and `pip`
+    reported `Could not find a version that satisfies the requirement`. One silent, one perfect, one
+    actively misleading — the proxy logged all three identically.
+  - **`dr-kit adopt`** — writes the hosts that were actually opened into the project's kit, read back
+    from the daemon rather than remembered by hand. Skips what the kit already declares, so running
+    it twice is a no-op, and edits only `caps.network.allow`. A kit whose shape it does not recognise
+    is reported and left untouched rather than guessed at.
+  - **`dr-skills install`** — puts Draugr's own skills into the shared store. `sbx skills import`
+    cannot: it scans five fixed host directories and takes no path. Its own verb rather than
+    something `dr-setup` does quietly, because the store is shared by every mound and its contents
+    are instructions.
+
+  The loop turns on a measured fact: **`dr-policy --allow` takes effect on the running mound.** A
+  host that answered `Blocked by network policy` answered with its own 404 immediately afterwards,
+  same mound, no restart. So the kit is written once at the end rather than being the mechanism
+  during. What stays manual is the grant itself — you see each host before it opens, which is the
+  review gate and is deliberately not automated.
+
+- **A `draugr-kit` skill**, shipped in `share/skills/` and installed with `dr-skills install`. It
+  teaches the agent its half of that loop: run the build, do **not** guess which host was refused,
+  stop and ask for `dr-policy --denied`. It also draws the line between the two writers of
+  `spec.yaml` — `caps.network.allow` belongs to `dr-kit adopt` on the host, `commands.install`
+  belongs to the agent — because both editing it would mean a conflicting change in the clone. One
+  `SKILL.md` serves both agents: measured, Claude Code and Codex each list a store skill by name.
+
 - **Codex is a supported agent.** `DRAUGR_AGENT=codex` works with the commands that already exist —
   including Ctrl+Z, verified end to end against a real mound. Everything except memory was already
   agent-agnostic: the attach path quotes `$DRAUGR_AGENT`, and the clone, the mirrored paths,
@@ -74,6 +105,12 @@ people reading the source, not for people calling it.
   appears in Claude's own list of available skills like any visible one, while anything a level
   deeper is ignored. Depth is the limit, not the dot. Not hypothetical either — Codex writes
   `.system/` into its skills directory the first time it runs.
+- **`dr-rm` and `dr-up --recreate` refuse while a host is open and not in the kit.** A rule added by
+  `dr-policy --allow` is scoped to the sandbox and does not outlive it — measured, after `sbx rm`
+  looking one up by id gives `policy or rule not found`. Recreating is exactly what you do once the
+  build finally works, so without this the list that made it work would be destroyed in the act of
+  making it permanent. Same shape as the existing refusal over unfetched commits, and cleared the
+  same way: write it down, with `dr-kit adopt`.
 - `dr-up`, `dr-kit validate` and `dr-doctor` catch a kit pinned to a different agent **before**
   creation, naming both agents. `sbx kit validate` accepts such a kit — the mismatch exists only at
   compose time — so Draugr reading the field itself is the only thing that could catch it. Same class

@@ -1599,6 +1599,116 @@ dr_kit_stamp() {
 }
 
 # ---------------------------------------------------------------------------
+# Network policy, and the loop it makes possible
+#
+# A kit's allow list is frozen into the sandbox at creation, so changing it means
+# a recreate. But `sbx policy allow --sandbox` adds a rule to a RUNNING mound and
+# it takes effect at once - measured: a host that answered "Blocked by network
+# policy" answered with its own 404 immediately afterwards, same mound, no
+# restart. That is what lets a build be fixed iteratively instead of one
+# recreate at a time, with the kit written down once at the end.
+#
+# Two questions have to be answerable for that loop to work, and sbx answers both
+# in a way no build tool can:
+#
+#   what was refused?   `sbx policy log` is the PROXY's record, so it is the same
+#                       whatever the client. Measured against one blocked host:
+#                       curl printed nothing at all, git named it exactly, and
+#                       pip reported "Could not find a version that satisfies the
+#                       requirement" - three dialects, one of them silent and one
+#                       actively misleading. The proxy logged all of them.
+#   what did I open?    so nothing has to be remembered during the loop.
+# ---------------------------------------------------------------------------
+
+# dr_policy_denied - hosts this mound was refused, one bare hostname per line.
+#
+# The log records "host:port"; the port is dropped because that is not what
+# `sbx policy allow network` or a kit's allow list take. Deduplicated, because a
+# retrying build hits the same host many times and the count is not the point.
+dr_policy_denied() {
+    dr_sbx policy log "$DRAUGR_SANDBOX" --json 2>/dev/null         | jq -r --arg n "$DRAUGR_SANDBOX" '
+              (.blocked_hosts // [])[]
+              | select(.vm_name == $n)
+              | .host | sub(":[0-9]+$"; "")' 2>/dev/null         | sort -u
+}
+
+# dr_policy_adhoc - hosts opened for this mound by hand, one per line.
+#
+# Everything scoped to this sandbox appears in one table, the kit's rules
+# included, so the two have to be told apart. `editable` is the discriminator
+# that means it: a rule that came from the kit artifact is not editable, and one
+# added by `dr-policy --allow` is. Measured - the kit's rule also carries
+# name "kit:<sandbox>" while an ad-hoc one is a bare UUID, and both agree.
+dr_policy_adhoc() {
+    dr_sbx policy ls "$DRAUGR_SANDBOX" --wide --json 2>/dev/null         | jq -r --arg s "sandbox:$DRAUGR_SANDBOX" '
+              .. | objects
+              | select(.applies_to? == $s and .decision? == "allow")
+              | select(.resource_type? == "network" and .editable? == true)
+              | .resources[]?' 2>/dev/null         | sort -u
+}
+
+# dr_kit_allow_list <kit-dir> - the hosts a kit already declares.
+#
+# A hand-rolled reader rather than a YAML parser, so it is deliberately narrow:
+# find `allow:` nested under `network:`, then take the `- item` lines directly
+# beneath it and stop at the first line that is not one. That is enough for the
+# shape dr-init writes and for anything a person would write by hand, and it
+# CANNOT wander into `deny:` or `publishedPorts:` further down the file, which a
+# bare "every - line" grep would.
+dr_kit_allow_list() {
+    [ -f "$1/spec.yaml" ] || return 0
+    awk '
+        # Track the indent of the allow: key so we know when its block ends.
+        /^[[:space:]]*allow:[[:space:]]*(\[\])?[[:space:]]*$/ && innet {
+            match($0, /^[[:space:]]*/); allow_indent = RLENGTH; inallow = 1; next
+        }
+        /^[[:space:]]*network:[[:space:]]*$/ { innet = 1 }
+        inallow {
+            # A list item deeper than the key belongs to it; anything else ends it.
+            if (match($0, /^[[:space:]]*-[[:space:]]+/)) {
+                item = $0
+                sub(/^[[:space:]]*-[[:space:]]+/, "", item)
+                sub(/[[:space:]]*(#.*)?$/, "", item)
+                gsub(/^["'"'"']|["'"'"']$/, "", item)
+                if (item != "") print item
+                next
+            }
+            if ($0 ~ /^[[:space:]]*(#.*)?$/) next     # comment or blank: still inside
+            match($0, /^[[:space:]]*/)
+            if (RLENGTH <= allow_indent) { inallow = 0 }
+        }
+    ' "$1/spec.yaml" 2>/dev/null | sort -u
+}
+
+# dr_policy_unadopted - ad-hoc hosts this repo's kit does not already declare.
+#
+# The set that would be LOST by a recreate, which is what dr-rm and dr-up guard
+# on. Measured: a rule scoped to a sandbox does not outlive it - after `sbx rm`,
+# looking the rule up by id gives "policy or rule not found" - so a recreate
+# silently discards exactly the list you were about to write down.
+#
+# With no kit of its own, every ad-hoc host counts as unadopted: there is nowhere
+# for it to have been written to.
+dr_policy_unadopted() {
+    local kit have host
+    # Spelled out rather than as have=$([ -n "$kit" ] && ...), which under set -e
+    # aborts the whole function when there is no kit - silently turning "every
+    # host is unadopted" into "there is nothing to report", which is the wrong
+    # answer in the one direction that loses data.
+    have=
+    if kit=$(dr_kit_repo_dir); then
+        have=$(dr_kit_allow_list "$kit")
+    fi
+    while IFS= read -r host; do
+        [ -n "$host" ] || continue
+        printf '%s
+' "$have" | grep -qxF "$host" || printf '%s
+' "$host"
+    done < <(dr_policy_adhoc)
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Creation-time settings
 #
 # Most of what sbx needs is frozen into the sandbox when it is built: the image,

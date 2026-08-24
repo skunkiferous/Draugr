@@ -9,15 +9,16 @@
 #
 # ONE host directory - sbx does not partition it by agent - but sbx mounts it at
 # a path that depends on the agent: ~/.claude/skills in a claude mound,
-# ~/.agents/skills in a codex one. Both measured, and the second is not a path
-# Codex reads, so Draugr composes a kit that moves the mount to the one it does.
-# This command is machine-wide and has no repository to ask, so it reports the
-# store rather than any one mound's view of it.
+# ~/.agents/skills in a codex one. Each agent reads the path it is given; both
+# measured, by asking the agent itself to list its skills. This command is
+# machine-wide and has no repository to ask, so it reports the store rather than
+# any one mound's view of it.
 #
 #   dr-skills list       what is in the store, and whether the mount can be refused
 #   dr-skills diff       what has appeared or changed since you last accepted
 #   dr-skills accept     record the current contents as reviewed
 #   dr-skills import     seed the store from your own host skill directories
+#   dr-skills install    put Draugr's own skills into the store
 #
 # diff exits 1 when something has changed, so it can be used as a test.
 set -euo pipefail
@@ -33,8 +34,8 @@ _dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 action=${1:-list}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
-    list|diff|accept|import) shift || : ;;
-    *) dr_die "unknown action: $action" "One of: list, diff, accept, import" ;;
+    list|diff|accept|import|install) shift || : ;;
+    *) dr_die "unknown action: $action" "One of: list, diff, accept, import, install" ;;
 esac
 
 # -y is ours - it answers the confirmation below. Everything else is left alone
@@ -213,6 +214,53 @@ accept)
     current > "$seen_file"
     n=$(grep -c . < "$seen_file" || true)
     dr_ok "recorded $n skill(s) as reviewed"
+    ;;
+
+# --- install ------------------------------------------------------------------
+#
+# Draugr ships skills of its own, under share/skills/. `sbx skills import` cannot
+# place them: it scans five fixed host directories (~/.agents/skills and the
+# per-agent ones) and takes no path, so the only way in is to copy into the store
+# directly. That is what this does.
+#
+# Its own verb rather than something dr-setup does quietly, for the reason the
+# whole command exists: the store is shared by every mound on the machine and its
+# contents are instructions. Draugr putting instructions in an agent's reach
+# without being asked would be exactly the thing dr-skills diff exists to catch.
+install)
+    src="$DRAUGR_ROOT/share/skills"
+    [ -d "$src" ] || dr_die "no skills shipped at $src" \
+        "This checkout is missing share/skills/."
+
+    # Named before the confirmation, because "Draugr's own" is not a reason to
+    # skim them - they are instructions like any others, and this is the moment
+    # to read them.
+    mapfile -t _shipped < <(cd "$src" && for d in */; do [ -d "$d" ] && printf '%s\n' "${d%/}"; done)
+    [ ${#_shipped[@]} -gt 0 ] || dr_die "no skills to install in $src"
+
+    # Listed by name and path before the prompt: "Draugr's own" is not a reason
+    # to skim them, and this is the moment they are easiest to actually read.
+    dr_warn "this puts ${#_shipped[@]} skill(s) into the shared store"
+    for _s in "${_shipped[@]}"; do
+        printf '    %s  %s%s/%s/SKILL.md%s\n' "$_s" "$_DR_DIM" "$src" "$_s" "$_DR_OFF" >&2
+    done
+    printf '  %sEvery mound on this machine reads them, whichever agent it runs.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    dr_confirm "Install ${#_shipped[@]} Draugr skill(s)?" || dr_die "cancelled"
+
+    mkdir -p "$skills_dir"
+    for _s in "${_shipped[@]}"; do
+        # Replaced wholesale rather than merged, so a file dropped from a newer
+        # version cannot linger - the same rule sbx applies on import.
+        rm -rf "${skills_dir:?}/$_s"
+        cp -a "$src/$_s" "$skills_dir/$_s" || dr_die "could not copy $_s into the store"
+    done
+
+    # Re-baselined, so the next dr-skills diff is about the NEXT change rather
+    # than about the install you just asked for.
+    mkdir -p "$DR_CONFIG_USER"
+    current > "$seen_file"
+    dr_ok "installed ${#_shipped[@]} skill(s), and recorded the result as reviewed"
     ;;
 
 # --- import -----------------------------------------------------------------
