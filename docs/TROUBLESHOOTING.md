@@ -223,6 +223,38 @@ dr-kit validate     # before you find out the hard way
 dr-kit show
 ```
 
+### `dr-up` fails with `500 Internal Server Error: failed to run sandbox container`
+
+That is everything sbx will tell you, and it is not enough. Its daemon knows exactly what happened,
+and `dr-up` now prints it under `sandboxd recorded:` — the failing command, its exit code and its
+captured output. If your `dr-up` is older, or the log has moved, read it yourself:
+
+```bash
+log="$(dirname "$(dirname "$(command -v sbx.exe)")")/sandboxes/state/sandboxd/daemon.log"
+jq -r 'select(.level == "ERROR") | .error' "$log" | tail -1
+
+By far the commonest cause is a kit install command that reads a project file. **`commands.install`
+runs before your repository is in the workspace.** At that point the working directory is empty and
+the repo is read-only at `/run/sandbox/source` — measured against sbx 0.37.1 in both clone and mount
+mode. So this fails:
+
+```yaml
+- command: "uv pip install -r requirements.txt"     # error: File not found
+```
+
+and this works:
+
+```yaml
+- command: "uv venv /home/agent/.venv"
+- command: "uv pip install --python /home/agent/.venv/bin/python -r /run/sandbox/source/requirements.txt"
+```
+
+The virtual environment goes outside the workspace too: the agent session populates that directory
+afterwards, so anything left in it is at risk.
+
+> `dr-kit validate` will not catch this. The kit is perfectly valid — the schema has no opinion on
+> whether a command can find its files.
+
 ### `rsync` is missing inside the mound
 
 It is present in the `claude` image (`/usr/bin/rsync`), but that is not guaranteed across every agent

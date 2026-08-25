@@ -71,9 +71,36 @@ commands:
       description: Install dependencies
 ```
 
+**Install commands cannot see your repository.** They run *before* it is in the
+workspace: at that moment the working directory is empty, and the repo is
+read-only at `/run/sandbox/source`. Measured against sbx 0.37.1, in both clone
+and mount mode. So this fails however right it looks —
+
+```yaml
+- command: "uv pip install -r requirements.txt"     # error: File not found
+```
+
+— and this works:
+
+```yaml
+- command: "uv venv /home/agent/.venv"
+- command: "uv pip install --python /home/agent/.venv/bin/python -r /run/sandbox/source/requirements.txt"
+```
+
+Note the venv is outside the workspace as well. The agent session populates that
+directory afterwards, so nothing you leave in it is safe.
+
+**You cannot test any of this.** Install commands run only when a mound is
+created, and you cannot create one. Whatever you write here is unverified until
+the operator runs `dr-up --recreate`, and a failure there reports as a bare
+`500 ... failed to run sandbox container` unless they are running a Draugr new
+enough to read the daemon's log. Say plainly that these commands are untested.
+
 Rules that matter:
 
 - Use `schemaVersion: "2"` spellings. v1 still validates but warns.
+- `commands.install` takes `command` as a string; `commands.startup` requires the
+  list form, `["sh", "-c", "…"]`, and rejects a string outright.
 - `user: "1000"` is the agent. Use `"0"` only for something that genuinely needs
   root, such as `apt-get install`.
 - Keep each command one job, with a `description`. The list is read by people.
@@ -103,8 +130,11 @@ outstanding.
    (`dr-go` fetches on exit; if they stayed attached, `dr-sync` first.)
 5. `dr-kit adopt` — writes the hosts that were actually opened into
    `caps.network.allow`. Then they commit the kit.
-6. `dr-up --recreate` — the real test. `commands.install` only runs when a mound
-   is created, so until this happens the kit you wrote is untested.
+6. `dr-kit validate` — catches a malformed kit before a recreate destroys a
+   working mound for one that will not build. It checks the schema only; it
+   cannot tell whether your install commands work.
+7. `dr-up --recreate` — the real test, and the first moment your install commands
+   have ever run.
 
 Two places where the order is not arbitrary:
 
@@ -126,5 +156,5 @@ Say plainly what you changed, and what you still need from the operator:
   cannot fix
 
 Then name the host-side steps they still owe, from the list above — usually
-`dr-merge`, `dr-kit adopt`, and a `dr-up --recreate` to prove the kit works from
-a clean mound.
+`dr-merge`, `dr-kit adopt`, `dr-kit validate`, and a `dr-up --recreate` to prove
+the kit works from a clean mound.

@@ -17,6 +17,19 @@ if [ -n "${DR_MOCK_LOG:-}" ]; then
 fi
 
 sub=${1:-}
+
+# When DR_MOCK_DAEMON_ERR is set, a create writes it into a daemon.log at exactly
+# the path dr_sbx_daemon_log computes from this binary's own location. That is
+# how the real sandboxd records the cause of a failure sbx itself reports as a
+# bare 500, so the reading of it can be exercised end to end.
+if [ -n "${DR_MOCK_DAEMON_ERR:-}" ] && [ "$sub" = create ]; then
+    _root=$(dirname "$(dirname "$0")")
+    mkdir -p "$_root/sandboxes/state/sandboxd"
+    # shellcheck disable=SC2016  # $e is jq's variable, not the shell's
+    _filter='{time:"t",level:"ERROR",msg:"create sandbox failed",stage:"run_container",error:$e}'
+    jq -cn --arg e "$DR_MOCK_DAEMON_ERR" "$_filter" >> "$_root/sandboxes/state/sandboxd/daemon.log"
+fi
+
 case " ${DR_MOCK_FAIL:-} " in
     *" $sub "*) printf 'mock sbx: %s failed\n' "$sub" >&2; exit 1 ;;
 esac

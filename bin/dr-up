@@ -224,6 +224,52 @@ report_drift() {
     esac
 }
 
+# Set here so create_failed can be read on its own: it is given a real value
+# immediately before the create attempt.
+_log_mark=0
+
+# What to say when sbx refuses to create. Its own message is already on screen
+# and is often nothing but a 500, so the useful part is whatever its daemon
+# recorded - see dr_sbx_log_error. Printed above the advice rather than dimmed
+# along with it, because it is evidence, not a suggestion.
+create_failed() {
+    local detail line
+    detail=$(dr_sbx_log_error "$_log_mark") || detail=
+    if [ -n "$detail" ]; then
+        dr_heading "sandboxd recorded:"
+        while IFS= read -r line; do
+            printf '  %s\n' "$line" >&2
+        done <<<"$detail"
+        printf '\n' >&2
+    fi
+
+    # A failed install command is the one case worth explaining outright, because
+    # the command usually looks correct: commands.install runs BEFORE the repo is
+    # in the workspace, so anything reading a project file cannot work. Measured
+    # in both clone and mount mode against sbx 0.37.1 - the working directory is
+    # empty, and in clone mode the repo is read-only at /run/sandbox/source.
+    if [ "${detail#*commands.install}" != "$detail" ]; then
+        dr_die "could not create $DRAUGR_SANDBOX" \
+            "A kit install command failed. Those run BEFORE your repository is in" \
+            "the workspace, so one that reads a project file always fails: at that" \
+            "point the working directory is empty, and the repo is read-only at" \
+            "/run/sandbox/source. Install tools there, not the project itself."
+    fi
+
+    # A kit is the likeliest other cause, and sbx says so in its own vocabulary
+    # two steps from the cause - "invalid name" turns out to be about a field in
+    # a YAML file you did not know it had read. So when kits are in play, name
+    # the command that checks them before offering the debug flag.
+    if dr_kit_refs >/dev/null; then
+        dr_die "could not create $DRAUGR_SANDBOX" \
+            "The message above is sbx's own. If it mentions the kit, check it with:" \
+            "  dr-kit validate" \
+            "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
+    fi
+    dr_die "could not create $DRAUGR_SANDBOX" \
+        "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
+}
+
 # pre-up runs on every dr-up; post-create only when one is actually built. Both
 # run on the HOST, in WSL, which is precisely what a kit's commands cannot do.
 dr_hook pre-up "$DR_REPO"
@@ -251,21 +297,10 @@ stopped)
 absent)
     dr_info "creating $DRAUGR_SANDBOX for $DR_REPO_WIN"
     dr_debug "sbx $(printf '%q ' "${create_args[@]}")"
-    # A kit is the likeliest thing to have made this fail, and sbx says so in its
-    # own vocabulary two steps from the cause - "invalid name" is about a field
-    # in a YAML file you did not know it had read. So when kits are in play,
-    # name the command that checks them before offering the debug flag.
-    if dr_kit_refs >/dev/null; then
-        dr_sbx "${create_args[@]}" || dr_die \
-            "could not create $DRAUGR_SANDBOX" \
-            "The message above is sbx's own. If it mentions the kit, check it with:" \
-            "  dr-kit validate" \
-            "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
-    else
-        dr_sbx "${create_args[@]}" || dr_die \
-            "could not create $DRAUGR_SANDBOX" \
-            "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
-    fi
+    # Where sandboxd's log stands before the attempt, so that a failure is
+    # reported from what THIS create appended and nothing older.
+    _log_mark=$(dr_sbx_log_mark)
+    dr_sbx "${create_args[@]}" || create_failed
     dr_ok "created $DRAUGR_SANDBOX"
 
     # Record what this was built from, so a later edit is detectable as drift

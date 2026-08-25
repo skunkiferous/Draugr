@@ -354,11 +354,17 @@ dr-policy --allow <host>     # per host you accept; the agent retries immediatel
 dr-diff                      # review the install commands the agent wrote
 dr-merge                     # take them out of the mound
 dr-kit adopt                 # write the hosts into the kit, from the daemon's own record
+dr-kit validate              # schema check, before a recreate destroys a working mound
 dr-up --recreate             # the real test: commands.install only runs at create
 ```
 
 **Merge before you adopt.** `dr-kit adopt` leaves the kit file modified and `dr-merge` refuses on a
 dirty tree, so the other order strands the agent's commit until you commit the adopt.
+
+**The recreate is where install commands run for the first time.** The agent cannot test them — it
+cannot create a mound — and it cannot see the repository from where they run, which is the trap they
+usually fall into. If the recreate fails, `dr-up` prints what sandboxd recorded underneath sbx's own
+`500`; see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#dr-up-fails-with-500-internal-server-error-failed-to-run-sandbox-container).
 
 `dr-policy --denied` matters because build output cannot be trusted for this. Measured against one
 blocked host: `curl` printed nothing at all, `git` named it exactly, and `pip` reported

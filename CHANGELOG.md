@@ -43,6 +43,23 @@ people reading the source, not for people calling it.
   belongs to the agent — because both editing it would mean a conflicting change in the clone. One
   `SKILL.md` serves both agents: measured, Claude Code and Codex each list a store skill by name.
 
+- **`dr-up` prints what sandboxd recorded when a create fails.** sbx reports it as
+  `500 Internal Server Error: failed to run sandbox container` and stops, while its own daemon log
+  holds the failing command, its exit code and its captured output. Reading an undocumented file is a
+  coupling, so every step of it is best-effort: no log, no `jq`, or a shape that has moved, and the
+  advice is exactly what it was before. A byte offset taken before the attempt, rather than a
+  timestamp, keeps last week's failure out of this one's report.
+
+- **The install-time rule, which is what makes that failure worth explaining.** `commands.install`
+  runs **before the repository is in the workspace** — the working directory is empty, and the repo
+  is read-only at `/run/sandbox/source`. Measured against sbx 0.37.1 in both clone and mount mode. So
+  `uv pip install -r requirements.txt` in a kit fails with `File not found` however right it looks,
+  and until now said so only as a 500. `dr-up` now names the rule when the failure mentions
+  `commands.install`; `share/kit.example/spec.yaml` shows the working form; and the `draugr-kit`
+  skill states it outright, along with the fact that an agent **cannot test an install command** —
+  they run only at create, which is the one thing it cannot do. The kit template previously offered
+  `npm ci` as the example, which is exactly the shape that cannot work.
+
 - **Codex is a supported agent.** `DRAUGR_AGENT=codex` works with the commands that already exist —
   including Ctrl+Z, verified end to end against a real mound. Everything except memory was already
   agent-agnostic: the attach path quotes `$DRAUGR_AGENT`, and the clone, the mirrored paths,

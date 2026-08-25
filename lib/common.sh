@@ -221,6 +221,67 @@ dr_sbx() {
 }
 
 # ---------------------------------------------------------------------------
+# sandboxd's own log, and why anything reads it
+#
+# sbx reports a failed create as one line - `500 Internal Server Error: failed
+# to run sandbox container` - and stops. Its daemon knows far more than that.
+# Measured on 0.37.1, a kit install command that could not find a file reached
+# the user as that bare 500, while the log held the failing command, its exit
+# code and its captured output:
+#
+#   commands.install[2] (uv pip install -r requirements.txt): exited 2 after 13ms
+#     -- captured output --
+#     error: File not found: `requirements.txt`
+#
+# That is the difference between a dead end and a diagnosis, so Draugr reads it.
+# It is an undocumented file with an undocumented shape, which is a coupling we
+# do not get to complain about if it breaks: every step below is allowed to fail
+# quietly, and every caller keeps the advice it printed before this existed.
+# ---------------------------------------------------------------------------
+
+# dr_sbx_daemon_log - where that log lives, derived from sbx's own location the
+# same way dr_skills_dir is. Returns 1 if sbx is not found or the log is absent.
+dr_sbx_daemon_log() {
+    local sbx_exe log
+    sbx_exe=$(dr_find_sbx) || return 1
+    log="$(dirname "$(dirname "$sbx_exe")")/sandboxes/state/sandboxd/daemon.log"
+    [ -f "$log" ] || return 1
+    printf '%s\n' "$log"
+}
+
+# dr_sbx_log_mark - how large the log is right now, so that a later read can look
+# at only what an operation appended. A byte offset rather than a timestamp: it
+# needs no clock and no date parsing, and it cannot mistake last week's failure
+# for this one. Always prints a number, so a caller need not test the result.
+dr_sbx_log_mark() {
+    local log size
+    log=$(dr_sbx_daemon_log) || { printf '0\n'; return 0; }
+    size=$(wc -c < "$log" 2>/dev/null) || size=0
+    printf '%s\n' "${size//[^0-9]/}"
+}
+
+# dr_sbx_log_error <mark> - the last error sandboxd recorded after <mark>, or 1.
+dr_sbx_log_error() {
+    local mark=${1:-0} log out
+    command -v jq >/dev/null 2>&1 || return 1
+    log=$(dr_sbx_daemon_log) || return 1
+    # fromjson? rather than plain parsing, because the file is being written
+    # while we read it: a torn final line is normal, and one unparseable line
+    # must not throw away the good ones. A create failure logs a `stage`, so
+    # that entry is preferred over any other error in the same window - which
+    # can be routine noise like a lookup that missed. The error field carries
+    # embedded newlines, and -r expands them, so what comes back is the
+    # multi-line block sbx captured.
+    out=$(tail -c "+$((mark + 1))" "$log" 2>/dev/null \
+              | jq -srR 'split("\n") | map(fromjson?)
+                        | map(select(.level == "ERROR" and (.error // "") != ""))
+                        | ((map(select(has("stage"))) | last) // last)
+                        | .error // empty' 2>/dev/null) || return 1
+    [ -n "$out" ] || return 1
+    printf '%s\n' "$out"
+}
+
+# ---------------------------------------------------------------------------
 # Path translation
 #
 # One repository has three names, and getting them confused is the single

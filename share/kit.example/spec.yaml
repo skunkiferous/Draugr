@@ -63,15 +63,29 @@ caps:
 #    NODE_ENV: development
 
 commands:
-  # Runs once, when the sandbox is created. This is where npm ci, uv sync and
-  # apt-get install go - the difference between a teammate cloning your repo and
-  # being productive in one command, versus half an hour of guessing.
+  # Runs once, when the sandbox is created - and BEFORE your repository is in
+  # the workspace. At that moment the working directory is EMPTY and the repo is
+  # read-only at /run/sandbox/source, so a command that reads a project file
+  # fails however right it looks. Measured against sbx 0.37.1 in both clone and
+  # mount mode; `uv pip install -r requirements.txt` here gives you nothing but
+  # `error: File not found`.
+  #
+  # apt-get install belongs here unchanged. Anything that reads the project has
+  # to name the read-only copy, and put its result somewhere the agent session
+  # will not later overwrite - the workspace is not that place.
+  #
+  # A failure here reaches sbx as a bare `500 ... failed to run sandbox
+  # container`. dr-up prints what sandboxd actually recorded underneath it.
   install: []
-    # - command: "npm ci"
+    # - command: "uv venv /home/agent/.venv"
     #   user: "1000"
-    #   description: Install dependencies
+    #   description: Create the virtual environment
+    # - command: "uv pip install --python /home/agent/.venv/bin/python -r /run/sandbox/source/requirements.txt"
+    #   user: "1000"
+    #   description: Install dependencies, from the read-only copy of the repo
 
-  # Runs on every start, so it must be idempotent.
+  # Runs on every start, so it must be idempotent. Note that `command` must be a
+  # LIST here - unlike install, startup rejects a plain string.
   #startup:
   #  - command: ["sh", "-c", "nohup npm run dev >/tmp/dev.log 2>&1 &"]
   #    user: "1000"
