@@ -441,7 +441,7 @@ DR_TRUST_FILE="$DR_CONFIG_USER/trusted"
 # silently ignored.
 DR_KEYS=(
     DRAUGR_AGENT DRAUGR_AGENT_ARGS DRAUGR_ATTACH DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
-    DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_KIT_STORE DRAUGR_PORTS DRAUGR_MOUNTS
+    DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_KIT_STORE DRAUGR_PORTS DRAUGR_HOST_PORTS DRAUGR_MOUNTS
     DRAUGR_DATA DRAUGR_DATA_PUSH DRAUGR_DATA_PULL DRAUGR_DATA_DELETE DRAUGR_DATA_CHMOD
     DRAUGR_DATA_DIFF_MAX
     DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC DRAUGR_ON_MISSING_REPO
@@ -493,6 +493,10 @@ _dr_defaults() {
     DRAUGR_KIT_STORE="$DR_CONFIG_USER/kits"
 
     DRAUGR_PORTS=
+    # Ports on THIS machine that the mound is allowed to reach, space
+    # separated. Bare port numbers: the address they belong to is resolved on
+    # every dr-up and never stored, because it does not survive a reboot.
+    DRAUGR_HOST_PORTS=
     DRAUGR_MOUNTS=
 
     DRAUGR_DATA=
@@ -1706,6 +1710,75 @@ dr_policy_adhoc() {
               | select(.applies_to? == $s and .decision? == "allow")
               | select(.resource_type? == "network" and .editable? == true)
               | .resources[]?' 2>/dev/null         | sort -u
+}
+
+# ---------------------------------------------------------------------------
+# Host ports - reaching a service that runs on THIS machine, from inside a mound
+# ---------------------------------------------------------------------------
+#
+# The mirror image of DRAUGR_PORTS. That publishes a port the mound listens on so
+# the host can reach in; this opens a port the HOST listens on so the mound can
+# reach out. Both are holes, and this is the more serious direction: the thing on
+# the other side is a process on your machine, outside the sandbox, that the
+# agent gets to talk to.
+
+# dr_host_ip - the address a mound must use to reach a service on this host.
+#
+# Not a constant, which is the whole reason this is a function. WSL sits on a
+# NAT'd Hyper-V network whose subnet is chosen when the network is created - per
+# Windows boot - and whose address within it comes from DHCP. Neither is
+# pinnable: WSL 2.6.1 parses networkingMode, dhcpTimeout and vmIdleTimeout out of
+# .wslconfig and contains no natNetwork or natGateway at all. So an address
+# written down today is wrong after the next reboot, and because the sandbox
+# policy is default-deny it then fails CLOSED and SILENTLY - the connection is
+# accepted and dropped with no error to read, which is a genuinely nasty thing to
+# debug. Hence: resolved at the moment the hole is opened, never stored.
+#
+# `route get` rather than a named interface, because the question is "which
+# source address would this machine leave from", which is the one a mound can
+# route back to - and the answer does not depend on the interface being eth0. No
+# packet is sent; it is a routing-table query.
+dr_host_ip() {
+    local ip
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null |
+             awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }')
+    [ -n "$ip" ] || return 1
+    printf '%s\n' "$ip"
+}
+
+# dr_hostport_rules <port> - ids of the rules dr-hostport itself wrote for <port>.
+#
+# Deliberately narrow, because these ids are about to be handed to `policy rm`.
+# Only a rule that is editable (so: not one the kit composed), scoped to this
+# mound, and holding EXACTLY ONE resource that is a bare IPv4 address on <port>
+# can have come from here. A hand-written rule bundling several hosts, or one
+# naming a domain, is left alone even when <port> appears inside it.
+#
+# Without this pruning the rules accumulate one dead entry per reboot, each
+# naming an address that no longer exists.
+dr_hostport_rules() {
+    local port=$1 re
+    re=$(printf '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+:%s$' "$port")
+    dr_sbx policy ls "$DRAUGR_SANDBOX" --wide --json 2>/dev/null |
+        jq -r --arg s "sandbox:$DRAUGR_SANDBOX" --arg re "$re" '
+              .. | objects
+              | select(.applies_to? == $s and .decision? == "allow")
+              | select(.resource_type? == "network" and .editable? == true)
+              | select(((.resources? // []) | length) == 1)
+              | select(.resources[0] | test($re))
+              | .id? // empty' 2>/dev/null
+}
+
+# dr_hostport_open <port> - the addresses currently allowed on <port>, one per line.
+dr_hostport_open() {
+    local port=$1 re
+    re=$(printf '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+:%s$' "$port")
+    dr_sbx policy ls "$DRAUGR_SANDBOX" --wide --json 2>/dev/null |
+        jq -r --arg s "sandbox:$DRAUGR_SANDBOX" --arg re "$re" '
+              .. | objects
+              | select(.applies_to? == $s and .decision? == "allow")
+              | select(.resource_type? == "network" and .editable? == true)
+              | .resources[]? | select(test($re))' 2>/dev/null | sort -u
 }
 
 # dr_kit_allow_list <kit-dir> - the hosts a kit already declares.

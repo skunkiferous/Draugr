@@ -312,11 +312,24 @@ detection rather than a flaw in it.
 
 ```bash
 DRAUGR_PORTS="5173:5173 8080:8080"   # published to Windows loopback
+DRAUGR_HOST_PORTS="11434"            # ports on THIS machine the mound may reach
 DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"   # extra read-only workspaces
 ```
 
 A kit can declare `network.publishedPorts` too. Use the kit for ports the project always needs, and
 `DRAUGR_PORTS` — or `dr-ports`, mid-session — for the ones that are just today's.
+
+`DRAUGR_HOST_PORTS` is the other direction, and the more serious one: a service on *your* machine
+that the agent is allowed to call — a local Ollama on the GPU being the case it was written for. It
+names bare port numbers, never an address, because WSL's address is handed out per boot and cannot be
+pinned; a rule written with a literal IP is right until the next reboot and then fails **closed and
+silently**. `dr-up` re-resolves it on every start and drops the rules left over from addresses this
+machine no longer has, so a reboot costs you nothing. `dr-hostport` is the mid-session equivalent.
+
+> The service must be listening on `0.0.0.0` — from inside the mound, `127.0.0.1` is the mound. And
+> on the far side of this hole is a process outside the sandbox: whatever the agent can reach there,
+> it can use. In a project's `.draugr.conf` it takes effect only once you have accepted the file with
+> `dr-trust`.
 
 **Data files that are not ready to commit** — see [Working with data files](#working-with-data-files)
 
@@ -510,6 +523,7 @@ apply, and let memory be memory.
 | `dr-kit save`/`list` | keep a library of named kits, shared across repositories |
 | `dr-policy` | Show the network rules in force; `--allow <host>` for a temporary hole |
 | `dr-ports` | Publish a port to an already-running sandbox |
+| `dr-hostport` | Let the mound reach a port on *this* machine, at whatever address it has today |
 | `dr-code` | Open VS Code Remote-SSH into the mound, on the agent's clone |
 | `dr-trust` | Accept a project config after reviewing it |
 
@@ -673,7 +687,8 @@ draugr/
 │   ├── dr-go  dr-up  dr-shell  dr-stop  dr-rm  dr-ls  dr-status
 │   ├── dr-sync  dr-log  dr-diff  dr-merge  dr-send  dr-cp
 │   ├── dr-data  dr-mem  dr-skills
-│   └── dr-doctor  dr-config  dr-scan  dr-kit  dr-policy  dr-ports  dr-code  dr-setup  dr-init  dr-trust
+│   └── dr-doctor  dr-config  dr-scan  dr-kit  dr-policy  dr-ports  dr-hostport  dr-code  dr-setup
+│       dr-init  dr-trust
 ├── lib/
 │   ├── common.sh           config loading, path translation, guards, output
 │   └── agents/             one file per agent, for the parts that differ

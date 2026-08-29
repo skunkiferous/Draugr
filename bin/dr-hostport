@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# dr-hostport - let the mound reach a service running on THIS machine.
+#
+# The mirror image of dr-ports. That publishes a port the mound listens on so a
+# browser on Windows can reach in; this opens a port the HOST listens on so the
+# agent can call out - a local Ollama on your GPU being the case it was written
+# for.
+#
+#   dr-hostport                 what this mound can reach on the host
+#   dr-hostport 11434           open host port 11434, at the address it has today
+#   dr-hostport --close 11434   close it again
+#
+# Only the PORT is ever named, never the address, and that is the whole point.
+# WSL's address is handed out per boot and cannot be pinned, so a rule written
+# with a literal IP is right until the next reboot and then fails CLOSED and
+# SILENTLY - the connection is accepted by the sandbox's interception layer and
+# dropped with no error to read. This resolves the address every time it runs and
+# removes the rules it wrote for addresses this machine no longer has.
+#
+# Put the port in DRAUGR_HOST_PORTS and dr-up does this on every start, which is
+# what makes it survive a reboot without you remembering anything.
+#
+# This is a hole from the sandbox to your machine, and the more serious of the
+# two directions: on the other side is a process outside the mound. dr-policy
+# --allow is the ad-hoc equivalent and says the same thing more loudly.
+set -euo pipefail
+
+DR_PROG=dr-hostport
+_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# A bare argument is a port to open; --close takes one to shut.
+close=()
+open=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --close|-c) shift; [ -n "${1:-}" ] || dr_die "--close needs a port"; close+=("$1") ;;
+        -h|--help)  dr_help "$0"; exit 0 ;;
+        -*) dr_die "unknown option: $1" "Try: dr-hostport --help" ;;
+        *)  open+=("$1") ;;
+    esac
+    shift
+done
+
+dr_context
+
+dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
+    "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
+
+# A port number and nothing else. Checked early because the value is interpolated
+# into a jq regex and handed to sbx, and because "11434/tcp" would be accepted by
+# sbx as a hostname, match nothing, and look exactly like a rule that was never
+# added.
+_check_port() {
+    case "$1" in
+        ''|*[!0-9]*) dr_die "not a port number: $1" "Usage:  dr-hostport 11434" ;;
+    esac
+    if [ "$1" -lt 1 ] || [ "$1" -gt 65535 ]; then
+        dr_die "port out of range: $1" "Usage:  dr-hostport 11434"
+    fi
+}
+
+# A hole to a port nothing is listening on is not an error - you may be about to
+# start the service. A port bound only to LOOPBACK is different: it is the
+# mistake this command sits next to, and it is invisible from inside the mound,
+# where 127.0.0.1 is the mound's own loopback and the failure looks identical to
+# a policy denial.
+_warn_if_loopback_only() {
+    local port=$1 bound
+    command -v ss >/dev/null 2>&1 || return 0
+    bound=$(ss -ltnH "sport = :$port" 2>/dev/null | awk '{ print $4 }') || return 0
+    [ -n "$bound" ] || return 0
+    case "$bound" in
+        *"0.0.0.0:$port"*|*"[::]:$port"*|*"*:$port"*) return 0 ;;
+    esac
+    dr_warn "port $port is listening on loopback only ($bound)"
+    printf '  %sFrom inside the mound 127.0.0.1 is the MOUND, so this will not%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sconnect however the rule reads. Bind the service to 0.0.0.0.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+}
+
+# Every address:port this mound has been given, whoever wrote it. Bare IPv4 only
+# - a rule naming a domain is somebody else's and is not listed as a host port.
+_all_rules() {
+    dr_sbx policy ls "$DRAUGR_SANDBOX" --wide --json 2>/dev/null |
+        jq -r --arg s "sandbox:$DRAUGR_SANDBOX" '
+              .. | objects
+              | select(.applies_to? == $s and .decision? == "allow")
+              | select(.resource_type? == "network" and .editable? == true)
+              | .resources[]?
+              | select(test("^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+:[0-9]+$"))' \
+            2>/dev/null | sort -u
+}
+
+# No arguments is a query, which is the common case and must not change anything.
+if [ ${#open[@]} -eq 0 ] && [ ${#close[@]} -eq 0 ]; then
+    ip=$(dr_host_ip) || ip=
+    rules=$(_all_rules)
+
+    # Nothing open at all. Both ways of opening one are named, because the
+    # config key is the answer for anything you will want again tomorrow and
+    # is the half of this that is easy not to find.
+    if [ -z "$rules" ]; then
+        dr_info "$DRAUGR_SANDBOX can reach no host ports"
+        printf '  %sOpen one with:  dr-hostport <port>%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sOr declare it once:  DRAUGR_HOST_PORTS="11434"%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        exit 0
+    fi
+
+    dr_heading "host ports open to $DRAUGR_SANDBOX:"
+    while IFS= read -r r; do
+        # A rule for an address this machine no longer has is dead weight, and
+        # saying so is most of why this listing exists: it is the state you are
+        # left in by a reboot, and it is otherwise indistinguishable from a
+        # working rule.
+        if [ -n "$ip" ] && [ "${r%:*}" != "$ip" ]; then
+            printf '  %-24s %sstale - this host is now %s%s\n' "$r" "$_DR_DIM" "$ip" "$_DR_OFF"
+        else
+            printf '  %s\n' "$r"
+        fi
+    done <<< "$rules"
+
+    # Said on every listing rather than only the first: the direction of this
+    # hole is the thing worth being reminded of.
+    printf '\n  %sThese are holes from the sandbox to your machine. Refresh them%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %son every start by setting DRAUGR_HOST_PORTS in .draugr.conf.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    exit 0
+fi
+
+# Closing removes every rule this command wrote for the port, not just the
+# one matching today's address: the stale ones are exactly what you are trying
+# to be rid of, and leaving them would make a "closed" port still reachable
+# from an address the machine may be handed again.
+for port in "${close[@]+"${close[@]}"}"; do
+    _check_port "$port"
+    n=0
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        dr_sbx policy rm network --sandbox "$DRAUGR_SANDBOX" --id "$id" >/dev/null \
+            || dr_warn "could not remove rule $id"
+        n=$((n + 1))
+    done < <(dr_hostport_rules "$port")
+    if [ "$n" -eq 0 ]; then
+        dr_info "host port $port was not open for $DRAUGR_SANDBOX"
+    else
+        dr_ok "closed host port $port for $DRAUGR_SANDBOX ($n rule(s))"
+    fi
+done
+
+for port in "${open[@]+"${open[@]}"}"; do
+    _check_port "$port"
+
+    ip=$(dr_host_ip) || dr_die \
+        "could not work out this host's address" \
+        "dr-hostport needs the address a mound would reach this machine at." \
+        "Check it by hand with:  ip -4 route get 1.1.1.1"
+    want="$ip:$port"
+
+    # Already exactly right, so do nothing and be quiet about it. This runs on
+    # every dr-up, and a command that rewrites machine state at every start is
+    # one whose output you stop reading.
+    if [ "$(dr_hostport_open "$port")" = "$want" ]; then
+        dr_info "host port $port already open at $want"
+        _warn_if_loopback_only "$port"
+        continue
+    fi
+
+    # Everything this command wrote for this port goes, before the new rule is
+    # added rather than after: the address being removed may be the one this
+    # machine has just been handed again, and the other order would then delete
+    # the rule that had just been written.
+    stale=0
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        stale=$((stale + 1))
+        dr_sbx policy rm network --sandbox "$DRAUGR_SANDBOX" --id "$id" >/dev/null \
+            || dr_warn "could not remove stale rule $id"
+    done < <(dr_hostport_rules "$port")
+
+    dr_sbx policy allow network --sandbox "$DRAUGR_SANDBOX" "$want" >/dev/null \
+        || dr_die "could not open host port $port" \
+                  "Check what is in force with:  dr-policy"
+
+    # The count is reported because a replacement is the interesting case: it
+    # means the address moved, which is the thing this command exists to
+    # absorb quietly but not silently.
+    if [ "$stale" -gt 0 ]; then
+        dr_ok "host port $port -> $want (replaced $stale stale rule(s))"
+    else
+        dr_ok "host port $port -> $want"
+    fi
+    _warn_if_loopback_only "$port"
+done

@@ -340,4 +340,17 @@ if [ "$DRAUGR_MEM_SYNC" = auto ] && [ -x "$_dr_bin/dr-mem" ]; then
         || dr_warn "auto memory import failed; retry with:  dr-mem import"
 fi
 
+# Host ports last, because the address they resolve to is only true for as long
+# as this boot lasts. Re-resolved on every up rather than stored, which is the
+# whole of what makes DRAUGR_HOST_PORTS survive a reboot - see dr_host_ip. A
+# failure warns rather than dies: the mound is already up, and a session
+# without the hole is still a session.
+if [ -n "$DRAUGR_HOST_PORTS" ] && [ -x "$_dr_bin/dr-hostport" ]; then
+    read -ra _hostports <<< "$DRAUGR_HOST_PORTS"
+    for _hp in "${_hostports[@]}"; do
+        "$_dr_bin/dr-hostport" "$_hp" \
+            || dr_warn "could not open host port $_hp; retry with:  dr-hostport $_hp"
+    done
+fi
+
 dr_hook post-up "$DR_REPO"

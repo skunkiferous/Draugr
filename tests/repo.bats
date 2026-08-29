@@ -15,12 +15,18 @@
 
 load helper
 
-# Everything something else executes by path: the commands, the installer, and
-# the two test-support scripts CI invokes directly.
+# Everything something else executes by path: the commands, the installer, the
+# test-support scripts CI invokes directly, and every mock.
+#
+# Every mock, because they are found on PATH rather than called by path, and
+# that fails in the quietest possible way: PATH lookup SKIPS a file that is not
+# executable and carries on down the list. So a 100644 mock does not produce
+# "permission denied" - it produces the REAL tool, contacted for real, on a
+# machine that was supposed to be talking to a stand-in.
 want_executable() {
     printf '%s\n' "$DR_ROOT"/bin/dr* \
                   "$DR_ROOT/install.sh" \
-                  "$DR_ROOT/tests/mocks/sbx" \
+                  "$DR_ROOT"/tests/mocks/* \
                   "$DR_ROOT/tests/lint-comments.sh"
 }
 

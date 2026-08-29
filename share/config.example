@@ -97,6 +97,11 @@
 # Published to Windows loopback. Applied at creation; use dr-ports mid-session.
 #DRAUGR_PORTS="5173:5173 8080:8080"
 
+# The other direction: ports on THIS machine the mound is allowed to reach, as
+# bare port numbers. Re-applied on every dr-up, because the address they belong
+# to is handed out per boot and cannot be pinned. See dr-hostport.
+#DRAUGR_HOST_PORTS="11434"
+
 # Extra workspaces. Append :ro for read-only, which is almost always what you
 # want - a read-only mount is strictly safer than copying data in.
 #DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"

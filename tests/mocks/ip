@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# A stand-in for iproute2's `ip`, so dr_host_ip has a fixed answer.
+#
+# The real thing reports an address that WSL is handed per boot, which is the
+# whole reason dr_host_ip exists - so a test that depended on it would be testing
+# the developer's current lease.
+#
+#   DR_MOCK_HOST_IP   the address to report. Unset means a plausible default;
+#                     set to EMPTY means a route with no `src` at all, which is
+#                     how "this is not WSL" is exercised.
+set -euo pipefail
+
+case "$*" in
+    *"route get"*)
+        ip=${DR_MOCK_HOST_IP-172.19.192.26}
+        if [ -z "$ip" ]; then
+            # A real answer for an interface with no source address: the route
+            # resolves, there is simply nothing to come from.
+            printf '1.1.1.1 dev eth0 \n    cache \n'
+            exit 0
+        fi
+        printf '1.1.1.1 via 172.19.192.1 dev eth0 src %s uid 1000 \n    cache \n' "$ip"
+        ;;
+    *)
+        printf 'mock ip: unhandled: %s\n' "$*" >&2
+        exit 1
+        ;;
+esac

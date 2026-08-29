@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# A stand-in for `ss`, so dr-hostport's loopback check has a fixed answer rather
+# than whatever happens to be listening on the machine running the tests.
+#
+#   DR_MOCK_LISTEN   the local address to report, e.g. "127.0.0.1:11434" or
+#                    "*:11434". Unset means nothing is listening on that port,
+#                    which is not an error - you may be about to start it.
+set -euo pipefail
+
+[ -n "${DR_MOCK_LISTEN:-}" ] || exit 0
+printf 'LISTEN 0      4096   %s %s\n' "$DR_MOCK_LISTEN" '*:*'

@@ -25,6 +25,10 @@
 # Ports this project's dev server needs.
 #DRAUGR_PORTS="5173:5173"
 
+# A service on your own machine the agent may call - a local Ollama, say. Bare
+# port numbers; the address is worked out at every dr-up.
+#DRAUGR_HOST_PORTS="11434"
+
 # Reference material the agent should be able to read but never change.
 #DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"
 

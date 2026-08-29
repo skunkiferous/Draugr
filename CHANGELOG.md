@@ -12,6 +12,39 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- **`DRAUGR_HOST_PORTS` and `dr-hostport`** — a service on your own machine that the agent is allowed
+  to call, a local Ollama on the GPU being the case it was written for. The mirror image of
+  `DRAUGR_PORTS`/`dr-ports`, and deliberately the same shape: declare it once in `.draugr.conf`, or
+  reach for the command mid-session.
+
+  The reason it exists as a feature rather than a line in the README telling you to run
+  `dr-policy --allow 172.19.192.26:11434` is that the address in that line stops being true. WSL sits
+  on a NAT'd network whose subnet is chosen per Windows boot and whose address within it comes from
+  DHCP, and neither can be pinned — WSL 2.6.1 parses `networkingMode`, `dhcpTimeout` and
+  `vmIdleTimeout` out of `.wslconfig` and contains no `natNetwork` or `natGateway` at all. So the
+  rule is right until the next reboot and then fails **closed and silently**: measured, the
+  connection is accepted by the sandbox's interception layer and dropped with no error to read, which
+  is indistinguishable from the service being down.
+
+  So only the port is ever named. `dr-up` re-resolves the address on every start — not only on the
+  create, because the start that matters is the first one after a reboot — and removes the rules left
+  behind for addresses this machine no longer has, which otherwise accumulate one per boot. Pruning
+  is narrow on purpose: a rule is only ours if it is editable, scoped to this mound, and holds
+  exactly one resource that is a bare IPv4 address on that port. A kit's rule, a rule naming a
+  domain, and a rule bundling several hosts are all left alone, because the next thing that happens
+  to a matched rule is `sbx policy rm`.
+
+  Two things worth knowing independently of this feature, both measured against sbx 0.37.1:
+  `sbx policy allow network` **accepts a CIDR and silently ignores it** — `172.19.192.0/20:11434` is
+  stored as a rule, and then denied by both `sbx policy check` and real traffic. A wildcard last
+  octet does work (`172.19.192.*:11434`), but only one label: `172.19.*` matches nothing. And
+  `host.docker.internal` resolves inside a mound but does not reach the WSL host, so the Docker
+  Desktop recipe for this does not transfer.
+
+  `dr-hostport` also warns when the port is bound to loopback only, which is the mistake that sits
+  next to this one: from inside the mound `127.0.0.1` is the mound, so the rule is perfect and the
+  connection still fails.
+
 - **The build-your-own-kit loop.** A new project's kit is the one thing you cannot write in advance,
   because you do not know what a build needs until it fails. Three additions make working it out an
   iteration inside one session rather than one recreate per host:

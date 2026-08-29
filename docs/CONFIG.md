@@ -271,6 +271,32 @@ DRAUGR_PORTS="5173:5173 8080:8080"
 A kit can declare `publishedPorts` too. Use the kit for ports the project always needs and this —
 or `dr-ports`, mid-session — for today's.
 
+### `DRAUGR_HOST_PORTS`
+Default empty. Space-separated **port numbers** on this machine that the mound is allowed to reach:
+
+```bash
+DRAUGR_HOST_PORTS="11434"        # a local Ollama on the host's GPU, say
+```
+
+The mirror image of `DRAUGR_PORTS`. That publishes a port *out* of the mound so a Windows browser can
+reach in; this opens a port *into* your machine so the agent can call out. `dr-up` applies it on
+every start, and `dr-hostport` is the mid-session equivalent — the same pairing as
+`DRAUGR_PORTS` and `dr-ports`.
+
+Only the port is ever named. The address is resolved each time this is applied, because WSL's is
+handed out per boot and cannot be pinned — WSL 2.6.1 has no `natNetwork` setting at all. A rule
+written with a literal IP is correct until the next reboot and then fails **closed and silently**:
+the connection is accepted by the sandbox's interception layer and dropped, with no error to read.
+Rules left behind for addresses this machine no longer has are removed as they are found.
+
+The service has to be listening on `0.0.0.0`, not `127.0.0.1` — from inside the mound, `127.0.0.1` is
+the mound. `dr-hostport` warns when it can see that mistake.
+
+> This is a hole from the sandbox to your machine, and the more serious of the two directions: on the
+> other side is a process outside the mound. Anything the agent can reach there, it can use. Declaring
+> it in a project's `.draugr.conf` takes effect only after you have accepted that file with `dr-trust`,
+> which is where the consent lives.
+
 ### `DRAUGR_MOUNTS`
 Default empty. Extra host directories, space-separated, each `PATH[:ro]`:
 

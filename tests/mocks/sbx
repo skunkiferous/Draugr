@@ -143,6 +143,8 @@ cp)
 #
 #   DR_MOCK_DENIED   space-separated hosts to report as blocked
 #   DR_MOCK_ADHOC    space-separated hosts allowed for this sandbox by hand
+#   DR_MOCK_MULTI    one editable rule holding SEVERAL resources, which nothing
+#                    that prunes by resource may touch
 #   DR_MOCK_KITHOST  one host allowed by the sandbox's KIT, which must never be
 #                    mistaken for an ad-hoc rule - editable:false is what tells
 #                    them apart, and that distinction is the whole of dr-kit adopt
@@ -168,12 +170,22 @@ policy)
 ' "$*" >> "${DR_MOCK_LOG:-/dev/null}"
         printf '{"rules":['
         sep=
+        n=0
         for h in ${DR_MOCK_ADHOC:-}; do
-            printf '%s{"applies_to":"sandbox:%s","decision":"allow","resource_type":"network","editable":true,"resources":["%s"]}'                 "$sep" "${DR_MOCK_NAME:-mock}" "$h"
+            printf '%s{"id":"rule-%s","applies_to":"sandbox:%s","decision":"allow","resource_type":"network","editable":true,"resources":["%s"]}' "$sep" "$n" "${DR_MOCK_NAME:-mock}" "$h"
             sep=,
+            n=$((n + 1))
         done
         if [ -n "${DR_MOCK_KITHOST:-}" ]; then
-            printf '%s{"applies_to":"sandbox:%s","decision":"allow","resource_type":"network","editable":false,"resources":["%s"]}'                 "$sep" "${DR_MOCK_NAME:-mock}" "$DR_MOCK_KITHOST"
+            printf '%s{"id":"kit-rule","applies_to":"sandbox:%s","decision":"allow","resource_type":"network","editable":false,"resources":["%s"]}' "$sep" "${DR_MOCK_NAME:-mock}" "$DR_MOCK_KITHOST"
+            sep=,
+        fi
+        if [ -n "${DR_MOCK_MULTI:-}" ]; then
+            printf '%s{"id":"multi-rule","applies_to":"sandbox:%s","decision":"allow","resource_type":"network","editable":true,"resources":[' "$sep" "${DR_MOCK_NAME:-mock}"
+            msep=
+            for h in $DR_MOCK_MULTI; do printf '%s"%s"' "$msep" "$h"; msep=,; done
+            printf ']}'
+            sep=,
         fi
         printf ']}
 '
