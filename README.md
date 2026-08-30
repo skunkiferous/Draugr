@@ -14,7 +14,7 @@ no reach outside it.
 
 **WARNING:** This entire project has been "vibe-coded" by [Claude Code](https://claude.ai).
 
-> **Status: 0.1.0 — ready to be used rather than read.** Every command in the tables below exists
+> **Status: 0.2.0 — ready to be used rather than read.** Every command in the tables below exists
 > and has tests; the mechanics are verified against `sbx` v0.37.1 on Windows 11 + WSL2. It has not
 > yet been used by anyone but its author, so expect rough edges in the places nobody has walked.
 >

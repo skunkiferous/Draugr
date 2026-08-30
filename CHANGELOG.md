@@ -12,6 +12,16 @@ people reading the source, not for people calling it.
 
 ### Added
 
+### Removed
+
+### Changed
+
+### Fixed
+
+## [0.2.0] — 2026-08-30
+
+### Added
+
 - **`DRAUGR_HOST_PORTS` and `dr-hostport`** — a service on your own machine that the agent is allowed
   to call, a local Ollama on the GPU being the case it was written for. The mirror image of
   `DRAUGR_PORTS`/`dr-ports`, and deliberately the same shape: declare it once in `.draugr.conf`, or
