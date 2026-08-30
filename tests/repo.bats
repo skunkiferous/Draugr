@@ -15,19 +15,12 @@
 
 load helper
 
-# Everything something else executes by path: the commands, the installer, the
-# test-support scripts CI invokes directly, and every mock.
-#
-# Every mock, because they are found on PATH rather than called by path, and
-# that fails in the quietest possible way: PATH lookup SKIPS a file that is not
-# executable and carries on down the list. So a 100644 mock does not produce
-# "permission denied" - it produces the REAL tool, contacted for real, on a
-# machine that was supposed to be talking to a stand-in.
+# The list lives in tests/executable-paths.sh, not here, because there are two
+# consumers and they must not drift: this test fails a build when one of these
+# is not executable, and .githooks/pre-commit fixes it before the commit exists.
+# The reasoning about WHICH files belong is in that script.
 want_executable() {
-    printf '%s\n' "$DR_ROOT"/bin/dr* \
-                  "$DR_ROOT/install.sh" \
-                  "$DR_ROOT"/tests/mocks/* \
-                  "$DR_ROOT/tests/lint-comments.sh"
+    "$DR_ROOT/tests/executable-paths.sh"
 }
 
 @test "every script that must be executable will arrive executable" {
@@ -87,4 +80,47 @@ want_executable() {
         printf 'not documented in README.md:%s\n' "$missing" >&2
         return 1
     }
+}
+
+# The hook is the half of this that runs in time to matter, so it is tested like
+# any other code. A fake repository rather than this one, because the assertion
+# is about what `git add` records, and doing that here would dirty the index of
+# the repo under test.
+@test "the pre-commit hook sets the bit that git add cannot" {
+    local fake="$BATS_TEST_TMPDIR/fake"
+    mkdir -p "$fake/bin" "$fake/tests" "$fake/.githooks"
+    cp "$DR_ROOT/tests/executable-paths.sh" "$fake/tests/"
+    cp "$DR_ROOT/.githooks/pre-commit" "$fake/.githooks/"
+    chmod +x "$fake/tests/executable-paths.sh" "$fake/.githooks/pre-commit"
+    printf '#!/usr/bin/env bash\ntrue\n' > "$fake/bin/dr-thing"
+
+    git -C "$fake" init -q -b main
+    git -C "$fake" config user.email t@example.com
+    git -C "$fake" config user.name T
+    # The condition that causes the bug in the first place: git ignoring the
+    # filesystem's executable bit, exactly as it does on /mnt/c.
+    git -C "$fake" config core.fileMode false
+    git -C "$fake" add -A
+
+    [ "$(git -C "$fake" ls-files -s -- bin/dr-thing | awk '{print $1}')" = 100644 ]
+    ( cd "$fake" && ./.githooks/pre-commit >/dev/null 2>&1 )
+    [ "$(git -C "$fake" ls-files -s -- bin/dr-thing | awk '{print $1}')" = 100755 ]
+}
+
+# A listed file that is not staged belongs to some other commit, and pulling it
+# in would commit something the author did not ask for.
+@test "the pre-commit hook leaves an unstaged script alone" {
+    local fake="$BATS_TEST_TMPDIR/fake2"
+    mkdir -p "$fake/bin" "$fake/tests" "$fake/.githooks"
+    cp "$DR_ROOT/tests/executable-paths.sh" "$fake/tests/"
+    cp "$DR_ROOT/.githooks/pre-commit" "$fake/.githooks/"
+    chmod +x "$fake/tests/executable-paths.sh" "$fake/.githooks/pre-commit"
+    printf '#!/usr/bin/env bash\ntrue\n' > "$fake/bin/dr-unstaged"
+
+    git -C "$fake" init -q -b main
+    git -C "$fake" config user.email t@example.com
+    git -C "$fake" config user.name T
+    ( cd "$fake" && ./.githooks/pre-commit >/dev/null 2>&1 )
+
+    [ -z "$(git -C "$fake" ls-files -s -- bin/dr-unstaged)" ]
 }

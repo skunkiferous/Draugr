@@ -696,6 +696,31 @@ record the argv they were called with, and the sbx one replays canned `ls --json
 output, so tests can assert on the command line Draugr built without a hypervisor
 anywhere near them.
 
+### Enable the commit hook, once per clone
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Without it, every new script you add is committed as mode `100644` and arrives on Linux as a file
+nothing can execute. This is not carelessness — it is unavoidable here. The project is developed on
+`/mnt/c`, where git sets `core.fileMode=false` and ignores the filesystem's executable bit
+completely, so `chmod +x` changes nothing git will record and `git add` cannot carry the bit either.
+The mode lives **only** in the index, and the only thing that writes it there is
+`git update-index --chmod=+x`.
+
+`.githooks/pre-commit` does that for you, for every path in `tests/executable-paths.sh`, and says
+which files it touched. It fixes rather than refuses, because there is no judgement to make: a file
+is on that list precisely because something executes it.
+
+`tests/repo.bats` still fails the build when a mode is wrong — the hook is the convenience, the test
+is the guarantee, and a fresh clone that never ran `git config` is still caught. But the test runs
+after the commit, and CI later still. Both are too late to be a reminder: this cost one red release,
+and ten commits of `tests/mocks/ssh` sitting at `100644` while the attach tests quietly resolved a
+**real** `ssh` on the runner — because PATH lookup skips a non-executable file and keeps searching
+rather than failing.
+
+
 ---
 
 ## Testing strategy

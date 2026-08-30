@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Set the executable bit on the scripts that need it, in the index, before the
+# commit exists.
+#
+# This repository is developed on /mnt/c, where git sets core.fileMode=false and
+# ignores the filesystem's executable bit entirely. A new script therefore runs
+# perfectly here and is committed as mode 100644, arriving on Linux as a file
+# nothing can execute. `git add` cannot carry the bit and `chmod` does not
+# either: on this checkout the mode lives ONLY in the index, and the only thing
+# that writes it there is `git update-index --chmod=+x`.
+#
+# tests/repo.bats already fails a build over this, and CI already goes red. Both
+# happen after the commit, which is too late to be a reminder and has now cost
+# one red release and ten commits of quietly non-executable tests/mocks/ssh. So
+# this fixes it at the one moment the information is still actionable.
+#
+# It fixes rather than refuses, because there is no judgement to make: every path
+# in tests/executable-paths.sh is there precisely because something executes it.
+# A hook that blocked instead would just be the reminder that keeps being
+# forgotten, moved one step earlier.
+#
+# Enable it once per clone, with:  git config core.hooksPath .githooks
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel) || exit 0
+list="$root/tests/executable-paths.sh"
+
+# A clone that predates the list, or a rebase that has it checked out at an old
+# revision, must not break committing. Nothing here is load-bearing for
+# correctness - repo.bats is - so every failure path is "do nothing, quietly".
+[ -x "$list" ] || exit 0
+
+fixed=()
+while IFS= read -r path; do
+    [ -f "$path" ] || continue
+
+    # The mode AND the repo-relative name both come out of git's own answer,
+    # rather than the name being computed by stripping $root off the front.
+    # That strip looks obvious and is wrong on Git Bash, where rev-parse says
+    # C:/Code/Draugr and the path list says /c/Code/Draugr - same directory,
+    # different spelling, and the prefix never matches.
+    #
+    # ls-files -s prints "<mode> <sha> <stage>\t<path>".
+    entry=$(git ls-files -s --full-name -- "$path" 2>/dev/null) || continue
+
+    # Only files already in the index. A listed script that has not been added
+    # is not part of this commit, and staging it here would silently commit
+    # something the author did not ask for.
+    [ -n "$entry" ] || continue
+
+    mode=${entry%% *}
+    [ "$mode" != 100755 ] || continue
+
+    rel=${entry#*$'\t'}
+    git update-index --chmod=+x -- "$rel" && fixed+=("$rel")
+done < <("$list")
+
+[ ${#fixed[@]} -gt 0 ] || exit 0
+
+# Said out loud rather than done silently: the commit about to be created now
+# contains a mode change nobody typed, and a surprising diff is worse than a
+# noisy hook.
+printf 'pre-commit: made executable in the index (mode 100644 -> 100755):\n' >&2
+printf '  %s\n' "${fixed[@]}" >&2

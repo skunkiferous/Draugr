@@ -12,6 +12,8 @@ people reading the source, not for people calling it.
 
 ### Added
 
+Since I always forget, there is now a git hook for running "git update-index --chmod=+x -- ..." on scripts.
+
 ### Removed
 
 ### Changed
