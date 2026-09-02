@@ -16,7 +16,7 @@
 [ -n "${_DR_COMMON_LOADED:-}" ] && return 0
 _DR_COMMON_LOADED=1
 
-DRAUGR_VERSION="0.2.0"
+DRAUGR_VERSION="0.3.0"
 
 # --- work out where Draugr itself is installed ------------------------------
 #
@@ -1384,6 +1384,62 @@ dr_data_is_text() {
     [ "$total" = "$stripped" ]
 }
 
+# dr_mode_note <repo> <path> - "mode X => Y, no content change", or nothing.
+#
+# True only when the STAGED entry and HEAD hold the same blob under different
+# modes. Anything else - an edit, an addition, a deletion - is not a mode-only
+# change and gets no note.
+dr_mode_note() {
+    local repo=$1 path=$2 idx head imode hmode iblob hblob
+
+    # A path git had to quote (spaces, non-ASCII) will not match as typed, and
+    # guessing at the unquoting would be worse than saying nothing: the note is
+    # a convenience, and its absence costs only the convenience.
+    idx=$(git -C "$repo" ls-files -s -- "$path" 2>/dev/null) || return 1
+    head=$(git -C "$repo" ls-tree HEAD -- "$path" 2>/dev/null) || return 1
+    [ -n "$idx" ] && [ -n "$head" ] || return 1
+
+    # ls-files -s  : "<mode> <blob> <stage>\t<path>"
+    # ls-tree      : "<mode> blob <blob>\t<path>"
+    imode=${idx%% *}
+    hmode=${head%% *}
+    iblob=$(printf '%s' "$idx"  | awk '{ print $2 }')
+    hblob=$(printf '%s' "$head" | awk '{ print $3 }')
+
+    [ "$imode" != "$hmode" ] || return 1
+    [ "$iblob" = "$hblob" ] || return 1
+    printf 'mode %s => %s, no content change\n' "$hmode" "$imode"
+}
+
+# dr_dirty_list <repo> - `git status --short`, with a mode-only change named.
+#
+# git prints "M  run.sh" whether the file was rewritten or merely made
+# executable, and on a /mnt/c checkout the second is likelier than it looks.
+# With core.fileMode=false a mode can only have reached the index through
+# `git update-index --chmod`, a checkout, or a merge - never through `git add` -
+# so reading that "M" as "I edited that" sends you hunting for an edit that does
+# not exist.
+#
+# Measured, and the reason this exists: a dr-merge was blocked by a staged
+# `100644 => 100755` on run.sh while the incoming commit carried THE SAME mode
+# change. The refusal was correct and the message was unreadable.
+dr_dirty_list() {
+    local repo=${1:-$PWD} line path note
+    while IFS= read -r line; do
+        # "XY path". A rename is "XY old -> new", where neither half is the
+        # path to ask git about, so it is left alone.
+        path=${line:3}
+        case "$line" in
+            *" -> "*) printf '%s\n' "$line"; continue ;;
+        esac
+        if note=$(dr_mode_note "$repo" "$path"); then
+            printf '%s   (%s)\n' "$line" "$note"
+        else
+            printf '%s\n' "$line"
+        fi
+    done < <(git -C "$repo" status --short 2>/dev/null)
+}
+
 # dr_data_dirty_only <repo> - true when every uncommitted change is a data file.
 #
 # This is the DRAUGR_REQUIRE_CLEAN exemption: churning a parquet file must not
@@ -1814,6 +1870,33 @@ dr_kit_allow_list() {
     ' "$1/spec.yaml" 2>/dev/null | sort -u
 }
 
+# dr_hostport_managed <resource> - true when DRAUGR_HOST_PORTS owns this rule.
+#
+# Such a rule is not machine state anyone has to preserve, and that changes the
+# answer to two separate questions. Recreating does destroy it, but dr-up writes
+# it again seconds later from the address of the day, so warning about the loss
+# sends you looking for a way to keep something that is about to come back. And
+# `dr-kit adopt` must never take it: the kit is COMMITTED, and the address in it
+# is true only until the next reboot - it is the one value this whole feature
+# exists to stop anybody writing down.
+#
+# Deliberately narrow. Only a bare IPv4 on a port this project declared can have
+# come from dr-hostport; a hostname on the same port belongs to somebody else and
+# is still reported.
+dr_hostport_managed() {
+    local res=$1 port p
+    [ -n "${DRAUGR_HOST_PORTS:-}" ] || return 1
+    case "$res" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*:[0-9]*) ;;
+        *) return 1 ;;
+    esac
+    port=${res##*:}
+    for p in $DRAUGR_HOST_PORTS; do
+        if [ "$p" = "$port" ]; then return 0; fi
+    done
+    return 1
+}
+
 # dr_policy_unadopted - ad-hoc hosts this repo's kit does not already declare.
 #
 # The set that would be LOST by a recreate, which is what dr-rm and dr-up guard
@@ -1835,6 +1918,9 @@ dr_policy_unadopted() {
     fi
     while IFS= read -r host; do
         [ -n "$host" ] || continue
+        # A rule dr-hostport wrote is restored automatically, so it is neither
+        # something a recreate loses nor something to write into the kit.
+        if dr_hostport_managed "$host"; then continue; fi
         printf '%s
 ' "$have" | grep -qxF "$host" || printf '%s
 ' "$host"
@@ -2173,16 +2259,28 @@ dr_tracking_ref() {
 # there. That is how a session's work went missing for a day.
 #
 # Prints "<ref> <count>" per line. The tracked branch is excluded because its
-# caller reports it separately, and HEAD because it is a symref to one of these.
+# caller reports it separately, and <remote>/HEAD because it is a symref to one
+# of these rather than a branch of its own.
+#
+# The FULL refname, deliberately: %(refname:short) is unsafe for that second
+# exclusion. refs/remotes/<name>/HEAD is one of git's own rev-parse rules, so it
+# shortens to "draugr" - NOT "draugr/HEAD" - and a */HEAD guard on the short form
+# never fires. Nothing created that ref until git 2.49 made `git fetch` do it by
+# default (remote.<name>.followRemoteHEAD=create); from then on every sync
+# reported "1 branch(es) you are NOT tracking: draugr", naming the branch you are
+# already on and taking the review hint with it. Found in CI, whose git is newer
+# than the one on the machine this was written on.
 dr_other_branches() {
     local tracked ref count
     tracked=$(dr_tracking_ref)
     while IFS= read -r ref; do
-        [ "$ref" = "$tracked" ] && continue
+        ref=${ref#refs/remotes/}
         case "$ref" in */HEAD) continue ;; esac
-        count=$(git -C "$DR_REPO" rev-list --count "HEAD..$ref" 2>/dev/null || printf 0)
+        [ "$ref" = "$tracked" ] && continue
+        count=$(git -C "$DR_REPO" rev-list --count "HEAD..refs/remotes/$ref" \
+                    2>/dev/null || printf 0)
         if [ "$count" -gt 0 ]; then printf '%s %s\n' "$ref" "$count"; fi
-    done < <(git -C "$DR_REPO" for-each-ref --format='%(refname:short)' \
+    done < <(git -C "$DR_REPO" for-each-ref --format='%(refname)' \
                  "refs/remotes/$DRAUGR_REMOTE/" 2>/dev/null)
     return 0
 }

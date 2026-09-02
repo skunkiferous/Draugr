@@ -14,6 +14,9 @@
 #   tests/mocks/*        found on PATH by the code under test - see below
 #   tests/*.sh           the standalone checks CI invokes directly
 #   .githooks/*          git SKIPS a hook that is not executable, silently
+#   share/.../ollama-proxy   shipped to be run; named rather than globbed,
+#                            because share/ is mostly examples that must not be
+#
 #
 # Mocks matter more than they look. They are found on PATH rather than called by
 # path, and PATH lookup SKIPS a file that is not executable and carries on down
@@ -32,4 +35,5 @@ printf '%s\n' "$_root"/bin/dr* \
               "$_root/install.sh" \
               "$_root"/tests/mocks/* \
               "$_root"/tests/*.sh \
-              "$_root"/.githooks/*
+              "$_root"/.githooks/* \
+              "$_root"/share/ollama-proxy/ollama-proxy

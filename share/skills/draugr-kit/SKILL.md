@@ -96,6 +96,31 @@ the operator runs `dr-up --recreate`, and a failure there reports as a bare
 `500 ... failed to run sandbox container` unless they are running a Draugr new
 enough to read the daemon's log. Say plainly that these commands are untested.
 
+**Setting `PATH` in `environment.variables` can lock the operator out of the
+mound.** The value REPLACES what the image had; it does not extend it. So a PATH
+that looks like a correct, standard Linux one silently drops whatever the image
+added — including the directory holding the agent binary itself.
+
+Measured. A kit wrote this, to put a virtualenv ahead of the system interpreter:
+
+```yaml
+environment:
+  variables:
+    PATH: "/home/agent/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+```
+
+The next `dr-go` ended in `bash: codex: command not found` before the agent ever
+started, because codex lives at `/usr/local/share/npm-global/bin/codex` and
+nothing under `/etc` puts that directory on `PATH` — the image does. The kit had
+removed the agent from its own sandbox.
+
+Do not reach for `PATH` to make a program find an interpreter. Make the program
+find it: `.venv/bin/python3` in the script beats `python3` plus a mound-wide
+`PATH`, it needs no kit entry at all, and it still works outside a mound. If you
+genuinely must set `PATH`, keep every directory the image had and add yours to
+the front — and say in your report that you have done something that can stop
+the mound opening.
+
 Rules that matter:
 
 - Use `schemaVersion: "2"` spellings. v1 still validates but warns.

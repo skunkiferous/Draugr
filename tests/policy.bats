@@ -275,3 +275,40 @@ make_kit_with() {
     run dr-up
     [ "$status" -eq 0 ]
 }
+
+# --- rules DRAUGR_HOST_PORTS owns --------------------------------------------
+#
+# These are written by dr-up on every start, from an address that is only valid
+# for this boot. Treating them as ad-hoc hosts made dr-up --recreate refuse and
+# recommend `dr-kit adopt`, which would have committed 172.19.192.26:11435 to the
+# repository - the exact thing DRAUGR_HOST_PORTS exists to avoid.
+
+@test "dr_policy_unadopted: a rule dr-hostport wrote is not unadopted" {
+    export DR_MOCK_ADHOC="172.19.192.26:11435"
+    DRAUGR_HOST_PORTS=11435
+    run dr_policy_unadopted
+    [ -z "$output" ]
+}
+
+@test "dr_policy_unadopted: an address on an undeclared port is still reported" {
+    export DR_MOCK_ADHOC="172.19.192.26:5432"
+    DRAUGR_HOST_PORTS=11435
+    run dr_policy_unadopted
+    [ "$output" = "172.19.192.26:5432" ]
+}
+
+@test "dr_policy_unadopted: a hostname on a declared port is somebody else's" {
+    # Only dr-hostport writes bare addresses. A domain on the same port came from
+    # dr-policy --allow and still belongs in the kit.
+    export DR_MOCK_ADHOC="ollama.example.com:11435"
+    DRAUGR_HOST_PORTS=11435
+    run dr_policy_unadopted
+    [ "$output" = "ollama.example.com:11435" ]
+}
+
+@test "dr_policy_unadopted: with no host ports declared, nothing is exempt" {
+    export DR_MOCK_ADHOC="172.19.192.26:11435"
+    DRAUGR_HOST_PORTS=
+    run dr_policy_unadopted
+    [ "$output" = "172.19.192.26:11435" ]
+}

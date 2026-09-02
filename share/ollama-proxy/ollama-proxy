@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# ollama-proxy - a query-only front door for a local Ollama.
+#
+#   ollama-proxy start     start it, and wait until it is actually answering
+#   ollama-proxy stop      stop it
+#   ollama-proxy status    is it up, on what address, and is Ollama behind it
+#   ollama-proxy config    print the config that would be used, and validate it
+#
+# Ollama has no authentication and no read-only mode, so anything that can reach
+# it can also pull, create and delete models - /api/create can read local files
+# while it is at it. This puts nginx in front with a default-deny allowlist, so
+# an application gets inference and nothing else.
+#
+# It is meant to pair with Draugr's DRAUGR_HOST_PORTS, but needs nothing from
+# Draugr and can be used on its own. The intended arrangement is:
+#
+#   Ollama          127.0.0.1:11434   loopback only, unreachable from outside
+#   this proxy      0.0.0.0:11435     the only way in, query-only
+#   the sandbox     DRAUGR_HOST_PORTS="11435"
+#
+# That is strictly LESS exposed than binding Ollama itself to 0.0.0.0, because
+# the management API then has no listener anything off-host can reach.
+#
+# --- it will not disturb another nginx ---------------------------------------
+#
+# This runs a private instance: its own prefix, config, pid file, logs and temp
+# paths, as an ordinary user, touching nothing under /etc/nginx. Measured on
+# nginx 1.28.3: `nginx -T` on this config resolves zero references to /etc/nginx,
+# a system instance and this one serve at the same time, and `-s quit` here stops
+# only this one. The single thing that WOULD couple them is installing a site
+# into /etc/nginx/sites-enabled, which this deliberately never does.
+#
+# Note that `apt install nginx` itself starts a system nginx on port 80 under
+# systemd. That is the distribution's doing, not this script's; disable it with
+# `sudo systemctl disable --now nginx` if you do not want it.
+set -euo pipefail
+
+PROG=${0##*/}
+
+# Everything is overridable, and the defaults are the arrangement described
+# above. UPSTREAM is loopback because the whole point is that Ollama should not
+# be listening anywhere else.
+LISTEN=${OLLAMA_PROXY_LISTEN:-0.0.0.0}
+PORT=${OLLAMA_PROXY_PORT:-11435}
+UPSTREAM=${OLLAMA_PROXY_UPSTREAM:-127.0.0.1:11434}
+
+# Machine state, not repo state, so it follows the XDG state directory rather
+# than living next to a project - the same reasoning that keeps sandbox policy
+# rules out of the kit.
+STATE=${OLLAMA_PROXY_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ollama-proxy}
+
+# The template sits beside this script, so a copied directory keeps working and
+# there is nothing to configure about where it lives.
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+TEMPLATE=${OLLAMA_PROXY_TEMPLATE:-$HERE/nginx.conf.template}
+
+die() { printf '%s: %s\n' "$PROG" "$1" >&2; shift; for l in "$@"; do printf '  %s\n' "$l" >&2; done; exit 1; }
+say() { printf '%s: %s\n' "$PROG" "$1"; }
+
+# nginx is the only hard dependency; curl is used for the readiness wait and the
+# status probe, and both are checked here so a missing one is a clear message
+# rather than a confusing failure three steps later.
+need() {
+    command -v "$1" >/dev/null 2>&1 \
+        || die "$1 is not installed" "Install it with:  sudo apt install $2"
+}
+
+# Render the template into the prefix. Substitution is done with a shell
+# parameter expansion rather than sed, so a value containing a slash - an IPv6
+# address, a path - cannot break the delimiter.
+render() {
+    [ -f "$TEMPLATE" ] || die "template not found: $TEMPLATE"
+    local conf
+    conf=$(cat "$TEMPLATE")
+    conf=${conf//@LISTEN@/$LISTEN}
+    conf=${conf//@PORT@/$PORT}
+    conf=${conf//@UPSTREAM@/$UPSTREAM}
+    printf '%s\n' "$conf"
+}
+
+# The prefix has to exist before nginx is asked to check the config: -t opens the
+# log files, so a missing logs/ directory fails validation for a reason that has
+# nothing to do with the config being wrong.
+prepare() {
+    mkdir -p "$STATE/logs" "$STATE/tmp"
+    render > "$STATE/nginx.conf"
+}
+
+# The pid file alone is not evidence: it survives a kill -9 and a reboot. So the
+# process it names has to still exist AND still be an nginx, which is what stops
+# this from adopting whatever process later inherits that pid.
+running() {
+    local pid
+    [ -f "$STATE/pid" ] || return 1
+    pid=$(cat "$STATE/pid" 2>/dev/null) || return 1
+    [ -n "$pid" ] || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    tr -d '\0' < "/proc/$pid/cmdline" | grep -q nginx
+}
+
+# Wait for the port to actually answer before returning. Without this, a caller
+# that starts the proxy and immediately makes a request - a dr-up hook, say -
+# races the listener and gets a connection refused it did not deserve.
+#
+# /healthz is served by nginx itself, so this tests the proxy and not Ollama.
+wait_ready() {
+    for _ in $(seq 1 50); do
+        if curl -fsS -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/healthz" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+case "${1:-status}" in
+
+start)
+    need nginx nginx
+    need curl curl
+    prepare
+
+    # Idempotent, because this is meant to be safe to call from a hook on every
+    # sandbox start. An already-running proxy is a success, not an error.
+    if running; then
+        say "already running on $LISTEN:$PORT (pid $(cat "$STATE/pid"))"
+        exit 0
+    fi
+
+    # Validated before starting, so a broken template is one clear nginx error
+    # rather than a process that dies immediately and leaves a stale pid file.
+    nginx -p "$STATE/" -c nginx.conf -t >/dev/null 2>&1 \
+        || { nginx -p "$STATE/" -c nginx.conf -t; die "the rendered config is not valid" \
+             "See it with:  $PROG config"; }
+
+    nginx -p "$STATE/" -c nginx.conf \
+        || die "nginx would not start" "Look at:  $STATE/logs/error.log"
+
+    wait_ready || die "started, but $LISTEN:$PORT never answered" \
+                      "Look at:  $STATE/logs/error.log"
+    say "listening on $LISTEN:$PORT, forwarding queries to $UPSTREAM"
+    ;;
+
+stop)
+    # Not an error when it is already down: a stop command that fails on an
+    # already-stopped service is one that cannot be used in a teardown script.
+    if ! running; then
+        say "not running"
+        exit 0
+    fi
+    nginx -p "$STATE/" -c nginx.conf -s quit || die "could not stop it"
+    say "stopped"
+    ;;
+
+status)
+    # Exit 1 when it is down, so this is usable as a test in a script -
+    # `ollama-proxy status || ollama-proxy start` should do the obvious thing.
+    if ! running; then
+        say "not running"
+        printf '  Start it with:  %s start\n' "$PROG"
+        exit 1
+    fi
+    say "running on $LISTEN:$PORT (pid $(cat "$STATE/pid"))"
+
+    # Two separate questions, and conflating them is how you spend an afternoon
+    # debugging the wrong process: is the PROXY up, and is OLLAMA up behind it.
+    if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/healthz" 2>/dev/null; then
+        printf '  proxy   answering\n'
+    else
+        printf '  proxy   NOT answering - see %s/logs/error.log\n' "$STATE"
+    fi
+
+    if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/api/version" 2>/dev/null; then
+        printf '  ollama  reachable at %s\n' "$UPSTREAM"
+    else
+        printf '  ollama  NOT reachable at %s\n' "$UPSTREAM"
+    fi
+
+    # The refusal is the feature, so it is worth showing that it is live rather
+    # than assumed. A 403 here means the allowlist is doing its job.
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \
+                -X POST "http://127.0.0.1:$PORT/api/pull" 2>/dev/null) || code=000
+    printf '  /api/pull returns %s (403 is correct - management is refused)\n' "$code"
+    ;;
+
+config)
+    # Printed AND checked, because a config you can read is not the same as one
+    # nginx accepts, and this is the command you reach for when start failed.
+    prepare
+    render
+    printf '\n' >&2
+    nginx -p "$STATE/" -c nginx.conf -t
+    ;;
+
+-h|--help|help)
+    sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//; $d'
+    ;;
+
+*)
+    die "unknown command: $1" "Try:  $PROG start|stop|status|config"
+    ;;
+esac

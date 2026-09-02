@@ -264,3 +264,50 @@ load_helpers() {
     [ "$status" -eq 0 ]
     ! grep -q "policy allow" "$DR_MOCK_LOG"
 }
+
+# --- telling the mound where this host is ------------------------------------
+#
+# The mound cannot find this out on its own: no `ip` command, and
+# host.docker.internal is its own gateway. So dr-hostport writes it in. What is
+# asserted here is the command line Draugr built, which is the part that has to
+# be right - the mock does not keep a filesystem for this.
+
+@test "dr-hostport: tells the mound this host address" {
+    run dr-hostport 11435
+    [ "$status" -eq 0 ]
+    grep -q "DRAUGR_HOST_ADDR=172.19.192.26" "$DR_MOCK_LOG"
+    grep -q "HOME/.draugr/host.env" "$DR_MOCK_LOG"
+}
+
+@test "dr-hostport: the file lists what is open, not what was asked for" {
+    # A second port that this invocation did not touch still belongs in the file,
+    # and the numbers are sorted so the content does not churn between runs.
+    export DR_MOCK_ADHOC="172.19.192.26:11435 172.19.192.26:5432"
+    run dr-hostport 11435
+    [ "$status" -eq 0 ]
+    grep -q 'DRAUGR_HOST_PORTS="5432 11435"' "$DR_MOCK_LOG"
+}
+
+@test "dr-hostport: an address from a previous boot is not written in" {
+    # The rules are filtered to the CURRENT address, so a stale rule left by a
+    # reboot cannot contribute a port the mound would then fail to reach.
+    export DR_MOCK_ADHOC="10.0.0.5:9999"
+    run dr-hostport 11435
+    [ "$status" -eq 0 ]
+    ! grep -q "9999" "$DR_MOCK_LOG"
+}
+
+@test "dr-hostport: writes nothing into a mound that is not running" {
+    # Starting one just to drop a file in it would turn a --close into a boot.
+    export DR_MOCK_STATE=stopped
+    run dr-hostport 11435
+    [ "$status" -eq 0 ]
+    ! grep -q "DRAUGR_HOST_ADDR" "$DR_MOCK_LOG"
+}
+
+@test "dr-up: the host address reaches the mound" {
+    export DRAUGR_HOST_PORTS=11435
+    run dr-up
+    [ "$status" -eq 0 ]
+    grep -q "DRAUGR_HOST_ADDR=172.19.192.26" "$DR_MOCK_LOG"
+}

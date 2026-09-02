@@ -124,3 +124,24 @@ want_executable() {
 
     [ -z "$(git -C "$fake" ls-files -s -- bin/dr-unstaged)" ]
 }
+
+# A placeholder the script does not substitute reaches a live nginx config as the
+# literal text "@FOO@", which nginx will either reject or - worse - accept as a
+# hostname. Cheap to check, and it needs no nginx.
+@test "every placeholder in the ollama-proxy template is substituted by the script" {
+    local tmpl="$DR_ROOT/share/ollama-proxy/nginx.conf.template"
+    local script="$DR_ROOT/share/ollama-proxy/ollama-proxy"
+    [ -f "$tmpl" ] || skip "no ollama-proxy template"
+
+    local ph missing=()
+    while read -r ph; do
+        [ -n "$ph" ] || continue
+        grep -qF "{conf//$ph/" "$script" || missing+=("$ph")
+    done < <(grep -oE '@[A-Z_]+@' "$tmpl" | sort -u)
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        printf 'in the template but never substituted by the script:\n' >&2
+        printf '  %s\n' "${missing[@]}" >&2
+        return 1
+    fi
+}

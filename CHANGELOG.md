@@ -12,13 +12,169 @@ people reading the source, not for people calling it.
 
 ### Added
 
-Since I always forget, there is now a git hook for running "git update-index --chmod=+x -- ..." on scripts.
-
 ### Removed
 
 ### Changed
 
 ### Fixed
+
+## [0.3.0] — 2026-09-02
+
+### Added
+
+- **`.githooks/pre-commit` sets the executable bit that `git add` cannot.** This repository is
+  developed on `/mnt/c`, where `core.fileMode=false` makes git ignore the filesystem's executable bit
+  entirely: `chmod +x` changes nothing git records, `git add` cannot carry it, and the mode exists
+  only in the index. A new script therefore runs perfectly locally and arrives on Linux as a file
+  nothing can execute — so remembering `git update-index --chmod=+x` was the only thing standing
+  between a new command and a red build.
+
+  `tests/repo.bats` already failed over this and CI already went red, but both happen *after* the
+  commit, which is too late to be a reminder. It had cost one red release, and ten commits during
+  which `tests/mocks/ssh` sat at `100644` while the attach tests quietly resolved a **real** `ssh` on
+  the runner — PATH lookup skips a non-executable file and keeps searching rather than failing, which
+  is the quietest way this can go wrong.
+
+  The hook fixes rather than refuses, because there is no judgement to make: a file is on the list
+  precisely because something executes it. It touches only files already in the index, so it never
+  pulls anything into a commit that was not offered to it, and it names what it changed. Enable it
+  once per clone with `git config core.hooksPath .githooks`; `tests/repo.bats` still fails the build
+  independently, so a clone that never ran that is still caught.
+
+- **`share/ollama-proxy/`** — a query-only front door for a local Ollama, and the worked answer to the
+  question `DRAUGR_HOST_PORTS` raises: you have opened a port to a service on your own machine, so
+  what is on the other side of it?
+
+  For Ollama the answer is uncomfortable. It has no authentication and no read-only mode, so the port
+  that serves inference also serves `POST /api/pull`, `POST /api/create` — which reads local files —
+  and `DELETE /api/delete`. "Let the agent use my GPU" and "let the agent delete my models" are the
+  same permission. This puts nginx in front with a default-deny allowlist and separates them.
+
+  Optional and standalone: it imports nothing from `lib/`, reads no Draugr config and needs no mound.
+  Start it from a `post-up` hook rather than a config key — that hook already runs on the host at
+  every `dr-up` and is trust-checked, whereas a `DRAUGR_*` key would mean `dr-up` supervising a
+  long-lived host daemon, which Draugr does not otherwise do.
+
+  Measured end to end against nginx 1.28.3: every allowed endpoint 200, every management endpoint 403,
+  methods enforced (`GET /api/chat` and `POST /api/tags` both refused), and an endpoint Ollama has not
+  shipped yet refused by default — it is an allowlist, so a future release cannot widen it. `/v1/` is
+  passed through whole because that surface carries no management verbs at all: `/v1/files` is a 404,
+  Ollama implementing no file or fine-tune endpoints.
+
+  It runs a **private** nginx — own prefix, config, pid, logs and all five temp paths, as an ordinary
+  user, touching nothing under `/etc/nginx`. Also measured: `nginx -T` resolves zero references to
+  `/etc/nginx`, a system instance on `:80` and this one serve simultaneously, and `-s quit` stops only
+  this one. Redefining the temp paths is not decoration — omit one and the instance starts cleanly,
+  then fails the first time a response needs buffering.
+
+### Changed
+
+- **The list of files that must be executable moved to `tests/executable-paths.sh`**, so the test and
+  the new commit hook read one list and cannot drift. Widened at the same time from `tests/mocks/sbx`
+  to every mock and every hook, which is what surfaced `tests/mocks/ssh`.
+
+- **`docs/HACKING.md` said "CI runs exactly these" over a command that no longer did.** Its shellcheck
+  line still named four paths while the workflow had gained `lib/agents/`, `.githooks/`,
+  `tests/executable-paths.sh` and `share/ollama-proxy/`, and the comment-density lint was missing from
+  the section entirely - so running the documented checks locally examined less than CI, which is the
+  one thing that section exists to prevent. Both lists now agree, verified by expanding them.
+
+### Fixed
+
+- **The host address is written into the mound**, at `~/.draugr/host.env`, on every `dr-up`:
+
+  ```
+  DRAUGR_HOST_ADDR=172.19.192.26
+  DRAUGR_HOST_PORTS="11435"
+  ```
+
+  `DRAUGR_HOST_PORTS` opens a path to a service on your machine, and then the application inside has
+  to be *told where that machine is* - which it cannot find out. There is no `ip` command in the
+  image, and `host.docker.internal` resolves to the mound own gateway rather than the host. Nor can
+  the value be committed anywhere: it changes with every boot, so a kit or config carrying it is right
+  until the next restart. Only the host knows, only at `dr-up`, which is exactly when `dr-hostport`
+  runs.
+
+  **Nothing sources the file.** Draugr does not touch the agent dotfiles or anything else inside the
+  mound that the agent owns, so a project that wants the value asks for it, in its own run script or a
+  kit startup command. The port list is read back from the rules in force rather than from
+  `DRAUGR_HOST_PORTS`, so it describes what is true rather than what was asked for, and a `--close` is
+  reflected without special-casing. Nothing is written into a mound that is not already running.
+
+- **The recreate guard no longer fires on rules `DRAUGR_HOST_PORTS` owns.** `dr-up --recreate`
+  refused with `1 host(s) are open ... and not in the kit`, naming `172.19.192.26:11435` and advising
+  `dr-kit adopt`. Following that would have committed a per-boot address to the repository - the one
+  value the whole feature exists to stop anyone writing down - and `dr-up` re-created the rule
+  seconds later anyway, unprompted.
+
+  `dr_policy_unadopted` now skips them, which fixes all three callers at once: `dr-up --recreate` and
+  `dr-rm` stop warning about a loss that undoes itself, and `dr-kit adopt` stops offering to make it
+  permanent. The exemption is narrow - only a bare IPv4 on a port this project declared can have come
+  from `dr-hostport`, so a hostname on the same port is still reported.
+
+- **The docs said to declare a project port in the kit. A kit cannot pin one.** `spec.PublishedPort`
+  has no host-port field at all - `host`, `hostPort`, `published` and `publishedPort` are each
+  rejected as "field not found" - so sbx assigns an ephemeral host port that changes on every
+  recreate, and the service is never twice at the same URL. README and CONFIG.md both framed the
+  choice as permanent-versus-temporary, which sent you to the one place that cannot give a stable
+  address. Corrected: the kit declares that a port exists, `DRAUGR_PORTS` decides where it lands.
+
+- **A staged mode-only change is now named as one.** `dr-merge` refused with `M  run.sh` under
+  "uncommitted changes", which reads as a rewrite. It was the executable bit and nothing else - the
+  same blob at a different mode, and the *same* change the mound's incoming commit was carrying. So
+  the refusal was correct, the file looked untouched when opened, and the way out was not obvious.
+
+  It now reads:
+
+  ```
+  M  run.sh   (mode 100644 => 100755, no content change)
+    A mode-only change is often the one the mound is already sending.
+    Unstage it and let the merge carry it:  git restore --staged <path>
+  ```
+
+  Worth distinguishing here more than elsewhere: this project is developed on `/mnt/c` with
+  `core.fileMode=false`, where a mode cannot reach the index through `git add` at all - only through
+  `git update-index --chmod`, a checkout, or a merge. The note is deliberately narrow, requiring the
+  index and HEAD to hold the same blob under different modes, so an ordinary edit never attracts it.
+
+- **`dr-status` no longer recommends `dr-send` when there is no mound.** With the sandbox removed it
+  reported `2 commit(s) not in draugr/main - dr-send`, and `dr-send` then refused, because it
+  delivers *into* a mound. The count was identical afterwards, so following the advice changed
+  nothing — twice, before anyone suspected the advice rather than the repository.
+
+  The tracking ref survives `dr-rm` deliberately: once fetched, it is the only copy of anything the
+  agent committed, so deleting it would destroy work. But it then describes a mound that no longer
+  exists, and the commits sitting ahead of it are not stranded at all — a new mound is cloned from
+  `HEAD`, so `dr-up` brings them in from the start. That is what the row says now.
+
+  Only the absent case changed; with a mound present the answer is still `dr-send`, or
+  `dr-send --merge` once the commits have been delivered but not merged.
+
+- **On git 2.49 or newer, every `dr-sync` invented a branch to warn you about.** The report read:
+
+  ```
+  dr-sync: the agent also worked on 1 branch(es) you are not tracking:
+      draugr                                       2 commit(s)
+    Review one with:  DRAUGR_BRANCH=draugr dr-diff
+  ```
+
+  `draugr` is not a branch. It is the branch you are already on, reported under the heading reserved
+  for work that would otherwise be invisible - so the one warning in Draugr that has to be believed on
+  the day it matters cried wolf on every single sync. Worse, when the agent *had* invented a branch,
+  the phantom sorted first and took the review hint with it: the line pointing at the work pointed at
+  `DRAUGR_BRANCH=draugr dr-diff`, which shows nothing. `dr-status` carried the same phantom row.
+
+  git 2.49 made `git fetch` create `refs/remotes/<remote>/HEAD` by default
+  (`remote.<name>.followRemoteHEAD=create`); before that, nothing in Draugr's use of git ever created
+  it. The ref was already meant to be skipped - but the guard tested the *short* name, and
+  `refs/remotes/draugr/HEAD` shortens to `draugr`, not to `draugr/HEAD`, because
+  `refs/remotes/<name>/HEAD` is one of git's own rev-parse rules. So the guard never fired.
+  `dr_other_branches` now filters on the full refname.
+
+  Only CI ever saw this: the runner's git is 2.49 or newer and this machine's is 2.43, so three tests
+  were green locally and red on every push. The regression tests create the ref by hand rather than
+  relying on the fetch, so they fail on the old code at both git versions - a test that only fails on
+  the machines that already have the bug is not much of a test.
 
 ## [0.2.0] — 2026-08-30
 

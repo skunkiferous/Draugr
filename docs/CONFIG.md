@@ -268,8 +268,13 @@ Default empty. Space-separated `HOST:SANDBOX` pairs, published to Windows loopba
 DRAUGR_PORTS="5173:5173 8080:8080"
 ```
 
-A kit can declare `publishedPorts` too. Use the kit for ports the project always needs and this —
-or `dr-ports`, mid-session — for today's.
+A kit can declare `publishedPorts` too, but it **cannot name the host port**: `spec.PublishedPort`
+has no such field, so `sbx` picks an ephemeral one that changes on every recreate. Anything you want
+to reach at a fixed URL — a dev server you keep open in a browser tab — has to be pinned here.
+`dr-ports` does the same thing mid-session, without a rebuild.
+
+They land on **Windows** loopback, not WSL's, so open them in a Windows browser; `curl` from inside
+WSL reaches the WSL VM's own loopback and will not connect.
 
 ### `DRAUGR_HOST_PORTS`
 Default empty. Space-separated **port numbers** on this machine that the mound is allowed to reach:
@@ -288,6 +293,26 @@ handed out per boot and cannot be pinned — WSL 2.6.1 has no `natNetwork` setti
 written with a literal IP is correct until the next reboot and then fails **closed and silently**:
 the connection is accepted by the sandbox's interception layer and dropped, with no error to read.
 Rules left behind for addresses this machine no longer has are removed as they are found.
+
+`dr-up` also writes the address into the mound, at `~/.draugr/host.env`:
+
+```
+DRAUGR_HOST_ADDR=172.19.192.26
+DRAUGR_HOST_PORTS="11435"
+```
+
+The mound cannot work this out for itself — there is no `ip` command in the image, and
+`host.docker.internal` resolves to the mound's own gateway rather than to your machine. **Nothing
+sources that file for you.** Draugr does not touch anything inside the mound that the agent owns, so
+a project that wants the value asks for it, in its own run script or a kit startup command:
+
+```sh
+. "$HOME/.draugr/host.env"
+OLLAMA_URL="http://$DRAUGR_HOST_ADDR:11435"
+```
+
+That is the whole reason the file exists rather than a committed setting: the address is different
+after every reboot, so anywhere you could write it down is somewhere it would be wrong.
 
 The service has to be listening on `0.0.0.0`, not `127.0.0.1` — from inside the mound, `127.0.0.1` is
 the mound. `dr-hostport` warns when it can see that mistake.

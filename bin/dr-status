@@ -96,7 +96,15 @@ if git -C "$DR_REPO" rev-parse --verify --quiet "$tracking" >/dev/null; then
     # "not in draugr/main - dr-send" was the standing answer even once they were
     # delivered, and following it did nothing.
     if [ "$behind" -gt 0 ]; then
-        if [ "$(dr_send_state)" = unmerged ]; then
+        # With no mound these commits are not stranded, and dr-send cannot help:
+        # it delivers INTO a mound, so with none it refuses, and the count is
+        # unchanged afterwards. Following the advice twice and seeing the same
+        # screen is how this was found. The tracking ref here is a fossil of a
+        # mound that has been removed - and a fresh one is cloned from HEAD, so
+        # dr-up brings these in from the start rather than needing a send.
+        if [ "$state" = absent ]; then
+            row unsent "${_DR_DIM}$behind commit(s) not in $tracking - dr-up clones them into the new mound${_DR_OFF}"
+        elif [ "$(dr_send_state)" = unmerged ]; then
             row unsent "${_DR_DIM}$behind commit(s) delivered, not merged - dr-send --merge${_DR_OFF}"
         else
             row unsent "${_DR_DIM}$behind commit(s) not in $tracking - dr-send${_DR_OFF}"

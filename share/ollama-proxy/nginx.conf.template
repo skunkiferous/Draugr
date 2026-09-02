@@ -1,0 +1,105 @@
+# A query-only front door for Ollama. Rendered by ./ollama-proxy, which fills in
+# the at-delimited values below at start time.
+#
+# Every path that resolves to something shared - the pid file, both logs, and all
+# five temp paths - is redefined relative to the prefix. That is what makes this
+# instance independent of any other nginx on the machine, and what lets it run as
+# an ordinary user: nginx's built-in defaults point at /var/run and /var/lib/nginx,
+# which a non-root process cannot write. Miss one of the temp paths and the
+# instance starts happily, then fails the first time a response needs buffering.
+
+pid          pid;
+error_log    logs/error.log warn;
+
+events {
+    worker_connections 256;
+}
+
+http {
+    access_log            logs/access.log;
+    client_body_temp_path tmp/client;
+    proxy_temp_path       tmp/proxy;
+    fastcgi_temp_path     tmp/fastcgi;
+    uwsgi_temp_path       tmp/uwsgi;
+    scgi_temp_path        tmp/scgi;
+
+    # Generation is slow and streamed. Without proxy_buffering off the tokens
+    # arrive in one lump at the end, which looks like a hung application; without
+    # the long read timeout a slow answer is cut off at nginx's 60s default,
+    # mid-sentence. client_max_body_size covers long prompts and vision images.
+    proxy_http_version    1.1;
+    proxy_buffering       off;
+    proxy_read_timeout    1h;
+    proxy_send_timeout    1h;
+    client_max_body_size  100m;
+
+    # Ollama checks the Host header and answers 403 when it does not look like a
+    # local address - a defence against DNS rebinding. nginx's default for a
+    # named upstream is the upstream NAME (here, literally "ollama"), which fails
+    # that check, so the Host is set to the address actually being connected to.
+    #
+    # Measured, and it only bites once Ollama is bound to loopback: while it was
+    # listening on 0.0.0.0 the very same proxied request was allowed. So the
+    # hardening that makes this proxy worth having is also what exposes the
+    # missing header - which is a nasty order to discover things in.
+    proxy_set_header Host @UPSTREAM@;
+
+    upstream ollama {
+        server @UPSTREAM@;
+    }
+
+    server {
+        listen @LISTEN@:@PORT@;
+
+        # DEFAULT DENY, and it is the load-bearing line in this file. Ollama
+        # gains endpoints between releases, so a denylist naming /api/pull and
+        # /api/delete would quietly admit whatever ships next. Everything below
+        # is an exception to this, and anything not named is refused.
+        location / { return 403; }
+
+        # nginx answers this itself, with no upstream involved, so it stays a
+        # true test of "is the proxy up" even when Ollama is down. The start
+        # command waits on it rather than returning before the port is open.
+        location = /healthz { return 200 "ollama-proxy ok\n"; }
+
+        # --- inference -------------------------------------------------------
+        # Verified against Ollama 0.32.14: a request naming a model that is not
+        # installed returns {"error":"model '...' not found"} and does NOT pull
+        # it, so allowing these does not smuggle in a download.
+        location = /api/chat      { limit_except POST { deny all; } proxy_pass http://ollama; }
+        location = /api/generate  { limit_except POST { deny all; } proxy_pass http://ollama; }
+        location = /api/embed     { limit_except POST { deny all; } proxy_pass http://ollama; }
+        location = /api/embeddings { limit_except POST { deny all; } proxy_pass http://ollama; }
+
+        # --- read-only introspection ----------------------------------------
+        # /api/show is a POST that only describes a model, which is why it is
+        # here and not above: the method says "write", the endpoint does not.
+        location = /api/show      { limit_except POST { deny all; } proxy_pass http://ollama; }
+        location = /api/tags      { limit_except GET  { deny all; } proxy_pass http://ollama; }
+        location = /api/ps        { limit_except GET  { deny all; } proxy_pass http://ollama; }
+        location = /api/version   { limit_except GET  { deny all; } proxy_pass http://ollama; }
+
+        # --- the OpenAI-compatible surface -----------------------------------
+        # Measured: this prefix carries no management verbs at all. /v1/models
+        # answers, chat/completions, completions and embeddings exist as POST,
+        # and /v1/files is a 404 - Ollama does not implement the file or
+        # fine-tune half of the OpenAI API. So the whole prefix can be passed
+        # through, unlike /api/, where the two kinds of endpoint are mixed.
+        #
+        # Delete the /api/ block above and keep this one if your application
+        # speaks the OpenAI protocol: it is the smaller allowlist to be right
+        # about, and it is one line instead of eight.
+        location /v1/ { proxy_pass http://ollama; }
+
+        # Never proxied, and listed so the omission is visibly deliberate rather
+        # than an oversight:
+        #
+        #   /api/pull, /api/push     fetch and publish models over your network
+        #   /api/create              builds a model, and can read local files
+        #   /api/copy, /api/delete   rewrite and destroy what you have installed
+        #   /api/blobs/<digest>      arbitrary blob upload
+        #
+        # These are refused by `location /` above. They are not denied by name
+        # anywhere, on purpose - a name-by-name denial is the shape that rots.
+    }
+}

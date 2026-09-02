@@ -37,7 +37,8 @@ if [ $# -eq 0 ]; then
     root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
     set -- "$root"/lib/common.sh "$root"/lib/agents/*.sh "$root"/install.sh \
            "$root"/bin/* "$root"/tests/mocks/sbx "$root"/tests/helper.bash \
-           "$root"/tests/lint-comments.sh
+           "$root"/tests/lint-comments.sh "$root"/tests/executable-paths.sh \
+           "$root"/.githooks/* "$root"/share/ollama-proxy/ollama-proxy
 fi
 
 for file in "$@"; do

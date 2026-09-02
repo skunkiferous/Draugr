@@ -20,6 +20,10 @@
 # Put the port in DRAUGR_HOST_PORTS and dr-up does this on every start, which is
 # what makes it survive a reboot without you remembering anything.
 #
+# The address is also written into the mound, at ~/.draugr/host.env, because
+# nothing in there can work it out. Nothing sources it for you: a project that
+# wants the value says so in its own run script or kit startup command.
+#
 # This is a hole from the sandbox to your machine, and the more serious of the
 # two directions: on the other side is a process outside the mound. dr-policy
 # --allow is the ad-hoc equivalent and says the same thing more loudly.
@@ -93,6 +97,49 @@ _all_rules() {
               | .resources[]?
               | select(test("^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+:[0-9]+$"))' \
             2>/dev/null | sort -u
+}
+
+# _write_host_env - tell the mound this host's address, in a file.
+#
+# The mound cannot work it out for itself. There is no `ip` command in the
+# image, and host.docker.internal resolves to the mound's OWN gateway rather
+# than to this machine - measured. So the one process that already knows has to
+# write it in, and that is this one, on every dr-up.
+#
+# A FILE, and nothing more. Draugr does not touch the agent's dotfiles, so
+# nothing sources this for you: a project that wants the value says so itself,
+# in its run script or in a kit startup command. That keeps an automatic,
+# invisible environment change out of a sandbox whose whole point is that you
+# can see what is in it.
+#
+# The port list is read back from the rules actually in force rather than from
+# DRAUGR_HOST_PORTS, so the file describes what is true rather than what was
+# asked for - and a --close is reflected without special-casing.
+_write_host_env() {
+    local ip ports
+
+    # Only into a mound that is already up. Starting one just to write a file
+    # would turn `dr-hostport --close` on a stopped sandbox into a boot.
+    [ "$(dr_sandbox_state "$DRAUGR_SANDBOX")" = running ] || return 0
+    ip=$(dr_host_ip) || return 0
+
+    ports=$(_all_rules | awk -F: -v ip="$ip" '$1 == ip { print $2 }' | sort -un | tr '\n' ' ')
+    ports=${ports% }
+
+    # Single-quoted lines, so the $ and " inside them reach the file literally.
+    # Nothing here contains an apostrophe, which is the one character that shape
+    # cannot carry.
+    dr_sbx exec "$DRAUGR_SANDBOX" sh -c \
+        "mkdir -p \"\$HOME/.draugr\" && printf '%s\n' \
+         '# Written by dr-hostport at every dr-up. Do not edit - it is overwritten.' \
+         '# Nothing sources this for you. Use it from your own script, for example:' \
+         '#   . \"\$HOME/.draugr/host.env\"' \
+         '#   OLLAMA_URL=\"http://\$DRAUGR_HOST_ADDR:11435\"' \
+         '# The address is valid only for this boot of the host.' \
+         'DRAUGR_HOST_ADDR=$ip' \
+         'DRAUGR_HOST_PORTS=\"$ports\"' \
+         > \"\$HOME/.draugr/host.env\"" >/dev/null 2>&1 \
+        || dr_warn "could not write the host address into $DRAUGR_SANDBOX"
 }
 
 # No arguments is a query, which is the common case and must not change anything.
@@ -196,3 +243,6 @@ for port in "${open[@]+"${open[@]}"}"; do
     fi
     _warn_if_loopback_only "$port"
 done
+
+# Both loops end here, so the file is written once however many ports moved.
+_write_host_env

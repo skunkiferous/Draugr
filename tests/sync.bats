@@ -287,6 +287,51 @@ mound_branch_commit() {
     [[ "$output" == *"already fetched"* ]]
 }
 
+# --- the remote's own HEAD -----------------------------------------------------
+#
+# git 2.49 made `git fetch` create refs/remotes/<remote>/HEAD by default
+# (remote.<name>.followRemoteHEAD=create). That ref shortens to "draugr", not
+# "draugr/HEAD", so the guard that skips it missed it entirely and every sync on
+# a new-enough git reported the branch you are already on as one you are not
+# tracking. It is created here by hand rather than by fetching, so these say the
+# same thing on git 2.43 and on 2.49 - otherwise the test only fails on the
+# machines that already have the bug.
+
+# git points the ref at whatever the mound has checked out, which is the branch
+# the agent has just been working on - so the argument matters.
+mound_head_ref() {
+    git symbolic-ref refs/remotes/draugr/HEAD "refs/remotes/draugr/${1:-main}"
+}
+
+@test "dr-sync: the remote's own HEAD is not a branch the agent worked on" {
+    dr_mound_commit "$MOUND" "on the tracked branch"
+    dr-sync >/dev/null 2>&1
+    mound_head_ref
+    run dr-sync
+    [[ "$output" == *"1 new commit(s)"* ]]
+    [[ "$output" != *"tracking"* ]]
+}
+
+@test "dr-sync: the remote's HEAD does not take the review hint" {
+    # The refs sort by full name, so refs/remotes/draugr/HEAD came FIRST and the
+    # hint named it instead of the branch there is actually something to review.
+    mound_branch_commit feature-x
+    dr-sync >/dev/null 2>&1
+    mound_head_ref feature-x
+    run dr-sync
+    [[ "$output" == *"DRAUGR_BRANCH=feature-x dr-diff"* ]]
+}
+
+@test "dr-status: the remote's own HEAD is not listed there either" {
+    # The same helper, the second caller: dr-status reported the phantom branch
+    # in its own table, with a DRAUGR_BRANCH=draugr hint that goes nowhere.
+    dr_mound_commit "$MOUND" "on the tracked branch"
+    dr-sync >/dev/null 2>&1
+    mound_head_ref
+    run dr-status
+    [[ "$output" != *"untracked"* ]]
+}
+
 @test "dr-sync: an invented branch is a warning when the tracked one is empty" {
     # "nothing new in the mound" immediately followed by a quiet note would read
     # as reassurance. When the tracked branch has nothing, this IS the news.
@@ -454,4 +499,80 @@ host_commit() {
     dr-sync >/dev/null 2>&1
     dr-sync >/dev/null 2>&1
     [ "$(git -C "$REPO" config --get-all remote.draugr.fetch | grep -c 'draugr/sent')" -eq 1 ]
+}
+
+# The mound can be removed while commits sit ahead of the tracking ref, and the
+# ref survives on purpose - it is the only copy of anything the agent committed.
+# But it then describes a mound that is gone, and the advice attached to it was
+# `dr-send`, which refuses without one. The screen was identical before and
+# after, so the only way to learn it was pointless was to try it twice.
+@test "dr-status: with no mound, does not tell you to dr-send" {
+    host_commit
+    dr-sync >/dev/null 2>&1
+    host_commit second
+    DR_MOCK_STATE=absent run dr-status
+    [[ "$output" != *"- dr-send"* ]]
+}
+
+@test "dr-status: with no mound, points at the command that does work" {
+    host_commit
+    dr-sync >/dev/null 2>&1
+    host_commit second
+    DR_MOCK_STATE=absent run dr-status
+    [[ "$output" == *"dr-up clones them into the new mound"* ]]
+}
+
+# The absent case must not swallow the ordinary one: with a mound there, the
+# advice is still dr-send.
+@test "dr-status: with a mound, dr-send is still the answer" {
+    host_commit
+    dr-sync >/dev/null 2>&1
+    host_commit second
+    run dr-status
+    [[ "$output" == *"not in draugr/main - dr-send"* ]]
+}
+
+# A staged mode change reads as "M  file" in git's own output, exactly like a
+# rewrite. On a /mnt/c checkout with core.fileMode=false it cannot have come from
+# `git add` at all, so the natural reading - "I edited that" - is wrong, and the
+# file it names looks untouched when you open it.
+@test "dr-merge: a mode-only change is named as one, not as an edit" {
+    dr_mound_commit "$MOUND"
+    dr-sync >/dev/null 2>&1
+    git -C "$REPO" config core.fileMode false
+    git -C "$REPO" update-index --chmod=+x README.md
+    run dr-merge
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"mode 100644 => 100755, no content change"* ]]
+}
+
+@test "dr-merge: and says how to get past it" {
+    dr_mound_commit "$MOUND"
+    dr-sync >/dev/null 2>&1
+    git -C "$REPO" config core.fileMode false
+    git -C "$REPO" update-index --chmod=+x README.md
+    run dr-merge
+    [[ "$output" == *"git restore --staged"* ]]
+}
+
+# The note must not appear on an ordinary edit, or it would be worse than none.
+@test "dr-merge: a real edit gets no mode note" {
+    dr_mound_commit "$MOUND"
+    dr-sync >/dev/null 2>&1
+    printf 'wip\n' > wip.txt
+    run dr-merge
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"no content change"* ]]
+    [[ "$output" != *"git restore --staged"* ]]
+}
+
+@test "dr_mode_note: a changed blob at a changed mode is not mode-only" {
+    dr_load_common
+    printf 'different\n' >> "$REPO/README.md"
+    git -C "$REPO" config core.fileMode false
+    git -C "$REPO" add README.md
+    git -C "$REPO" update-index --chmod=+x README.md
+    run dr_mode_note "$REPO" README.md
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
 }

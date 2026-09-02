@@ -316,8 +316,14 @@ DRAUGR_HOST_PORTS="11434"            # ports on THIS machine the mound may reach
 DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"   # extra read-only workspaces
 ```
 
-A kit can declare `network.publishedPorts` too. Use the kit for ports the project always needs, and
-`DRAUGR_PORTS` — or `dr-ports`, mid-session — for the ones that are just today's.
+A kit can declare `network.publishedPorts` too, but **a kit cannot pin the host side** — its
+`PublishedPort` has no field for it, so `sbx` assigns an ephemeral port that changes on every
+recreate, and the service is never twice at the same URL. Measured: `host`, `hostPort`, `published`
+and `publishedPort` are all rejected as *"field not found in type spec.PublishedPort"*.
+
+So the split is not "permanent in the kit, temporary here". Use the kit to declare that a port
+exists; use `DRAUGR_PORTS` when you want it at an address you can bookmark, and `dr-ports`
+mid-session for one you do not.
 
 `DRAUGR_HOST_PORTS` is the other direction, and the more serious one: a service on *your* machine
 that the agent is allowed to call — a local Ollama on the GPU being the case it was written for. It

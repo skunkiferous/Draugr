@@ -36,7 +36,19 @@ dr_context
 # what to do about it.
 if ! dr_repo_is_clean "$DR_REPO"; then
     dr_error "your working tree has uncommitted changes"
-    git -C "$DR_REPO" status --short >&2
+    _dirty=$(dr_dirty_list "$DR_REPO")
+    printf '%s\n' "$_dirty" >&2
+
+    # A mode-only change is very often the SAME one the mound is sending, in
+    # which case there is nothing to preserve and the merge will bring it in.
+    # Saying so turns a dead end into one command.
+    if [[ "$_dirty" == *"no content change"* ]]; then
+        printf '  %sA mode-only change is often the one the mound is already sending.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sUnstage it and let the merge carry it:  git restore --staged <path>%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+    fi
+
     dr_die "refusing to merge into it" \
         "Commit or stash them first - a merge on top of uncommitted work is hard to unpick."
 fi

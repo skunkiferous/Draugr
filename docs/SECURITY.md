@@ -245,6 +245,51 @@ the kit — deny wins over allow.
 
 ---
 
+---
+
+## Opening a host port to the mound
+
+[`DRAUGR_HOST_PORTS`](CONFIG.md#draugr_host_ports) and `dr-hostport` let a mound reach a service on
+your own machine. It is the most serious hole Draugr will open for you, and it is worth being clear
+about why: everything else here is about what the agent can do *inside* a box. This is a door in the
+wall of the box, and on the other side is a process running as you, outside it.
+
+Two things follow.
+
+**The service must be bound to `0.0.0.0`, not `127.0.0.1`.** From inside the mound, `127.0.0.1` is
+the *mound*. This is the mistake worth knowing about in advance, because it fails in the same way a
+policy denial does — the connection is accepted by the sandbox's interception layer and dropped, with
+no error to read. `dr-hostport` warns when it can see it.
+
+**Most local services have no authentication at all**, because they were written for a threat model
+in which only you can reach them. That assumption stops being true the moment you open the port. A
+local Ollama is the clearest example: the same port that serves inference also serves `POST
+/api/pull`, `POST /api/create` — which reads local files — and `DELETE /api/delete`. "Let the agent
+use my GPU" and "let the agent delete my models" are one permission.
+
+The answer is not to leave the port shut but to open a narrower one. Put a reverse proxy in front
+with a default-deny allowlist, bind the *service* to loopback, and open only the proxy's port:
+
+```
+Ollama        127.0.0.1:11434    loopback only - nothing off-host can reach it
+proxy         0.0.0.0:11435      the only way in, query-only
+the mound     DRAUGR_HOST_PORTS="11435"
+```
+
+That is strictly **less** exposed than binding the service itself to `0.0.0.0`, because the
+management API ends up with no listener anything outside the host can reach.
+
+[`share/ollama-proxy/`](../share/ollama-proxy/) is a worked example of exactly this, for Ollama — a
+private nginx instance that touches nothing under `/etc/nginx` and needs no root. It is optional and
+independent of Draugr; read its README before running it. Start it from a `post-up` hook rather than
+inventing a config key: that hook already runs on the host at every `dr-up`, and it is trust-checked.
+
+What a proxy cannot do is worth stating too. It cannot stop an application from pinning your GPU with
+entirely legitimate requests, it cannot see which model a request asks for without inspecting the
+body, and it cannot stop prompt content being used as a channel — anything the application can read,
+it can send. Path filtering buys you the difference between *querying* and *administering*, which is
+a large difference, and not the same as safety.
+
 ## Things Draugr refuses to do
 
 Each of these is a refusal by default with an explicit override, because the point of a guard you

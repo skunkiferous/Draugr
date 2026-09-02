@@ -58,6 +58,12 @@ caps:
 #    protocol: tcp
 #    name: dev-server
 
+# Each variable REPLACES what the image set, rather than extending it - which
+# makes PATH genuinely dangerous here. An absolute PATH that looks standard drops
+# whatever the image added, including the directory holding the agent binary, and
+# the next dr-go then ends in "command not found" before the agent starts. If a
+# program needs a particular interpreter, name it in the program
+# (.venv/bin/python3) rather than reaching for PATH here.
 #environment:
 #  variables:
 #    NODE_ENV: development

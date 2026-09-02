@@ -682,14 +682,25 @@ rather than padding with prose.
 ```bash
 sudo apt install jq shellcheck bats     # jq is a runtime dependency; the others are for development
 
-shellcheck --external-sources --shell=bash lib/common.sh install.sh tests/mocks/* bin/*
+shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh install.sh \
+    tests/mocks/* bin/* .githooks/* tests/executable-paths.sh share/ollama-proxy/ollama-proxy
+./tests/lint-comments.sh                # the comment-density rule, below
 bats -j 8 tests/                        # -j 8 takes the suite from ~280s to ~70s
 ```
 
-Both must be clean before a commit. CI runs exactly these, with **no**
-shellcheck exclusions — the two legitimately-unused-looking variables carry
-targeted `# shellcheck disable=SC2034` comments instead, so the check stays live
-for real typos.
+All three must be clean before a commit, and CI runs exactly these.
+
+The shellcheck list is spelled out here because `.github/workflows/ci.yml` spells it out, and it has
+drifted once already: the workflow gained `lib/agents/`, `.githooks/` and `share/ollama-proxy/` while
+this line still named four paths, so the obvious local invocation quietly checked less than CI did.
+The globs are what keep it honest in between - a new command, mock or hook is covered without anyone
+remembering. `./tests/lint-comments.sh` takes no arguments at all, for the reason its own header
+gives.
+
+There are **no** shellcheck exclusions on the command line. What look like unused variables - the
+`DRAUGR_*` config surface, `DR_ORIGIN`, and the values a `dr-*` command reads back out of
+`common.sh` - carry a targeted `# shellcheck disable=SC2034` at the point of use instead, so the
+check stays live for real typos everywhere else.
 
 `tests/mocks/sbx` and `tests/mocks/ssh` stand in for the real binaries: they
 record the argv they were called with, and the sbx one replays canned `ls --json`
@@ -720,6 +731,23 @@ and ten commits of `tests/mocks/ssh` sitting at `100644` while the attach tests 
 **real** `ssh` on the runner — because PATH lookup skips a non-executable file and keeps searching
 rather than failing.
 
+### The runner is not this machine
+
+Two green-here-red-there bugs have now come from the same place: the tests run on Ubuntu with a
+recent toolchain, and they are written under WSL on `/mnt/c`, with whatever that distribution
+shipped.
+
+- **File modes.** `core.fileMode=false` on `/mnt/c` hides a wrong mode completely until CI, which is
+  what the commit hook above exists for.
+- **git's version.** git 2.49 made `git fetch` create `refs/remotes/<remote>/HEAD` by default. On
+  git 2.43 that ref never appears, so `dr_other_branches` mis-skipping it was invisible here and
+  failed three tests on every push. `git --version` on the runner is worth knowing before spending
+  an afternoon on a test that passes locally.
+
+The lesson for tests rather than for code: when the thing under test is a state some *other*
+version produces, construct that state in the test instead of provoking it. The regression tests for
+that ref call `git symbolic-ref` directly, so they fail on the buggy code at both git versions. A
+test that only fails where the bug is already visible tells you nothing you did not know.
 
 ---
 
