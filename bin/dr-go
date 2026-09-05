@@ -16,7 +16,9 @@
 set -euo pipefail
 
 DR_PROG=dr-go
-_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# readlink -f first: install.sh links this into ~/.local/bin by default, and
+# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+_dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
@@ -44,6 +46,16 @@ done
 
 dr_context
 dr_attach_check
+
+# Config that cannot work, refused before anything is created. Both cases are in
+# dr_model_check, and both would otherwise surface inside the agent as a timeout
+# or as a session quietly running on the cloud you meant to leave.
+dr_model_check
+
+# Same reasoning for DRAUGR_ENV. Finding a malformed entry at attach time means
+# a mound was built for a session that cannot start; the output is discarded
+# because this call is for the refusal, not for the pairs.
+dr_env_pairs >/dev/null
 
 # Fall back to the configured arguments only when the command line said nothing.
 # The command line REPLACES them rather than adding to them, which is the same
@@ -137,11 +149,54 @@ fi
 # machine, and `dr-up --print` stays a truthful preview of what dr-go will do.
 "$_dr_bin/dr-up" ${DR_ASSUME_YES:+--yes}
 
+# The model has to be answering before the agent starts. Without this the
+# session comes up looking perfectly normal and every prompt fails with a dial
+# error naming an address and nothing else - which is the failure this whole
+# feature is meant to replace, arrived at from the other side.
+#
+# After dr-up on purpose: post-up runs in there, and that is the hook the proxy
+# documents for starting itself, so anything earlier would refuse a setup that
+# was about to work. Before the tty check, so a scripted dr-go fails on the
+# real problem rather than on not having a terminal.
+if [ -n "$DRAUGR_MODEL" ]; then
+    model_url=$(dr_model_url) || dr_die \
+        "DRAUGR_MODEL is set, but this machine's address could not be resolved" \
+        "The mound needs it to reach port $DRAUGR_MODEL_URL."
+
+    case $(dr_model_probe "$model_url") in
+        # Refusals, both of them: there is no partial session to be had. The way
+        # past is to start the service, or to say so and use the cloud once.
+        dead)
+            dr_die "nothing is answering at $model_url" \
+                "DRAUGR_MODEL is \"$DRAUGR_MODEL\", so every prompt would fail with a" \
+                "dial error naming that address and nothing else." \
+                "Start it:  $DRAUGR_SHARE/ollama-proxy/ollama-proxy start" \
+                "Or run this one session on the cloud:  DRAUGR_MODEL= dr-go" ;;
+        stalled)
+            dr_die "the proxy at $model_url answers, but nothing is behind it" \
+                "Its /healthz is up and /api/version is not, so the proxy is" \
+                "running and the model server is not." \
+                "Start it:  ollama serve" ;;
+
+        # Not a refusal: it works. It is just more exposed than the default
+        # arrangement, and that is worth saying once rather than never.
+        bare)
+            dr_warn "$model_url has no query-only proxy in front of it"
+            printf '  %sThe agent can administer it as well as use it - POST /api/pull%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %sand DELETE /api/delete are on the same port. A front door:%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %s%s/ollama-proxy/%s\n' \
+                "$_DR_DIM" "$DRAUGR_SHARE" "$_DR_OFF" >&2 ;;
+    esac
+fi
+
 # Checked after dr-up so that `dr-go` from a script still creates the mound
 # before complaining that it cannot attach to it.
 dr_require_tty dr-go
 
 dr_hook pre-attach "$DR_REPO"
+
 
 # Name the arguments in the attach line. If DRAUGR_AGENT_ARGS is doing something
 # on your behalf you should see it, rather than wondering why the agent resumed.

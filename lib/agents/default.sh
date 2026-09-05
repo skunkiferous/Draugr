@@ -32,6 +32,11 @@
 #                                 agent, heading included, or nothing at all
 #   dr_agent_secret               the service name sbx stores this agent's
 #                                 credentials under. Returns 1 when unknown
+#   dr_agent_model_supported      0 when this agent can be pointed at another
+#                                 endpoint, i.e. when DRAUGR_MODEL can work
+#   dr_agent_model_env <url> <model> <fast>
+#                                 the KEY=value lines to export into the attach
+#                                 rcfile, one a line, for those three values
 #
 # pack, unpack and list are the contract that matters, and they are three views
 # of one thing: the PACKED TREE. Whatever pack writes is what the store holds,
@@ -71,6 +76,14 @@ dr_agent_mem_status_extra() { return 0; }
 # is none of them. Unknown here means dr-doctor says nothing rather than
 # recommending a secret that does not exist.
 dr_agent_secret() { return 1; }
+
+# Which variables an agent reads to find its endpoint is per-agent and not
+# derivable from its name, so an unmeasured agent says so. This one matters more
+# than the others: an agent that ignored DRAUGR_MODEL would keep talking to its
+# cloud while you believed the work was staying local, so dr_model_check turns a
+# failure here into a refusal rather than a shrug.
+dr_agent_model_supported() { return 1; }
+dr_agent_model_env()       { return 1; }
 
 # No host-side layout either, so --from-host has nothing to offer, and the hint
 # says which of the two possible reasons it is: nothing there, or nobody looked.

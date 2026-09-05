@@ -155,10 +155,13 @@ ssh has no such seam: a native Linux client, a real pty at the far end, and job 
 inside the sandbox where it belongs. It is also the transport `dr-sync` and `dr-data` already use,
 so the `*.sbx` block `dr-setup` writes is the only setup either mode needs.
 
-Over ssh the agent runs as a job of an interactive bash, started from `PROMPT_COMMAND` — putting it
-in the rcfile instead **hangs**, because bash has not enabled job control while it is still running
-its startup files. When the agent exits normally the session ends and `dr-go` returns its status,
-exactly as `sbx run` did; only Ctrl+Z is different, and that is by design:
+Over ssh the agent runs as a job of an interactive bash, started from `PROMPT_COMMAND`. Draugr writes
+that shell's **rcfile** — the startup script named by `bash --rcfile`, filling the slot `~/.bashrc`
+normally fills — and sends it into the mound at attach time; it is also how anything else the agent
+needs in its environment gets there. Starting the agent from the body of that file instead **hangs**,
+because bash has not enabled job control while it is still running its startup files. When the
+agent exits normally the session ends and `dr-go` returns its status, exactly as `sbx run` did; only
+Ctrl+Z is different, and that is by design:
 
 ```text
 Ctrl+Z   →  $? is 148 (128 + SIGTSTP)  →  stay, and you have the mound's shell
@@ -338,12 +341,12 @@ appears at `/c/Code/TabuLua`. So a sibling project stays a sibling, and a relati
 two keeps working unchanged:
 
 ```bash
-# in C:\Code\SurvivalGameData/.draugr.conf
+# in C:\Code\MyGame/.draugr.conf
 DRAUGR_MOUNTS="/mnt/c/Code/TabuLua:ro"
 ```
 
 ```text
-/c/Code/SurvivalGameData      ← the clone, writable
+/c/Code/MyGame                ← the clone, writable
 /c/Code/TabuLua               ← the mount, read-only
 ```
 
@@ -360,6 +363,234 @@ credential-shaped file in a mounted directory is readable and unreported.
 
 > **Mounts are fixed when the mound is built.** Adding one to `.draugr.conf` does nothing to a
 > sandbox that already exists. `dr-up` says so and names the setting; `dr-up --recreate` rebuilds.
+
+---
+
+## Running the agent on a local model
+
+### `DRAUGR_MODEL`
+Default empty. The name of a model to run **the agent itself** on, instead of its vendor's cloud:
+
+```bash
+DRAUGR_MODEL="qwen3.8:27b"
+```
+
+Empty — the default — means the agent reaches its own service exactly as it always has, and nothing
+else in this section applies.
+
+This is not the same feature as [`DRAUGR_HOST_PORTS`](#draugr_host_ports), and they are easy to
+confuse because they involve the same port. That key lets **the code you are working on** call a
+local service. This one changes what **the agent** is. A project that uses an LLM and an agent that
+runs on one are different things, and wanting both at once is ordinary.
+
+Draugr does not check that the name exists: the endpoint is asked for it at the first prompt, and an
+unknown name fails there. `ollama list` is where to read the spelling from — `qwen3.8:27b` and
+`qwen3.8` are different names to Ollama, and only the first is installed.
+
+> **On its own this is not a "my code stays here" setting.** It changes where the agent sends your
+> code by design; it does not change what the mound can reach, and `sbx`'s default policy allows the
+> AI service endpoints along with ~190 other hosts. Closing that needs kit `deny` rules as well —
+> [SECURITY.md](SECURITY.md#running-the-agent-on-a-local-model) covers what it buys and what it costs.
+
+### `DRAUGR_MODEL_URL`
+Default `11435`. Where that model is served, in one of two spellings:
+
+| Value | Meaning |
+|---|---|
+| `11435` | a port on **this machine**, whose address is resolved at every attach |
+| `https://llm.corp.example` | a fixed endpoint, used exactly as written |
+
+A bare port number is the local case, and gets the same treatment as `DRAUGR_HOST_PORTS`: the address
+is never written down anywhere, because WSL's is handed out per boot and a rule carrying a literal IP
+is correct until the next reboot and then fails **closed and silently**.
+
+**A bare port must also appear in `DRAUGR_HOST_PORTS`, and `dr-go` refuses to start when it does
+not.** The two keys are not redundant — this one says where the model is, that one is where you
+consent to a hole into your machine, and Draugr will not manufacture the consent from the address. It
+is a refusal rather than a warning because the combination cannot work: without the rule the mound's
+connection is accepted by the sandbox's interception layer and dropped, so the agent fails at its
+first prompt with a timeout that names nothing and points nowhere. The message names the one line
+that fixes it:
+
+```
+dr-go: DRAUGR_MODEL_URL is port 11435, which is not in DRAUGR_HOST_PORTS
+  The mound cannot reach it, and the agent would fail at its first prompt.
+  Add it:  DRAUGR_HOST_PORTS="11435"
+```
+
+A URL with a scheme is exempt: it is somebody else's address, reached under the ordinary network
+policy, and `DRAUGR_HOST_PORTS` has nothing to do with it. Check that one with `dr-policy --check`
+instead.
+
+The default is `11435` and not Ollama's own `11434` deliberately. Ollama has no authentication and no
+read-only mode, so the port serving inference also serves `POST /api/pull`, `POST /api/create` —
+which reads local files — and `DELETE /api/delete`. `11435` is the query-only proxy in
+[`share/ollama-proxy/`](../share/ollama-proxy/), and pointing at it by default makes the safe
+arrangement the one you get without reading this paragraph.
+
+Anything with a scheme is taken literally and never resolved: a model on another machine, or a
+company endpoint fronting several. It has to speak whatever API the configured agent expects, which
+for `claude` is Anthropic's Messages API at `/v1/messages`.
+
+**The vendor's own API is a legal value, and Draugr contributes nothing to the authentication
+there.** `sbx`'s proxy rewrites the authorization header for Anthropic's hosts whatever the mound
+sent — measured, a request from inside a mound carrying no credential at all is answered — so the
+placeholder token Draugr writes is inert rather than wrong. What the setting buys in that case is the
+model pinning below: three tiers nailed to names you chose, instead of whatever the account defaults
+to. What it cannot buy is a different credential. That one is `sbx secret`, and
+[SECURITY.md](SECURITY.md#running-the-agent-on-a-local-model) says why.
+
+### `DRAUGR_MODEL_FAST`
+Default: whatever `DRAUGR_MODEL` is set to. The model for the agent's cheap background calls — Claude
+Code's Haiku tier, which it uses for summaries and titles rather than for your work:
+
+```bash
+DRAUGR_MODEL="qwen3.8:27b"
+DRAUGR_MODEL_FAST="qwen3:8b"      # only if both fit in VRAM at once
+```
+
+Defaulting it to the main model rather than to something smaller is the conservative choice, and the
+reason is memory rather than quality. Two models are only faster if both stay resident: a 17 GB model
+and a 5 GB one do not both fit on a 24 GB card once the KV cache is counted, so the second one evicts
+the first and every background call pays a reload that the next foreground call pays again. One
+resident model beats two that take turns. Set this only after checking that `ollama ps` still reports
+`100% GPU` with both loaded.
+
+### How it reaches the agent
+
+Worth writing down, because two of the three obvious routes are already known not to work.
+
+**Not over ssh.** `sbx`'s ssh proxy honours no `AcceptEnv` at all — measured against 0.37.1, and the
+reason [`share/ssh-config.snippet`](../share/ssh-config.snippet) sends only `LANG` and `LC_*`.
+Nothing crosses that way today, so `SendEnv ANTHROPIC_BASE_URL` would be a setting that silently does
+nothing.
+
+**Not in the kit.** A kit's `environment.variables` is static and committed, and the local address is
+per-boot. It is the same reason `DRAUGR_HOST_PORTS` names a port and not an address.
+
+**In the attach rcfile**, therefore — the startup script described under
+[`DRAUGR_ATTACH`](#draugr_attach), which Draugr generates on the host and sends into the mound at
+every attach. It is built at the moment the address is known, which is exactly the shape this needs.
+The variables are exported there, and a mound started for one model can be re-attached to another
+without a rebuild.
+
+That last point is why these keys are **not** `dr_create_facts`, and so never appear as drift: like
+`DRAUGR_AGENT_ARGS`, they are applied at attach rather than at creation. Changing one costs you a
+`Ctrl+D` and another `dr-go`, not a recreate.
+
+Which variables get exported is the agent's business, not Draugr's, so it joins the module interface
+in [`lib/agents/`](../lib/agents/) beside the memory functions:
+
+| | |
+|---|---|
+| `dr_agent_model_supported` | `0` when this agent can be pointed at another endpoint |
+| `dr_agent_model_env <url> <model> <fast>` | the `KEY=value` lines to export |
+
+For `claude` that is `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` — required, and ignored by Ollama —
+and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers. For `codex` it is a different set entirely, which is
+the whole reason this is a function on the module rather than a table in `common.sh`. An agent whose
+module returns failure for `dr_agent_model_supported` makes `DRAUGR_MODEL` an error rather than a
+setting that quietly does nothing.
+
+### What checks that the model is really there
+
+One probe, `dr_model_probe`, shared by everything that asks - because the check
+that refuses to start a session and the check that explains why have to be the
+same check, or `dr-doctor` ends up approving what `dr-go` is about to reject. It
+answers with a word rather than a status:
+
+| | |
+|---|---|
+| `proxy` | the query-only front door, with a model server behind it |
+| `stalled` | the proxy answers, nothing is behind it |
+| `bare` | a model server with no proxy - the agent can administer it too |
+| `alive` | answering, and neither of those: somebody else's endpoint |
+| `dead` | nothing listening |
+| `unknown` | no `curl` here, so the question cannot be asked |
+
+`alive` is the reason this is not a boolean. A company endpoint has never heard
+of `/healthz`, answers 404, and works perfectly - so "not the proxy" must not
+mean "not working", or the one case a full URL exists for would be refused.
+
+**`dr-go` refuses on `dead` and `stalled`**, after `dr-up` and before the agent
+starts. Neither has a partial session to offer: every prompt would fail with a
+dial error naming an address and nothing else. The way past is to start the
+service, or `DRAUGR_MODEL= dr-go` to use the cloud once. `bare` is a warning
+rather than a refusal, because it does work - it is only more exposed than the
+default arrangement.
+
+It runs after `dr-up` because `post-up` is the hook the proxy documents for
+starting itself, and before the terminal check so a scripted `dr-go` fails on
+the real problem rather than on not having a tty.
+
+`dr-doctor` reports all six, and `dr-status` shows the model with its
+reachability whenever `DRAUGR_MODEL` is set - a model that is not answering
+otherwise looks identical to one that is, right up until the first prompt.
+
+### What `dr-doctor` has to stop saying
+
+`dr-doctor` reports a missing agent credential - *"no 'anthropic' secret - the
+agent starts logged out"*. With `DRAUGR_MODEL` set that advice is wrong, and
+confidently so: you deliberately do not need that secret, and following the
+suggestion signs you in to a service the agent is not going to call.
+`dr_agent_secret` returns failure while `DRAUGR_MODEL` is set, which is the
+existing spelling for "this agent has no secret worth naming" and needs no new
+machinery.
+
+There is one case this gets wrong. `DRAUGR_MODEL_URL` can point at the vendor's
+own API, and the secret is load-bearing again the moment it does: `sbx`'s proxy
+still supplies it, and an expired one fails every prompt with a 401. `dr-doctor`
+goes quiet at exactly the moment its advice would have been right. Narrowing the
+suppression to a URL that is not the vendor's own host is a small change, and
+has not been made.
+
+---
+
+## Environment for the agent
+
+### `DRAUGR_ENV`
+Default empty. Space-separated `NAME=value` pairs, exported into the agent's session:
+
+```bash
+DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=25"
+```
+
+The escape hatch, for anything Draugr has no key of its own for. It exists because the setting that
+matters most on a local model — the point at which Claude Code compacts, which has to come down from
+the model's advertised window to whatever your card actually holds — is spelled with a variable that
+is **not in Claude Code's documentation** and appeared between two point releases. A typed
+`DRAUGR_MODEL_CONTEXT` would hardcode that name; this leaves the judgement with you.
+
+**Values cannot contain spaces**, because spaces separate entries. That is the same limitation every
+other list-shaped key here has, and the same reason: a config file is shell, and a quoting scheme
+inside a quoted string is one nobody remembers correctly at the point of writing it.
+
+Entries are **validated, not passed through**. An entry with no `=`, or a name that is not a shell
+identifier, is refused by `dr-go` before the mound is built. This is not fussiness: an environment
+variable the agent does not recognise is *ignored* rather than rejected, so a typo produces a session
+that looks entirely correct and behaves as though you had never written the setting — which is the
+failure this key exists to prevent, reached from the other side. `PATH` and `HOME` are refused
+outright; both replace rather than extend, and a replacement inside the mound ends the next `dr-go`
+in `command not found` before the agent starts.
+
+Applied in the **attach rcfile** described under [`DRAUGR_ATTACH`](#draugr_attach), like the model
+variables and for the same reasons — so it is not a `dr_create_facts` entry, never shows as drift,
+and changing it costs `Ctrl+D` and another `dr-go` rather than a recreate.
+
+It is exported **after** anything [`DRAUGR_MODEL`](#draugr_model) derived, so an explicit setting
+wins: an escape hatch the tool can silently overrule is not one. A collision is reported rather than
+left quiet, because two settings and an invisible winner is how an afternoon goes missing.
+
+```
+dr-go: DRAUGR_ENV sets ANTHROPIC_BASE_URL, overriding what DRAUGR_MODEL derived
+```
+
+It reaches the **agent's session only**, not `dr-shell`. A shell in the mound is for looking around,
+and it starts without an rcfile at all.
+
+> A project's `.draugr.conf` can set any variable in the agent's environment this way. That is no
+> more reach than the rest of that file already has — it is shell, and Draugr runs it — and it is
+> gated by the same `dr-trust` acceptance.
 
 ---
 

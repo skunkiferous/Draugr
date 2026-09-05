@@ -41,6 +41,19 @@ sudo apt install nginx          # see the warning below
 ./ollama-proxy config           # print the rendered config, and validate it
 ```
 
+**It is deliberately not on your PATH, and you are not missing an installation step.** `install.sh`
+links `bin/` and only `bin/`: this is optional, independent of Draugr, and needs an nginx you may not
+have, so a tool called Draugr should not put a generic `ollama-proxy` into your PATH on the strength
+of having been installed. `tests/executable-paths.sh` names this file one by one for the same reason
+— `share/` is otherwise examples, which must *not* be executable.
+
+Draugr's own messages therefore name the full path (`dr-doctor` prints it when the model is not
+answering). If you would rather type it short, link it yourself:
+
+```bash
+ln -s "$PWD/ollama-proxy" ~/.local/bin/ollama-proxy
+```
+
 Everything is overridable by environment variable: `OLLAMA_PROXY_LISTEN` (default `0.0.0.0`),
 `OLLAMA_PROXY_PORT` (`11435`), `OLLAMA_PROXY_UPSTREAM` (`127.0.0.1:11434`), `OLLAMA_PROXY_STATE`
 (`$XDG_STATE_HOME/ollama-proxy`), `OLLAMA_PROXY_TEMPLATE`.
@@ -86,7 +99,7 @@ GET  /api/tags               200      POST /api/create               403
 POST /api/chat               200      POST /api/push                 403
 POST /v1/chat/completions    200      POST /api/copy                 403
 GET  /v1/models              200      DELETE /api/delete             403
-                                      POST /api/blobs/sha256:abc     403
+POST /v1/messages            200      POST /api/blobs/sha256:abc     403
 GET  /api/chat               403      GET  /api/anything-new-later   403
 POST /api/tags               403
 ```
@@ -100,6 +113,19 @@ answers, `chat/completions`, `completions` and `embeddings` exist as POST, and `
 Ollama does not implement the file or fine-tune half of the OpenAI API. If your application speaks
 the OpenAI protocol, delete the `/api/` locations and keep only that one: it is a smaller allowlist
 to be right about.
+
+That prefix has since grown a second protocol, which is the reason this proxy matters more than it
+looks. Since Ollama 0.14 `/v1/messages` is **Anthropic's Messages API** — the endpoint Claude Code
+itself speaks — so `location /v1/` already admits it, and a coding agent can be pointed straight at
+this port with `ANTHROPIC_BASE_URL`. Measured on nginx 1.24.0 against Ollama 0.32.14: `POST
+/v1/messages` answers 200 through the allowlist unchanged, while `/api/pull`, `/api/create` and
+`/api/delete` stay 403.
+
+Worth noting how that happened. Nobody added a rule for it: the prefix was passed through whole on
+the grounds that it carried no management verbs, and a new protocol landed inside it. That is the
+allowlist working as intended and also the limit of the reasoning behind it — "no management verbs
+today" is a claim about a surface that moves. It is still true on 0.32.14, and it is worth
+re-measuring rather than inheriting.
 
 Allowing `/api/chat` does not smuggle in downloads. Verified on 0.32.14: a request naming a model
 that is not installed returns `{"error":"model '...' not found"}` and does **not** pull it.

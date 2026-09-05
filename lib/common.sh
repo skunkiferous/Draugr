@@ -16,7 +16,7 @@
 [ -n "${_DR_COMMON_LOADED:-}" ] && return 0
 _DR_COMMON_LOADED=1
 
-DRAUGR_VERSION="0.3.0"
+DRAUGR_VERSION="0.4.0"
 
 # --- work out where Draugr itself is installed ------------------------------
 #
@@ -442,6 +442,8 @@ DR_TRUST_FILE="$DR_CONFIG_USER/trusted"
 DR_KEYS=(
     DRAUGR_AGENT DRAUGR_AGENT_ARGS DRAUGR_ATTACH DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
     DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_KIT_STORE DRAUGR_PORTS DRAUGR_HOST_PORTS DRAUGR_MOUNTS
+    DRAUGR_MODEL DRAUGR_MODEL_URL DRAUGR_MODEL_FAST
+    DRAUGR_ENV
     DRAUGR_DATA DRAUGR_DATA_PUSH DRAUGR_DATA_PULL DRAUGR_DATA_DELETE DRAUGR_DATA_CHMOD
     DRAUGR_DATA_DIFF_MAX
     DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC DRAUGR_ON_MISSING_REPO
@@ -498,6 +500,25 @@ _dr_defaults() {
     # every dr-up and never stored, because it does not survive a reboot.
     DRAUGR_HOST_PORTS=
     DRAUGR_MOUNTS=
+
+    # The agent's OWN model, when it should not be its vendor's cloud. Empty is
+    # the default and changes nothing about how the agent reaches its service.
+    DRAUGR_MODEL=
+    # Where that model is served: a bare port on THIS machine, resolved at every
+    # attach because the address does not survive a reboot, or a full URL used
+    # exactly as written. The default is the query-only proxy in
+    # share/ollama-proxy rather than Ollama's own 11434, because the port that
+    # serves inference there also serves DELETE /api/delete.
+    DRAUGR_MODEL_URL=11435
+    # The cheap background tier. Empty means "whatever DRAUGR_MODEL is": two
+    # models are only faster if both stay resident, and a second one that evicts
+    # the first costs more in reloads than the smaller model saves.
+    DRAUGR_MODEL_FAST=
+    # Arbitrary environment for the agent's session, as space-separated
+    # NAME=value pairs. The escape hatch for anything Draugr has no key of its
+    # own for - a local model's context limit being the case it was written for,
+    # where the variable that does it is undocumented and may be renamed.
+    DRAUGR_ENV=
 
     DRAUGR_DATA=
     DRAUGR_DATA_PUSH=auto
@@ -1051,6 +1072,181 @@ dr_shquote() {
     printf '%s' "${out# }"
 }
 
+# ---------------------------------------------------------------------------
+# The agent's own model
+#
+# DRAUGR_MODEL points the agent at something other than its vendor's cloud. The
+# three functions here answer the three questions that come with that: is this a
+# port or a URL, what address does the mound actually dial, and is the
+# combination one that can work at all.
+# ---------------------------------------------------------------------------
+
+# dr_model_is_port <value> - true when DRAUGR_MODEL_URL names a local port.
+#
+# Digits and nothing else. There is deliberately no third spelling: "localhost"
+# means the MOUND from inside the mound, so a value like localhost:11435 is a
+# URL like any other and must not be given the host-port treatment below - it
+# would resolve to the sandbox talking to itself and fail with nothing to read.
+dr_model_is_port() {
+    case "${1:-}" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+}
+
+# dr_model_url - DRAUGR_MODEL_URL as an address the mound can actually open.
+#
+# A bare port becomes http://<this machine>:<port>, resolved NOW rather than
+# stored, for the same reason dr-hostport re-resolves on every start: WSL hands
+# out its address per boot, so anywhere you could write it down is somewhere it
+# would be wrong. Anything else is somebody else's endpoint and is printed back
+# untouched. Returns 1 when the address cannot be worked out at all.
+dr_model_url() {
+    local ip
+    if ! dr_model_is_port "${DRAUGR_MODEL_URL:-}"; then
+        printf '%s' "${DRAUGR_MODEL_URL:-}"
+        return 0
+    fi
+    ip=$(dr_host_ip) || return 1
+    printf 'http://%s:%s' "$ip" "$DRAUGR_MODEL_URL"
+}
+
+# dr_model_probe <url> - what is actually answering there. Prints one word:
+#
+#   proxy    the query-only front door, with a model server behind it
+#   stalled  the proxy answers, but nothing is behind it
+#   bare     a model server with no proxy - the agent can administer it too
+#   alive    answering, but neither of those: somebody else's endpoint
+#   dead     nothing listening at all
+#   unknown  no curl here, so the question cannot be asked
+#
+# Only `dead` and `stalled` mean the session cannot work, and that distinction is
+# the whole point of returning a word rather than a status. A company endpoint
+# that has never heard of /healthz answers 404 and is perfectly usable, so
+# treating "not the proxy" as "broken" would refuse the one case DRAUGR_MODEL_URL
+# takes a full URL for.
+#
+# /healthz is nginx's own, served with no upstream, so it separates the proxy
+# from the thing behind it - which is why `stalled` can be told from `proxy` at
+# all. From inside the agent those two fail identically.
+dr_model_probe() {
+    local url=$1 code
+    command -v curl >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+
+    code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "$url/healthz" 2>/dev/null) || code=000
+
+    # The proxy answered. Ask the second question it cannot answer for itself.
+    if [ "$code" = 200 ]; then
+        code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "$url/api/version" 2>/dev/null) || code=000
+        [ "$code" = 200 ] && { printf 'proxy'; return 0; }
+        printf 'stalled'
+        return 0
+    fi
+
+    # 000 is curl for "no HTTP response at all" - refused, unreachable, timed
+    # out. Any other code means something is there and simply has no /healthz.
+    [ "$code" = 000 ] && { printf 'dead'; return 0; }
+
+    code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "$url/api/version" 2>/dev/null) || code=000
+    [ "$code" = 200 ] && { printf 'bare'; return 0; }
+    printf 'alive'
+}
+
+# dr_model_check - refuse the two combinations that cannot work.
+#
+# Both are refusals rather than warnings, because neither has a working outcome
+# to warn about. An agent whose module cannot point it anywhere would ignore
+# DRAUGR_MODEL and keep talking to its cloud, which is the worst failure this
+# feature has: you would believe the work was staying local while it was not.
+#
+# The second is the missing host-port rule. Without it the mound's connection is
+# accepted by the sandbox's interception layer and dropped, so the symptom is a
+# timeout at the agent's first prompt that names nothing and points nowhere.
+dr_model_check() {
+    local p
+    [ -n "${DRAUGR_MODEL:-}" ] || return 0
+
+    if ! dr_agent_model_supported; then
+        dr_die "DRAUGR_MODEL is set, but Draugr cannot point $DRAUGR_AGENT at another endpoint" \
+            "Which variables an agent reads is per-agent, and this one has not been measured." \
+            "Unset DRAUGR_MODEL, or run this project with DRAUGR_AGENT=claude."
+    fi
+
+    # A URL is somebody else's address, reached under the ordinary network
+    # policy. DRAUGR_HOST_PORTS has nothing to say about it; dr-policy does.
+    dr_model_is_port "${DRAUGR_MODEL_URL:-}" || return 0
+
+    for p in ${DRAUGR_HOST_PORTS:-}; do
+        [ "$p" = "$DRAUGR_MODEL_URL" ] && return 0
+    done
+
+    # Naming the one line that fixes it, rather than the key in the abstract:
+    # the two keys are not redundant and Draugr will not manufacture the consent
+    # for a hole into your machine out of the fact that you named an address.
+    dr_die "DRAUGR_MODEL_URL is port $DRAUGR_MODEL_URL, which is not in DRAUGR_HOST_PORTS" \
+        "The mound cannot reach it, and the agent would fail at its first prompt." \
+        "Add it:  DRAUGR_HOST_PORTS=\"$DRAUGR_MODEL_URL\""
+}
+
+# dr_env_pairs - DRAUGR_ENV as one validated NAME=value a line.
+#
+# The escape hatch, for anything Draugr has no key of its own for. It exists
+# because the variable that caps Claude Code's context is undocumented and was
+# added between two point releases: a typed DRAUGR_MODEL_CONTEXT would hardcode
+# a name nobody has published and cannot be routed around when it changes,
+# whereas a passthrough leaves that judgement where it belongs.
+#
+# Validated rather than passed through, because every failure here is silent
+# otherwise. An unrecognised variable is IGNORED by the agent, not refused, so a
+# typo'd name produces a session that looks correct and behaves as though the
+# setting were never written - which is exactly the failure this key exists to
+# avoid, arrived at from the other side.
+dr_env_pairs() {
+    local entry name
+    local -a entries=()
+    [ -n "${DRAUGR_ENV:-}" ] || return 0
+
+    # read -ra splits on whitespace WITHOUT globbing - the same trap documented
+    # at dr_kit_refs. An unquoted expansion would turn a value containing * into
+    # a listing of the current directory.
+    read -ra entries <<< "$DRAUGR_ENV"
+
+    for entry in "${entries[@]}"; do
+        # Nothing before the first "=" is not a pair, and the most likely way to
+        # write one is to forget that the separator between entries is a space.
+        case "$entry" in
+            *=*) ;;
+            *) dr_die "DRAUGR_ENV: \"$entry\" is not NAME=value" \
+                   "Entries are separated by spaces, so a value cannot contain one." \
+                   'Example:  DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1 FOO=bar"' ;;
+        esac
+
+        name=${entry%%=*}
+
+        # A name that is not a shell identifier cannot be exported at all: the
+        # rcfile would fail to source, taking the whole session with it rather
+        # than just this variable.
+        case "$name" in
+            ''|[0-9]*|*[!A-Za-z0-9_]*)
+                dr_die "DRAUGR_ENV: \"$name\" is not a variable name" \
+                    "Letters, digits and underscore, and not starting with a digit." \
+                    "The entry was:  $entry" ;;
+        esac
+
+        # PATH is the one that looks harmless and is not: it REPLACES rather than
+        # extends, so an absolute one drops the directory holding the agent
+        # binary and the next dr-go ends in "command not found" before the agent
+        # starts. The kit spec carries the same warning about the same hazard.
+        case "$name" in
+            PATH|HOME)
+                dr_die "DRAUGR_ENV must not set $name" \
+                    "Draugr and the agent both depend on it inside the mound, and a" \
+                    "replacement here breaks the session before it starts." ;;
+        esac
+
+        printf '%s\n' "$entry"
+    done
+}
+
 # dr_attach_rc <command...> - the bash rcfile that starts the agent.
 #
 # The obvious spelling - putting the agent's command straight in the rcfile -
@@ -1069,14 +1265,58 @@ dr_shquote() {
 # command list, so a bare `agent; exit` ends the session on Ctrl-Z as well.
 # Measured, after writing it that way first.
 dr_attach_rc() {
-    local cmd
+    local cmd url k v model_keys='' envpairs
     cmd=$(dr_shquote "$@")
+
+    # Collected before the loop rather than piped into one: dr_env_pairs dies on
+    # a malformed entry, and a process substitution would take that exit with it
+    # - leaving an rcfile that quietly lacked the variables and a session that
+    # looked fine. The message has already reached stderr by the time we return.
+    envpairs=$(dr_env_pairs) || return 1
+
     # Single quotes throughout: none of this is for us to expand. It is a file to
     # be read by a bash that has not started yet, in another machine.
     # shellcheck disable=SC2016
     printf '%s\n' \
         '# Written by Draugr at attach time. Overwritten on the next dr-go.' \
-        '[ -f ~/.bashrc ] && . ~/.bashrc' \
+        '[ -f ~/.bashrc ] && . ~/.bashrc'
+
+    # The agent's own model, when DRAUGR_MODEL asks for one. This is the only
+    # place it can go: sbx's ssh proxy honours no AcceptEnv, so nothing crosses
+    # that way, and a kit is committed while the address is known only now.
+    if [ -n "${DRAUGR_MODEL:-}" ]; then
+        # Dying rather than carrying on is the point. An unresolved address would
+        # leave the variables unset and the agent talking to its cloud while you
+        # believed otherwise, which is the one failure this feature must not have.
+        url=$(dr_model_url) || dr_die \
+            "DRAUGR_MODEL is set, but this machine's address could not be resolved" \
+            "The mound needs it to reach port ${DRAUGR_MODEL_URL:-}." \
+            "Check the network with:  dr-doctor"
+
+        # Quoted with %q here and read back by a bash over there - the same pair
+        # that agrees about the command line above. IFS splits on the first = only,
+        # because v is the last field and takes everything left, = included.
+        while IFS='=' read -r k v; do
+            [ -n "$k" ] || continue
+            model_keys+=" $k"
+            printf 'export %s=%s\n' "$k" "$(dr_shquote "$v")"
+        done < <(dr_agent_model_env "$url" "$DRAUGR_MODEL" "${DRAUGR_MODEL_FAST:-$DRAUGR_MODEL}")
+    fi
+
+    # DRAUGR_ENV last, so an explicit setting beats one Draugr derived: an escape
+    # hatch the tool can silently overrule is not an escape hatch. The collision
+    # is still said out loud, because two settings and a quiet winner is how an
+    # afternoon goes missing.
+    while IFS='=' read -r k v; do
+        [ -n "$k" ] || continue
+        case " $model_keys " in
+            *" $k "*) dr_warn "DRAUGR_ENV sets $k, overriding what DRAUGR_MODEL derived" ;;
+        esac
+        printf 'export %s=%s\n' "$k" "$(dr_shquote "$v")"
+    done <<< "$envpairs"
+
+    # shellcheck disable=SC2016
+    printf '%s\n' \
         '_dr_pc=${PROMPT_COMMAND-}' \
         "PROMPT_COMMAND='PROMPT_COMMAND=\$_dr_pc; $cmd; _dr_s=\$?; [ \$_dr_s -eq 148 ] || exit \$_dr_s'"
 }
@@ -1500,6 +1740,25 @@ dr_data_dirty_blockers() {
 # worth having - "the Lua toolchain" is a fact about you, not about one repo, and
 # a library entry ADDS to the project's kit instead of replacing it.
 
+# dr_kit_reserved_names - names a kit must not take, one per line.
+#
+# The composition always contains the agent's own kit, so the agent's name is
+# spoken for. Two sources, and neither is a hand-written list:
+#
+#   $DRAUGR_AGENT        the only name that can break a create today
+#   lib/agents/*.sh      so switching to one Draugr knows about does not turn a
+#                        working kit into a broken one
+#
+# sbx offers ten agents and this names at most three of them, which is
+# deliberate. A hardcoded list of the other seven is the shape that rots - it
+# would be wrong the day sbx adds one, and silently. What is here is derived: one
+# from a directory listing, one from whatever you configured. An agent outside
+# both is caught by dr-up, and dr-kit validate then names it, because
+# DRAUGR_AGENT is by definition the agent you just switched to.
+dr_kit_reserved_names() {
+    { printf '%s\n' "${DRAUGR_AGENT:-claude}"; dr_agent_known | tr ' ' '\n'; } | sort -u
+}
+
 # dr_kit_slug <text> - a string sbx will accept as a kit's `name:` field.
 #
 # sbx's rule, quoted from its own error: "must be lowercase alphanumeric with
@@ -1511,7 +1770,7 @@ dr_data_dirty_blockers() {
 # Only `name:` is constrained. `displayName:` is free text and keeps the
 # capitals, which is why the two are set from different values in dr-init.
 dr_kit_slug() {
-    local s
+    local s a
     # Lowercase, then anything outside the permitted set becomes a hyphen. -c is
     # tr's complement: "every character NOT in this set".
     s=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')
@@ -1525,6 +1784,21 @@ dr_kit_slug() {
     # that was in the middle a moment ago.
     s=${s:0:64}
     s=${s%-}
+
+    # A kit named after an agent is legal and uncomposable. sbx puts the agent's
+    # own kit in the same composition and refuses two that share a name, so a
+    # repository in a directory called "claude" or "codex" produces a kit that
+    # validates cleanly and then fails at dr-up with sbx's own words, two steps
+    # from the cause - the same shape as the capitals problem above.
+    #
+    # Checked against EVERY known agent rather than the configured one, because
+    # the kit is deliberately agent-agnostic: a name that works until you switch
+    # DRAUGR_AGENT is a trap rather than a kit.
+    while IFS= read -r a; do
+        [ "$s" = "$a" ] || continue
+        s="$s-project"
+        break
+    done < <(dr_kit_reserved_names)
 
     # A name made entirely of punctuation leaves nothing behind. Better a dull
     # placeholder than an empty field that fails validation for a second reason.
@@ -1620,6 +1894,41 @@ dr_kit_agent_conflicts() {
         [ -n "$want" ] || continue
         [ "$want" = "${DRAUGR_AGENT:-claude}" ] && continue
         printf '%s %s\n' "$ref" "$want"
+    done < <(dr_kit_refs)
+    return 0
+}
+
+# dr_kit_name_conflicts - resolved kits whose `name:` is an agent's name, one per
+# line as "<kit> <name>".
+#
+# sbx composes the agent's own kit with the project's and refuses two that share
+# a name:
+#
+#   ERROR: request failed: 400 Bad Request: kit_artifacts: compose:
+#   duplicate kit name "claude" - each kit in a composition must have a unique name
+#
+# which arrives at dr-up in sbx's vocabulary, with nothing pointing back at the
+# file that caused it. `sbx kit validate` passes such a kit happily - the name is
+# perfectly legal, and the collision exists only at compose time - so this is the
+# second thing dr-kit has to check that sbx will not, and for the same reason as
+# dr_kit_agent_conflicts above.
+#
+# The set it checks against is dr_kit_reserved_names, so it covers the agent you
+# have configured plus the ones Draugr carries a module for - not sbx's full ten,
+# and see there for why not.
+#
+# Directories only, as above: a ZIP or an OCI reference cannot be read from here.
+dr_kit_name_conflicts() {
+    local ref name a
+    while IFS= read -r ref; do
+        [ -d "$ref" ] || continue
+        # Anchored at column 0. `name:` appears indented under publishedPorts as
+        # well, and only the top-level one is the kit's own.
+        name=$(sed -n 's/^name:[[:space:]]*//p' "$ref/spec.yaml" 2>/dev/null | head -1)
+        [ -n "$name" ] || continue
+        while IFS= read -r a; do
+            [ "$name" = "$a" ] && printf '%s %s\n' "$ref" "$name"
+        done < <(dr_kit_reserved_names)
     done < <(dr_kit_refs)
     return 0
 }

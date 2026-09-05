@@ -13,7 +13,9 @@
 set -euo pipefail
 
 DR_PROG=dr-status
-_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# readlink -f first: install.sh links this into ~/.local/bin by default, and
+# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+_dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
@@ -177,7 +179,7 @@ if [ "$DRAUGR_MEM_SYNC" != off ]; then
     esac
 fi
 
-# Only the three settings that change what the agent can reach. The rest are a
+# Only the settings that change what the agent can reach. The rest are a
 # dr-config away, and a status screen nobody reads is worse than a short one.
 heading "settings"
 if dr_is_true "$DRAUGR_CLONE"; then
@@ -187,5 +189,32 @@ else
 fi
 row kit "${DRAUGR_KIT:-${_DR_DIM}none${_DR_OFF}}"
 row remote "$DRAUGR_REMOTE"
+
+# A local model changes where every prompt goes, which is exactly what this
+# section is for. Shown only when set, so the screen stays short for everyone
+# else - and shown with its reachability, because a model that is not answering
+# looks identical to one that is until the agent's first prompt fails.
+if [ -n "${DRAUGR_MODEL:-}" ]; then
+    _surl=$(dr_model_url) || _surl=
+    case ${_surl:+$(dr_model_probe "$_surl")} in
+        proxy|alive) row model "$DRAUGR_MODEL at $_surl" ;;
+        bare)        row model "$DRAUGR_MODEL at $_surl ${_DR_YELLOW}- no proxy in front${_DR_OFF}" ;;
+        stalled)     row model "$DRAUGR_MODEL at $_surl ${_DR_RED}- proxy up, model server down${_DR_OFF}" ;;
+        dead)        row model "$DRAUGR_MODEL at $_surl ${_DR_RED}- not answering, dr-go will refuse${_DR_OFF}" ;;
+        *)           row model "$DRAUGR_MODEL at ${_surl:-$DRAUGR_MODEL_URL}" ;;
+    esac
+fi
+
+# Arbitrary environment is unbounded text and this screen is deliberately short,
+# so the COUNT is what earns a row: "something is being injected into the agent"
+# is the part worth knowing at a glance, and dr-config prints what. A malformed
+# value says so rather than reporting zero, which would read as "none set".
+if [ -n "${DRAUGR_ENV:-}" ]; then
+    if _envs=$(dr_env_pairs 2>/dev/null); then
+        row env "$(printf '%s\n' "$_envs" | grep -c .) variable(s) - dr-config to see them"
+    else
+        row env "${_DR_RED}malformed - dr-go will refuse${_DR_OFF}"
+    fi
+fi
 
 printf '\n  %sWhy any of these:  dr-config --changed%s\n' "$_DR_DIM" "$_DR_OFF"

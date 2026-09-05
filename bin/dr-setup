@@ -15,7 +15,9 @@
 set -euo pipefail
 
 DR_PROG=dr-setup
-_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# readlink -f first: install.sh links this into ~/.local/bin by default, and
+# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+_dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"

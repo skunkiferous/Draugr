@@ -79,7 +79,7 @@ http {
         location = /api/ps        { limit_except GET  { deny all; } proxy_pass http://ollama; }
         location = /api/version   { limit_except GET  { deny all; } proxy_pass http://ollama; }
 
-        # --- the OpenAI-compatible surface -----------------------------------
+        # --- the /v1/ surface: OpenAI AND Anthropic --------------------------
         # Measured: this prefix carries no management verbs at all. /v1/models
         # answers, chat/completions, completions and embeddings exist as POST,
         # and /v1/files is a 404 - Ollama does not implement the file or
@@ -89,6 +89,17 @@ http {
         # Delete the /api/ block above and keep this one if your application
         # speaks the OpenAI protocol: it is the smaller allowlist to be right
         # about, and it is one line instead of eight.
+        #
+        # It also carries a second protocol now, which is worth naming because
+        # it is the reason to run this at all: since Ollama 0.14, /v1/messages
+        # is ANTHROPIC's Messages API, so a coding agent pointed here with
+        # ANTHROPIC_BASE_URL is served by the line below and by no other. It
+        # needed no new rule - the prefix was already passed through whole, and
+        # a new protocol landed inside it.
+        #
+        # Which is the limit of the reasoning above, stated plainly: "carries no
+        # management verbs" is a claim about a surface that moves. True on
+        # 0.32.14, measured; worth re-measuring rather than inheriting.
         location /v1/ { proxy_pass http://ollama; }
 
         # Never proxied, and listed so the omission is visibly deliberate rather

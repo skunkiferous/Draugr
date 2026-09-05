@@ -180,4 +180,40 @@ dr_agent_mem_host_hint() {
 # `sbx secret set -g anthropic --oauth`. The token never enters the mound: sbx's
 # proxy authenticates on the agent's behalf, which is why signing in after a
 # mound was built needs no rebuild.
-dr_agent_secret() { printf 'anthropic'; }
+#
+# With DRAUGR_MODEL set there is no secret worth naming: the agent is not going
+# to call Anthropic at all, and dr-doctor's "the agent starts logged out" would
+# be advice to authenticate against a service this session does not use.
+# Returning failure is the existing spelling for that, and dr-doctor already
+# says nothing when it gets one.
+dr_agent_secret() {
+    [ -z "${DRAUGR_MODEL:-}" ] || return 1
+    printf 'anthropic'
+}
+
+# ---------------------------------------------------------------------------
+# Pointing Claude Code at another endpoint
+#
+# Claude Code reads its endpoint from ANTHROPIC_BASE_URL, and sends no request
+# at all without ANTHROPIC_AUTH_TOKEN even when the far side ignores it. So the
+# token below is a placeholder and deliberately not a real credential: nothing
+# here should put a live token on a local port.
+#
+# The three tier variables are not redundant. Claude Code picks a tier per call
+# rather than using one model - a small one for background work, a larger one
+# for yours - and any tier left unmapped falls through to a cloud model name the
+# local endpoint has never heard of. That surfaces as "model not found" at a
+# moment with no obvious connection to what you were doing, so all three are set
+# even when two of them name the same model.
+# ---------------------------------------------------------------------------
+
+dr_agent_model_supported() { return 0; }
+
+# dr_agent_model_env <url> <model> <fast> - KEY=value a line, for the rcfile.
+dr_agent_model_env() {
+    printf 'ANTHROPIC_BASE_URL=%s\n'             "$1"
+    printf 'ANTHROPIC_AUTH_TOKEN=%s\n'           'draugr-local'
+    printf 'ANTHROPIC_DEFAULT_OPUS_MODEL=%s\n'   "$2"
+    printf 'ANTHROPIC_DEFAULT_SONNET_MODEL=%s\n' "$2"
+    printf 'ANTHROPIC_DEFAULT_HAIKU_MODEL=%s\n'  "${3:-$2}"
+}

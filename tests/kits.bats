@@ -609,3 +609,97 @@ make_pinned_kit() {
     [ -z "$(calls rm)" ]
     [ -z "$(calls create)" ]
 }
+
+# --- a kit named after an agent ----------------------------------------------
+#
+# sbx composes the agent's own kit with the project's and refuses two that share
+# a name. A repository in a directory called "claude" produced exactly that, and
+# the failure arrived from sbx at create time saying `duplicate kit name
+# "claude"`, with dr-kit validate having just called the kit composable.
+
+make_named_kit() {
+    mkdir -p "$1"
+    printf 'schemaVersion: "2"\nkind: mixin\nname: %s\ndisplayName: %s\n' "$2" "$2" > "$1/spec.yaml"
+}
+
+@test "dr_kit_slug: a name that is the configured agent gets out of its way" {
+    DRAUGR_AGENT=claude
+    [ "$(dr_kit_slug claude)" = "claude-project" ]
+    DRAUGR_AGENT=gemini
+    [ "$(dr_kit_slug gemini)" = "gemini-project" ]
+}
+
+@test "dr_kit_slug: an agent Draugr has a module for is avoided too" {
+    # So that switching DRAUGR_AGENT later does not turn a working kit into one
+    # sbx refuses to compose.
+    DRAUGR_AGENT=claude
+    [ "$(dr_kit_slug codex)" = "codex-project" ]
+}
+
+@test "dr_kit_slug: a name that merely contains an agent name is left alone" {
+    DRAUGR_AGENT=claude
+    [ "$(dr_kit_slug claude-tools)" = "claude-tools" ]
+    [ "$(dr_kit_slug myclaude)" = "myclaude" ]
+}
+
+@test "dr_kit_reserved_names: covers the configured agent and the modules" {
+    DRAUGR_AGENT=gemini run dr_kit_reserved_names
+    [[ "$output" == *gemini* ]]
+    [[ "$output" == *claude* ]]
+    [[ "$output" == *codex* ]]
+}
+
+@test "kit name conflicts: a kit named after the agent is reported" {
+    make_named_kit "$REPO/.draugr/kit" claude
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=claude
+
+    run dr_kit_name_conflicts
+    [ "$output" = "$REPO/.draugr/kit claude" ]
+}
+
+@test "kit name conflicts: an ordinary name is not one" {
+    make_named_kit "$REPO/.draugr/kit" myproject
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=claude
+
+    run dr_kit_name_conflicts
+    [ -z "$output" ]
+}
+
+@test "kit name conflicts: an indented name: is not the kit's own" {
+    # publishedPorts entries carry a name: too. Reading one of those as the kit's
+    # name would report a conflict against a port called "claude" and, worse,
+    # miss the real name sitting at column 0.
+    make_named_kit "$REPO/.draugr/kit" myproject
+    printf 'publishedPorts:\n  - container: 5173\n    name: claude\n' >> "$REPO/.draugr/kit/spec.yaml"
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=claude
+
+    run dr_kit_name_conflicts
+    [ -z "$output" ]
+}
+
+@test "dr-kit validate: says so, instead of calling it composable" {
+    make_named_kit "$REPO/.draugr/kit" claude
+    export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=claude
+
+    run dr-kit validate
+    [[ "$output" == *'is also the name of an agent'* ]]
+    # The claim that sent someone to dr-up with a kit that could not be created.
+    [[ "$output" != *"composable with claude"* ]]
+}
+
+@test "dr-init: the kit it generates is composable in a directory named claude" {
+    # The regression, end to end: dr-init slugged the directory name in
+    # unchanged, so C:\Code\claude produced `name: claude` - valid, and refused
+    # by sbx at create time as a duplicate of the agent's own kit.
+    local repo
+    repo=$(dr_make_win_repo claude) || skip "no writable path under /mnt/<drive>"
+    cd "$repo" || return 1
+    DR_REPO=$repo
+
+    run dr-init --agent claude
+    [ "$status" -eq 0 ]
+    run grep -x 'name: claude' "$repo/.draugr/kit/spec.yaml"
+    [ "$status" -ne 0 ]
+    run grep -x 'name: claude-project' "$repo/.draugr/kit/spec.yaml"
+    [ "$status" -eq 0 ]
+}

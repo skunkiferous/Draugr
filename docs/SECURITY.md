@@ -290,6 +290,119 @@ body, and it cannot stop prompt content being used as a channel — anything the
 it can send. Path filtering buys you the difference between *querying* and *administering*, which is
 a large difference, and not the same as safety.
 
+## Running the agent on a local model
+
+[`DRAUGR_MODEL`](CONFIG.md#draugr_model) points the agent at a model you host instead of its vendor's
+cloud. Two claims get made about that, and only one of them survives contact with this document.
+
+**It is not about the credential.** The agent's token never entered the mound in the first place:
+`sbx`'s proxy authenticates each request on the host, on the agent's behalf. Measured from inside a
+mound against `api.anthropic.com`: a junk bearer token, the proxy's own sentinel, and *no
+authorization header at all* produced the same answer — the one that exists only if a real token
+reached Anthropic. The same requests from the host, outside the proxy, came back `Invalid bearer
+token` and `x-api-key header is required`. The proxy rewrites the header for `api.anthropic.com`,
+`console.anthropic.com`, `claude.ai` and `mcp-proxy.anthropic.com` whatever the mound sent.
+
+That is a stronger property than "the token is not in the mound", and it cuts both ways: **the mound
+cannot present a credential of its own to those hosts either.** No environment variable changes it —
+not `DRAUGR_ENV`, not the placeholder `ANTHROPIC_AUTH_TOKEN` that `DRAUGR_MODEL` writes. The one
+lever is `sbx secret` on the host, where a sandbox-scoped entry beats the global one.
+
+It is also why signing in after a mound was built needs no rebuild, and why an expired token surfaces
+as a 401 on every prompt rather than as a login screen. `SBX_CRED_ANTHROPIC_MODE` cannot tell those
+apart — it reports `none` for an OAuth login exactly as it does for no credential at all — so do not
+key anything off it; [TROUBLESHOOTING.md](TROUBLESHOOTING.md) carries the symptom. Nothing
+`DRAUGR_MODEL` does improves on any of this, because there was nothing to improve.
+
+**And it is not, by itself, an egress guarantee.** This is the one worth being blunt about, because
+the feature invites exactly the wrong conclusion. What `DRAUGR_MODEL` changes is where the agent
+sends your code *by design* — the one channel Draugr builds for it. It changes nothing about what the
+mound can *reach*. Every one of `sbx`'s ~190 default allow rules is still in force, and as
+[The network policy](#the-network-policy) says, those cover the common code hosts, the package
+managers **and the AI service endpoints**. So on a stock policy the mound running a local model can
+still open a connection to the very service you switched away from.
+
+> **A local model closes the designed channel, not the network.** "My code does not leave this
+> machine" is a claim about the policy, not about `DRAUGR_MODEL`, and setting one without narrowing
+> the other buys you a feeling rather than a property.
+
+### Making the claim true, and what it costs
+
+The other half is kit `deny` rules, which beat the machine-wide allows. Read what you would be
+closing first — `dr-policy --defaults` lists the rules you did not write, and `dr-policy --check
+<host>` answers for one — then deny what the work does not need.
+
+The cost is not small, and it is the reason this is a posture rather than a default. A mound that
+cannot reach the package managers cannot install anything, which for most projects means the setup
+commands in the kit have to have finished the job at creation, from a cache, once. A mound that
+cannot reach `github.com` cannot fetch a dependency the agent decides it wants. Whether that is
+tolerable is entirely use-case dependent: for review, refactoring and writing against a tree that is
+already complete, it is barely noticeable; for greenfield work in a language with a live dependency
+resolver, it is unworkable.
+
+So the honest ordering is: narrow the policy until the work stops, widen it one rule at a time, and
+treat `DRAUGR_MODEL` as the thing that lets you close the largest hole rather than as the thing that
+closes it.
+
+### The trade runs both ways
+
+Reaching a model on your own machine means opening a host port, which the section above calls the
+most serious hole Draugr will open for you. So this buys a narrower egress surface with a new ingress
+one. That is usually a good trade, and it is only a good trade if the port you open is narrow.
+
+### Why the default port is 11435
+
+Ollama has no authentication and no read-only mode, so `11434` serves inference and administration
+through one door. [`DRAUGR_MODEL_URL`](CONFIG.md#draugr_model_url) therefore defaults to `11435`, the
+query-only proxy in [`share/ollama-proxy/`](../share/ollama-proxy/), so the arrangement you get
+without reading anything is the safe one:
+
+```
+Ollama        127.0.0.1:11434    loopback only - nothing off-host can reach it
+proxy         0.0.0.0:11435      the only way in, query-only
+the mound     DRAUGR_HOST_PORTS="11435"
+```
+
+Measured against that proxy on nginx 1.24.0 and Ollama 0.32.14, with the shipped allowlist unchanged:
+
+```
+POST /v1/messages            200      POST /api/pull        403
+POST /v1/chat/completions    200      POST /api/create      403
+GET  /v1/models              200      DELETE /api/delete    403
+GET  /api/version            200      GET  /v1/files        404
+```
+
+The first column is what an agent needs and the second is what it must not have. `/v1/messages` is
+the endpoint Claude Code speaks, and it was already inside the allowlist — the `/v1/` prefix was
+passed through whole because that surface carried no management verbs, and Ollama's Anthropic
+compatibility landed inside it.
+
+Because that default assumes the proxy, Draugr checks for it rather than trusting it: a `GET
+/healthz` answering `200` is the proxy, a `404` means the agent has been pointed straight at an
+Ollama it can also administer, and no answer at all means the session cannot work — `dr-go` refuses
+to attach rather than handing you an agent that fails at its first prompt. See
+[What checks that the model is really there](CONFIG.md#what-checks-that-the-model-is-really-there).
+
+
+`DRAUGR_ENV` sets arbitrary variables in the agent's session. That is no more reach than a project
+config already has — it is shell, and Draugr runs it — so it is gated by the same `dr-trust`
+acceptance rather than by a rule of its own. `PATH` and `HOME` are refused outright, because both
+replace rather than extend and a replacement inside the mound breaks the session before it starts.
+
+### What this does not buy
+
+- **Not a reason to relax anything else.** A local model is still an agent running commands in a
+  sandbox. Every other boundary in this document applies unchanged.
+- **Not privacy from the model's operator**, when `DRAUGR_MODEL_URL` names someone else's endpoint. A
+  company LLM gateway is somebody's server with somebody's logs. Only a URL resolving to your own
+  machine makes the egress argument above available at all; the key cannot tell the difference and
+  does not try.
+- **Not protection from what the agent puts in a prompt.** Anything it can read, it can send to
+  whatever endpoint it has. Narrowing the endpoint narrows the audience, not the channel.
+- **Not the same quality.** A model that fits on one GPU is meaningfully worse at long tool chains
+  than the hosted one, and Draugr's loop is nothing but long tool chains. This is a tier for work
+  that cannot leave the machine, not a cheaper way to do the same work.
+
 ## Things Draugr refuses to do
 
 Each of these is a refusal by default with an explicit override, because the point of a guard you

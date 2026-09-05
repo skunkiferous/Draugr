@@ -106,6 +106,37 @@
 # want - a read-only mount is strictly safer than copying data in.
 #DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"
 
+# --- The agent's own model --------------------------------------------------
+
+# Run the AGENT on a model you host, instead of its vendor's cloud. Empty is the
+# default and changes nothing. This is NOT the same thing as DRAUGR_HOST_PORTS
+# above: that lets the code you are working on call a local service, this changes
+# what the agent is. Read docs/SECURITY.md before relying on it to keep code in -
+# the mound can still reach the network it always could.
+#DRAUGR_MODEL="qwen3.8:27b"
+
+# Where that model is served: a bare port on THIS machine, or a full URL. A bare
+# port must also be in DRAUGR_HOST_PORTS, and dr-go refuses to start when it is
+# not. The default is the query-only proxy in share/ollama-proxy, not Ollama's
+# own 11434, which serves DELETE /api/delete through the same door as inference.
+#DRAUGR_MODEL_URL="11435"
+
+# The cheap background tier. Defaults to DRAUGR_MODEL, because two models are
+# only faster if both stay resident on the card at once.
+#DRAUGR_MODEL_FAST="qwen3:8b"
+
+# --- Environment for the agent ----------------------------------------------
+
+# Space-separated NAME=value pairs, exported into the agent's session. The
+# escape hatch for anything with no key of its own - the pair below caps where
+# Claude Code compacts, which matters on a local model whose real window is far
+# smaller than the one it advertises.
+#
+# Values cannot contain spaces, because spaces separate entries. Entries are
+# validated: a malformed one is refused by dr-go rather than silently ignored by
+# the agent, which is how a typo here would otherwise cost you an afternoon.
+#DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=25"
+
 # --- Data files that are not ready to commit --------------------------------
 #
 # Repo-relative globs, synced with rsync alongside git rather than through it.

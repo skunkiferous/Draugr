@@ -9,7 +9,9 @@
 set -euo pipefail
 
 DR_PROG=dr-doctor
-_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# readlink -f first: install.sh links this into ~/.local/bin by default, and
+# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+_dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
@@ -261,6 +263,73 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
                 "The token stays on the host; sbx's proxy injects it per request." \
                 "Sign in:  sbx secret set -g $_svc --oauth" \
                 "Or an API key:  sbx secret set -g $_svc"
+        fi
+    fi
+
+    # The agent's own model, when DRAUGR_MODEL asks for one. These exist because
+    # DRAUGR_MODEL_URL defaults to the ollama-proxy port: a default that assumes
+    # a piece of software is a default that has to verify it. Nothing here
+    # imports anything from share/ollama-proxy - they are plain HTTP requests, so
+    # the two stay independent of each other.
+    if [ -n "${DRAUGR_MODEL:-}" ]; then
+        _mok=1
+
+        # The refusal dr-go would hit, reported here first so it is found while
+        # you are looking for problems rather than while you are starting work.
+        if dr_model_is_port "${DRAUGR_MODEL_URL:-}"; then
+            _mfound=
+            for _p in ${DRAUGR_HOST_PORTS:-}; do
+                [ "$_p" = "$DRAUGR_MODEL_URL" ] && _mfound=1
+            done
+            if [ -z "$_mfound" ]; then
+                bad "DRAUGR_MODEL_URL" "port $DRAUGR_MODEL_URL is not in DRAUGR_HOST_PORTS" \
+                    "The mound cannot reach it, and dr-go refuses to start." \
+                    "Add it:  DRAUGR_HOST_PORTS=\"$DRAUGR_MODEL_URL\""
+                _mok=
+            fi
+        fi
+
+        # An unmeasured agent is a refusal rather than a silent no-op: it would
+        # keep talking to its cloud while you believed the work was staying here.
+        if ! dr_agent_model_supported; then
+            bad "DRAUGR_MODEL" "Draugr cannot point $DRAUGR_AGENT at another endpoint" \
+                "Which variables an agent reads for this has not been measured." \
+                "Unset DRAUGR_MODEL, or use DRAUGR_AGENT=claude."
+        elif [ -n "$_mok" ]; then
+            _murl=$(dr_model_url) || _murl=
+
+            # One probe, shared with dr-go. The check that refuses to attach and
+            # the check that explains why have to be the same check, or this
+            # command ends up cheerfully approving what dr-go is about to reject.
+            if [ -z "$_murl" ]; then
+                bad "DRAUGR_MODEL" "this machine's address could not be resolved" \
+                    "A bare DRAUGR_MODEL_URL needs it, and dr-up needs it too."
+            else
+                case $(dr_model_probe "$_murl") in
+                    proxy)
+                        ok "$DRAUGR_AGENT model" "$DRAUGR_MODEL via the proxy at $_murl" ;;
+                    alive)
+                        ok "$DRAUGR_AGENT model" "$DRAUGR_MODEL at $_murl" ;;
+                    stalled)
+                        bad "$DRAUGR_AGENT model" "the proxy answers, but nothing is behind it" \
+                            "$_murl serves /healthz but not /api/version, so the" \
+                            "proxy is up and the model server is not." \
+                            "Start it:  ollama serve" ;;
+                    bare)
+                        soft "$DRAUGR_AGENT model" "answering at $_murl, with no proxy" \
+                            "No /healthz there, so this is the model server itself:" \
+                            "the agent can POST /api/pull and DELETE /api/delete on" \
+                            "the same port. A front door:  $DRAUGR_SHARE/ollama-proxy/" ;;
+                    dead)
+                        bad "$DRAUGR_AGENT model" "nothing answering at $_murl" \
+                            "dr-go will refuse to attach, because every prompt would" \
+                            "fail with a dial error naming that address and nothing" \
+                            "else. Start it:  $DRAUGR_SHARE/ollama-proxy/ollama-proxy start" ;;
+                    unknown)
+                        soft "$DRAUGR_AGENT model" "cannot check $_murl - no curl here" \
+                            "Install curl, or ask by hand:  curl $_murl/healthz" ;;
+                esac
+            fi
         fi
     fi
 else

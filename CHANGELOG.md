@@ -18,6 +18,165 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+## [0.4.0] — 2026-09-05
+
+### Added
+
+- **`DRAUGR_ENV`** carries arbitrary `NAME=value` pairs into the agent's session, exported from the
+  attach rcfile beside the model variables. The escape hatch for anything with no key of its own.
+
+  It exists because of a specific hole. A local model advertises a context window it cannot honour —
+  `qwen3.8:27b` reports 1M to Claude Code on a card holding about 50k — and the variables that bring
+  the compaction point down are **undocumented**. Measured in the shipped binaries:
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` are absent from 2.1.63 and
+  present in 2.1.261, so they arrived between two point releases and have not reached the docs.
+  `CLAUDE_CODE_DISABLE_1M_CONTEXT` and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` are in both, and documented.
+
+  A typed `DRAUGR_MODEL_CONTEXT` would have hardcoded one of those names, which is the shape that
+  rots: wrong the day it is renamed, and unroutable-around when it is. A passthrough leaves the
+  judgement with whoever is configuring the project.
+
+  Entries are **validated rather than passed through**, and that is the load-bearing decision. An
+  environment variable the agent does not recognise is *ignored*, not refused — so a typo'd name
+  produces a session that looks correct and behaves as though the setting were never written, which
+  is the failure the key exists to prevent, arrived at from the other side. `dr-go` refuses a
+  malformed entry before the mound is built; a name that is not a shell identifier is refused because
+  the rcfile would fail to source and take the session with it; and `PATH` and `HOME` are refused
+  outright, both replacing rather than extending, the same hazard the kit spec already warns about.
+
+  Values cannot contain spaces, because spaces separate entries — the limitation every list-shaped
+  key here has. Exported *after* anything `DRAUGR_MODEL` derived, so an explicit setting wins, with a
+  warning naming the collision: an escape hatch the tool can silently overrule is not one. Applied at
+  attach, so it is not a `dr_create_facts` entry and never shows as drift. Reaches the agent's
+  session only, not `dr-shell`, which starts without an rcfile at all.
+
+- **`DRAUGR_MODEL`, `DRAUGR_MODEL_URL` and `DRAUGR_MODEL_FAST`** run the *agent itself* on a model you
+  host, rather than on its vendor's cloud. Distinct from `DRAUGR_HOST_PORTS`, which lets the code you
+  are working on call a local service; these change what the agent is. Both at once is ordinary.
+
+  The variables reach the agent through the **attach rcfile**, and that is the only place they can go.
+  `sbx`'s ssh proxy honours no `AcceptEnv` at all — measured against 0.37.1, and already the reason
+  `share/ssh-config.snippet` sends only `LANG` and `LC_*` — so `SendEnv ANTHROPIC_BASE_URL` would be a
+  setting that silently did nothing. A kit cannot carry them either: `environment.variables` is static
+  and committed, while the local address is handed out per boot. The rcfile is generated on the host
+  at every attach, which is the one moment the address is known. Consequence: these are not
+  `dr_create_facts`, so changing a model is `Ctrl+D` and another `dr-go`, never a rebuild.
+
+  Which variables an agent reads is per-agent, so it joins the module interface as
+  `dr_agent_model_supported` and `dr_agent_model_env`. For `claude` that is `ANTHROPIC_BASE_URL`, a
+  placeholder `ANTHROPIC_AUTH_TOKEN` — Claude Code sends no request without one even where it is
+  ignored, and a real credential has no business on a local port — and **all three**
+  `ANTHROPIC_DEFAULT_*_MODEL` tiers, because an unmapped tier reaches the endpoint as a cloud model
+  name it has never heard of and fails as "model not found" at an unrelated moment. `codex` declines:
+  it takes its provider from `config.toml`, not the environment, and guessing has not been measured.
+
+  Two refusals rather than warnings, because neither has a working outcome. A bare `DRAUGR_MODEL_URL`
+  that is not in `DRAUGR_HOST_PORTS` is refused by `dr-go` before anything is built — the two keys are
+  not redundant, and Draugr will not manufacture consent for a hole into your machine out of the fact
+  that you named an address. An agent whose module cannot point it anywhere is refused too: ignoring
+  the setting would leave it talking to the cloud while you believed otherwise, which is the one
+  failure this feature must not have.
+
+  `DRAUGR_MODEL_URL` defaults to `11435`, the query-only proxy in `share/ollama-proxy/`, not Ollama's
+  own `11434` — the port that serves inference there also serves `DELETE /api/delete`. A default that
+  assumes a piece of software is a default that has to verify it, so `dr_model_probe` asks what is
+  actually answering and reports one of `proxy`, `stalled`, `bare`, `alive`, `dead` or `unknown`.
+  `alive` is why it is not a boolean: a company endpoint has never heard of `/healthz`, answers 404,
+  and works perfectly, so "not the proxy" must not mean "not working".
+
+  **`dr-go` refuses to attach on `dead` and `stalled`.** Neither has a partial session to offer -
+  every prompt fails with `500 dial tcp ...: connectex: No connection could be made`, which names an
+  address and nothing else. One probe serves `dr-go`, `dr-doctor` and `dr-status`, because a check
+  that refuses and a check that explains have to be the same check or the second cheerfully approves
+  what the first is about to reject. `dr-status` shows the model with its reachability whenever one
+  is configured: a model that is not answering otherwise looks exactly like one that is, right up
+  until the first prompt. `dr-doctor` also stops recommending the `anthropic` secret when
+  `DRAUGR_MODEL` is set, since signing in to a service this session will not call is advice that
+  makes things worse.
+  Measured on nginx 1.24.0 against Ollama 0.32.14: `POST /v1/messages` — Claude Code's own endpoint —
+  answers `200` through the shipped allowlist unchanged, while `/api/pull`, `/api/create` and
+  `/api/delete` stay `403`. Nobody added a rule for it: `/v1/` was passed through whole because that
+  surface carried no management verbs, and Ollama's Anthropic compatibility landed inside it. Which is
+  also the limit of that reasoning, now written down — "no management verbs" is a claim about a surface
+  that moves.
+
+  **What this does not do is keep your code on the machine.** It closes the channel Draugr builds; it
+  changes nothing about what the mound can reach, and `sbx`'s ~190 default allow rules cover the AI
+  service endpoints along with everything else. Making that claim true needs kit `deny` rules as well,
+  and `docs/SECURITY.md` is explicit about what narrowing the policy costs — a mound that cannot reach
+  the package managers cannot install anything.
+
+### Changed
+
+- **The credential story is measured now, not inferred.** [SECURITY.md](docs/SECURITY.md) argued that
+  the agent's token never enters the mound from `SBX_CRED_ANTHROPIC_MODE=none`, which proves nothing —
+  that variable reports `none` for an OAuth login exactly as for no credential at all. Measured from
+  inside a mound instead: a junk bearer token, sbx's own sentinel, and no authorization header at all
+  all draw the same answer from `api.anthropic.com`, the one that exists only if a real token reached
+  Anthropic. The property is stronger than was claimed, and it cuts both ways — the mound cannot
+  present a credential of its own to those hosts, so `DRAUGR_ENV` cannot change it either.
+
+- `DRAUGR_MODEL_URL` may name the vendor's own API. Documented in
+  [CONFIG.md](docs/CONFIG.md#draugr_model_url), along with the case `dr-doctor` gets wrong there: it
+  suppresses the missing-credential advice whenever `DRAUGR_MODEL` is set, including when the
+  endpoint is the vendor's own and the secret is still load-bearing.
+
+- [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) gained two entries: running `sbx` yourself from WSL,
+  where it is not on `PATH` and an alias cannot work because the path contains a space; and the 401
+  that every prompt fails with once the host-side token has expired.
+
+### Fixed
+
+- `docs/CONFIG.md` rendered "machinery." as a heading. A `---` with no blank line above it is a
+  setext underline, not a horizontal rule.
+
+- `docs/TROUBLESHOOTING.md` had an unclosed ```` ```bash ```` fence under the `500 Internal Server
+  Error` entry, so three paragraphs and two YAML examples rendered as one code block. The snippet it
+  opened could not work either: it located the daemon log with `command -v sbx.exe`, which finds
+  nothing under WSL. It uses `$DRAUGR_SBX` now.
+
+- **`install.sh`'s default mode produced commands that could not run.** It symlinks `bin/*` into
+  `~/.local/bin`, and every command then resolved its library with
+  `dirname "${BASH_SOURCE[0]}"` — which through a symlink is the *link's* directory, so `../lib`
+  became `~/.local/lib`:
+
+  ```
+  /home/you/.local/bin/dr-config: line 16: /home/you/.local/bin/../lib/common.sh: No such file or directory
+  ```
+
+  Every one of the 28 commands, on the documented default install. It went unnoticed because
+  `./install.sh --path` puts the repo's own `bin/` on `PATH` instead, where `BASH_SOURCE` is already
+  the real file — so the author's machine never saw it. `readlink -f` now resolves the link first,
+  which leaves the `--path` case and a copied directory identical.
+
+  `share/ollama-proxy/ollama-proxy` had the same bug in the same shape, and it is the one that
+  surfaced it: symlinked onto a `PATH` it looked for its template next to the link and failed with
+  `template not found: /home/you/.local/bin/nginx.conf.template`, naming a path nobody had chosen.
+
+- **A repository whose directory name is an agent's name produced a kit that could not be created.**
+  `dr-init` slugs the kit's `name:` from the directory, so `C:\Code\claude` wrote `name: claude` — and
+  sbx puts the agent's own kit in the same composition and refuses two that share one:
+
+  ```
+  ERROR: request failed: 400 Bad Request: kit_artifacts: compose:
+  duplicate kit name "claude" — each kit in a composition must have a unique name
+  ```
+
+  which arrives at `dr-up` in sbx's vocabulary with nothing pointing back at the file that caused it —
+  the same shape as the capitals bug the slug function was written for.
+
+  The worse half was the diagnosis. `dr-up` tells you to run `dr-kit validate`, and that command
+  replied **`valid, and composable with claude`**. It checked `requires: agent:` and nothing else, so
+  it was answering a narrower question than the one it appeared to answer, and confidently. `sbx kit
+  validate` passes such a kit too: the name is perfectly legal and the collision exists only at
+  compose time.
+
+  `dr_kit_slug` now steps aside from a reserved name (`claude` becomes `claude-project`), and
+  `dr_kit_name_conflicts` catches the kits already written, since nothing regenerates those. The
+  reserved set is `$DRAUGR_AGENT` plus the modules in `lib/agents/` — deliberately not a hardcoded
+  list of sbx's ten agents, which would be wrong the day sbx adds one and silently. Both sources are
+  derived, and an agent outside them is still caught the moment you configure it.
+
 ## [0.3.0] — 2026-09-02
 
 ### Added

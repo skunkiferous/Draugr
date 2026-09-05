@@ -246,3 +246,18 @@ dr_agent_mem_host_hint() {
 # recommending: it uses the entitlement a ChatGPT plan already carries, where an
 # API key bills separately. Either way the credential stays on the host.
 dr_agent_secret() { printf 'openai'; }
+
+# ---------------------------------------------------------------------------
+# Pointing Codex at another endpoint - not measured, so not offered.
+#
+# Codex takes its provider from `model_provider` in the mound's config.toml,
+# which sbx writes at creation, rather than from the environment - so this is
+# not the same shape as Claude Code's two variables and guessing at it would be
+# the failure DRAUGR_MODEL must not have: an agent still calling its cloud while
+# you believed otherwise. Saying so refuses the setting instead.
+#
+# Whoever measures it should start at the model trap in the CHANGELOG: sbx sets
+# model_provider and no model, which is already one surprise in this file.
+# ---------------------------------------------------------------------------
+dr_agent_model_supported() { return 1; }
+dr_agent_model_env()       { return 1; }

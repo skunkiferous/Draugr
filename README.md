@@ -337,6 +337,36 @@ machine no longer has, so a reboot costs you nothing. `dr-hostport` is the mid-s
 > it can use. In a project's `.draugr.conf` it takes effect only once you have accepted the file with
 > `dr-trust`.
 
+**Running the agent on your own model**
+
+```bash
+DRAUGR_MODEL="qwen3.8:27b"           # run the AGENT on this, not on its vendor's cloud
+DRAUGR_MODEL_URL="11435"             # a port here (resolved per boot), or a full URL elsewhere
+DRAUGR_HOST_PORTS="11435"            # required for a bare port - dr-go refuses without it
+```
+
+Note what this is *not*. `DRAUGR_HOST_PORTS` on its own lets **the code you are working on** call a
+local Ollama. `DRAUGR_MODEL` changes what **the agent** is. They share a port and are otherwise
+unrelated, and you may want both.
+
+It is not about the credential — the agent's token never entered the mound anyway, because `sbx`
+authenticates on the host. It changes where the agent *sends* your code. That is a smaller claim than
+it sounds, and the reason is worth reading before you rely on it: a mound still carries `sbx`'s ~190
+default allow rules, **the AI service endpoints among them**, so the agent can still reach the
+network it always could. A local model closes the channel Draugr points it down; it does not close
+the others. Making "my code does not leave this machine" true needs kit `deny` rules as well — see
+[docs/SECURITY.md](docs/SECURITY.md#running-the-agent-on-a-local-model), which is honest about what
+that costs you.
+
+The default `11435` is the query-only proxy in [`share/ollama-proxy/`](share/ollama-proxy/) rather
+than Ollama's own `11434`, which serves `DELETE /api/delete` through the same door as inference.
+`dr-doctor` checks that what answers there really is the proxy.
+
+Applied at attach, not at creation, so switching models is `Ctrl+D` and another `dr-go` rather than a
+rebuild. Expect a model that fits on one GPU to be noticeably worse at long tool chains than the
+hosted one: this is a tier for work that cannot leave the building, not a cheaper way to do the same
+work. See [docs/CONFIG.md](docs/CONFIG.md#running-the-agent-on-a-local-model).
+
 **Data files that are not ready to commit** — see [Working with data files](#working-with-data-files)
 
 ```bash

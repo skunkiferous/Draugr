@@ -29,6 +29,25 @@
 # port numbers; the address is worked out at every dr-up.
 #DRAUGR_HOST_PORTS="11434"
 
+# Run the AGENT itself on a model you host, rather than on its vendor's cloud.
+# Commit this only if the PROJECT requires it: code that cannot leave the
+# building is a property of the repository, but the model NAME is a property of
+# whoever's machine is running it, and a teammate who has not pulled that model
+# gets a failure at their first prompt. A preference rather than a requirement
+# belongs in .draugr.local.conf.
+#DRAUGR_MODEL="qwen3.8:27b"
+
+# Where that model is served. A bare port must ALSO be in DRAUGR_HOST_PORTS
+# above, and dr-go refuses to start when it is not. Note 11435 rather than the
+# 11434 in the example above: that is the query-only proxy in
+# share/ollama-proxy, and 11434 serves DELETE /api/delete as well as inference.
+#DRAUGR_MODEL_URL="11435"
+
+# Extra environment for the agent, as space-separated NAME=value pairs. Commit
+# this only for something the PROJECT needs; a limit that follows your GPU
+# rather than the repository belongs in .draugr.local.conf.
+#DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1"
+
 # Reference material the agent should be able to read but never change.
 #DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"
 

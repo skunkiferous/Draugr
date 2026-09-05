@@ -7,6 +7,9 @@ Draugr never hides `sbx`: when a command fails, its error names the underlying `
 `DRAUGR_DEBUG=1` prints every `sbx` command line before it runs. Reproducing a problem without
 Draugr in the way is usually the fastest route to understanding it.
 
+The `sbx` blocks below are marked `powershell` deliberately: `sbx` is a Windows binary and is not on
+WSL's `PATH`. Run them from a Windows terminal.
+
 ---
 
 ## Setup
@@ -30,6 +33,25 @@ This is the single most commonly missed step.
 ```bash
 export DRAUGR_SBX=/mnt/c/path/to/sbx.exe
 ```
+
+### `sbx: command not found`, when you run it yourself
+
+The other half of the same fact. Draugr finds `sbx` for you; your shell does not. Most of what you
+need has a `dr-*` wrapper, but a few things have no reason to have one — `sbx secret`, `sbx
+diagnose`, `sbx reset` are sbx's business rather than Draugr's — and those you type yourself.
+
+Run them from a Windows terminal, where `sbx` is already on `PATH`. That matters doubly for anything
+that opens a browser, such as an OAuth sign-in. To have it in WSL as well, use a **function, not an
+alias**: the path contains a space, and alias expansion does not quote it, so `sbx secret ls` would
+split into a command that does not exist.
+
+```bash
+export DRAUGR_SBX="$(wslpath "$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '
+')")/DockerSandboxes/bin/sbx.exe"
+sbx() { "$DRAUGR_SBX" "$@"; }
+```
+
+`DRAUGR_SBX` is the variable Draugr itself honours first, so one line serves both.
 
 ### `sbx` commands hang, or say the daemon is unreachable
 
@@ -129,6 +151,34 @@ jq -r '.. | .id? // empty' ~/.codex/models_cache.json | sort -u
 ```
 
 No recreate is needed: `DRAUGR_AGENT_ARGS` is passed at attach, not at creation.
+
+### Every prompt fails with `401 OAuth access token has expired`
+
+Nothing in the mound is wrong, and it is not about `DRAUGR_MODEL`. The agent's credential lives on
+the host: `sbx`'s proxy rewrites the authorization header of every request to Anthropic's hosts,
+whatever the mound sent. When the stored token has expired, every prompt gets that 401.
+
+`sbx secret ls` is no help — it reports that a secret exists, not that it works — and `sbx diagnose`
+does not check expiry either. Repair it from a Windows terminal, with no arguments, for the
+interactive scope and service picker:
+
+```powershell
+sbx secret set
+```
+
+Two things that look like fixes and are not. Setting `ANTHROPIC_API_KEY` in your shell changes
+nothing: Draugr forwards only `DRAUGR_ENV` and the `DRAUGR_MODEL` variables into the mound, and
+sbx's ssh proxy honours no `AcceptEnv`. Neither can `DRAUGR_ENV` reach it, because the proxy
+overwrites the header regardless of what the mound sent. The only lever is the secret store, which
+also takes a sandbox-scoped entry that beats the global one:
+
+```powershell
+sbx secret set draugr-<project> anthropic
+```
+
+The banner will not warn you. Claude Code prints `API Usage Billing` in response to any
+`ANTHROPIC_AUTH_TOKEN`, including the placeholder `DRAUGR_MODEL` writes, so a mound with no working
+credential looks authenticated right up to the first prompt.
 
 ### The agent seems to have forgotten everything
 
@@ -230,8 +280,10 @@ and `dr-up` now prints it under `sandboxd recorded:` — the failing command, it
 captured output. If your `dr-up` is older, or the log has moved, read it yourself:
 
 ```bash
-log="$(dirname "$(dirname "$(command -v sbx.exe)")")/sandboxes/state/sandboxd/daemon.log"
+# $DRAUGR_SBX is the path to sbx.exe - see "sbx: command not found" above
+log="$(dirname "$(dirname "$DRAUGR_SBX")")/sandboxes/state/sandboxd/daemon.log"
 jq -r 'select(.level == "ERROR") | .error' "$log" | tail -1
+```
 
 By far the commonest cause is a kit install command that reads a project file. **`commands.install`
 runs before your repository is in the workspace.** At that point the working directory is empty and

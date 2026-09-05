@@ -51,7 +51,23 @@ STATE=${OLLAMA_PROXY_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ollama-proxy}
 
 # The template sits beside this script, so a copied directory keeps working and
 # there is nothing to configure about where it lives.
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# The template sits beside this script, so a copied directory keeps working and
+# there is nothing to configure about where it lives. BASH_SOURCE is followed to
+# its target first, because the obvious way to put this on a PATH is
+#
+#   ln -s .../share/ollama-proxy/ollama-proxy ~/.local/bin/ollama-proxy
+#
+# and through a symlink BASH_SOURCE is the LINK, so dirname is ~/.local/bin and
+# the template is looked for next to the link rather than next to the script.
+# Measured: `ollama-proxy start` then fails with "template not found:
+# /home/you/.local/bin/nginx.conf.template", naming a path nobody chose.
+#
+# readlink -f resolves a chain of links and prints a real file unchanged, so this
+# costs the copied-directory case nothing. Guarded because a readlink that is
+# absent or non-GNU should leave the old behaviour rather than an empty path.
+_self=${BASH_SOURCE[0]}
+_target=$(readlink -f "$_self" 2>/dev/null) && [ -n "$_target" ] && _self=$_target
+HERE=$(cd "$(dirname "$_self")" && pwd)
 TEMPLATE=${OLLAMA_PROXY_TEMPLATE:-$HERE/nginx.conf.template}
 
 die() { printf '%s: %s\n' "$PROG" "$1" >&2; shift; for l in "$@"; do printf '  %s\n' "$l" >&2; done; exit 1; }

@@ -24,7 +24,9 @@
 set -euo pipefail
 
 DR_PROG=dr-kit
-_dr_bin=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# readlink -f first: install.sh links this into ~/.local/bin by default, and
+# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+_dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
@@ -216,6 +218,23 @@ validate)
         printf '  %sa separate %s.%s/ for this agent.%s\n' \
             "$_DR_DIM" "$k" "$DRAUGR_AGENT" "$_DR_OFF" >&2
     done < <(dr_kit_agent_conflicts)
+
+    # The second compose hazard, and the one this command used to paper over: a
+    # kit whose own name is an agent name. sbx refuses the composition, sbx kit
+    # validate passes it, and the line below then called it composable.
+    while IFS=' ' read -r k nm; do
+        [ -n "$k" ] || continue
+        conflicts=1
+        dr_warn "$k is named \"$nm\", which is also the name of an agent"
+        printf '  %sdr-up will refuse: sbx composes the agent kit with this one,%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sand two kits in one composition cannot share a name.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sRename it in %s/spec.yaml - only name: is constrained,%s\n' \
+            "$_DR_DIM" "$k" "$_DR_OFF" >&2
+        printf '  %sdisplayName is free text. Try:  name: %s-project%s\n' \
+            "$_DR_DIM" "$nm" "$_DR_OFF" >&2
+    done < <(dr_kit_name_conflicts)
     [ "$conflicts" -eq 0 ] && dr_ok "valid, and composable with $DRAUGR_AGENT"
     ;;
 

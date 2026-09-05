@@ -65,6 +65,29 @@ teardown() { dr_test_teardown; }
     fi
 }
 
+@test "docs: project.example invents no key the code does not have" {
+    # project.example is a curated SUBSET and should stay one - it is the file a
+    # project commits, so it lists what a project plausibly sets rather than
+    # everything. Hence one direction only: this cannot notice a key that ought
+    # to be here and is not, which stays a judgement call, but it does catch the
+    # rename that leaves a plausible-looking dead setting in every repo's copy.
+    local key strays=()
+    while read -r key; do
+        [ -n "$key" ] || continue
+        case " ${DR_KEYS[*]} " in
+            *" $key "*) ;;
+            *) strays+=("$key") ;;
+        esac
+    done < <(grep -oE '^#?DRAUGR_[A-Z_]+' "$DR_ROOT/share/project.example" \
+             | tr -d '#' | sort -u)
+
+    if [ ${#strays[@]} -gt 0 ]; then
+        printf 'in share/project.example but not in DR_KEYS:\n' >&2
+        printf '  %s\n' "${strays[@]}" >&2
+        return 1
+    fi
+}
+
 # --- every command the docs promise actually exists ---------------------------
 
 # Was advisory while the README described commands that were not written yet.
