@@ -177,9 +177,10 @@ dr_agent_mem_host_hint() {
 
 # dr_agent_secret - the name sbx stores this agent's credentials under.
 #
-# `sbx secret set -g anthropic --oauth`. The token never enters the mound: sbx's
-# proxy authenticates on the agent's behalf, which is why signing in after a
-# mound was built needs no rebuild.
+# The token never enters the mound: sbx's proxy authenticates on the agent's
+# behalf, which is why signing in after a mound was built needs no rebuild.
+# How to GET that token is dr_agent_signin below, and it is not what you would
+# guess.
 #
 # With DRAUGR_MODEL set there is no secret worth naming: the agent is not going
 # to call Anthropic at all, and dr-doctor's "the agent starts logged out" would
@@ -189,6 +190,32 @@ dr_agent_mem_host_hint() {
 dr_agent_secret() {
     [ -z "${DRAUGR_MODEL:-}" ] || return 1
     printf 'anthropic'
+}
+
+# dr_agent_signin - and how to get one, which for Anthropic is backwards from
+# every other service sbx handles.
+#
+# `sbx secret set -g anthropic --oauth` is the obvious command and sbx REFUSES
+# it, measured against 0.37.1:
+#
+#   ERROR: anthropic OAuth cannot be started from `sbx secret set`;
+#          sign in from inside the Claude sandbox
+#
+# `sbx secret set --help` bears that out - its only --oauth example is openai,
+# so the flag works for the secret Codex uses and not for this one. The store
+# holds the RESULT of a login rather than the means to perform one, and for
+# Anthropic the only thing that knows how to run the flow is Claude Code itself.
+# So the sign-in happens in a mound and sbx captures what comes out of it;
+# every later mound is then covered, because the secret is global.
+#
+# An API key can still be pasted in directly, since a key is a value you already
+# have rather than one a flow has to produce. Named second because it is the
+# answer to a different question.
+dr_agent_signin() {
+    printf 'Sign in from INSIDE a mound - sbx refuses to start this flow itself:\n'
+    printf '  dr-go     then run  /login  in Claude Code\n'
+    printf 'The token is captured globally, so other mounds need no rebuild.\n'
+    printf 'Or paste an API key instead:  echo "$KEY" | sbx secret set -g %s\n' "$1"
 }
 
 # ---------------------------------------------------------------------------

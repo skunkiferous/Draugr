@@ -9,6 +9,7 @@
 #   dr-up              create or start it
 #   dr-up --recreate   remove it first, so creation flags are re-applied
 #   dr-up --print      show the sbx command line, run nothing
+#   dr-up --force      with --recreate, also skip the unfetched/unexported checks
 set -euo pipefail
 
 DR_PROG=dr-up
@@ -21,13 +22,19 @@ _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 
 # --print is a dry run and --recreate is destructive, so they are deliberately
 # separate flags rather than one clever one.
+#
+# --yes and --force are separate for the reason dr-rm keeps them separate: --yes
+# means "stop asking me" and still refuses to destroy work that exists nowhere
+# else, while --force means "I know it is there and I want it gone".
 recreate=
 print=
+force=
 while [ $# -gt 0 ]; do
     case "$1" in
         --recreate) recreate=1 ;;
         --print|-n) print=1 ;;
         -y|--yes)   DR_ASSUME_YES=1 ;;
+        -f|--force) force=1; DR_ASSUME_YES=1 ;;
         -h|--help)  dr_help "$0"; exit 0 ;;
         *) dr_die "unknown option: $1" "Try: dr-up --help" ;;
     esac
@@ -164,19 +171,61 @@ if [ "$state" = absent ] || [ -n "$recreate" ]; then
     done < <(dr_kit_agent_conflicts)
 fi
 
-# --recreate destroys the mound, and with it every host opened by dr-policy
-# --allow: those rules are scoped to the sandbox and do not outlive it. That is
-# the cruellest possible moment to lose them, because recreating is exactly what
-# you do once the build finally works - so the list that made it work would go in
-# the act of making it permanent. Same remedy as the guard in dr-rm, and checked
-# BEFORE anything is removed for the same reason the kit-agent check above is.
-if [ -n "$recreate" ] && [ "$state" != absent ]; then
+# --recreate destroys the mound, and a mound holds three things that exist
+# nowhere else. All three are checked BEFORE anything is removed, for the reason
+# the kit-agent check above is: refusing afterwards would leave you with no mound
+# at all, over a problem that was visible before it was touched.
+#
+# The first two are commits the agent made and you never fetched, and the memory
+# it wrote. dr-rm refuses over both. This path called `sbx rm --force` directly
+# and so asked about neither, which made --recreate quietly MORE destructive than
+# the command whose entire job is destroying things - and --recreate is what you
+# run after editing the config, which is not a moment anyone is thinking about
+# the agent's memory.
+#
+# Duplicated from dr-rm rather than shared, the same way the policy guard below
+# is, because the remedy differs: there it ends "then dr-rm again", here it names
+# the command you were actually running.
+if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
+    if [ -x "$_dr_bin/dr-sync" ]; then
+        _check=0
+        "$_dr_bin/dr-sync" --check-only || _check=$?
+        case "$_check" in
+            1) dr_die \
+                   "$DRAUGR_SANDBOX has commits you have not fetched" \
+                   "Recreating destroys them. Fetch them first with:  dr-sync" \
+                   "Then dr-up --recreate again. To throw them away:  dr-up --recreate --force" ;;
+            2) dr_warn "could not reach $DRAUGR_SANDBOX to check for unfetched commits" ;;
+        esac
+    fi
+
+    # DRAUGR_MEM_SYNC=off means "I do not keep agent memory", so refusing over it
+    # would be an obstacle rather than a guard. Same exemption dr-rm makes.
+    if [ "${DRAUGR_MEM_SYNC:-}" != off ] && [ -x "$_dr_bin/dr-mem" ]; then
+        _mcheck=0
+        "$_dr_bin/dr-mem" check || _mcheck=$?
+        case "$_mcheck" in
+            1) dr_die \
+                   "$DRAUGR_SANDBOX has memory you have not exported" \
+                   "Recreating destroys it. Export it first with:  dr-mem export" \
+                   "Then dr-up --recreate again. To throw it away:  dr-up --recreate --force" ;;
+            2) dr_warn "could not reach $DRAUGR_SANDBOX to check for unexported memory" ;;
+        esac
+    fi
+fi
+
+# The third: every host opened by dr-policy --allow. Those rules are scoped to
+# the sandbox and do not outlive it, which makes this the cruellest possible
+# moment to lose them - recreating is exactly what you do once the build finally
+# works, so the list that made it work would go in the act of making it
+# permanent. Same remedy as the guard in dr-rm.
+if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
     mapfile -t _opened < <(dr_policy_unadopted)
     if [ ${#_opened[@]} -gt 0 ]; then
         dr_die "${#_opened[@]} host(s) are open for $DRAUGR_SANDBOX, and not in the kit" \
                "$(printf '%s ' "${_opened[@]}")" \
                "Recreating destroys them. Write them down first:  dr-kit adopt" \
-               "Or accept the loss:  dr-rm --force  then  dr-up"
+               "Or accept the loss:  dr-up --recreate --force"
     fi
 fi
 

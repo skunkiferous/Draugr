@@ -436,6 +436,27 @@ dr_repo_is_clean() {
 DR_CONFIG_USER="${DRAUGR_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/draugr}"
 DR_TRUST_FILE="$DR_CONFIG_USER/trusted"
 
+# The agents sbx can run. Draugr has a module for two of them - see lib/agents/ -
+# and the rest get default.sh, which is the honest answer for the other eight.
+#
+# The list exists as data rather than as prose in the docs because the per-agent
+# argument keys below are BUILT from it: adding an agent here is the only edit
+# needed for it to gain one.
+DR_AGENTS=(claude codex copilot cursor docker-agent droid gemini kiro opencode shell)
+
+# dr_agent_args_key <agent> - the per-agent argument key for that agent.
+#
+# Uppercased, with "-" turned into "_", because docker-agent is a legal agent
+# name and DRAUGR_AGENT_ARGS_DOCKER-AGENT is not a legal variable name. In tr's
+# first set a trailing "-" is a literal rather than a range, which is why the two
+# sets are 'a-z-' and 'A-Z_' and are the same length.
+#
+# Defined above DR_KEYS rather than beside its friends, because the array below
+# is built by calling it at source time.
+dr_agent_args_key() {
+    printf 'DRAUGR_AGENT_ARGS_%s' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
+}
+
 # Every key Draugr understands. dr-config iterates this, dr-doctor validates
 # against it, and an unknown DRAUGR_* in a config file is reported rather than
 # silently ignored.
@@ -451,6 +472,17 @@ DR_KEYS=(
     DRAUGR_MEM_SYNC DRAUGR_MEM_STORE
     DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL
 )
+
+# One DRAUGR_AGENT_ARGS_<AGENT> per agent, appended rather than typed out.
+#
+# These are the only keys with NO built-in default, deliberately: _dr_defaults
+# leaves them unset so that a set-but-empty value stays distinguishable from an
+# absent one. "no arguments for codex, whatever the generic key says" is a real
+# thing to want, and it is spelled DRAUGR_AGENT_ARGS_CODEX="".
+for _dr_a in "${DR_AGENTS[@]}"; do
+    DR_KEYS+=("$(dr_agent_args_key "$_dr_a")")
+done
+unset _dr_a
 
 # -g matters: if a caller sources this file from inside a function - which every
 # bats test does - a plain `declare -A` would scope the array to that function.
@@ -678,9 +710,29 @@ dr_load_config() {
         DR_ORIGIN[DRAUGR_SANDBOX]="derived from repo name"
     fi
 
-    # STEP 5 - now that DRAUGR_AGENT is final, load what we know about it. This
-    # has to be last: the module is chosen by a setting the cascade decides, so
-    # loading it any earlier would pick the agent from the wrong layer.
+    # STEP 5 - now that DRAUGR_AGENT is final, resolve the things that depend on
+    # which agent it is. This has to be last: both are chosen by a setting the
+    # cascade decides, so doing either earlier would pick from the wrong layer.
+
+    # DRAUGR_AGENT_ARGS carries the AGENT's own flags - "--continue" is Claude
+    # Code's, "resume --last" is Codex's, and neither means anything to the
+    # other. So one machine-wide value is wrong the moment a second agent is in
+    # play, and there is no way to guard it by hand: a shell conditional in
+    # ~/.config/draugr/config cannot work, because that layer is sourced BEFORE
+    # the project one and $DRAUGR_AGENT is still the default while it runs.
+    #
+    # Hence a key per agent, which REPLACES the generic one rather than adding to
+    # it - the same rule .draugr/kit.<agent>/ follows against .draugr/kit/.
+    #
+    # ${!k+set} rather than ${!k:+set}: an empty DRAUGR_AGENT_ARGS_CODEX is a
+    # deliberate "nothing for codex", not silence, and must beat a generic value.
+    local _ak; _ak=$(dr_agent_args_key "$DRAUGR_AGENT")
+    if [ -n "${!_ak+set}" ]; then
+        # shellcheck disable=SC2034  # read by dr-go, like the rest of the surface
+        DRAUGR_AGENT_ARGS=${!_ak}
+        DR_ORIGIN[DRAUGR_AGENT_ARGS]="${DR_ORIGIN[$_ak]:-built-in default} (via $_ak)"
+    fi
+
     dr_agent_load
 }
 

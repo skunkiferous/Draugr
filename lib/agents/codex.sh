@@ -247,6 +247,16 @@ dr_agent_mem_host_hint() {
 # API key bills separately. Either way the credential stays on the host.
 dr_agent_secret() { printf 'openai'; }
 
+# dr_agent_signin - and unlike Anthropic's, this flow really can be started from
+# the host. `sbx secret set --help` gives `sbx secret set -g openai --oauth` as
+# its own worked example, where the same flag against anthropic is refused with
+# "sign in from inside the Claude sandbox". Same store, two different routes into
+# it, which is why this hint lives per agent rather than in dr-doctor.
+dr_agent_signin() {
+    printf 'Sign in with a ChatGPT plan:  sbx secret set -g %s --oauth\n' "$1"
+    printf 'Or an API key, which bills separately:  echo "$KEY" | sbx secret set -g %s\n' "$1"
+}
+
 # ---------------------------------------------------------------------------
 # Pointing Codex at another endpoint - not measured, so not offered.
 #

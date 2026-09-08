@@ -12,11 +12,142 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- **[docs/CLAUDE_PLUGINS.md](docs/CLAUDE_PLUGINS.md)** — using Claude Code plugins in a mound
+  without installing them on your host. A plugin is not a skill: it is code that runs, so it belongs
+  inside the mound like the agent itself. Five options, ordered by reach, and the one that scales
+  documented in full — a plugin *seed* built inside a mound, carried out as inert files, and mounted
+  read-only into every mound afterwards.
+
+  The page covers the whole life of a seeded plugin: adding one, adding one from a mound that never
+  held the others, updating, removing, and the swap that all three end in. The thread running
+  through it is that `sbx cp` extracts a tar, so **directories merge and same-named files are
+  replaced** — which means a copy onto an existing seed adds and never removes, and the one file it
+  does replace is `known_marketplaces.json`. Get that wrong and the seed keeps every byte of a plugin
+  nothing registers any more.
+
+  Two sections say what the seed does not carry: a plugin's `data/` directory, credentials included,
+  which is created in the mound and dies with `dr-rm`; and egress for whatever a plugin's MCP server
+  or hooks call at session time. The second is a `dr-policy` question rather than a seed one, and it
+  is worth knowing what it looks like: sbx refuses with **HTTP 403 from the proxy** rather than a
+  connection failure, so a blocked plugin reports an authentication problem and sends you to check
+  credentials that were never wrong. `dr-policy --denied` names the host.
+
+  It closes with a follow-up that turned out better than expected: `--plugin-dir` aimed straight at a
+  plugin inside the read-only seed **works**, with no install and nothing copied into the mound —
+  and so do hooks. Measured with a throwaway plugin in the mount whose `SessionStart` hook reported
+  on itself: it ran, and its attempt to write into its own directory was refused without the session
+  minding. It is still not the recommendation, because the seed path pins the plugin's version and no
+  subcommand accepts the flag, so only a live session can ever confirm one is loaded.
+
+- **`dr-cp -L`** (`--follow-link`), passed through to `sbx cp`. Windows will not create a symlink
+  without `SeCreateSymbolicLinkPrivilege`, so a tree containing one cannot be copied to a Windows
+  drive at all — and plugins contain them: `superpowers` ships `AGENTS.md` as a link to `CLAUDE.md`,
+  which is enough to fail the whole copy and leave a partial tree behind.
+
+  Note that `sbx`'s `-L` is not `cp -L` or `docker cp -L`, which follow only a link named as the
+  source. It follows links found anywhere in the tree — measured against sbx 0.37.1, a seed of three
+  marketplaces came out whole, 2262 files, with no link left in it. Opt-in, because for any other
+  copy, silently turning links into copies would change what came out of the mound.
+
+- **`dr-up --force`**, which skips the checks below. Separate from `--yes` for the reason `dr-rm`
+  keeps them separate: `--yes` means "stop asking me", `--force` means "I know it is there and I
+  want it gone".
+
+- **`DRAUGR_AGENT_ARGS_<AGENT>`** — one per agent, winning over `DRAUGR_AGENT_ARGS` whenever that
+  agent is the one configured. `DRAUGR_AGENT_ARGS_CLAUDE`, `..._CODEX`, and so on for every agent in
+  the new `DR_AGENTS`; the name uppercases the agent and turns `-` into `_`, because `docker-agent`
+  is a legal agent name and a hyphen is not legal in a variable name.
+
+  `DRAUGR_AGENT_ARGS` holds the *agent's* own flags — `--continue` is Claude Code's, `resume --last`
+  is Codex's — so a machine-wide value is a contradiction the moment a second agent is in play, and
+  every mound running another agent is handed a flag it has never heard of at each attach. The
+  generic key was therefore usable only per project, which is the wrong scope for a preference.
+
+  It has to be a key rather than advice, because **a shell conditional cannot do this job**:
+  `~/.config/draugr/config` is sourced before the project's config, and `DRAUGR_AGENT` is normally
+  set by the project, so `$DRAUGR_AGENT` still holds the default while the machine-wide layer runs.
+  The choice is made in `dr_load_config` STEP 5 instead, once the whole cascade has spoken.
+
+  These are the only keys with **no built-in default**, deliberately. Leaving one unset falls
+  through to the generic key; setting it to `""` is a decision — "nothing for this agent" — and beats
+  a generic value. A default would have made those two indistinguishable. The per-agent key replaces
+  rather than extends, the same rule `.draugr/kit.<agent>/` follows against `.draugr/kit/`, and
+  `dr-config` names the winner: `~/.config/draugr/config (via DRAUGR_AGENT_ARGS_CLAUDE)`.
+
+- **tests/cp.bats**, which did not exist. `dr-cp` had no tests at all, which is how the path bug
+  below survived: `tests/mocks/sbx` accepts both spellings — it has to, since it also stands in for
+  the mound side — so the tests assert on the argv Draugr *built*, not on whether the mock liked it.
+
 ### Removed
 
 ### Changed
 
 ### Fixed
+
+- **`dr-cp --to` left everything it copied owned by root.** `sbx cp` writes into a mound as
+  `root:root` while the agent is uid 1000, so `dr-cp` has always chowned the result afterwards. That
+  chown ran through `sbx exec`, which defaults to the agent — and the agent cannot chown a root-owned
+  tree. So it failed on every copy in, and surfaced as the warning written for the rare case:
+
+  ```text
+  dr-cp: copied, but could not chown /home/agent/seed to the agent (uid 1000)
+  drwxr-xr-x 4 root root  /home/agent/seed
+  ```
+
+  The result was readable and not writable, which is the failure the chown exists to prevent, and it
+  arrived looking like an aberration rather than the norm. `sbx exec -u root` is the fix. Found while
+  putting a plugin seed back into a fresh mound, where an unwritable copy stops `claude plugin
+  marketplace add` dead.
+
+- **`dr-doctor` told you to sign in with a command sbx refuses.** Its hint was one hardcoded line,
+  `sbx secret set -g <service> --oauth`, and against `anthropic` sbx answers:
+
+  ```text
+  ERROR: anthropic OAuth cannot be started from `sbx secret set`;
+         sign in from inside the Claude sandbox
+  ```
+
+  The flag is real, but `sbx secret set --help` gives it only for `openai` — so the advice was
+  correct for Codex and wrong for Claude Code, which is the agent Draugr was built against. The
+  secret store holds the *result* of a login rather than the means to perform one, and for Anthropic
+  the only thing that can run the flow is Claude Code itself.
+
+  The hint now comes from the agent module as `dr_agent_signin`, alongside `dr_agent_secret` which
+  already named the service. Claude Code's says to `dr-go` and run `/login` inside the mound; Codex's
+  keeps the `--oauth` form that genuinely works there; an unmeasured agent gets the interactive
+  `sbx secret set`, which cannot be wrong.
+
+- **`dr-config` crashed on a setting with no built-in default.** It read values with `${!k}` rather
+  than `${!k-}`, so an unset key under `set -u` aborted the whole listing. Nothing had no default
+  until now, which is why it never showed; `${!k-}` is what the rest of the loader already used.
+
+- **`dr-cp` now spells the host side of a copy the way Windows spells it.** `sbx.exe` is a Windows
+  binary run over interop and translates nothing, so an absolute WSL path arrived as a Windows one:
+
+  ```text
+  ERROR: extract to /mnt/c/Code/x: GetFileAttributesEx \mnt\c\Code: The system cannot find the
+         path specified.
+  ```
+
+  `dr_path_win` already existed for this and `dr-up` already used it for mounts; `dr-cp` simply
+  never applied it. Relative destinations are deliberately left alone — interop resolves those
+  against the Windows working directory, which is why `dr-cp out.log .` has always worked and had to
+  keep working.
+
+- **`dr-cp`'s failure hint named the wrong cause.** It said "check the path exists on the source
+  side" for every failure, and the path existed in both of the real ones. It now names the two by
+  the words `sbx` prints: "a required privilege is not held" means a symlink and `-L`, "not found in
+  container" means the mound-side path.
+
+- **`dr-up --recreate` was quietly more destructive than `dr-rm`.** It called `sbx rm --force`
+  directly, so it skipped the two guards `dr-rm` runs before destroying a mound: the check for
+  commits the agent made and you never fetched, and the one for memory you never exported. Its only
+  warning was that uncommitted work would be lost.
+
+  That is the worst place for the omission to sit. `--recreate` is what you run after editing the
+  config — adding a mount, changing a port — which is not a moment anyone is thinking about the
+  agent's memory. Both checks now run first, worded for the command you were actually running, and
+  `--force` overrides them. The policy guard already there now honours `--force` too.
 
 ## [0.4.0] — 2026-09-05
 

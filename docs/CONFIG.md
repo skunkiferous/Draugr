@@ -135,6 +135,45 @@ Neither means anything to `shell`.
 > jq -r '.. | .id? // empty' ~/.codex/models_cache.json | sort -u
 > ```
 
+### `DRAUGR_AGENT_ARGS_<AGENT>`
+Default **unset** — the only keys with no built-in value, and that is deliberate. One per agent,
+winning over `DRAUGR_AGENT_ARGS` whenever that agent is the one configured:
+
+| | |
+|---|---|
+| `DRAUGR_AGENT_ARGS_CLAUDE` | `DRAUGR_AGENT_ARGS_CODEX` |
+| `DRAUGR_AGENT_ARGS_COPILOT` | `DRAUGR_AGENT_ARGS_CURSOR` |
+| `DRAUGR_AGENT_ARGS_DROID` | `DRAUGR_AGENT_ARGS_GEMINI` |
+| `DRAUGR_AGENT_ARGS_KIRO` | `DRAUGR_AGENT_ARGS_OPENCODE` |
+| `DRAUGR_AGENT_ARGS_SHELL` | `DRAUGR_AGENT_ARGS_DOCKER_AGENT` |
+
+The name is the agent uppercased, with `-` turned into `_`, because `docker-agent` is a legal agent
+name and a hyphen is not legal in a variable name.
+
+These exist because `DRAUGR_AGENT_ARGS` holds the *agent's* flags, which makes a machine-wide value
+a contradiction the moment you run a second agent: `--settings` is Claude Code's spelling and a
+codex mound handed it fails at every attach. So the generic key belongs in a project, and this one
+belongs in `~/.config/draugr/config`:
+
+```bash
+DRAUGR_AGENT_ARGS_CLAUDE="--continue"
+DRAUGR_AGENT_ARGS_CODEX="resume --last"
+```
+
+**A shell conditional cannot do this job**, which is why these are keys rather than advice.
+`~/.config/draugr/config` is sourced *before* the project's config, and `DRAUGR_AGENT` is normally
+set by the project — so `$DRAUGR_AGENT` still holds the default while the machine-wide layer runs,
+whatever the project goes on to say.
+
+It **replaces** the generic key rather than adding to it, the same rule `.draugr/kit.<agent>/`
+follows against `.draugr/kit/`. And unset is not the same as empty: leaving one out falls through to
+`DRAUGR_AGENT_ARGS`, while setting it to `""` is a deliberate "nothing for this agent" that beats a
+generic value. `dr-config` shows which one won:
+
+```text
+DRAUGR_AGENT_ARGS   --continue   ~/.config/draugr/config (via DRAUGR_AGENT_ARGS_CLAUDE)
+```
+
 ### `DRAUGR_ATTACH`
 Default `ssh`. How `dr-go` and `dr-shell` get a terminal inside the mound. The other value is `sbx`.
 

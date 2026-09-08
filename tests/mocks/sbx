@@ -83,6 +83,16 @@ exec)
         exit 0
     fi
     shift                              # "exec"
+    # Flags come before the sandbox name, exactly as they do for real sbx. -u
+    # root is the one Draugr passes; the rest are listed so that where this mock
+    # thinks the sandbox name starts cannot drift from where sbx thinks it does.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -u|--user|-e|--env|--env-file|-w|--workdir|--detach-keys) shift 2 ;;
+            -*) shift ;;
+            *)  break ;;
+        esac
+    done
     shift                              # the sandbox name
     if [ "${1:-}" = -- ]; then shift; fi   # the optional separator
 

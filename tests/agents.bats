@@ -147,3 +147,49 @@ modules() {
     run dr-mem check
     [ "$status" -eq 0 ]
 }
+
+# --- signing in, which is not the same command for every agent ---------------
+#
+# `sbx secret set -g anthropic --oauth` is the obvious spelling and sbx refuses
+# it outright: "anthropic OAuth cannot be started from `sbx secret set`; sign in
+# from inside the Claude sandbox". The same flag against openai is sbx's own
+# documented example. dr-doctor used to print one hardcoded line for both, so it
+# was wrong for exactly the agent Draugr was built against.
+
+@test "signin: Claude Code does not recommend the flow sbx refuses" {
+    DRAUGR_AGENT=claude dr_agent_load
+    run dr_agent_signin "$(dr_agent_secret)"
+    [ "$status" -eq 0 ]
+    # The refused command, in the spelling sbx rejects.
+    [[ "$output" != *"set -g anthropic --oauth"* ]]
+    # What actually works: sign in inside a mound.
+    [[ "$output" == *"/login"* ]]
+    [[ "$output" == *"dr-go"* ]]
+}
+
+@test "signin: Codex keeps the --oauth flow, which works for openai" {
+    DRAUGR_AGENT=codex dr_agent_load
+    run dr_agent_signin "$(dr_agent_secret)"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"-g openai --oauth"* ]]
+}
+
+@test "signin: an unmeasured agent gets advice that cannot be wrong" {
+    # No --oauth for an agent nobody has checked: sbx supports it for some
+    # services and refuses it for others, so guessing would reproduce the bug.
+    DRAUGR_AGENT=gemini dr_agent_load
+    run dr_agent_signin google
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"--oauth"* ]]
+    [[ "$output" == *"sbx secret set"* ]]
+}
+
+@test "signin: every module says something, and dr-doctor can use it" {
+    # dr-doctor feeds the output to mapfile and expands it into soft(), so an
+    # empty answer would print a heading with no advice under it.
+    local a
+    for a in claude codex gemini; do
+        DRAUGR_AGENT=$a dr_agent_load
+        [ -n "$(dr_agent_signin somesvc)" ] || { printf 'no hint for %s\n' "$a" >&2; return 1; }
+    done
+}

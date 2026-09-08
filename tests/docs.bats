@@ -119,6 +119,7 @@ teardown() { dr_test_teardown; }
                  "$DR_ROOT"/docs/SETUP.md "$DR_ROOT"/docs/WORKFLOW.md \
                  "$DR_ROOT"/docs/CONFIG.md "$DR_ROOT"/docs/SECURITY.md \
                  "$DR_ROOT"/docs/TROUBLESHOOTING.md "$DR_ROOT"/docs/DESIGN.md \
+                 "$DR_ROOT"/docs/CLAUDE_PLUGINS.md \
              | sort -u)
 
     if [ ${#missing[@]} -gt 0 ]; then

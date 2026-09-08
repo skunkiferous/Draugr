@@ -228,3 +228,87 @@ teardown() { dr_test_teardown; }
     DR_MOCK_STATE=running DR_MOCK_NAME=draugr-x run dr_sandbox_state draugr-other
     [ "$output" = absent ]
 }
+
+# --- per-agent agent arguments -----------------------------------------------
+#
+# DRAUGR_AGENT_ARGS holds the AGENT's own flags, so one machine-wide value is
+# wrong the moment a second agent is in play. These pin the key that fixes that,
+# and in particular the reason it has to be a key rather than advice: a shell
+# conditional in the user config cannot see DRAUGR_AGENT, because that layer is
+# sourced before the project sets it.
+
+@test "agent args: the per-agent key beats the generic one" {
+    printf 'DRAUGR_AGENT=claude\nDRAUGR_AGENT_ARGS=generic\nDRAUGR_AGENT_ARGS_CLAUDE=--continue\n' \
+        > "$DRAUGR_CONFIG_HOME/config"
+    dr_load_config
+    [ "$DRAUGR_AGENT_ARGS" = "--continue" ]
+    [[ "${DR_ORIGIN[DRAUGR_AGENT_ARGS]}" == *"via DRAUGR_AGENT_ARGS_CLAUDE"* ]]
+}
+
+@test "agent args: another agent's key is ignored" {
+    printf 'DRAUGR_AGENT=codex\nDRAUGR_AGENT_ARGS=generic\nDRAUGR_AGENT_ARGS_CLAUDE=--continue\n' \
+        > "$DRAUGR_CONFIG_HOME/config"
+    dr_load_config
+    [ "$DRAUGR_AGENT_ARGS" = generic ]
+    [[ "${DR_ORIGIN[DRAUGR_AGENT_ARGS]}" != *"via"* ]]
+}
+
+@test "agent args: unset falls through, empty does not" {
+    # Unset means "nothing to say about codex", so the generic value stands.
+    printf 'DRAUGR_AGENT=codex\nDRAUGR_AGENT_ARGS=generic\n' > "$DRAUGR_CONFIG_HOME/config"
+    dr_load_config
+    [ "$DRAUGR_AGENT_ARGS" = generic ]
+
+    # Empty means "nothing FOR codex", which is a decision and must win. This is
+    # the distinction ${!k+set} exists for, and the reason these keys have no
+    # built-in default: a default would make the two indistinguishable.
+    printf 'DRAUGR_AGENT=codex\nDRAUGR_AGENT_ARGS=generic\nDRAUGR_AGENT_ARGS_CODEX=\n' \
+        > "$DRAUGR_CONFIG_HOME/config"
+    dr_load_config
+    [ -z "$DRAUGR_AGENT_ARGS" ]
+    [[ "${DR_ORIGIN[DRAUGR_AGENT_ARGS]}" == *"via DRAUGR_AGENT_ARGS_CODEX"* ]]
+}
+
+@test "agent args: the agent set by the PROJECT chooses the key" {
+    # The point of the whole feature. The user config cannot know which agent
+    # will be in play - it is sourced first - so the choice has to happen after
+    # every layer has spoken. A conditional in that file would pick claude here.
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT_ARGS_CLAUDE=--continue\nDRAUGR_AGENT_ARGS_CODEX=resume\n' \
+        > "$DRAUGR_CONFIG_HOME/config"
+    printf 'DRAUGR_AGENT=codex\n' > "$repo/.draugr.conf"
+    dr_trust_add "$repo/.draugr.conf"
+    dr_load_config "$repo"
+    [ "$DRAUGR_AGENT_ARGS" = resume ]
+}
+
+@test "agent args: an agent whose name has a hyphen gets a legal key name" {
+    [ "$(dr_agent_args_key docker-agent)" = DRAUGR_AGENT_ARGS_DOCKER_AGENT ]
+    [ "$(dr_agent_args_key claude)" = DRAUGR_AGENT_ARGS_CLAUDE ]
+
+    printf 'DRAUGR_AGENT=docker-agent\nDRAUGR_AGENT_ARGS=generic\nDRAUGR_AGENT_ARGS_DOCKER_AGENT=x\n' \
+        > "$DRAUGR_CONFIG_HOME/config"
+    dr_load_config
+    [ "$DRAUGR_AGENT_ARGS" = x ]
+}
+
+@test "agent args: every agent Draugr knows has a registered key" {
+    # DR_KEYS is what dr-config lists and what the environment override in
+    # dr_load_config walks, so an agent missing from it would have a key that
+    # silently only worked from a config file.
+    local a k
+    for a in "${DR_AGENTS[@]}"; do
+        k=$(dr_agent_args_key "$a")
+        case " ${DR_KEYS[*]} " in
+            *" $k "*) ;;
+            *) printf 'not in DR_KEYS: %s\n' "$k" >&2; return 1 ;;
+        esac
+    done
+}
+
+@test "agent args: the environment beats a config file, as for any key" {
+    printf 'DRAUGR_AGENT=claude\nDRAUGR_AGENT_ARGS_CLAUDE=--from-file\n' \
+        > "$DRAUGR_CONFIG_HOME/config"
+    DRAUGR_AGENT_ARGS_CLAUDE=--from-env dr_load_config
+    [ "$DRAUGR_AGENT_ARGS" = "--from-env" ]
+}

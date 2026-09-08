@@ -259,10 +259,15 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
         if dr_sbx secret ls 2>/dev/null | grep -qE "^\(global\)[[:space:]]+service[[:space:]]+$_svc\b"; then
             ok "$DRAUGR_AGENT credentials" "$_svc configured with sbx"
         else
+            # The how-to comes from the agent module rather than from here,
+            # because it genuinely differs: sbx runs the OAuth flow itself for
+            # openai and refuses to for anthropic, telling you to sign in inside
+            # the sandbox instead. One hardcoded line was wrong for one of the
+            # two agents Draugr knows, and named a command sbx rejects outright.
+            mapfile -t _hints < <(dr_agent_signin "$_svc")
             soft "$DRAUGR_AGENT credentials" "no '$_svc' secret - the agent starts logged out" \
                 "The token stays on the host; sbx's proxy injects it per request." \
-                "Sign in:  sbx secret set -g $_svc --oauth" \
-                "Or an API key:  sbx secret set -g $_svc"
+                "${_hints[@]}"
         fi
     fi
 

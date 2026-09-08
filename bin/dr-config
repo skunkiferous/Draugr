@@ -42,9 +42,11 @@ if [ "$mode" = one ]; then
     # separated string; padding both it and the needle with spaces means we
     # match whole words only, so "AGENT" cannot match inside "DRAUGR_AGENT".
     case " ${DR_KEYS[*]} " in
-        # ${!key} is an indirect read: the value of the variable NAMED by $key.
+        # ${!key-} is an indirect read: the value of the variable NAMED by $key,
+        # empty rather than an error when that variable is unset - which the
+        # DRAUGR_AGENT_ARGS_<AGENT> keys are until someone sets one.
         # Printed bare, with no label, so scripts can use:  x=$(dr-config DRAUGR_AGENT)
-        *" $key "*) printf '%s\n' "${!key}" ;;
+        *" $key "*) printf '%s\n' "${!key-}" ;;
         *) dr_die "no such setting: $key" "Run dr-config with no arguments to list them all." ;;
     esac
     exit 0
@@ -88,7 +90,7 @@ for k in "${DR_KEYS[@]}"; do
 
     # --changed hides anything still sitting at its built-in value.
     [ "$mode" = changed ] && [ "$origin" = "built-in default" ] && continue
-    value=${!k}
+    value=${!k-}
     [ -z "$value" ] && value="${_DR_DIM}(unset)${_DR_OFF}"
 
     # Shorten the two long paths that otherwise dominate the column: a config

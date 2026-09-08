@@ -44,6 +44,27 @@
 # To pass nothing for one run:  dr-go --bare
 #DRAUGR_AGENT_ARGS=
 
+# One per agent, which is what you want in THIS file if you run more than one.
+# The key above holds the agent's own flags, so a machine-wide value is handed to
+# every agent including the ones that have never heard of it - "--settings" is
+# Claude Code's and would fail a codex mound at every attach. The per-agent key
+# wins whenever that agent is the one configured:
+#
+#   DRAUGR_AGENT_ARGS_CLAUDE    DRAUGR_AGENT_ARGS_CODEX     DRAUGR_AGENT_ARGS_COPILOT
+#   DRAUGR_AGENT_ARGS_CURSOR    DRAUGR_AGENT_ARGS_DROID     DRAUGR_AGENT_ARGS_GEMINI
+#   DRAUGR_AGENT_ARGS_KIRO      DRAUGR_AGENT_ARGS_OPENCODE  DRAUGR_AGENT_ARGS_SHELL
+#   DRAUGR_AGENT_ARGS_DOCKER_AGENT     - the hyphen becomes an underscore
+#
+# It REPLACES the generic key rather than adding to it, the same rule
+# .draugr/kit.<agent>/ follows. Note that a conditional here cannot do this job:
+# this file is sourced BEFORE the project's, so $DRAUGR_AGENT is still the
+# default while it runs, whatever the project goes on to say.
+#
+# Setting one to the empty string is a deliberate "nothing for this agent" and
+# beats a generic value; leaving it unset falls through to the key above.
+#DRAUGR_AGENT_ARGS_CLAUDE="--continue"
+#DRAUGR_AGENT_ARGS_CODEX="resume --last"
+
 # ssh | sbx - how dr-go and dr-shell get a terminal inside the mound.
 #
 # ssh is the only one where Ctrl-Z works. It suspends the agent and hands you a

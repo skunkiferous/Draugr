@@ -12,6 +12,7 @@
 #   dr-cp out.log .              mound -> host
 #   dr-cp --to notes.md docs/    host  -> mound
 #   dr-cp --raw /tmp/x .         mound path taken literally, not repo-relative
+#   dr-cp -L dist/ .             copy what symlinks point at, not the links
 set -euo pipefail
 
 DR_PROG=dr-cp
@@ -24,13 +25,20 @@ _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 
 # Direction is a flag rather than being inferred from the paths: "does this look
 # like a sandbox path" would guess wrong the moment a host file shares a name.
+#
+# -L is passed straight through to sbx, and is not the same flag as cp(1)'s: sbx
+# follows links found ANYWHERE in the tree, not just one named as the source.
+# Measured against sbx 0.37.1 - a seed containing a plugin whose AGENTS.md is a
+# symlink to CLAUDE.md copied out whole, 2262 files, with no link left in it.
 to_mound=
 raw=
+follow=()
 args=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --to)      to_mound=1 ;;
         --raw)     raw=1 ;;
+        -L|--follow-link) follow=(-L) ;;
         -h|--help) dr_help "$0"; exit 0 ;;
         -*) dr_die "unknown option: $1" "Try: dr-cp --help" ;;
         *) args+=("$1") ;;
@@ -59,29 +67,66 @@ mound_path() {
     esac
 }
 
+# The HOST side of the copy, spelled the way sbx wants it.
+#
+# sbx.exe is a Windows binary that WSL runs over interop, and it does not
+# translate paths: an absolute WSL path arrives as a Windows one, so
+# /mnt/c/Code/x is read as \mnt\c\Code\x and the error names a path nobody typed
+#
+#   ERROR: extract to /mnt/c/Code/x: GetFileAttributesEx \mnt\c\Code: The system
+#          cannot find the path specified.
+#
+# Relative paths are deliberately NOT touched. Interop already resolves those
+# against the Windows working directory, which is why `dr-cp out.log .` has
+# always worked - translating them would break the documented spelling to fix
+# one nobody could use.
+host_path() {
+    case "$1" in
+        /*) dr_path_win "$1" ;;
+        *)  printf '%s' "$1" ;;
+    esac
+}
+
 # sbx cp wants one side written as SANDBOX:PATH and the other as a plain local
 # path. Which side is which is the only difference between the two directions.
 if [ -n "$to_mound" ]; then
     src=${args[0]}
-    dst="$DRAUGR_SANDBOX:$(mound_path "${args[1]}")"
+    # Checked before translation, so the message names the path as it was typed.
     [ -e "$src" ] || dr_die "no such file on the host: $src"
+    src=$(host_path "$src") || dr_die \
+        "not on a Windows drive: ${args[0]}" \
+        "sbx.exe cannot reach it. Copy from somewhere under /mnt/<drive>/."
+    dst="$DRAUGR_SANDBOX:$(mound_path "${args[1]}")"
 else
     src="$DRAUGR_SANDBOX:$(mound_path "${args[0]}")"
-    dst=${args[1]}
+    dst=$(host_path "${args[1]}") || dr_die \
+        "not on a Windows drive: ${args[1]}" \
+        "sbx.exe cannot reach it. Copy to somewhere under /mnt/<drive>/, or use" \
+        "a relative path - interop resolves those against the Windows directory."
 fi
 
 dr_info "$src -> $dst"
-dr_sbx cp "$src" "$dst" || dr_die \
+# The hint names the two failures by the words sbx prints, because both of them
+# used to arrive under "check the path exists on the source side" - advice that
+# was wrong in each case, since the path existed both times.
+dr_sbx cp ${follow[0]+"${follow[@]}"} "$src" "$dst" || dr_die \
     "copy failed" \
-    "Check the path exists on the source side. Inside the mound, look with:" \
+    "\"a required privilege is not held\" means the tree contains a symlink, and" \
+    "Windows will not create one. Copy what it points at instead:  dr-cp -L ..." \
+    "\"not found in container\" means the mound-side path is wrong. Look with:" \
     "  dr-shell -- ls -la"
 
 # sbx cp writes to the host as whoever ran it, but *into* the mound as root:root,
 # and the agent is uid 1000 - so a file copied in would be readable and not
 # writable, which fails later in ways that look like a broken script.
+#
+# -u root is what makes the chown work. `sbx exec` runs as the agent by default,
+# and the agent cannot chown a root-owned tree, so without it this line failed
+# every time and degraded to the warning below - the exact outcome it exists to
+# prevent, announced as if it were rare. Measured against sbx 0.37.1.
 if [ -n "$to_mound" ]; then
     target=$(mound_path "${args[1]}")
-    dr_sbx exec "$DRAUGR_SANDBOX" chown -R 1000:1000 "$target" 2>/dev/null \
+    dr_sbx exec -u root "$DRAUGR_SANDBOX" chown -R 1000:1000 "$target" 2>/dev/null \
         || dr_warn "copied, but could not chown $target to the agent (uid 1000)"
 fi
 

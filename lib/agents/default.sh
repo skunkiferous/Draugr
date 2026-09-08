@@ -32,6 +32,10 @@
 #                                 agent, heading included, or nothing at all
 #   dr_agent_secret               the service name sbx stores this agent's
 #                                 credentials under. Returns 1 when unknown
+#   dr_agent_signin               how to obtain that secret, one hint a line.
+#                                 Per-agent because it genuinely differs: sbx
+#                                 runs the OAuth flow itself for some services
+#                                 and refuses to for others
 #   dr_agent_model_supported      0 when this agent can be pointed at another
 #                                 endpoint, i.e. when DRAUGR_MODEL can work
 #   dr_agent_model_env <url> <model> <fast>
@@ -76,6 +80,20 @@ dr_agent_mem_status_extra() { return 0; }
 # is none of them. Unknown here means dr-doctor says nothing rather than
 # recommending a secret that does not exist.
 dr_agent_secret() { return 1; }
+
+# dr_agent_signin - how to put that secret in place, one hint a line.
+#
+# The generic pair, which is all that can be said about an agent nobody has
+# measured. `sbx secret set` with no arguments prompts for scope and service, so
+# it is the one form that cannot be wrong here.
+#
+# It is a separate question from dr_agent_secret because the ANSWER varies more
+# than the service name does: sbx will run the OAuth flow for some services and
+# flatly refuses for others, telling you to sign in inside the sandbox instead.
+dr_agent_signin() {
+    printf 'Sign in:  sbx secret set -g %s\n' "$1"
+    printf 'Or let sbx prompt for scope and service:  sbx secret set\n'
+}
 
 # Which variables an agent reads to find its endpoint is per-agent and not
 # derivable from its name, so an unmeasured agent says so. This one matters more

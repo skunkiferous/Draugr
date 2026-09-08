@@ -28,6 +28,7 @@ no reach outside it.
 | [docs/SETUP.md](docs/SETUP.md) | From a bare machine to a working session |
 | [docs/WORKFLOW.md](docs/WORKFLOW.md) | The daily loop, review, data, memory, skills |
 | [docs/CONFIG.md](docs/CONFIG.md) | Every `DRAUGR_*` key, and what happens if you get it wrong |
+| [docs/CLAUDE_PLUGINS.md](docs/CLAUDE_PLUGINS.md) | Using Claude Code plugins in a mound without installing them on your host |
 | [docs/SECURITY.md](docs/SECURITY.md) | What the agent can and cannot reach, and how that was measured |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptoms, causes, fixes |
 | [docs/DESIGN.md](docs/DESIGN.md) | Why it is shaped this way, including what was tried and rejected |
