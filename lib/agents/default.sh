@@ -36,6 +36,18 @@
 #                                 Per-agent because it genuinely differs: sbx
 #                                 runs the OAuth flow itself for some services
 #                                 and refuses to for others
+#   dr_agent_plugin_supported     0 when this agent has a plugin library Draugr
+#                                 knows how to build. dr-plugin refuses otherwise
+#   dr_agent_plugin_cache_var     the variable that points the agent's plugin CLI
+#                                 at a library other than its default, which is
+#                                 what makes a seed buildable at all
+#   dr_agent_plugin_seed_var      the variable that makes a READ-ONLY library
+#                                 available to a session, for the advice dr-plugin
+#                                 prints when the configuration is not wired up
+#   dr_agent_plugin_cli <verb> [arg...]
+#                                 argv for one plugin operation, printed a word a
+#                                 line. Verbs: market-add, market-remove,
+#                                 market-update, install, update, uninstall, list
 #   dr_agent_model_supported      0 when this agent can be pointed at another
 #                                 endpoint, i.e. when DRAUGR_MODEL can work
 #   dr_agent_model_env <url> <model> <fast>
@@ -94,6 +106,22 @@ dr_agent_signin() {
     printf 'Sign in:  sbx secret set -g %s\n' "$1"
     printf 'Or let sbx prompt for scope and service:  sbx secret set\n'
 }
+
+# Plugins, and why an unmeasured agent gets nothing rather than a guess.
+#
+# A plugin library is not a format Draugr can infer from an agent's name: it is a
+# directory layout, a CLI with its own verbs, and an environment variable that
+# redirects both. Claude Code's is measured and written down in claude.sh;
+# everything else refuses, so dr-plugin says "not measured" instead of building a
+# directory the agent will never read.
+#
+# That matters more here than it does for memory. dr-mem copying into the wrong
+# place loses what the agent learned; dr-plugin building the wrong shape would
+# put third-party CODE in a directory mounted into every mound on the machine.
+dr_agent_plugin_supported() { return 1; }
+dr_agent_plugin_cache_var() { return 1; }
+dr_agent_plugin_seed_var()  { return 1; }
+dr_agent_plugin_cli()       { return 1; }
 
 # Which variables an agent reads to find its endpoint is per-agent and not
 # derivable from its name, so an unmeasured agent says so. This one matters more

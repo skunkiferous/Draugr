@@ -470,6 +470,7 @@ DR_KEYS=(
     DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC DRAUGR_ON_MISSING_REPO
     DRAUGR_STOP_ON_EXIT
     DRAUGR_MEM_SYNC DRAUGR_MEM_STORE
+    DRAUGR_PLUGIN_STORE
     DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL
 )
 
@@ -588,6 +589,13 @@ _dr_defaults() {
 
     DRAUGR_MEM_SYNC=auto
     DRAUGR_MEM_STORE="${XDG_DATA_HOME:-$HOME/.local/share}/draugr/memory"
+
+    # The plugin library dr-plugin manages, on a Windows drive so that a mound
+    # can be pointed at it. Empty by default and the feature is simply off:
+    # unlike the memory store there is no sensible place to invent, because this
+    # directory has to be mountable into a mound and $HOME under WSL is not.
+    # See docs/CLAUDE_PLUGINS.md.
+    DRAUGR_PLUGIN_STORE=
 
     DRAUGR_SCAN=true
     DRAUGR_SCAN_PATTERNS=".env *.pem *.key id_rsa id_ed25519 credentials.json secrets.*"

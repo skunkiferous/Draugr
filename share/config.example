@@ -230,6 +230,26 @@
 # of one project are different things in different shapes.
 #DRAUGR_MEM_STORE="$HOME/.local/share/draugr/memory"
 
+# --- Plugins ----------------------------------------------------------------
+#
+# The plugin library dr-plugin manages and every mound reads. Empty by default,
+# so the feature is off until you set it. Unlike the memory store this MUST be on
+# a Windows drive: a mound has to be pointed at it, and an sbx workspace is a
+# Windows path.
+#
+# A plugin is code that runs, so it is never installed on your host - dr-plugin
+# builds the library inside a throwaway mound and your host only stores the
+# result. See docs/CLAUDE_PLUGINS.md.
+#DRAUGR_PLUGIN_STORE="/mnt/c/Code/claude-plugins"
+
+# Setting the line above makes dr-plugin work. Making the plugins reach your
+# mounds is three more settings, and they are machine-wide rather than per
+# project - run `dr-plugin` with no arguments and it prints the exact lines:
+#
+#   DRAUGR_MOUNTS               the library, mounted read-only
+#   DRAUGR_ENV                  the seed path the agent reads at startup
+#   DRAUGR_AGENT_ARGS_CLAUDE    the settings file holding the on/off switches
+
 # --- Safety rails -----------------------------------------------------------
 #
 # .gitignore hides files from git, not from the filesystem: an untracked .env is

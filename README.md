@@ -515,6 +515,19 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 | `dr-skills accept` | Record the store's current contents as reviewed |
 | `dr-skills import` | Seed the store from your own host skill directories |
 | `dr-skills install` | Put Draugr's own skills into the store, so agents can use them |
+| `dr-plugin` | What the plugin library holds, and whether your mounds are pointed at it |
+| `dr-plugin add <owner>/<repo>` | Register the **marketplace** and install every plugin it lists |
+| `dr-plugin add <owner>/<repo> <plugin>…` | The same, but install only the plugins you name |
+| `dr-plugin update` | Refresh the catalogues and the plugins |
+| `dr-plugin remove <plugin>@<mkt>` | Uninstall, deregister, disable — and actually reclaim the space |
+| `dr-plugin enable` / `disable` | The switch only. No mound, instant |
+| `dr-plugin clean` | Drop superseded versions, which nothing else reaps |
+| `dr-plugin rollback` | Swap back to the previous library |
+
+A plugin is **code that runs** — hooks, MCP servers, `bin/` on the Bash tool's `PATH` — so it is
+never installed on your host. `dr-plugin` builds the library inside a mound it throws away, and your
+host only ever stores the result, mounted back read-only. Set `DRAUGR_PLUGIN_STORE`, then run
+`dr-plugin` with no arguments: it prints the rest. See [docs/CLAUDE_PLUGINS.md](docs/CLAUDE_PLUGINS.md).
 
 `dr-mem import` refuses to run unattended against a store Draugr did not write itself. Its own
 export carries a marker naming the repo; anything else is somebody's instructions and gets a

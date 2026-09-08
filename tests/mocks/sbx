@@ -206,9 +206,22 @@ policy)
 ' "$*"
     ;;
 
+# create makes the stand-in filesystem exist, when there is one. dr-plugin builds
+# in the mound's own rootfs and copies the result back onto the workspace, so a
+# create that left DR_MOCK_MOUND absent would fail at the first exec rather than
+# at anything a test meant to check.
+create)
+    printf 'mock sbx: %s\n' "$*"
+    # An `if`, not `[ ] &&`: under set -e a false test as the last command in
+    # this branch would exit 1 and fail every test that creates a sandbox.
+    if [ -n "${DR_MOCK_MOUND:-}" ]; then
+        mkdir -p "$DR_MOCK_MOUND/home/agent"
+    fi
+    ;;
+
 # Everything else only ever needs to have its argv recorded: the tests assert on
 # the command line Draugr built, which is the part worth checking.
-create|run|stop|rm|ports|kit|skills)
+run|stop|rm|ports|kit|skills)
     printf 'mock sbx: %s\n' "$*"
     ;;
 # Loudly, and with sbx's own exit code for an unknown command - a mock that

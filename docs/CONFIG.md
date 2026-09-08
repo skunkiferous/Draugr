@@ -785,6 +785,29 @@ May live anywhere, including WSL's own filesystem — Draugr stages transfers th
 
 ---
 
+## Plugins
+
+### `DRAUGR_PLUGIN_STORE`
+Empty by default, and the feature is off until it is set. Names the directory `dr-plugin` manages:
+the plugin library every mound reads, held on your host as inert files and mounted **read-only**.
+
+```text
+/mnt/c/Code/claude-plugins/
+├── seed/           the library the mounds read
+├── seed.old/       the one it replaced — `dr-plugin rollback` swaps them
+└── settings.json   which plugins are switched on
+```
+
+Unlike [`DRAUGR_MEM_STORE`](#draugr_mem_store) this **must be on a Windows drive**: a mound has to be
+pointed at it, and sbx workspaces are Windows paths, so a store on WSL's own filesystem could never
+be mounted. `dr-plugin` refuses one that is not.
+
+Setting it makes `dr-plugin` work. It does **not** make the plugins reach your mounds — that is three
+more settings, and `dr-plugin` with no arguments checks them and prints the exact lines if they are
+missing. See [docs/CLAUDE_PLUGINS.md](CLAUDE_PLUGINS.md).
+
+---
+
 ## Safety rails
 
 ### `DRAUGR_SCAN`

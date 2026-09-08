@@ -258,6 +258,25 @@ dr_agent_signin() {
 }
 
 # ---------------------------------------------------------------------------
+# Plugins - not measured, so not offered.
+#
+# Codex has its own extension story and it is not Claude Code's: no
+# .claude-plugin manifest, no marketplace catalogue, and no measured variable
+# that redirects a library the way CLAUDE_CODE_PLUGIN_CACHE_DIR does. dr-plugin
+# builds a directory that gets mounted into every mound on the machine, so a
+# guess here would put third-party code somewhere nothing reviewed it.
+#
+# Whoever measures it wants docs/CLAUDE_PLUGINS.md as the shape to fill in: a
+# writable build library, a read-only one for sessions, and a CLI with verbs for
+# add, install, update and uninstall. If Codex has no equivalent of the second,
+# option 4 does not apply to it at all and that is the finding.
+# ---------------------------------------------------------------------------
+dr_agent_plugin_supported() { return 1; }
+dr_agent_plugin_cache_var() { return 1; }
+dr_agent_plugin_seed_var()  { return 1; }
+dr_agent_plugin_cli()       { return 1; }
+
+# ---------------------------------------------------------------------------
 # Pointing Codex at another endpoint - not measured, so not offered.
 #
 # Codex takes its provider from `model_provider` in the mound's config.toml,

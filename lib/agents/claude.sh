@@ -219,6 +219,54 @@ dr_agent_signin() {
 }
 
 # ---------------------------------------------------------------------------
+# Plugins
+#
+# Claude Code keeps a plugin library at ~/.claude/plugins, and two variables
+# redirect it. They are not interchangeable and dr-plugin needs both names:
+#
+#   CLAUDE_CODE_PLUGIN_CACHE_DIR   the library to READ AND WRITE. This is what
+#                                  makes a seed buildable: point the CLI at a
+#                                  directory and every install lands there
+#   CLAUDE_CODE_PLUGIN_SEED_DIR    a READ-ONLY library, consulted once at session
+#                                  startup. Never read by the CLI subcommands -
+#                                  measured, and the reason `claude plugin
+#                                  marketplace list` reports nothing in a mound
+#                                  that is working perfectly well
+#
+# So dr-plugin writes through the first and the mounds read through the second.
+# ---------------------------------------------------------------------------
+
+dr_agent_plugin_supported() { return 0; }
+dr_agent_plugin_cache_var() { printf 'CLAUDE_CODE_PLUGIN_CACHE_DIR'; }
+dr_agent_plugin_seed_var()  { printf 'CLAUDE_CODE_PLUGIN_SEED_DIR'; }
+
+# dr_agent_plugin_cli <verb> [arg...] - one operation, a word a line.
+#
+# A word a line rather than a string because the caller feeds it to mapfile and
+# then to sbx exec: quoting a command line and re-splitting it is how the
+# `dr-shell -- "VAR=x cmd"` trap happens, and this avoids the question.
+#
+# -y everywhere it is accepted, because none of this runs on a TTY. On install
+# and update it accepts a marketplace-declared command that has CHANGED since it
+# was last agreed to, which is a real review step - dr-plugin prints what the CLI
+# says rather than swallowing it.
+dr_agent_plugin_cli() {
+    local verb=$1; shift
+    local argv=(claude plugin)
+    case "$verb" in
+        market-add)    argv+=(marketplace add "$1") ;;
+        market-remove) argv+=(marketplace remove "$1") ;;
+        market-update) argv+=(marketplace update ${1:+"$1"}) ;;
+        install)       argv+=(install "$1" -y) ;;
+        update)        argv+=(update "$1" -y) ;;
+        uninstall)     argv+=(uninstall "$1" -y) ;;
+        list)          argv+=(list) ;;
+        *) return 1 ;;
+    esac
+    printf '%s\n' "${argv[@]}"
+}
+
+# ---------------------------------------------------------------------------
 # Pointing Claude Code at another endpoint
 #
 # Claude Code reads its endpoint from ANTHROPIC_BASE_URL, and sends no request

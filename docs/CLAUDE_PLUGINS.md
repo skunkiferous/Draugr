@@ -5,13 +5,56 @@ A Claude Code *plugin* is a directory with a `.claude-plugin/plugin.json` manife
 a repository with a `.claude-plugin/marketplace.json` cataloguing one or more of them. Normal use is
 two steps: register the marketplace, then install a plugin from it.
 
-Draugr adds no command of its own for this, and does not need one. Everything below is built out of
-ordinary settings — `DRAUGR_MOUNTS`, `DRAUGR_ENV`, `DRAUGR_AGENT_ARGS_<AGENT>` and the kit.
-
 > **Measured**, against sbx 0.37.1 and Claude Code 2.1.246, in a mound whose plugin state was moved
 > aside first so the result could not be residue from an earlier experiment. What the seed does and
 > does not do is set out under [what a seed actually saves](#what-a-seed-actually-saves), and it is
 > less than an earlier draft of this page claimed: it supplies the marketplaces, not the installs.
+
+## The short version: `dr-plugin`
+
+```bash
+DRAUGR_PLUGIN_STORE="/mnt/c/Code/claude-plugins"     # in ~/.config/draugr/config
+```
+
+```bash
+dr-plugin                              # what the library holds, and what is missing to use it
+dr-plugin add anthropics/claude-code   # register the marketplace, install, enable
+dr-plugin update                       # refresh catalogues and plugins
+dr-plugin clean                        # drop superseded versions, which nothing else reaps
+dr-plugin remove <plugin>@<mkt>        # uninstall, deregister, disable, reclaim the space
+dr-plugin rollback                     # swap back to the previous library
+```
+
+**`add` takes a marketplace, not a plugin**, and registering one is not a separate step. Normal use
+is two commands — register the catalogue, then install from it — and `add` is both. Name nothing
+after the marketplace and you get everything it lists; name plugins and you get only those:
+
+```bash
+dr-plugin add obra/superpowers                     # every plugin it lists
+dr-plugin add obra/superpowers superpowers         # only that one
+dr-plugin add anthropics/claude-code a b c         # only those three
+```
+
+The marketplace's *registered* name is discovered rather than typed, because the repository decides
+it: `obra/superpowers` arrives as `superpowers-marketplace`. So the plugin you name may be bare, and
+`dr-plugin` completes it with whatever appeared.
+
+`dr-plugin` with no arguments checks the three settings that make the library reachable from a mound
+and prints the exact lines when they are missing, so the only one you have to know is the store.
+
+Every plugin operation happens inside a mound created for it and destroyed afterwards. Your host
+never runs plugin code; it receives a directory and mounts it back read-only. The library being
+edited is always a copy, so a failed build changes nothing and the previous one stays as `seed.old`.
+
+**The rest of this page is what that command does, and why.** It is worth reading if you want to do
+it by hand, or when something does not work — every claim below was measured rather than assumed.
+The single fact that shapes all of it:
+
+> `sbx cp` extracts a tar, so **directories merge and same-named files are replaced**.
+
+That is why copying a rebuilt library over an existing one adds and never removes, why updates
+accumulate versions for ever, and why a manual removal reclaims nothing. `dr-plugin` sidesteps it
+entirely by never using `dr-cp`: it works on a host-side copy and swaps.
 
 ## Why plugins are a different problem from skills
 
@@ -269,6 +312,21 @@ failed and the copy is not the thing to debug.
 **Build in the agent's home, not `/tmp`.** `/home/agent` is the persistent rootfs, and the seed has
 to survive between the install and the copy — which is not one moment. A mound can stop in between,
 and `dr-cp` will restart it to do the copy.
+
+**And not on a mounted Windows directory either**, which is the obvious way to skip the copy
+entirely: mount the store read-write and build straight into it. It half works, which is worse than
+failing. Measured, in a mound, on a bind-mounted workspace:
+
+```text
+git clone -q https://github.com/… X   →  clone: OK
+mv X Y                                →  mv: cannot move 'X' to 'Y': Permission denied
+```
+
+A plain directory renames there without complaint, and both succeed in the rootfs — it is renaming a
+*git clone* that a Windows-backed mount refuses. `claude plugin marketplace add` clones to a
+temporary name and renames it into place, so `add` fails while `uninstall`, which only deletes,
+succeeds. This is why `dr-plugin` stages the library into `/home/agent/seed`, works there, and copies
+it back afterwards with `cp -a`, which only ever creates.
 
 `sbx cp` follows `docker cp` conventions, so a directory copied into an existing directory lands
 *inside* it: the result is `claude-plugins\seed\`, holding `cache\<marketplace>\` and

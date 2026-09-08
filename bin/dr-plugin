@@ -1,0 +1,607 @@
+#!/usr/bin/env bash
+# dr-plugin - manage the plugin library every mound reads, without ever
+# installing a plugin on your host.
+#
+#   dr-plugin                          what the library holds, and whether it is wired up
+#   dr-plugin list                     the plugins in it, with versions
+#   dr-plugin add <owner>/<repo> [<plugin>...]  register the MARKETPLACE, install, enable
+#   dr-plugin update [<plugin>@<mkt>]  all of them, or one
+#   dr-plugin remove <plugin>@<mkt>    uninstall, deregister, disable
+#   dr-plugin enable <plugin>@<mkt>    the switch only - no mound, instant
+#   dr-plugin disable <plugin>@<mkt>   likewise
+#   dr-plugin clean                    drop superseded versions that nothing reaps
+#   dr-plugin rollback                 put the previous library back
+#
+# `add` takes a MARKETPLACE, not a plugin. It registers the repository and then
+# installs what that marketplace lists - all of it, or only the plugins you name
+# after it - so there is no separate step for adding a marketplace. The name it
+# registers under is discovered rather than typed, because a repository decides
+# that for itself: obra/superpowers arrives as superpowers-marketplace. A plugin
+# you name may therefore be bare, and gets completed with whatever appeared.
+#
+# A plugin is code that runs - hooks fire on session start, MCP servers are
+# processes, bin/ lands on the Bash tool's PATH. So the rule is the one in
+# docs/CLAUDE_PLUGINS.md: your host STORES plugin bytes and never RUNS them.
+# Every install here happens inside a throwaway mound, and the host only ever
+# receives files.
+#
+# The three verbs that need a mound build it fresh and destroy it afterwards.
+# They work on a copy at $DRAUGR_PLUGIN_STORE/.build and swap it into place at
+# the end, so the library your mounds are reading is never the one being edited,
+# a failed build changes nothing, and the previous one stays as seed.old.
+#
+# WHY A COPY AND A SWAP, rather than editing the library in place: sbx bind-mounts
+# a sandbox workspace read-write, so plugin install code would be writing into the
+# directory that is mounted into every mound on this machine. One bad install
+# could rewrite plugins you trust. Building beside it costs a copy and removes
+# that entirely.
+#
+# WHY THE WORK HAPPENS IN THE MOUND'S ROOTFS and not straight on that copy:
+# a Windows-backed workspace cannot rename a git clone. Measured, in a mound,
+# on the bind-mounted workspace:
+#
+#   git clone -q https://github.com/… X   -> clone: OK
+#   mv X Y                                -> cannot move 'X' to 'Y': Permission denied
+#
+# while renaming a plain directory in the same place succeeds, and both succeed
+# in the rootfs. `claude plugin marketplace add` clones to a temporary name and
+# renames it into place, so it fails there and `remove`, which only deletes,
+# does not - the worst possible split. So the library is copied into
+# /home/agent/seed, worked on with full POSIX semantics, and copied back out
+# afterwards with cp -a, which only ever creates.
+#
+# Note what is still absent: dr-cp. `sbx cp` extracts a tar and therefore MERGES,
+# which is what makes a manual update accumulate versions for ever and a manual
+# removal reclaim nothing. Every copy here is cp -a onto a path that was just
+# deleted, so it is exact.
+#
+# Set DRAUGR_PLUGIN_STORE to a directory on a Windows drive, then point your
+# mounds at it - `dr-plugin` with no arguments prints the three lines to add.
+#
+# shellcheck disable=SC2016
+# Single-quoted "$1" appears in the copy helpers and is deliberate: those strings
+# are scripts for the MOUND's shell, and the whole point is that the host does
+# not expand them.
+set -euo pipefail
+
+DR_PROG=dr-plugin
+# readlink -f first: install.sh links this into ~/.local/bin by default, and
+# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+_dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../lib/common.sh
+. "$_dr_bin/../lib/common.sh"
+
+# status is the default because it is the only verb that moves nothing, and
+# "what have I actually got" is the question you have first. Same reasoning as
+# dr-mem.
+action=${1:-status}
+case "$action" in
+    -h|--help) dr_help "$0"; exit 0 ;;
+    status|list|add|update|remove|enable|disable|clean|rollback) shift || : ;;
+    *) dr_die "unknown action: $action" \
+              "One of: status, list, add, update, remove, enable, disable, clean, rollback" ;;
+esac
+
+# Options are read once for every verb rather than per verb: rejecting --yes on
+# a verb that does not prompt would be noise, and the positional arguments differ
+# enough that a shared parser is simpler than eight of them.
+force=
+args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes)  DR_ASSUME_YES=1 ;;
+        --force)   force=1 ;;
+        -h|--help) dr_help "$0"; exit 0 ;;
+        -*) dr_die "unknown option: $1" "Try: dr-plugin --help" ;;
+        *) args+=("$1") ;;
+    esac
+    shift
+done
+
+dr_context
+
+# The library layout is the agent's, not Draugr's, and only Claude Code's has
+# been measured. Refusing beats building a directory in a shape the agent will
+# never read - and unlike a wrong memory copy, a wrong plugin library would put
+# third-party code somewhere every mound on the machine mounts.
+dr_agent_plugin_supported || dr_die \
+    "Draugr does not know how ${DRAUGR_AGENT:-this agent} keeps plugins" \
+    "Plugin layout is per-agent and only measured ones are offered." \
+    "Known: $(dr_agent_known). See docs/CLAUDE_PLUGINS.md."
+
+# Empty by default, so the feature is off until it is configured. There is no
+# sensible location to invent: it has to be mountable into a mound, and $HOME
+# under WSL is not on a Windows drive.
+[ -n "$DRAUGR_PLUGIN_STORE" ] || dr_die \
+    "DRAUGR_PLUGIN_STORE is not set" \
+    "It names the directory holding the plugins every mound reads. Put it on a" \
+    "Windows drive so a mound can be pointed at it, then add this line to" \
+    "your ~/.config/draugr/config:" \
+    '  DRAUGR_PLUGIN_STORE="/mnt/c/Code/claude-plugins"'
+
+# sbx.exe is a Windows binary and its workspaces are Windows paths, so a store on
+# WSL's own filesystem could never be mounted into a mound. Better to say so here
+# than to fail later inside sbx with a path nobody typed.
+dr_require_win_path "$DRAUGR_PLUGIN_STORE"
+
+# The layout, in one place. `seed` is the name Claude Code's own documentation
+# uses for a pre-built plugin library, and the mounds read it through
+# DRAUGR_MOUNTS, so it is a published name rather than an internal one.
+STORE=$DRAUGR_PLUGIN_STORE
+SEED="$STORE/seed"
+PREV="$STORE/seed.old"
+BUILD="$STORE/.build"
+SETTINGS="$STORE/settings.json"
+BUILD_SANDBOX=draugr-plugin-build
+# Where the CLI actually works, inside the mound. Rootfs, so that a git clone can
+# be renamed - see the header.
+WORK=/home/agent/seed
+
+# Which variables redirect this agent's library. Both come from the agent module
+# because they are its private business - see lib/agents/claude.sh.
+CACHE_VAR=$(dr_agent_plugin_cache_var)
+SEED_VAR=$(dr_agent_plugin_seed_var)
+
+# --- reading the library ------------------------------------------------------
+
+# The three files the library is made of. Absent is normal before the first add,
+# so every reader answers empty rather than failing.
+marketplaces() {
+    [ -f "$SEED/known_marketplaces.json" ] || return 0
+    jq -r '. // {} | keys[]' "$SEED/known_marketplaces.json" 2>/dev/null || true
+}
+
+# The same, against the copy being built, before any mound has touched it.
+build_marketplaces() {
+    [ -f "$BUILD/seed/known_marketplaces.json" ] || return 0
+    jq -r '. // {} | keys[]' "$BUILD/seed/known_marketplaces.json" 2>/dev/null || true
+}
+
+# work_cat <relative path> - one file out of the working copy INSIDE the mound.
+#
+# The host's build directory is a snapshot from before the CLI ran, so anything
+# decided from what an operation actually did has to be read from here instead.
+work_cat() {
+    dr_sbx exec "$BUILD_SANDBOX" cat "$WORK/$1" 2>/dev/null || true
+}
+
+# What the mound's copy has registered. `add` needs it to see what a marketplace
+# called itself, which is not derivable from the source: obra/superpowers
+# registers as superpowers-marketplace.
+work_marketplaces() {
+    work_cat known_marketplaces.json | jq -r '. // {} | keys[]' 2>/dev/null || true
+}
+
+# "<id> <version>" a line. The id is already <plugin>@<marketplace>, which is the
+# spelling every other command here takes.
+installed() {
+    [ -f "$SEED/installed_plugins.json" ] || return 0
+    jq -r '.plugins // {} | to_entries[] | "\(.key) \(.value[0].version // "?")"' \
+        "$SEED/installed_plugins.json" 2>/dev/null || true
+}
+
+# Enabled is a different question from installed - the seed carries content, the
+# settings file carries the decision - and dr-plugin reports both because a
+# plugin that is one and not the other is the confusing case.
+#
+# Space separated on ONE line, because every caller tests membership with a
+# `case " $list " in *" $id "*` and a newline between two ids would defeat the
+# space either side of the pattern.
+enabled_ids() {
+    [ -f "$SETTINGS" ] || return 0
+    jq -r '.enabledPlugins // {} | to_entries[] | select(.value) | .key' \
+        "$SETTINGS" 2>/dev/null | tr '\n' ' ' || true
+}
+
+# --- the switch ---------------------------------------------------------------
+
+# settings_write <id> <true|false|drop> - the enable decision, host-side only.
+#
+# Written through a temporary file and moved into place: settings.json is read by
+# every mound at every attach, and a half-written one would take them all down.
+settings_write() {
+    local id=$1 how=$2 tmp filter
+    [ -f "$SETTINGS" ] || printf '{\n  "enabledPlugins": {}\n}\n' > "$SETTINGS"
+
+    # shellcheck disable=SC2016  # $id and $v are jq's variables, not the shell's
+    case "$how" in
+        drop) filter='.enabledPlugins |= (. // {} | del(.[$id]))' ;;
+        *)    filter='.enabledPlugins |= ((. // {}) + {($id): ($v == "true")})' ;;
+    esac
+
+    tmp=$(mktemp)
+    jq --arg id "$id" --arg v "$how" "$filter" "$SETTINGS" > "$tmp" \
+        || dr_die "could not update $SETTINGS"
+    mv "$tmp" "$SETTINGS"
+}
+
+# --- the build transaction ----------------------------------------------------
+
+# build_begin - a fresh copy of the library to work on.
+#
+# cp -a on the host rather than dr-cp through the mound. That is the whole reason
+# this command exists: `sbx cp` extracts a tar, so it MERGES directories and
+# replaces same-named files, which means a copy back over the library adds and
+# never removes. A host-side copy is exact, so an uninstall really uninstalls.
+build_begin() {
+    rm -rf "$BUILD"
+    mkdir -p "$BUILD"
+    if [ -d "$SEED" ]; then
+        cp -a "$SEED" "$BUILD/seed"
+    else
+        mkdir -p "$BUILD/seed"
+    fi
+    build_repath
+}
+
+# build_repath - point installed_plugins.json at where the library will be WORKED
+# ON, which is the rootfs path rather than either the store or the build copy.
+#
+# Every entry records an ABSOLUTE installPath - measured, e.g.
+# /home/agent/seed/cache/claude-code-plugins/commit-commands/1.0.0 - so a library
+# copied anywhere else carries paths that do not exist. Rewriting after every
+# copy makes the first migration from a hand-built seed and every later run the
+# same case, which is cheaper than having two.
+#
+# Done on the host, where jq is known to exist, rather than inside the mound.
+build_repath() {
+    local f="$BUILD/seed/installed_plugins.json" mound tmp
+    [ -f "$f" ] || return 0
+    mound=$WORK
+
+    # Keep everything from /cache/ onwards and re-root it: that tail is the only
+    # part of the path the layout guarantees, so this works whatever directory
+    # the library was built in before.
+    # shellcheck disable=SC2016  # $root is jq's variable, not the shell's
+    tmp=$(mktemp)
+    jq --arg root "$mound" '
+        .plugins |= ((. // {}) | map_values(map(
+            .installPath |= ($root + (. | sub("^.*/cache/"; "/cache/")))
+        )))' "$f" > "$tmp" || dr_die "could not rewrite installPath in $f"
+    mv "$tmp" "$f"
+}
+
+# build_run <verb> [arg...] - one plugin CLI operation, inside a throwaway mound.
+#
+# The mound's workspace IS the build directory, bind-mounted read-write, so the
+# CLI writes its results straight to the host and nothing has to be copied back.
+# The trap is what makes "throwaway" true even when the operation fails.
+build_run() {
+    local argv=() line
+    while IFS= read -r line; do argv+=("$line"); done < <(dr_agent_plugin_cli "$@")
+    [ ${#argv[@]} -gt 0 ] || dr_die "no command for plugin verb: $1"
+
+    # env rather than a quoted command line: dr_agent_plugin_cli hands back one
+    # word a line precisely so that nothing here has to re-split a string.
+    build_mound_start
+    dr_info "${argv[*]}"
+    # </dev/null because sbx exec CONSUMES STDIN. Without it, a caller looping
+    # over `installed()` has the rest of its list eaten by the first iteration -
+    # measured as an `update` that reported success having touched exactly one
+    # plugin of three, which is the worst way for this to be wrong.
+    dr_sbx exec "$BUILD_SANDBOX" env "$CACHE_VAR=$WORK" "${argv[@]}" </dev/null \
+        || dr_die "plugin command failed: ${argv[*]}" \
+                  "The library was not changed - $SEED is untouched."
+}
+
+# build_harvest - the finished library, back onto the workspace and so onto the
+# host. rm then cp -a, never a merge: what comes out is exactly what is in the
+# mound, which is what makes an uninstall actually remove something.
+build_harvest() {
+    local mount; mount=$(dr_path_mound "$BUILD/seed")
+    dr_sbx exec "$BUILD_SANDBOX" sh -c \
+        'rm -rf "$1" && cp -a "$2" "$1"' sh "$mount" "$WORK" \
+        || dr_die "could not carry the built library back out"
+}
+
+# build_mound_start - create it once per run, and arrange for it to go away.
+#
+# A pre-existing one is a crashed run rather than something to reuse: its
+# workspace is a build directory this run has already deleted, so it would be
+# pointed at nothing. Refusing names --force instead of guessing.
+build_mound_start() {
+    [ -z "${_dr_mound_up:-}" ] || return 0
+
+    # --force removes it rather than adopting it: adopting would run the install
+    # inside a mound whose workspace this run has already deleted.
+    if dr_sandbox_exists "$BUILD_SANDBOX"; then
+        [ -n "$force" ] || dr_die \
+            "$BUILD_SANDBOX already exists" \
+            "A previous dr-plugin run did not clean up, or one is running now." \
+            "If nothing else is running:  dr-plugin $action --force"
+        dr_sbx rm --force "$BUILD_SANDBOX" >/dev/null 2>&1 || :
+    fi
+
+    # The trap goes on BEFORE the create, so a mound that comes up and then fails
+    # something later is still removed. No kit, no ports, no clone: this mound
+    # exists to run one CLI against one directory.
+    trap build_mound_stop EXIT INT TERM
+    dr_info "building in $BUILD_SANDBOX"
+    dr_sbx create --name "$BUILD_SANDBOX" -q "$DRAUGR_AGENT" "$(dr_path_win "$BUILD")" \
+        || dr_die "could not create the build mound" \
+                  "Check that sbx works:  dr-doctor"
+    _dr_mound_up=1
+
+    # The working copy, in the rootfs, for the rename reason in the header.
+    dr_sbx exec "$BUILD_SANDBOX" sh -c \
+        'rm -rf "$1" && cp -a "$2" "$1"' sh "$WORK" "$(dr_path_mound "$BUILD/seed")" \
+        || dr_die "could not stage the library inside $BUILD_SANDBOX"
+}
+
+# A warning rather than a failure: by the time this runs the work is either
+# committed or abandoned, and exiting non-zero here would report the wrong thing.
+build_mound_stop() {
+    [ -n "${_dr_mound_up:-}" ] || return 0
+    _dr_mound_up=
+    dr_sbx rm --force "$BUILD_SANDBOX" >/dev/null 2>&1 \
+        || dr_warn "could not remove $BUILD_SANDBOX - remove it with: dr-rm --force"
+}
+
+# build_commit - the swap, which is the only moment the live library changes.
+#
+# mv rather than a copy, so it is as close to atomic as a directory gets: a mound
+# reads the library at startup, and there is no window in which it would see half
+# of one. The previous library stays as seed.old for `dr-plugin rollback`.
+build_commit() {
+    # Harvest first when a mound did the work; verbs that only touched the host
+    # copy have nothing to bring back.
+    if [ -n "${_dr_mound_up:-}" ]; then
+        build_harvest
+    fi
+    [ -d "$BUILD/seed" ] || dr_die "nothing was built"
+    rm -rf "$PREV"
+    # An `if` rather than `[ ] && mv`, which under set -e would exit the script
+    # the first time there was no library to move aside - i.e. on the first add.
+    if [ -d "$SEED" ]; then
+        mv "$SEED" "$PREV"
+    fi
+    mv "$BUILD/seed" "$SEED"
+    rm -rf "$BUILD"
+    dr_ok "library updated - previous one kept as $PREV"
+}
+
+case "$action" in
+
+# --- status -------------------------------------------------------------------
+status)
+    dr_heading "library"
+    printf '  %s\n' "$STORE" >&2
+    if [ ! -d "$SEED" ]; then
+        printf '  %s\n' "empty - add one with:  dr-plugin add <owner>/<repo>" >&2
+    fi
+
+    # Marketplaces and plugins are listed separately because the seed supplies
+    # the first and not the second: a marketplace with no plugin under it is the
+    # normal state after a manual `marketplace add`, not a fault.
+    _m=$(marketplaces)
+    if [ -n "$_m" ]; then
+        dr_heading "marketplaces"
+        # sed rather than printf: the list is one name a line, and printf would
+        # indent only the first of them.
+        printf '%s\n' "$_m" | sed 's/^/  /' >&2
+    fi
+
+    _enabled=$(enabled_ids)
+    if [ -n "$(installed)" ]; then
+        dr_heading "plugins"
+        while read -r _id _ver; do
+            [ -n "$_id" ] || continue
+            # "enabled" is what the settings file says, and a plugin that is
+            # installed but not enabled does nothing at all - worth seeing.
+            case " $_enabled " in
+                *" $_id "*) _state="enabled" ;;
+                *)          _state="INSTALLED, NOT ENABLED" ;;
+            esac
+            printf '  %-45s %-8s %s\n' "$_id" "$_ver" "$_state" >&2
+        done < <(installed)
+    fi
+
+    # The library is useless until the mounds are pointed at it, and that is
+    # three settings in a file this command does not own. Checking them here is
+    # the only place the two halves meet.
+    dr_heading "wiring"
+    _seed_mound=$(dr_path_mound "$SEED")
+    _set_mound=$(dr_path_mound "$SETTINGS")
+    _args_key=$(dr_agent_args_key "$DRAUGR_AGENT")
+    _want_mount="$STORE:ro"
+    _missing=()
+    case " $DRAUGR_MOUNTS " in *" $_want_mount "*) ;; *) _missing+=(mount) ;; esac
+    case " $DRAUGR_ENV " in *"$SEED_VAR=$_seed_mound"*) ;; *) _missing+=(env) ;; esac
+    case " ${!_args_key:-} " in *"--settings $_set_mound"*) ;; *) _missing+=(args) ;; esac
+
+    # Printing the exact lines rather than "see the docs": the last of the three
+    # is per-agent, and its name is one nobody guesses on the first try.
+    if [ ${#_missing[@]} -eq 0 ]; then
+        printf '  %s\n' "all three settings point at this library" >&2
+    else
+        printf '  %s\n' "not wired up (${_missing[*]}). Add to ~/.config/draugr/config:" >&2
+        printf '    DRAUGR_MOUNTS="%s"\n'     "$_want_mount" >&2
+        printf '    DRAUGR_ENV="%s=%s"\n'     "$SEED_VAR" "$_seed_mound" >&2
+        printf '    %s="--settings %s"\n'     "$_args_key" "$_set_mound" >&2
+        printf '  %s\n' "DRAUGR_MOUNTS and DRAUGR_ENV are single strings that a project config" >&2
+        printf '  %s\n' "REPLACES rather than adds to. Append if you already set them." >&2
+    fi
+    ;;
+
+# --- list ---------------------------------------------------------------------
+list)
+    _enabled=$(enabled_ids)
+    while read -r _id _ver; do
+        [ -n "$_id" ] || continue
+        case " $_enabled " in
+            *" $_id "*) _state=enabled ;;
+            *)          _state=disabled ;;
+        esac
+        printf '%s %s %s\n' "$_id" "$_ver" "$_state"
+    done < <(installed)
+    ;;
+
+# --- add ----------------------------------------------------------------------
+add)
+    [ ${#args[@]} -ge 1 ] || dr_die "add needs a marketplace" \
+        "  dr-plugin add <owner>/<repo>               every plugin the marketplace lists" \
+        "  dr-plugin add <owner>/<repo> <plugin>...   only the ones you name"
+    _source=${args[0]}
+
+    build_begin
+    # What a repository registers ITSELF as is its own business - "obra/superpowers"
+    # arrives as "superpowers-marketplace" - so the name is discovered by watching
+    # what appeared rather than derived from what was typed.
+    _before=$(build_marketplaces)
+    build_run market-add "$_source"
+    _mkt=$(comm -13 <(printf '%s\n' "$_before" | sort) \
+                    <(work_marketplaces | sort) | head -1)
+
+    # With no plugin named, install everything the new marketplace offers. Its
+    # catalogue is on disk by now, because market-add cloned it.
+    if [ ${#args[@]} -ge 2 ]; then
+        # A bare name is completed with the marketplace just discovered, because
+        # requiring <plugin>@<marketplace> here would be asking for a name that
+        # cannot be known until this command has already run.
+        _plugins=()
+        for _p in "${args[@]:1}"; do
+            case "$_p" in
+                *@*) _plugins+=("$_p") ;;
+                *)   [ -n "$_mkt" ] || dr_die \
+                         "cannot tell which marketplace $_p belongs to" \
+                         "$_source registered nothing new, so there is no name to complete it" \
+                         "with. Give the full id:  dr-plugin add $_source <plugin>@<marketplace>" \
+                         "The registered names are listed by:  dr-plugin"
+                     _plugins+=("$_p@$_mkt") ;;
+            esac
+        done
+    else
+        [ -n "$_mkt" ] || dr_die \
+            "$_source registered no new marketplace" \
+            "It may already be registered. Name the plugin instead:" \
+            "  dr-plugin add $_source <plugin>"
+        mapfile -t _plugins < <(work_cat "marketplaces/$_mkt/.claude-plugin/marketplace.json" \
+            | jq -r '.plugins[]?.name' 2>/dev/null)
+        [ ${#_plugins[@]} -gt 0 ] || dr_die "no plugins listed in $_mkt"
+        _plugins=("${_plugins[@]/%/@$_mkt}")
+    fi
+
+    for _p in "${_plugins[@]}"; do build_run install "$_p"; done
+    build_commit
+    # Enabling last, and only after the swap: a switch pointing at a plugin the
+    # library does not have is a lie, and the swap is the moment it does.
+    for _p in "${_plugins[@]}"; do
+        settings_write "$_p" true
+        dr_ok "enabled $_p"
+    done
+    ;;
+
+# --- update -------------------------------------------------------------------
+update)
+    build_begin
+    # marketplace update refreshes the catalogues; plugin update acts on what
+    # they now offer. Doing the first unconditionally means "update" means the
+    # same thing whether or not a plugin was named.
+    build_run market-update ""
+    if [ ${#args[@]} -ge 1 ]; then
+        for _p in "${args[@]}"; do build_run update "$_p"; done
+    else
+        # The whole list first, then the loop. Reading it as the loop runs would
+        # put a command that touches stdin inside the pipeline feeding it - see
+        # the redirect in build_run.
+        mapfile -t _ids < <(installed | cut -d' ' -f1)
+        for _id in "${_ids[@]}"; do
+            [ -n "$_id" ] || continue
+            build_run update "$_id"
+        done
+    fi
+    build_commit
+    dr_info "superseded versions are not reaped by the CLI - run: dr-plugin clean"
+    ;;
+
+# --- remove -------------------------------------------------------------------
+remove)
+    [ ${#args[@]} -ge 1 ] || dr_die "remove needs a plugin" \
+        "  dr-plugin remove <plugin>@<marketplace>" \
+        "See what is installed with:  dr-plugin list"
+
+    build_begin
+    for _p in "${args[@]}"; do
+        build_run uninstall "$_p"
+
+        # The marketplace goes too when nothing else came from it. Leaving it
+        # would keep a catalogue registered in every mound for no plugin, and
+        # the clone it brought with it on disk.
+        _mkt=${_p#*@}
+        _left=$(work_cat installed_plugins.json | jq -r --arg m "$_mkt" \
+            '[.plugins // {} | keys[] | select(endswith("@" + $m))] | length' \
+            2>/dev/null || echo 1)
+        if [ "$_left" = 0 ]; then
+            build_run market-remove "$_mkt"
+        fi
+    done
+    build_commit
+    for _p in "${args[@]}"; do settings_write "$_p" drop; done
+    ;;
+
+# --- enable / disable ---------------------------------------------------------
+enable|disable)
+    [ ${#args[@]} -ge 1 ] || dr_die "$action needs a plugin" \
+        "  dr-plugin $action <plugin>@<marketplace>"
+    # No mound and no build: this is one key in one JSON file, and it takes
+    # effect at the next attach because that is when a session reads settings.
+    for _p in "${args[@]}"; do
+        if [ "$action" = enable ]; then
+            settings_write "$_p" true
+        else
+            settings_write "$_p" false
+        fi
+        dr_ok "$action $_p - takes effect at the next dr-go"
+    done
+    ;;
+
+# --- clean --------------------------------------------------------------------
+clean)
+    [ -d "$SEED/cache" ] || { dr_ok "nothing to clean"; exit 0; }
+
+    # Superseded versions are invisible and permanent: measured, a stale 0.9.0
+    # left beside a live 1.0.0 survived `plugin update`, `plugin prune` and
+    # `plugin list`, and list never mentioned it. Only the version the library
+    # says is installed is kept.
+    _kept=0 _dropped=0
+    while read -r _id _ver; do
+        [ -n "$_id" ] || continue
+        _plug=${_id%@*}; _mkt=${_id#*@}
+        _dir="$SEED/cache/$_mkt/$_plug"
+        [ -d "$_dir" ] || continue
+        for _v in "$_dir"/*; do
+            [ -d "$_v" ] || continue
+            if [ "$(basename "$_v")" = "$_ver" ]; then
+                _kept=$((_kept + 1))
+            else
+                dr_info "dropping $_mkt/$_plug/$(basename "$_v")"
+                rm -rf "$_v"; _dropped=$((_dropped + 1))
+            fi
+        done
+    done < <(installed)
+
+    # An uninstall leaves the empty parents behind - cache/<mkt>/<plugin>/ with
+    # no version in it - which costs nothing but makes a find in the library name
+    # plugins that are gone.
+    #
+    # Twice, deepest first: emptying <plugin> is what makes <mkt> empty, and a
+    # single find has already walked past <mkt> by the time that happens.
+    find "$SEED/cache" -mindepth 2 -maxdepth 2 -type d -empty -delete 2>/dev/null || :
+    find "$SEED/cache" -mindepth 1 -maxdepth 1 -type d -empty -delete 2>/dev/null || :
+    dr_ok "kept $_kept, dropped $_dropped"
+    ;;
+
+# --- rollback -----------------------------------------------------------------
+rollback)
+    [ -d "$PREV" ] || dr_die "there is no $PREV to go back to"
+    dr_confirm "Swap $SEED and $PREV?" || dr_die "cancelled"
+    # A swap rather than a restore, so running it twice returns you to where you
+    # started - which is what you want when the rollback was the mistake.
+    _tmp="$STORE/.swap.$$"
+    mv "$SEED" "$_tmp"
+    mv "$PREV" "$SEED"
+    mv "$_tmp" "$PREV"
+    dr_ok "rolled back - run it again to undo"
+    ;;
+esac

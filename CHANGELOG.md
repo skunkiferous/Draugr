@@ -12,6 +12,29 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- **`dr-plugin`** — the plugin library every mound reads, managed as one verb each instead of the
+  four-to-six command recipes it replaces. `add`, `update`, `remove`, `enable`, `disable`, `clean`,
+  `rollback`, and a `status` that checks whether your mounds are actually pointed at the library and
+  prints the exact lines when they are not. New key `DRAUGR_PLUGIN_STORE`, empty by default.
+
+  The three verbs that need a mound create one for the job and destroy it in a `trap`. Your host
+  still never runs plugin code: it holds the result, mounted back read-only.
+
+  **It does not use `dr-cp`, and that is the point.** `sbx cp` extracts a tar, so it merges
+  directories and replaces same-named files — which is why a hand-built library accumulates
+  superseded versions for ever and why a manual removal reclaims nothing. `dr-plugin` works on a
+  host-side `cp -a` copy and swaps it into place, so a removal really removes. Measured end to end:
+  removing one plugin took the library from 33 MB to 30 MB, and `clean` took an updated one from
+  38 MB to 33 MB by dropping the version the CLI had superseded and left behind.
+
+  A failed build changes nothing — the library being edited is always the copy — and the one it
+  replaced stays as `seed.old`, which `dr-plugin rollback` swaps back. Running rollback twice
+  returns you to where you started.
+
+  Plugin support is per-agent, like memory: `dr_agent_plugin_*` in `lib/agents/<agent>.sh`, with
+  Claude Code implemented and everything else refusing rather than guessing. A wrong guess here
+  would put third-party code in a directory mounted into every mound on the machine.
+
 - **[docs/CLAUDE_PLUGINS.md](docs/CLAUDE_PLUGINS.md)** — using Claude Code plugins in a mound
   without installing them on your host. A plugin is not a skill: it is code that runs, so it belongs
   inside the mound like the agent itself. Five options, ordered by reach, and the one that scales
