@@ -216,6 +216,12 @@ with nobody touching a GUI — on 0.1.8. The display call kills 0.1.4; see the l
 daemon costs is AppSandbox's **management** window, since the mutex allows one instance: no VM list,
 no settings dialog, no snapshot tree while it runs.
 
+**Telling the two apart is free**, which is what `dr-forge` needs in order to refuse usefully: with
+the GUI up there is no `host.json` and the process owns no socket at all *(measured)*. So
+`AppSandbox.exe` running with no discovery file beside it means a GUI instance, and the refusal can
+say "close the AppSandbox window and start it with `--headless`" rather than "the daemon is not
+answering".
+
 **The tunnel supervisor self-heals, measured the hard way.** Restarting AppSandbox stopped the VM
 out from under a running `vm-tunnel.ps1`. After the API started the VM again, the supervisor
 reconnected on its own and the guest's preflight passed with no human action.
@@ -649,7 +655,7 @@ House rule 7 — *"nothing is written outside the repo, `~/.config/draugr`, and 
 project, run `dr-up`, and the gateway, the VM and the tunnel come up first if they are not already
 running, in that order, before the agent's mound. It makes the mounds depend on each other at run
 time — something Draugr has never had, since every mound so far stood alone — so it is planned on its
-own: [run-state dependencies](#run-state-dependencies-to-be-planned).
+own: [run-state dependencies](#run-state-dependencies-planned-separately).
 
 **`up` and `doctor` exist mostly because of the gateway.** Its liveness chain is long — AppSandbox →
 VM → tunnel supervisor → keeper → tinyproxy → gateway — and bringing it back after a reboot is four
@@ -659,91 +665,28 @@ and `doctor` checking each link is the chain's best defence.
 House rule 5 generalises: **AppSandbox stays visible.** Every error names the API call that failed, so
 the problem is reproducible without Draugr.
 
-### Run-state dependencies (to be planned)
+### Run-state dependencies, planned separately
 
-**The requirement:** in the game project, one `dr-up` starts whatever the agent's mound depends on and
-is not already running, then the mound itself. Nothing starts twice, and nothing that is running is
-restarted.
+**The requirement:** in the game project, one `dr-up` starts whatever the agent's mound depends on
+and is not already running, then the mound itself. Nothing starts twice, and nothing that is running
+is restarted.
 
-**The chain, and what each link needs:**
+That is a general Draugr feature with no forge in it, so it has its own plan:
+**[DEPENDENCIES.md](DEPENDENCIES.md)**. It carries the six-link chain, the claim model, the optional
+lock, the counted stop with its linger, the security consequences of requiring another repository,
+and the acceptance criteria. The decisions taken on 2026-09-20 — elevation stays manual, the
+mechanism lives in core, the lock is optional and declared by the dependency, stopping is counted —
+are recorded there, and are not repeated here so that the two cannot drift apart.
 
-| # | Link | Up when | Brought up by | Known from |
-|---|---|---|---|---|
-| 1 | AppSandbox daemon | its API answers | **needs elevation** — see below | *measured*: it must run elevated |
-| 2 | Gateway mound | `sbx ls` shows it running *and* the post-up probe passes | `dr-up` in `$DRAUGR_FORGE_GATEWAY` | *measured*: idempotent, 1–1.5 min cold, seconds warm |
-| 3 | VM | the API reports it running and `sshd` answers | the API | *read* |
-| 4 | Tunnel | `ssh.exe -R` holds, supervised by `vm-tunnel.ps1` | a hidden Windows process | *measured*: the pieces; the script whole is not |
-| 5 | Preflight | `curl.exe -x http://127.0.0.1:3128 …` in the guest is neither `000` nor `500` | `ssh` into the guest | *measured* |
-| 6 | The agent's mound | as today, plus its `localhost:<SshPort>` rule | `dr-up`, as today | — |
+**What stays on the forge's side of that line**, and is planned here rather than there: the
+AppSandbox daemon check (link 1), the VM (3), the tunnel (4) and the guest preflight (5). None of
+them is a mound. The gateway (2) is a mound, so core starts it and `dr-forge` only asks whether it
+answers — which is what keeps [optional by construction](#optional-by-construction) intact: core
+gains a general mechanism, and every forge-shaped step stays behind `DRAUGR_FORGE`.
 
-Links 2 and 3 are independent and can start in parallel; 4 needs 3; 5 needs 2 and 4.
-
-**Decided (2026-09-20), so the plan starts from these:**
-
-- **Link 1 stays the human's job.** AppSandbox is started by hand, once per host boot, or from the
-  user's own startup sequence if that grates. Draugr only **checks** whether the daemon answers, and
-  **refuses** to go on when it does not, saying what to start. No Scheduled Task, no elevation, no
-  persistent change to the host for a feature most people never turn on.
-- **Mound → mound dependencies belong in core**, as an ordinary Draugr feature (a repo's mound can
-  require other repos' mounds, brought up in order, idempotently). What stays in `dr-forge` is the
-  part that is not a mound at all: the VM, the tunnel and the preflight. The gateway is a mound, so
-  core starts it; `dr-forge` only asks whether it answers. That keeps
-  [optional by construction](#optional-by-construction) intact: core gains a general mechanism with
-  no forge in it, and every forge-shaped step stays behind `DRAUGR_FORGE`.
-- **Sharing needs a lock, or it is not offered** — for *this* dependency. A shared gateway or forge
-  that two project mounds use at once is not safe, and the plan must make concurrent use impossible
-  rather than merely unlikely. But the general mechanism must not impose it: a required mound that
-  serves concurrent callers happily, a database being the obvious one, should be shared without a
-  lock. So **locking is available and optional, and the dependency declares it**, not the projects
-  that use it: exclusivity is a property of the resource, and leaving it to each consumer means one
-  careless repo defeats it. Default: shared. The forge's gateway repo opts in; `dr-forge` claims the
-  VM the same way, through the same helper, since the VM is not a mound.
-- **Stopping is automatic, and counted.** A dependency knows how many projects are using it, and when
-  the last one goes away it is released — which also means a single-project setup never has to be
-  switched off by hand. The count is what makes both halves safe: it is what an exclusive lock
-  enforces at 1, and what a shared dependency uses to know when nobody needs it any more. Release is
-  deliberately **late**, never immediate: see question 3.
-
-**Why the lock is not optional.** Two projects pointed at one forge would drive one Windows desktop,
-one derived-data cache and one editor at the same time — and one project's `dr-up --recreate` or kit
-change cuts the other's egress mid-build. So the second project must be refused, by name, not
-warned.
-
-**Questions the plan has to answer:**
-
-1. **How the lock behaves, and how a dependency asks for one.** It lives in core beside the
-   dependency mechanism, since any required mound may want it, and it must be:
-   - **Off unless asked for**, so requiring a database stays as simple as naming it.
-   - **Self-healing**: a lock whose holder's mound is gone is stale, so it is validated against live
-     state rather than trusted as a file.
-   - **Re-entrant for the same project**, so a second terminal on the same repo is not locked out by
-     the first.
-   - **Informative**: it names the holder and since when, and refuses rather than waits. Whether
-     waiting is ever worth offering is a later question.
-
-   Open within it: whether one claim covers "the forge and its gateway" or each resource is claimed
-   separately.
-2. **GUI or headless — answered 2026-09-20 *(measured)*.** The API is served by the daemon, not by
-   the window, and the mutex allows one of them: with the GUI up there is no `host.json` and no
-   socket; with `--headless` there is, and it drove the VM end to end
-   ([the API drives the VM](#the-api-drives-the-vm-and-it-is-fast-measured-2026-09-20)). So "start
-   AppSandbox yourself" means **start it with `--headless`**, and what the user gives up is
-   AppSandbox's management window, not the VM's screen. `dr-forge` can tell the two apart exactly as
-   this was measured: `AppSandbox.exe` running with no `host.json` beside it is a GUI instance, and
-   the refusal should say so in those words.
-3. **How long "nobody is using it" has to last.** The count going to zero must not stop anything at
-   once. `dr-up --recreate`, a crash and a retry, or closing one terminal to open another all drop
-   the count for a few seconds, and a Windows VM that takes minutes to boot must not fall over
-   because of it. So zero starts a **linger timer** and only its expiry stops the dependency; a new
-   user inside the window cancels it. The plan has to pick the default (minutes, not seconds, and
-   longer for the VM than for a mound), decide whether each dependency sets its own, and say what
-   holds the timer — a host-side process, since by then no mound is alive to hold it, and it has to
-   survive the case where nothing ever comes back. `DRAUGR_FORGE_STOP=manual` stays for anyone who
-   wants the VM up until they say otherwise.
-4. **Failure midway.** What `dr-up` does when a dependency will not come up — refuse to start the
-   agent, or start it with the forge marked unavailable — and how `dr-forge doctor` reports each link.
-5. **Recovery.** A Windows reboot takes down links 1, 2 and 4 (the keeper, the daemon's sessions, the
-   tunnel). `dr-up` must be the whole recovery, which is acceptance criterion A5.
+One consequence worth keeping in view here: the plan makes **core** responsible for the keeper
+session that stops `sbx` auto-stopping an idle dependency 30 s after its last session *(measured)*.
+The gateway's `post-up` hook does that today, and loses the job.
 
 ---
 
@@ -814,7 +757,7 @@ assumption.
 - **C — `dr-forge`, after A and the loopback item of B:**
   1. **Vertical slice at `gpuMode=0`**: VM through the API, ssh working, `up`/`down`/`exec`, status.
   2. **The gateway under `up` and `doctor`**, on top of core's mound-to-mound dependencies and the
-     lock ([run-state dependencies](#run-state-dependencies-to-be-planned)), which are core work and
+     lock ([run-state dependencies](#run-state-dependencies-planned-separately)), which are core work and
      come first.
   3. **The code loop**: `push` and `pull`, reusing the `dr-send` and `dr-data` transports.
   4. **Rollback**, as a single baseline.
@@ -854,7 +797,7 @@ assumption.
    isolation "one mound, one repo" exists to provide. Recommendation: allow a shared forge, say so
    loudly in `SECURITY.md`, and let `DRAUGR_FORGE` name it per project so the choice is visible.
    **Sharing ships only with the lock** from [run-state
-   dependencies](#run-state-dependencies-to-be-planned): sharing one desktop, one cache and one
+   dependencies](#run-state-dependencies-planned-separately): sharing one desktop, one cache and one
    editor between two agents at once is not a risk to document, it is one to make impossible.
 2. **Which Epic account.** A dedicated one is safest and has its own, empty, Fab library. Your own
    is convenient and puts your library and your account in reach of the agent. See
