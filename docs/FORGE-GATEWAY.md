@@ -39,9 +39,18 @@ Every claim carries one of three labels:
 1. **Debugging from Visual Studio.** Installing, building and the Unreal integration are measured
    ([step 4](#the-visual-studio-test-measured)). Pressing F5 once, which is where symbol servers such
    as `msdl.microsoft.com` would appear, is not.
-2. **`dr-up` against the gateway repo** has not been run. Each piece it runs has been.
-3. **Step 5** (narrowing the defaults) has not been done.
-4. **A5** (the full reboot sequence) and **A7** (a one-file kit change) are unmeasured.
+2. **Steps 2 and 3 are done, and a real tool has run through the narrowed gateway, 2026-09-20
+   *(measured)*.** The restricted tunnel key and `vm-tunnel.ps1` ran, and an Epic Games Launcher
+   session cost the strict policy exactly one host; see [step 3](#done-2026-09-20-measured) and
+   [the run](#a-real-tool-through-the-narrowed-gateway-2026-09-20-measured). Visual Studio through
+   the *narrowed* gateway is still untested, as is F5.
+3. **`dr-kit apply` does not work on `sbx` 0.37.1.** It passes `--sandbox`, which `sbx kit add` does
+   not accept; and `kit add` *appends* a kit, so whether re-adding an edited kit can remove a rule is
+   unmeasured *(measured: the failure)*. Until it is fixed, apply a kit change with
+   `dr-up --recreate --yes`, which the gateway can afford: it holds no state. A Draugr fix, tracked as
+   [track B](FORGE.md#order-of-work).
+4. **A5** (a real reboot) and **A7** (a one-file kit change) are unmeasured. On 2026-09-20 every
+   step of A5 except the reboot itself ran in order; A7 waits on the `dr-kit apply` bug above.
 
 ---
 
@@ -214,6 +223,8 @@ commands:
 ```
 
 Measured: the kit validates, the install takes about 12 s, and the test gateway was built with it.
+[Step 5](#step-5-narrow-the-defaults-required-before-calling-this-done) replaces `deny: []` with 147
+entries; the gateway repo holds the list.
 
 ### `kits/unreal/spec.yaml`
 
@@ -269,6 +280,12 @@ caps:
       - ocsp.digicert.com # DigiCert chains, still common
       - crl3.digicert.com
       - crl4.digicert.com
+      # Microsoft's own chain ("Microsoft TLS RSA Root G2"), which Visual Studio's hosts use.
+      # Windows requested all three during the 2026-09-18 test; they were refused and the
+      # check soft-failed, so nothing broke, but anything strict about revocation would.
+      - crl2.microsoft.com     # the CRL
+      - oneocsp.microsoft.com  # OCSP
+      - www.microsoft.com      # the same CRL, at /pkiops/crl/ (sbx rules cannot name a path)
       # Windows, on behalf of the tools
       - ctldl.windowsupdate.com   # certificate trust list download (plain HTTP), during the lighting build
       - wdcp.microsoft.com        # Defender cloud lookups: winget, and the editor's first start
@@ -367,14 +384,20 @@ run directly with `DRAUGR_SANDBOX` set, not yet through `dr-up`.
 
 ### Done when
 
-- [ ] `dr-kit validate` reports both kits valid.
-- [ ] `dr-up` creates the mound and post-up prints `gateway answers`.
-- [ ] In PowerShell, `curl.exe -x http://127.0.0.1:18888 -o NUL -w "%{http_code}" https://www.unrealengine.com/`
+All five passed on 2026-09-19, on `sbx` 0.37.1, against a repo built exactly as above *(measured)*.
+The one addition: `DRAUGR_MOUNTS=` and `DRAUGR_ENV=` in `.draugr.conf`, so that a machine-wide config
+mounting something into every mound (a Claude plugin seed, here) leaves the gateway alone.
+
+- [x] `dr-kit validate` reports both kits valid.
+- [x] `dr-up` creates the mound and post-up prints `gateway answers`: 1 min 23 s from nothing.
+- [x] In PowerShell, `curl.exe -x http://127.0.0.1:18888 -o NUL -w "%{http_code}" https://www.unrealengine.com/`
       returns neither `000` nor `500`, and `https://example.com` fails with
-      `CONNECT tunnel failed, response 500`.
-- [ ] Two minutes later, with nobody attached, `sbx ls` still shows `draugr-gateway running`.
-- [ ] After `sbx daemon stop` and another `dr-up`, post-up prints `gateway answers`. This is the
-      reboot path, without rebooting.
+      `CONNECT tunnel failed, response 500`. `https://api.github.com/` returned `200` with its
+      2,262-byte body, and `dr-policy --denied` listed `example.com`.
+- [x] Two minutes later, with nobody attached, `sbx ls` still shows `draugr-gateway running`, with
+      one keeper.
+- [x] After `sbx daemon stop` (keeper gone, probe `000`) and another `dr-up`, post-up prints
+      `gateway answers`: 1 min 7 s. This is the reboot path, without rebooting.
 
 ---
 
@@ -395,6 +418,12 @@ icacls $f /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F'
 
 Generate both keypairs on the host with `ssh-keygen.exe -t ed25519`. Keep the private keys where only
 your user can read them, because `ssh.exe` refuses keys that other users can read.
+
+*Done 2026-09-20:* the gateway repo's `guest/install-tunnel-key.ps1` does this and is idempotent —
+it replaces its own line, backs the file up and re-applies the ACL `sshd` insists on. Drive it with
+`-PubKeyFile`, not `-PubKey`: over `ssh` the guest's default shell sees the command first and a key
+passed as an argument comes apart on its spaces. Results in
+[step 3](#done-2026-09-20-measured).
 
 ### Harden, cut the network, set the proxies
 
@@ -563,6 +592,55 @@ post-up, which restores both the keeper and tinyproxy.
 `curl.exe -x http://127.0.0.1:3128 -o NUL -w "%{http_code}" https://www.unrealengine.com/` in the
 guest, and refuse to continue on `000` or `500`.
 
+### Done, 2026-09-20 *(measured)*
+
+The chain ran for the first time against the **narrowed** gateway: guest `127.0.0.1:3128` →
+`ssh -R` on the restricted key → host `127.0.0.1:18888` → tinyproxy in `draugr-gateway` → the
+`sbx` policy → the internet. The two guest-side scripts now live in the gateway repo, so neither is a
+paste any more: `guest/install-tunnel-key.ps1` and `guest/preflight.ps1`.
+
+- **The restricted key is restricted.** Installed over the admin key into the guest's
+  `administrators_authorized_keys`. Asking it for a shell runs the forced command and prints
+  `tunnel-only`; `-R 127.0.0.1:9999:…` is refused with `remote port forwarding failed for listen
+  port 9999`, which is `permitlisten` doing its job; `-R 127.0.0.1:3128:…` holds.
+- **The supervisor holds.** `windows/vm-tunnel.ps1 -Vm <vm> -User <user>`, started hidden, parsed
+  `SshPort` out of `vms.cfg` and the guest then listened on `127.0.0.1:3128`. The parser is still
+  the thing to re-check after an AppSandbox update.
+- **Preflight** in the guest answered `403` from `www.unrealengine.com`: reached, so the path works.
+  Anything else is a `000`, and the script says which of the two halves to restart.
+- **The sweep proves the policy, not only the path.** From inside the guest, 20 hosts standing for
+  every group in both kits returned exactly the codes the host side got through `18888`, and the
+  three controls — `learn.microsoft.com`, `api.anthropic.com`, `example.com` — returned `000`.
+  The VM cannot reach the agent's own API, while its mound will reach the documentation hosts.
+- **`ssh` and a path with a space in it** *(measured, after it produced a wrong diagnosis)*:
+  `-o UserKnownHostsFile=/c/Users/Some Name/.ssh/known_hosts` splits on the space, loads nothing,
+  and fails with `Host key verification failed` — which reads like a changed host key and is not.
+  The value needs quotes **inside** the option: `-o 'UserKnownHostsFile="…/known_hosts"'`.
+
+
+### A real tool through the narrowed gateway, 2026-09-20 *(measured)*
+
+The Epic Games Launcher was driven in the guest while every refusal was collected from
+`dr-policy --denied`. Over the whole session the gateway refused **34 hosts**, of which exactly
+**one** belonged to a tool:
+
+| Group | Count | Examples |
+|---|---|---|
+| Epic | **1** | `epicgames-privacy.my.onetrust.com` — Epic's own OneTrust tenant |
+| Probes run for this test | 4 | `learn.microsoft.com`, `stackoverflow.com`, `api.anthropic.com`, `example.com` |
+| Windows, Edge, MSN, Update, Defender | 29 | `edge.microsoft.com`, `ntp.msn.com`, `www.bing.com`, `settings-win.data.microsoft.com`, `fe3cr.delivery.mp.microsoft.com`, `nav-edge.smartscreen.microsoft.com` |
+
+So the allowlist built from the two broad tests covers a real launcher session, and the 147 denies
+cost the toolchain one host. That host is *not* on the deny list — `sbx` reports "no matching allow
+rule (default deny)" — so it is an ordinary addition to `kits/unreal`, which is where it now is. The
+tester saw nothing fail without it, so it is insurance rather than a fix; a consent endpoint that
+never answers is the kind of thing that shows up later as a panel that waits.
+
+**A caveat on "nothing failed".** The guest's display blanks briefly at random — a black rectangle
+while it redraws — so a panel that failed to paint could have been missed. That also matters beyond
+this test: an agent driving the UI by screenshot can capture one of those blank frames, so
+[the UI work](FORGE.md#how-the-agent-works-the-ui) needs to treat a black frame as "retry", not as
+state.
 ---
 
 ## Step 4: extend `kits/unreal`
@@ -580,7 +658,11 @@ guest, and refuse to continue on `000` or `500`.
    `kits/unreal/spec.yaml` with a comment each. Use `"**.domain"` for a vendor's own domain, and
    exact names for shared CDNs.
 6. Run `dr-kit validate`, `dr-kit apply`, and then **`dr-up`**. `dr-kit apply` recreates the container
-   and runs no hooks, so without `dr-up` there is no keeper and no tinyproxy.
+   and runs no hooks, so without `dr-up` there is no keeper and no tinyproxy. **On `sbx` 0.37.1
+   `dr-kit apply` fails** ([open items](#open-items)); use `dr-up --recreate --yes` instead, which
+   rebuilds the gateway and runs the hook in one step.
+7. If the host is in `.draugr/kit`'s deny list (step 5), delete that line first: a deny wins over
+   every allow, `dr-policy --allow` included.
 
 ### Lessons from the Epic test *(measured)*
 
@@ -666,21 +748,64 @@ would appear. `api.nuget.org` was never requested.
 5. Check each with `dr-policy --check <host>`, which should report `denied by local rule
    "kit:draugr-gateway:deny"`. Then run `dr-kit validate`, `dr-kit apply` and `dr-up`.
 
+### Done, 2026-09-19 *(measured)*
+
+The strict reading: **every default the VM did not use in the two tests is denied**, 147 of the ~190.
+The list was generated from the live `sbx` 0.37.1 defaults, not typed, and lives in the gateway
+repo's `.draugr/kit/spec.yaml` with a reason per group. Kept, each for a stated reason:
+
+| Kept | Why |
+|---|---|
+| all of `default-cert-validation` | revocation checking (D6) |
+| `archive.ubuntu.com`, `security.ubuntu.com` | the gateway's own install |
+| `**.docker.com` | **the `sbx` base image lists `download.docker.com` as an apt source.** With it denied, `apt-get update` exits 100, the kit install fails, and the gateway cannot be created. Pushes to Docker Hub go to `docker.io`, which stays denied |
+| `**.github.com`, `github.com`, `**.githubusercontent.com` | `kits/unreal` needs three hosts under them, and a deny would win over its allow |
+| `**.visualstudio.com`, `visualstudio.com` | the same, for Visual Studio's licence check |
+| `login.microsoftonline.com` | Visual Studio sign-in, which keeps Community licensed |
+| `challenges.cloudflare.com`, `www.google.com`, `**.googleapis.com` | seen in the tests. `storage.googleapis.com`, which takes uploads, is denied inside it |
+
+Checked afterwards:
+
+- `dr-policy --check api.anthropic.com` reports `denied by local rule rule "kit:draugr-gateway:deny"`.
+  `registry.npmjs.org`, `s3.amazonaws.com` and `storage.googleapis.com` are denied too, and none of
+  the four gets through the gateway.
+- Every host the VM used in the tests was re-checked: all 82 that the kit or a kept default covers
+  are allowed, and the 60 that only the test gateway had allowed (Windows, Edge, MSN, telemetry) are
+  denied.
+- Through the gateway: `www.unrealengine.com` and `www.fab.com` answer (403 from the sites),
+  `api.github.com` and `www.google.com` return 200, and both revocation paths return 200.
+
+Re-checked 2026-09-20, after the `sbx` daemon had exited and one `dr-up` brought the gateway back in
+65 s: the 226 allow and 147 deny rules were still in force — a daemon restart loses a kit's startup
+commands, not its rules — and a live sweep of 20 hosts standing for every group in the two kits
+(Epic, Fab, Quixel, the four Visual Studio hosts, the GitHub trio, all six revocation paths,
+`ctldl.windowsupdate.com`) reached every one of them; 403, 404, 302, 400 and 200 are the sites' own
+answers to a bare `curl`. The controls `learn.microsoft.com`, `stackoverflow.com` and `example.com`
+returned `000`. So the strict narrowing costs the toolchain nothing a request can show, and the
+agent's documentation hosts stay outside the gateway, where
+[FORGE.md](FORGE.md#two-mounds-two-policies) puts them.
+
+Two consequences worth knowing before the next change:
+
+- **A denied host cannot be opened with `dr-policy --allow`**, because deny wins over allow wherever
+  the allow comes from. Step 4's loop now starts, for a host on the list, by deleting its deny line.
+- **Re-check after an `sbx` upgrade**: new default rules arrive open.
+
 ---
 
 ## Step 6: acceptance criteria
 
 | # | Criterion | Proof | Status |
 |---|---|---|---|
-| A1 | An allowed host works from the guest | `curl.exe -x http://127.0.0.1:3128 … https://www.unrealengine.com/` is not `000` or `500`, and the gateway log shows it allowed | measured (test gateway) |
-| A2 | A non-allowed host fails and is logged against the gateway | `https://example.com` gives `CONNECT tunnel failed, response 500`, and `dr-policy --denied` lists it | measured (test gateway) |
+| A1 | An allowed host works from the guest | `curl.exe -x http://127.0.0.1:3128 … https://www.unrealengine.com/` is not `000` or `500`, and the gateway log shows it allowed | **measured on the real, narrowed gateway, 2026-09-20** (403 from the site), and earlier on the test gateway |
+| A2 | A non-allowed host fails and is logged against the gateway | `https://example.com` gives `CONNECT tunnel failed, response 500`, and `dr-policy --denied` lists it | **measured on the narrowed gateway, 2026-09-20.** Note the shape: tinyproxy answers `HTTP/1.1 500 Unable to connect`, so a plain-HTTP request reports `500` while an HTTPS one reports `000` — the 500 was the answer to `CONNECT`, and the tunnelled request never happened. A check must treat both as failure, which `guest/preflight.ps1` does |
 | A3 | No direct route out, even as guest admin | `Get-NetRoute -DestinationPrefix '0.0.0.0/0'` is empty, `curl.exe --noproxy "*" https://1.1.1.1/` fails in 0 ms, DNS does not resolve, and ping fails | measured, both without an adapter and with the loopback adapter of D6 |
 | A4 | The gateway stays up unattended | 5 minutes after `dr-up`, with nobody attached, it is running and A1 passes | measured with a keeper (80 s+, then 45 s+) |
-| A5 | Reboot recovery | After a reboot: start AppSandbox elevated, start the VM, `dr-up` in the gateway repo, start `vm-tunnel.ps1`, then A1 | pieces measured; the full sequence unmeasured |
-| A6 | Daemon restart recovery | `sbx daemon stop`, `dr-up`, then A1 | measured with the hook |
+| A5 | Reboot recovery | After a reboot: start AppSandbox elevated, start the VM, `dr-up` in the gateway repo, start `vm-tunnel.ps1`, then A1 | pieces measured; on 2026-09-20 the whole sequence except the reboot itself ran in order — VM started, `dr-up`, `vm-tunnel.ps1`, then A1 from inside the guest. A real reboot is still unmeasured |
+| A6 | Daemon restart recovery | `sbx daemon stop`, `dr-up`, then A1 | measured with the hook; re-measured 2026-09-20 after the daemon had exited on its own — one `dr-up` restored keeper, tinyproxy and the probe in 65 s, and the 226 allow / 147 deny rules were still in place |
 | A7 | Adding a domain touches one file | Edit `kits/unreal`, run `dr-kit validate && dr-kit apply && dr-up`, then A1 for that host | unmeasured |
-| A8 | `dr-policy --check` predicts the guest | Five sampled hosts agree with A1 and A2 | measured for 4 hosts |
-| A9 | Narrowing is real | `dr-policy --check api.anthropic.com` is denied by the kit, and the guest gets `500` | measured (test kit) |
+| A8 | `dr-policy --check` predicts the guest | Five sampled hosts agree with A1 and A2 | measured for 4 hosts; on 2026-09-20, 23 hosts behaved from inside the guest exactly as the kits predict — 20 reachable, 3 refused — and the three sampled with `sbx policy check` agreed |
+| A9 | Narrowing is real | `dr-policy --check api.anthropic.com` is denied by the kit, and the guest gets `500` | **measured on the real gateway, 2026-09-20**: from inside the VM, `api.anthropic.com` is refused by the proxy, as are `learn.microsoft.com` and `example.com`. The VM cannot reach the agent's own API |
 | A10 | Each Unreal tool works while Windows reports offline | Step 4 | **measured** for the Epic Games Launcher (sign-in, Fab, Library, a 131 MB download), Unreal Editor 5.8 (Fab plugin, lighting build through Swarm, Play), the Visual Studio Installer, Visual Studio 2022 and a C++ project build; **unmeasured** for F5 debugging |
 | A11 | Upgrade safety | After any `sbx` upgrade, A1–A10 pass again | — |
 | A12 | Certificates validate in the guest | `certutil -urlfetch -verify` on a leaf from a host the tools use reports the revocation check passed, and the gateway logs the OCSP, CRL and AIA fetches | measured, with the loopback adapter of D6 |
@@ -1012,11 +1137,12 @@ Community 2022 17.14 installed over NAT, then returned to `NetworkMode=0`.
 
 Every host the guest's traffic reached the gateway with, taken from the gateway's policy log and
 tinyproxy's log. Hosts in the "Tester's probes" row were the tester's own `curl` requests, not a
-tool's.
+tool's. Completed on 2026-09-19 against both raw tinyproxy logs, which held 29 hosts this table had
+missed, most of them refused and so absent from the rules export too.
 
 | Group | Hosts | In the kit as |
 |---|---|---|
-| Epic services | `account-public-service-prod.ak.`, `account-public-service-prod03.ol.`, `launcher-public-service-prod06.ol.`, `catalog-public-service-prod06.ol.`, `entitlement-public-service-prod08.ol.`, `friends-public-service-prod06.ol.`, `priceengine-public-service-ecomprod01.ol.`, `api.kws.ol.`, `datarouter.ol.`, `library-service.live.use1a.on.`, `social-ban-public-service-prod.social.live.on.`, `ue-launcher-website-prod.ol.`, `tracking.`, `static-assets-prod.`, `cdn1.`, `selective-download-egs.distro.on.`, each followed by `epicgames.com` | `**.epicgames.com` |
+| Epic services | `account-public-service-prod.ak.`, `account-public-service-prod03.ol.`, `launcher-public-service-prod06.ol.`, `catalog-public-service-prod06.ol.`, `entitlement-public-service-prod08.ol.`, `friends-public-service-prod06.ol.`, `priceengine-public-service-ecomprod01.ol.`, `api.kws.ol.`, `datarouter.ol.`, `library-service.live.use1a.on.`, `social-ban-public-service-prod.social.live.on.`, `ue-launcher-website-prod.ol.`, `tracking.`, `static-assets-prod.`, `cdn1.`, `selective-download-egs.distro.on.`, `social-overlay.ol.`, each followed by `epicgames.com` | `**.epicgames.com` |
 | Epic Online Services | `api.epicgames.dev`, `connect.epicgames.dev` | `**.epicgames.dev` |
 | Epic CDN | `eosh.epicgamescdn.com`, `egs-cloudfront-chunks.epicgamescdn.com` | `**.epicgamescdn.com` |
 | Unreal Engine tab and editor | `www.`, `assets.`, `cms-assets.`, `editor.`, `components.`, each followed by `unrealengine.com` | `**.unrealengine.com` |
@@ -1026,9 +1152,10 @@ tool's.
 | Windows, for the tools | `ctldl.windowsupdate.com` (port 80), `wdcp.microsoft.com`, `wdcpalt.microsoft.com` | exact names |
 | Visual Studio 2022 | `download.`, `settings.`, `telemetry.`, `newsfeed.`, each followed by `visualstudio.microsoft.com`; `app.vssps.visualstudio.com`; `aka.ms`; `go.microsoft.com`; `builds.dotnet.microsoft.com` | `**.visualstudio.microsoft.com` and exact names |
 | Visual Studio's Unreal integration | `api.github.com`, `github.com`, `release-assets.githubusercontent.com` | exact names |
-| Certificate revocation (port 80, fetched by Windows) | `crt.sectigo.com`, `ocsp.sectigo.com`, `crl.sectigo.com`, `c.pki.goog`; DigiCert's `ocsp.`, `crl3.`, `crl4.` added for chains not seen here | exact names |
+| Certificate revocation (port 80, fetched by Windows) | `crt.sectigo.com`, `ocsp.sectigo.com`, `crl.sectigo.com`, `c.pki.goog`; DigiCert's `ocsp.`, `crl3.`, `crl4.` added for chains not seen here; Microsoft TLS RSA Root G2's `crl2.microsoft.com`, `oneocsp.microsoft.com` and `www.microsoft.com` (`/pkiops/crl/`), refused during the test and added on 2026-09-19 | exact names |
 | Visual Studio telemetry and feedback, left out | `default.exp-tas.com`, `targetednotifications-tm.trafficmanager.net`, `sendvsfeedback2.azurewebsites.net`, `mobile.events.data.microsoft.com` | no |
-| Windows Update, left out | `tas02.sls.update.microsoft.com`, `oneclient.sfx.ms`, `msedge.api.cdp.microsoft.com`, `displaycatalog.mp.microsoft.com`, `msedge.b.tlu.dl.delivery.mp.microsoft.com`, `storeedgefd.dsx.mp.microsoft.com` | no; see D7 |
-| Allowed by the `sbx` defaults | `c.pki.goog` (port 80), `www.google.com`; Chromium's own `optimizationguide-pa.`, `update.` and `safebrowsing.googleapis.com` | not in the kit; see step 5 |
-| Windows background, left out | `self.events.data.microsoft.com`, `settings-win.data.microsoft.com`, `fd.api.iris.microsoft.com`, `edge.microsoft.com` (ports 80 and 443), `api.edgeoffer.microsoft.com`, `edge-consumer-static.azureedge.net`, `nav-edge.smartscreen.microsoft.com`, `explore.microsoft.com`, `storeedgefd.dsx.mp.microsoft.com`, `ecs.office.com`, `g.live.com`, `assets.msn.com`, `api.msn.com`, `c.msn.com`, `ntp.msn.com`, `srtb.msn.com`, `windows.msn.com`, `img-s-msn-com.akamaized.net`, `www.bing.com`, `th.bing.com`, `c.bing.com`, `sb.scorecardresearch.com` | no |
-| Tester's probes | `store.epicgames.com`, `dev.epicgames.com`, `status.epicgames.com`, `lightswitch-public-service-prod06.ol.epicgames.com`, `fortnite-public-service-prod11.ol.epicgames.com`, `epicgames.com`, `epicgamescdn.com`, `download.epicgamescdn.com`, `docs.unrealengine.com`, `unrealengine.com`, `fab.com`, `newassets.hcaptcha.com`, `hcaptcha.com`, `quixel.com`, `www.quixel.com`, `github.com` | — |
+| Windows Update, left out | `tas02.sls.update.microsoft.com`, `oneclient.sfx.ms`, `msedge.api.cdp.microsoft.com`, `displaycatalog.mp.microsoft.com`, `msedge.b.tlu.dl.delivery.mp.microsoft.com`, `storeedgefd.dsx.mp.microsoft.com`, `fe2cr.update.microsoft.com`, `fe3cr.delivery.mp.microsoft.com`, `tas01.cwsapp.update.microsoft.com`, `displaycatalog-caching.bigcatalog-frontdoor-prod.commerce.microsoft.com` | no; see D7 |
+| Allowed by the `sbx` defaults | `c.pki.goog` and `ocsp.comodoca.com` (port 80), `www.google.com`, `challenges.cloudflare.com`; Chromium's own `optimizationguide-pa.`, `update.` and `safebrowsing.googleapis.com` | not in the kit; kept open by step 5 |
+| Unknown purpose, left out | `d1ap1mz92jnks1.cloudfront.net`, `d3kjluh73b9h9o.cloudfront.net`: seen amid Epic Launcher traffic on 2026-09-18, and allowed by the test gateway | no. **The first suspects if the Launcher misbehaves behind the narrowed gateway** |
+| Windows background, left out | `self.events.data.microsoft.com`, `settings-win.data.microsoft.com`, `fd.api.iris.microsoft.com`, `edge.microsoft.com` (ports 80 and 443), `api.edgeoffer.microsoft.com`, `edge-consumer-static.azureedge.net`, `nav-edge.smartscreen.microsoft.com`, `explore.microsoft.com`, `storeedgefd.dsx.mp.microsoft.com`, `ecs.office.com`, `g.live.com`, `assets.msn.com`, `api.msn.com`, `c.msn.com`, `ntp.msn.com`, `srtb.msn.com`, `windows.msn.com`, `img-s-msn-com.akamaized.net`, `www.bing.com`, `th.bing.com`, `c.bing.com`, `sb.scorecardresearch.com`, `config.edge.skype.com`, `deff.nelreports.net`, `ecn.dev.virtualearth.net`, `hagen.challenges.cloudflare.com`, `m.adnxs.com`, `px.ads.linkedin.com`, `odc.officeapps.live.com`, `outlook.office.com`, `to-do.microsoft.com`, `staging.to-do.microsoft.com`, `staging.to-do.officeppe.com`, `accounts.google.com`, `v10.`, `v20.` and `watson.events.data.microsoft.com` (Windows Error Reporting, 35 attempts), `adl.windows.com` (port 80, a compatibility database) | no |
+| Tester's probes | `store.epicgames.com`, `dev.epicgames.com`, `status.epicgames.com`, `lightswitch-public-service-prod06.ol.epicgames.com`, `fortnite-public-service-prod11.ol.epicgames.com`, `epicgames.com`, `epicgamescdn.com`, `download.epicgamescdn.com`, `docs.unrealengine.com`, `unrealengine.com`, `fab.com`, `newassets.hcaptcha.com`, `hcaptcha.com`, `quixel.com`, `www.quixel.com`, `github.com`, `example.com` | — |

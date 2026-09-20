@@ -125,9 +125,10 @@ a human at a desk. It is not an option for a loop.
 
 ### Getting it: the release zip
 
-Use the release zip, not a build from source. Two drivers ship in it — `AppSandboxVDD`, the display
-driver, and `AppSandboxVAD`, the audio driver — and those need Microsoft attestation, which needs an
-EV certificate on a hardware token and a Partner Center Hardware account. A build without them
+Use the release zip, not a build from source. Three drivers ship in it — `AppSandboxVDD`, the display
+driver, `AppSandboxVAD`, the audio driver, and `AppSandboxSHM`, a transport used only for Windows
+guests on a Mac host — and those need Microsoft attestation, which needs an EV certificate on a
+hardware token and a Partner Center Hardware account. A build without them
 produces test-signed drivers that retail Windows refuses to load. The release zip also carries the
 SDK (`headless-api\asb.py`) at its root.
 
@@ -195,6 +196,30 @@ App Sandbox Virtual Display Adapter 0.1.4.0         ROOT\DISPLAY\0000
   `Saved/Logs/<Project>.log` lists every adapter it found and names the one it chose, so
   `dr-forge doctor` should report that line.
 
+### The API drives the VM, and it is fast *(measured 2026-09-20)*
+
+Driven from `tools/headless-api/asb.py` on the host's Python, against `AppSandbox.exe --headless`
+0.1.4:
+
+| Call | Result |
+|---|---|
+| discovery | `%ProgramData%\AppSandbox\host.json` gives endpoint, port and a per-run bearer token; `asb.connect()` needs no configuration |
+| `version()` | `0.1.4`, `apiVersion v1`, capabilities `snapshots` and `templates` |
+| `host()` | 32 cores, 130 998 MB RAM, 222 GB free — the numbers `dr-forge status` would report |
+| `list()`, `status()` | every field the forge needs: `state`, `running`, `agentOnline`, `sshPort`, `networkMode`, `gpuMode` |
+| `start()` + `wait_online()` | **14 s** from stopped to `agentOnline`, booting the current state — no argument means no branch is created |
+| `ssh_info()` | host, port, user, `sshState`, `keyDeployed` |
+| `open_display()` | **crashed the 0.1.4 daemon**; on 0.1.8 it opens a real window and `display_status` follows it — see the limit below |
+
+So a mound can start the VM, wait for it, learn where to `ssh`, and put a screen in front of a human,
+with nobody touching a GUI — on 0.1.8. The display call kills 0.1.4; see the limit below. What the
+daemon costs is AppSandbox's **management** window, since the mutex allows one instance: no VM list,
+no settings dialog, no snapshot tree while it runs.
+
+**The tunnel supervisor self-heals, measured the hard way.** Restarting AppSandbox stopped the VM
+out from under a running `vm-tunnel.ps1`. After the API started the VM again, the supervisor
+reconnected on its own and the guest's preflight passed with no human action.
+
 ### Limits found
 
 - **Ray-tracing shaders can take the guest down.** Compiling the path tracer's shaders first killed
@@ -213,6 +238,29 @@ App Sandbox Virtual Display Adapter 0.1.4.0         ROOT\DISPLAY\0000
 - **The display is fixed at 1920×1080, 60 Hz** for Windows guests (*read*). For an agent taking
   screenshots that is mostly a feature — a fixed size makes a screenshot a repeatable test artifact —
   and a real limit only for a human who wants to work in the editor at 4K.
+- **The guest's display blanks at random** *(reported by the tester, 2026-09-20)*: a black rectangle
+  while it redraws, lasting long enough to notice. Harmless to a human, but it decides how the agent
+  may read the screen: an all-black or partly black frame is **"retry"**, never state, and a check
+  that samples a single screenshot can be wrong about what is on screen. It also weakens any "I saw
+  nothing fail" report from inside the VM, this plan's included.
+- **`open_display` crashes 0.1.4, and is fixed in 0.1.8** *(both measured 2026-09-20)*. On the
+  0.1.4 build the call returned `200 {"displayOpen": true}`, a window titled `<vm> - IDD Display`
+  existed just long enough to register as the process's main window, nothing was ever visible on
+  screen, and `AppSandbox.exe` then died with **exception `0xc0000005` in `ntdll.dll`** (Application
+  Error, faulting PID matching the daemon). The daemon owns its VMs, so the VM went down with it,
+  ungracefully. `display_status` also reported `{"open": false}` throughout.
+
+  On pristine 0.1.8, against a throwaway VM in an isolated data root, the same call opened a real
+  window (1936×1119, on screen), `display_status` reported `{"open": true}`, and the daemon was
+  still answering ten seconds later. Nothing to report upstream — but it is a concrete reason to
+  **run 0.1.8 rather than 0.1.4**, which the forge needs anyway for the snapshot fix in
+  [PR #153](https://github.com/jamesstringer90/appsandbox/pull/153).
+
+  The design lesson survives the fix: the daemon can die, and when it does it takes every VM with
+  it, so the agent's session, the tunnel and any running build must tolerate that. There is a
+  ready-made signal for it — a clean `shutdown_daemon()` **deletes** `host.json`, so a discovery
+  file with no daemon behind it means the last one died. `dr-forge doctor` should say so in those
+  words instead of reporting a dead endpoint.
 
 ---
 
@@ -238,6 +286,40 @@ The build document, the Unreal allowlist and the full measurement record are
 - **The gateway is optional within an optional feature.** A forge without one has **no egress at
   all** — the most locked-down configuration there is, and enough for a pure build loop once the
   engine is installed. It is what you want to start with.
+
+### Two mounds, two policies
+
+**The gateway is not the agent's mound.** The agent works in the game project's mound; the gateway is
+a second mound that runs no agent and only carries the VM's traffic. Merging them looks simpler, and
+it would cost three things:
+
+- **Least privilege, both ways.** Each mound's policy covers its own traffic only, and a kit's rules
+  stay with the sandbox that uses it *(measured: `kits/unreal` allows `docs.unrealengine.com` on the
+  gateway, while a project mound is denied it)*. Merged, the agent could reach everything the VM
+  needs — Epic's account and store services, Fab purchases, CDNs — and the VM could reach everything
+  the agent needs, starting with the AI endpoints.
+- **Lifetimes.** The gateway must be up whenever the VM is; the agent's mound is stopped, recreated
+  when its kit changes, and removed. As the gateway, each of those would cut the VM's network,
+  possibly mid-build.
+- **One forge, several projects.** A shared forge ([open question 1](#open-questions)) needs one
+  gateway, whichever project's agent is working.
+
+The cost is one more mound, 2 GiB in the [budget](#budget-on-this-specific-machine), and one more
+thing to keep running — which is why [`dr-up` in the project starts it](#commands).
+
+**What the agent can read is the project mound's business, not the gateway's.** A project mound gets
+only `sbx`'s defaults plus its own kits, and those do not include Epic's documentation, its forums,
+Microsoft Learn or Stack Overflow *(measured: all four denied)*. So Unreal work needs two kits in the
+project, neither of them the gateway's:
+
+- **Unreal reference**, on by default for a forge project: `dev.epicgames.com`,
+  `docs.unrealengine.com`, `forums.unrealengine.com`, and `learn.microsoft.com` with
+  `docs.microsoft.com`, which redirects to it — Visual Studio, MSVC's compiler and linker errors, the
+  Windows APIs.
+- **Coding guides**, generic and in the kit library for any project: Stack Overflow and the like.
+
+The agent reads them from its mound, not through a browser in the VM: that is faster, and it keeps the
+lookups inside the boundary that has the credential scan.
 
 > **The allowlist is per name at the rule and per address in practice.** A name that shares an IP
 > with an allowed one resolves and connects, even while `sbx policy check` reports it denied
@@ -427,8 +509,11 @@ but the snapshot does not contain it.
 The fix is not a one-liner. Making a snapshot a child of the *current* disk turns that disk into a
 parent, which must never be written again — yet AppSandbox would still list it as a branch you can
 boot, and booting it would corrupt every later snapshot. How to prevent that is a data-model decision
-for the author. It is being reported upstream with a tested fix attached as a suggestion, which is
-the form he asks for.
+for the author. It is reported upstream as
+[#152](https://github.com/jamesstringer90/appsandbox/issues/152), with a tested fix attached as a
+suggestion, [#153](https://github.com/jamesstringer90/appsandbox/pull/153), which is the form he asks
+for. The fix freezes the branch the VM is on as the new snapshot, and continues on a fresh branch of
+it.
 
 **Until a release fixes it, `dr-forge` uses a single baseline.** The first snapshot is correct, so:
 
@@ -525,8 +610,9 @@ New keys, following the standing rule that Draugr configures the boundary and ne
 DRAUGR_FORGE=                        # VM name. EMPTY = no forge, feature invisible
 DRAUGR_FORGE_DIR=                    # where the clone lives in the guest, e.g. D:\work\MyGame
 DRAUGR_FORGE_GATEWAY=                # the gateway repo. EMPTY = the VM has no egress at all
-DRAUGR_FORGE_START=manual            # auto|manual|off  — does dr-up boot the VM?
-DRAUGR_FORGE_STOP=manual             # auto|manual|off  — does detaching shut it down?
+DRAUGR_FORGE_START=auto              # auto|manual|off  — does dr-up start the gateway and the VM?
+DRAUGR_FORGE_STOP=auto               # auto|manual|off  — stop when the last user leaves
+DRAUGR_FORGE_LINGER=10m              # grace period after the last user, before stopping
 DRAUGR_FORGE_SNAPSHOT=               # the baseline rollback returns to. Empty = the base disk
 ```
 
@@ -559,6 +645,12 @@ House rule 7 — *"nothing is written outside the repo, `~/.config/draugr`, and 
 | `dr-forge rollback` | discard the working branch, re-branch from the baseline. Stops the VM. Refuses without confirmation |
 | `dr-forge doctor` | every link, each naming its own fix |
 
+**One `dr-up` in the project starts everything, if needed.** That is the requirement: go to the game
+project, run `dr-up`, and the gateway, the VM and the tunnel come up first if they are not already
+running, in that order, before the agent's mound. It makes the mounds depend on each other at run
+time — something Draugr has never had, since every mound so far stood alone — so it is planned on its
+own: [run-state dependencies](#run-state-dependencies-to-be-planned).
+
 **`up` and `doctor` exist mostly because of the gateway.** Its liveness chain is long — AppSandbox →
 VM → tunnel supervisor → keeper → tinyproxy → gateway — and bringing it back after a reboot is four
 ordered steps across two operating systems. That is exactly the kind of recipe `dr-plugin` replaced,
@@ -566,6 +658,92 @@ and `doctor` checking each link is the chain's best defence.
 
 House rule 5 generalises: **AppSandbox stays visible.** Every error names the API call that failed, so
 the problem is reproducible without Draugr.
+
+### Run-state dependencies (to be planned)
+
+**The requirement:** in the game project, one `dr-up` starts whatever the agent's mound depends on and
+is not already running, then the mound itself. Nothing starts twice, and nothing that is running is
+restarted.
+
+**The chain, and what each link needs:**
+
+| # | Link | Up when | Brought up by | Known from |
+|---|---|---|---|---|
+| 1 | AppSandbox daemon | its API answers | **needs elevation** — see below | *measured*: it must run elevated |
+| 2 | Gateway mound | `sbx ls` shows it running *and* the post-up probe passes | `dr-up` in `$DRAUGR_FORGE_GATEWAY` | *measured*: idempotent, 1–1.5 min cold, seconds warm |
+| 3 | VM | the API reports it running and `sshd` answers | the API | *read* |
+| 4 | Tunnel | `ssh.exe -R` holds, supervised by `vm-tunnel.ps1` | a hidden Windows process | *measured*: the pieces; the script whole is not |
+| 5 | Preflight | `curl.exe -x http://127.0.0.1:3128 …` in the guest is neither `000` nor `500` | `ssh` into the guest | *measured* |
+| 6 | The agent's mound | as today, plus its `localhost:<SshPort>` rule | `dr-up`, as today | — |
+
+Links 2 and 3 are independent and can start in parallel; 4 needs 3; 5 needs 2 and 4.
+
+**Decided (2026-09-20), so the plan starts from these:**
+
+- **Link 1 stays the human's job.** AppSandbox is started by hand, once per host boot, or from the
+  user's own startup sequence if that grates. Draugr only **checks** whether the daemon answers, and
+  **refuses** to go on when it does not, saying what to start. No Scheduled Task, no elevation, no
+  persistent change to the host for a feature most people never turn on.
+- **Mound → mound dependencies belong in core**, as an ordinary Draugr feature (a repo's mound can
+  require other repos' mounds, brought up in order, idempotently). What stays in `dr-forge` is the
+  part that is not a mound at all: the VM, the tunnel and the preflight. The gateway is a mound, so
+  core starts it; `dr-forge` only asks whether it answers. That keeps
+  [optional by construction](#optional-by-construction) intact: core gains a general mechanism with
+  no forge in it, and every forge-shaped step stays behind `DRAUGR_FORGE`.
+- **Sharing needs a lock, or it is not offered** — for *this* dependency. A shared gateway or forge
+  that two project mounds use at once is not safe, and the plan must make concurrent use impossible
+  rather than merely unlikely. But the general mechanism must not impose it: a required mound that
+  serves concurrent callers happily, a database being the obvious one, should be shared without a
+  lock. So **locking is available and optional, and the dependency declares it**, not the projects
+  that use it: exclusivity is a property of the resource, and leaving it to each consumer means one
+  careless repo defeats it. Default: shared. The forge's gateway repo opts in; `dr-forge` claims the
+  VM the same way, through the same helper, since the VM is not a mound.
+- **Stopping is automatic, and counted.** A dependency knows how many projects are using it, and when
+  the last one goes away it is released — which also means a single-project setup never has to be
+  switched off by hand. The count is what makes both halves safe: it is what an exclusive lock
+  enforces at 1, and what a shared dependency uses to know when nobody needs it any more. Release is
+  deliberately **late**, never immediate: see question 3.
+
+**Why the lock is not optional.** Two projects pointed at one forge would drive one Windows desktop,
+one derived-data cache and one editor at the same time — and one project's `dr-up --recreate` or kit
+change cuts the other's egress mid-build. So the second project must be refused, by name, not
+warned.
+
+**Questions the plan has to answer:**
+
+1. **How the lock behaves, and how a dependency asks for one.** It lives in core beside the
+   dependency mechanism, since any required mound may want it, and it must be:
+   - **Off unless asked for**, so requiring a database stays as simple as naming it.
+   - **Self-healing**: a lock whose holder's mound is gone is stale, so it is validated against live
+     state rather than trusted as a file.
+   - **Re-entrant for the same project**, so a second terminal on the same repo is not locked out by
+     the first.
+   - **Informative**: it names the holder and since when, and refuses rather than waits. Whether
+     waiting is ever worth offering is a later question.
+
+   Open within it: whether one claim covers "the forge and its gateway" or each resource is claimed
+   separately.
+2. **GUI or headless — answered 2026-09-20 *(measured)*.** The API is served by the daemon, not by
+   the window, and the mutex allows one of them: with the GUI up there is no `host.json` and no
+   socket; with `--headless` there is, and it drove the VM end to end
+   ([the API drives the VM](#the-api-drives-the-vm-and-it-is-fast-measured-2026-09-20)). So "start
+   AppSandbox yourself" means **start it with `--headless`**, and what the user gives up is
+   AppSandbox's management window, not the VM's screen. `dr-forge` can tell the two apart exactly as
+   this was measured: `AppSandbox.exe` running with no `host.json` beside it is a GUI instance, and
+   the refusal should say so in those words.
+3. **How long "nobody is using it" has to last.** The count going to zero must not stop anything at
+   once. `dr-up --recreate`, a crash and a retry, or closing one terminal to open another all drop
+   the count for a few seconds, and a Windows VM that takes minutes to boot must not fall over
+   because of it. So zero starts a **linger timer** and only its expiry stops the dependency; a new
+   user inside the window cancels it. The plan has to pick the default (minutes, not seconds, and
+   longer for the VM than for a mound), decide whether each dependency sets its own, and say what
+   holds the timer — a host-side process, since by then no mound is alive to hold it, and it has to
+   survive the case where nothing ever comes back. `DRAUGR_FORGE_STOP=manual` stays for anyone who
+   wants the VM up until they say otherwise.
+4. **Failure midway.** What `dr-up` does when a dependency will not come up — refuse to start the
+   agent, or start it with the forge marked unavailable — and how `dr-forge doctor` reports each link.
+5. **Recovery.** A Windows reboot takes down links 1, 2 and 4 (the keeper, the daemon's sessions, the
+   tunnel). `dr-up` must be the whole recovery, which is acceptance criterion A5.
 
 ---
 
@@ -610,9 +788,10 @@ assumption.
 
 ### Tracks
 
-- **A — the gateway, first.** Specified and ready ([FORGE-GATEWAY.md](FORGE-GATEWAY.md), step 1). It
-  needs no new Draugr code: `post-up` hooks exist, and `DRAUGR_PORTS` reaches `sbx create -p`
-  unchanged. `dr-up` has never been run against it.
+- **A — the gateway, first.** Built, and narrowed ([FORGE-GATEWAY.md](FORGE-GATEWAY.md), steps 1 and
+  5): `dr-up` creates it and recovers it after a daemon restart, with no new Draugr code, and it
+  denies every `sbx` default the VM did not use. Left: the VM side against the real gateway (steps
+  2–3), so that a real tool's traffic has crossed the narrowed gateway.
 - **B — Draugr fixes the gateway turned up.** Wrong for every user today, independent of the forge:
   - `dr-go` says the mound is "still running"; `sbx` stops it 30 s after the last session. An opt-in
     keep-alive key would also replace the gateway's hand-written keeper.
@@ -624,11 +803,19 @@ assumption.
   - `dr-policy --check` is presented as authoritative, but checks names while enforcement is per IP.
   - Wildcard semantics are undocumented: `*.` is one label, `**.` is the apex and any depth, both
     quoted.
-- **Upstream — the snapshot bug.** An issue with the analysis, and a fix built on 0.1.8 with the
-  released drivers and tested on a throwaway VM, attached as a suggestion.
+  - **`dr-kit apply` has never worked on `sbx` 0.37.1**: it runs `sbx kit add <kit> --sandbox <name>`,
+    and `sbx` wants `sbx kit add <name> <kit>` *(measured)*. The test mock accepts any arguments, so
+    nothing caught it. Separately, `kit add` appends to the sandbox's kit list, so whether applying
+    an *edited* kit can remove a rule is unmeasured; if it cannot, `apply` should rebuild instead.
+- **Upstream — the snapshot bug.** Filed: the issue with the analysis,
+  [#152](https://github.com/jamesstringer90/appsandbox/issues/152), and a fix built on 0.1.8 with the
+  released drivers and tested on a throwaway VM,
+  [#153](https://github.com/jamesstringer90/appsandbox/pull/153). Waiting on the author.
 - **C — `dr-forge`, after A and the loopback item of B:**
   1. **Vertical slice at `gpuMode=0`**: VM through the API, ssh working, `up`/`down`/`exec`, status.
-  2. **The gateway under `up` and `doctor`.**
+  2. **The gateway under `up` and `doctor`**, on top of core's mound-to-mound dependencies and the
+     lock ([run-state dependencies](#run-state-dependencies-to-be-planned)), which are core work and
+     come first.
   3. **The code loop**: `push` and `pull`, reusing the `dr-send` and `dr-data` transports.
   4. **Rollback**, as a single baseline.
   5. **`gpuMode=1`**: the editor, running the game, screenshots back through `pull`.
@@ -666,6 +853,9 @@ assumption.
    strongly tempting — and it means two projects' agents can read each other's code, which is the
    isolation "one mound, one repo" exists to provide. Recommendation: allow a shared forge, say so
    loudly in `SECURITY.md`, and let `DRAUGR_FORGE` name it per project so the choice is visible.
+   **Sharing ships only with the lock** from [run-state
+   dependencies](#run-state-dependencies-to-be-planned): sharing one desktop, one cache and one
+   editor between two agents at once is not a risk to document, it is one to make impossible.
 2. **Which Epic account.** A dedicated one is safest and has its own, empty, Fab library. Your own
    is convenient and puts your library and your account in reach of the agent. See
    [Security](#security).
