@@ -337,6 +337,59 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
             fi
         fi
     fi
+
+    # Dependencies: every failure here happens at the next dr-up, so it is worth
+    # finding now. A path that is gone, a directory that is not a repository and
+    # a config nobody has read are all refusals, not warnings - dr-up stops on
+    # each of them. Cycles are left to dr-up, which sees the whole chain.
+    if [ -n "${DRAUGR_REQUIRES:-}" ]; then
+        while read -r _dep; do
+            [ -n "$_dep" ] || continue
+            if [ ! -d "$_dep" ]; then
+                bad "requires $(basename "$_dep")" "no such directory: $_dep" \
+                    "Named in DRAUGR_REQUIRES (${DR_ORIGIN[DRAUGR_REQUIRES]:-built-in default})."
+            elif ! git -C "$_dep" rev-parse --show-toplevel >/dev/null 2>&1; then
+                bad "requires $(basename "$_dep")" "not a git repository: $_dep" \
+                    "dr-up brings up repositories, so a dependency has to be one."
+            elif [ -f "$_dep/.draugr.conf" ] && ! dr_trust_is_trusted "$_dep/.draugr.conf"; then
+                bad "requires $(basename "$_dep")" "its config is untrusted" \
+                    "Requiring a repo means running its config and hooks, as you." \
+                    "Read it, then:  dr-trust $_dep/.draugr.conf"
+            else
+                _dn=$(dr_dep_config "$_dep" DRAUGR_SANDBOX)
+                ok "requires ${_dn:-$(basename "$_dep")}" \
+                   "$(dr_sandbox_state "${_dn:-?}"), $(dr_dep_claims "${_dn:-?}" | grep -c .) claim(s)"
+            fi
+        done < <(dr_dep_requires "$DR_REPO")
+    fi
+
+    # Claims this repo left behind on resources it no longer requires. Harmless
+    # - they age out, and an exclusive one is taken over rather than waited for
+    # - but they keep a warden alive, which keeps a mound up.
+    # The names this repo is entitled to hold, so that a claim on anything else
+    # stands out. Built once rather than per claim, since each entry costs a
+    # dr-config in another repository.
+    _wanted=" "
+    if [ -n "${DRAUGR_REQUIRES:-}" ]; then
+        while read -r _dep; do
+            [ -d "$_dep" ] || continue
+            _wanted="$_wanted$(dr_dep_config "$_dep" DRAUGR_SANDBOX) "
+        done < <(dr_dep_requires "$DR_REPO")
+    fi
+
+    _mine=$(_dr_hash_text "$DR_REPO")
+    for _cdir in "$DR_RUN_DIR"/*/; do
+        [ -f "$_cdir$_mine.claim" ] || continue
+        # The key as it was claimed, not the directory name it was sanitised
+        # into. A claim dr-forge made on something that is not a mound - the
+        # VM, as "vm:<name>" - is not in DRAUGR_REQUIRES and never will be, so
+        # it is not an orphan.
+        _ckey=$(sed -n 's/^key=//p' "$_cdir$_mine.claim" | head -1)
+        case "$_ckey" in *:*) continue ;; esac
+        case "$_wanted" in *" $_ckey "*) continue ;; esac
+        soft "claim on $_ckey" "held by this repo, which no longer requires it" \
+            "Nothing breaks; it keeps that resource up. Let it go:  dr-dep release"
+    done
 else
     soft "git repository" "$PWD is not one" \
         "Draugr works on one repository at a time. cd into a project, or 'git init'."

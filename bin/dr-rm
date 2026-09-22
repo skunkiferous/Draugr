@@ -119,3 +119,10 @@ dr_hook pre-rm "${repo:-$PWD}"
 # connection open - a stale one otherwise blocks removal for no good reason.
 dr_sbx rm --force "$name" >/dev/null || dr_die "could not remove $name"
 dr_ok "removed $name"
+
+# The mound this repo claimed with is gone, so its claims are stale by
+# definition. Dropped here rather than left to age out, because a destroyed
+# mound is the one case where nobody is coming back.
+if [ -n "$repo" ] && [ -x "$_dr_bin/dr-dep" ]; then
+    "$_dr_bin/dr-dep" release >/dev/null || dr_warn "could not release claims; see:  dr-dep"
+fi

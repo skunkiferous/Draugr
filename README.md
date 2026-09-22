@@ -475,6 +475,7 @@ earlier on `PATH`, and call them from Makefiles and other scripts. `dr <verb>` i
 | `dr-ls` | All Draugr mounds on this machine |
 | `dr-stop` | Shut down. Filesystem, login and memory all survive |
 | `dr-rm` | **Destroy.** Refuses unless commits are synced and memory exported (`--force` to override) |
+| `dr-dep` | The mounds this repo needs running (`DRAUGR_REQUIRES`), and who else is using them |
 
 ### Moving code
 

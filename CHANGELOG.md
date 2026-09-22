@@ -12,6 +12,56 @@ people reading the source, not for people calling it.
 
 ### Added
 
+### Removed
+
+### Changed
+
+### Fixed
+
+## [0.5.0] — 2026-09-22
+
+### Added
+
+- **Run-state dependencies** — `DRAUGR_REQUIRES` names other repositories whose mounds have to be
+  running before this one is any use, and one `dr-up` brings them up first, in order, idempotently.
+  The forge's gateway is the case it was written for; nothing in the mechanism knows what a forge is.
+  New command `dr-dep`, new keys `DRAUGR_REQUIRES`, `DRAUGR_EXCLUSIVE` and `DRAUGR_LINGER`, all
+  empty or off by default, so a repository that requires nothing behaves exactly as before.
+
+  **Bringing a dependency up is that repository's own `dr-up`**, which is the whole protocol: it is
+  idempotent, and it runs that repository's `post-up` hook, which is where a readiness check already
+  lives. "Ready" means its `dr-up` returned 0, and nothing else had to be invented.
+
+  **A claim is never trusted because it exists.** It counts only while the claimant's mound is
+  running, or while it is younger than a five-minute grace that covers the gap between claiming and
+  building. So a reboot, a crash, a `dr-stop` and a `dr-rm` all release claims by the same rule,
+  and there is nothing to clean up. Claims live in `$XDG_STATE_HOME/draugr/run`, which house rule 7
+  now names: run-state is deleted freely and would make `~/.config/draugr` unsafe to copy.
+
+  **The lock is optional and declared by the dependency**, not by the projects that use it, because
+  exclusivity is a property of the resource: a gateway fronting one desktop is exclusive, a database
+  that queues its callers is not. With `DRAUGR_EXCLUSIVE=true` the second project is refused **by
+  name and since when**, a lock whose holder is gone is taken over rather than waited for, and a
+  second terminal in the same project is never locked out by the first.
+
+  **Stopping is counted, and late.** One warden process per running dependency holds the session
+  that stops sbx auto-stopping an idle mound after 30 s, counts valid claims, and stops the mound
+  once `DRAUGR_LINGER` (default `10m`) has passed with none. The delay is the point: a
+  `dr-up --recreate` or a reopened terminal must not cost the minutes a forge VM takes to boot. Both
+  deaths are safe in the same direction — if the warden dies the mound stays up, and the next
+  `dr-up` starts another.
+
+  **Requiring a repository means running its code**, so its config and hooks must be accepted with
+  `dr-trust` first. Draugr refuses rather than carrying on with defaults, because a config that is
+  not sourced leaves `DRAUGR_SANDBOX` at `draugr-<leaf>` — and claiming and starting the wrong mound
+  is worse than stopping. Cycles are refused by name, and `dr-doctor` checks every declared path,
+  its trust and its state before the next `dr-up` has to.
+
+  `dr-up --skip-deps` starts a mound alone. `dr-dep claim` works on resources that are not mounds at
+  all, which is how `dr-forge` will claim the forge VM with the same lock everything else uses.
+  The design, its failure modes and its acceptance criteria are
+  [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
+
 - **`dr-plugin`** — the plugin library every mound reads, managed as one verb each instead of the
   four-to-six command recipes it replaces. `add`, `update`, `remove`, `enable`, `disable`, `clean`,
   `rollback`, and a `status` that checks whether your mounds are actually pointed at the library and
@@ -100,10 +150,6 @@ people reading the source, not for people calling it.
 - **tests/cp.bats**, which did not exist. `dr-cp` had no tests at all, which is how the path bug
   below survived: `tests/mocks/sbx` accepts both spellings — it has to, since it also stands in for
   the mound side — so the tests assert on the argv Draugr *built*, not on whether the mock liked it.
-
-### Removed
-
-### Changed
 
 ### Fixed
 

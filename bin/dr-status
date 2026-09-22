@@ -205,6 +205,21 @@ if [ -n "${DRAUGR_MODEL:-}" ]; then
     esac
 fi
 
+# What this repo needs running, and whether it is. One row each, because the
+# question behind them is always "can I start work" rather than "what is the
+# full state of the chain" - dr-dep answers that, and says who else holds what.
+if [ -n "${DRAUGR_REQUIRES:-}" ]; then
+    while read -r _dep; do
+        [ -n "$_dep" ] || continue
+        _dname=$(dr_dep_config "$_dep" DRAUGR_SANDBOX)
+        if [ -z "$_dname" ]; then
+            row requires "${_DR_RED}$_dep - cannot read its config${_DR_OFF}"
+        else
+            row requires "$_dname ($(dr_sandbox_state "$_dname"))"
+        fi
+    done < <(dr_dep_requires "$DR_REPO")
+fi
+
 # Arbitrary environment is unbounded text and this screen is deliberately short,
 # so the COUNT is what earns a row: "something is being injected into the agent"
 # is the part worth knowing at a glance, and dr-config prints what. A malformed

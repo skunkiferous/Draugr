@@ -135,6 +135,14 @@
 # what the agent is. Read docs/SECURITY.md before relying on it to keep code in -
 # the mound can still reach the network it always could.
 #DRAUGR_MODEL="qwen3.8:27b"
+# Alternatively, for a more compact qwen3.8:27b:
+#DRAUGR_MODEL="qwen3.8-27b-128k"
+# Created from https://huggingface.co/byteshape/Qwen3.8-27B-GGUF using:
+# $ cat > /tmp/Modelfile <<'EOF'
+# FROM hf.co/byteshape/Qwen3.8-27B-GGUF:Qwen3.8-27B-IQ4_XS-3.84bpw
+# PARAMETER num_ctx 131072
+# EOF
+# ollama create qwen3.8-27b-128k -f /tmp/Modelfile
 
 # Where that model is served: a bare port on THIS machine, or a full URL. A bare
 # port must also be in DRAUGR_HOST_PORTS, and dr-go refuses to start when it is
@@ -157,6 +165,8 @@
 # validated: a malformed one is refused by dr-go rather than silently ignored by
 # the agent, which is how a typo here would otherwise cost you an afternoon.
 #DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=25"
+# Alternatively, with a more compact qwen3.8:27b:
+#DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=56"
 
 # --- Data files that are not ready to commit --------------------------------
 #
@@ -260,3 +270,25 @@
 
 # warn | block
 #DRAUGR_SCAN_FAIL=block
+
+# --- Run-state dependencies -------------------------------------------------
+#
+# Other repositories whose mounds have to be RUNNING before this one is any use.
+# One dr-up here brings them up first, in order, and claims them; the last
+# project to leave lets them stop. Empty and none of this exists.
+#
+# Requiring a repository means running its config and its hooks, as you, so an
+# untrusted one is refused rather than guessed at. See docs/DEPENDENCIES.md.
+#DRAUGR_REQUIRES="$HOME/code/draugr-gateway"
+
+# The next two describe what kind of resource THIS repo's mound is, and are read
+# from here by the projects that require it - not the other way round.
+#
+# true means one project at a time, refused by name: right for a gateway that
+# fronts one desktop, wrong for a database that queues its callers.
+#DRAUGR_EXCLUSIVE=false
+
+# How long this mound stays up after its last user leaves, when it is up as
+# somebody's dependency. Late on purpose: a dr-up --recreate must not cost the
+# minutes a forge VM takes to boot. 30s, 10m, 1h, or off.
+#DRAUGR_LINGER=10m

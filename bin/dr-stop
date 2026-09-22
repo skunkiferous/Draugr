@@ -84,3 +84,12 @@ esac
 
 dr_sbx stop "$name" >/dev/null || dr_die "could not stop $name"
 dr_ok "stopped $name"
+
+# A stopped mound stops being a valid claimant anyway - the warden would work
+# that out at its next tick - but releasing now starts the linger at the moment
+# you actually left, rather than up to a minute later. Only when we know which
+# repository we are in: `dr-stop <name>` from anywhere else has no claims to give
+# back, and DR_REPO would be somebody else's repository.
+if [ -n "${DR_REPO:-}" ] && [ -x "$_dr_bin/dr-dep" ]; then
+    "$_dr_bin/dr-dep" release >/dev/null || dr_warn "could not release claims; see:  dr-dep"
+fi

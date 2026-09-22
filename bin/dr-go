@@ -272,6 +272,12 @@ if dr_is_true "$DRAUGR_STOP_ON_EXIT"; then
     # that will not stop is untidy rather than dangerous.
     if dr_sbx stop "$DRAUGR_SANDBOX" >/dev/null 2>&1; then
         dr_ok "stopped $DRAUGR_SANDBOX (DRAUGR_STOP_ON_EXIT)"
+        # Whatever this repo required is no longer being used by it. The claim
+        # would go stale on its own at the next warden tick, but letting go here
+        # starts the linger when you actually left.
+        if [ -x "$_dr_bin/dr-dep" ]; then
+            "$_dr_bin/dr-dep" release >/dev/null 2>&1 || true
+        fi
     else
         dr_warn "could not stop $DRAUGR_SANDBOX - it is still running"
     fi

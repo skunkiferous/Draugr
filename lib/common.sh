@@ -16,7 +16,7 @@
 [ -n "${_DR_COMMON_LOADED:-}" ] && return 0
 _DR_COMMON_LOADED=1
 
-DRAUGR_VERSION="0.4.0"
+DRAUGR_VERSION="0.5.0"
 
 # --- work out where Draugr itself is installed ------------------------------
 #
@@ -471,6 +471,7 @@ DR_KEYS=(
     DRAUGR_STOP_ON_EXIT
     DRAUGR_MEM_SYNC DRAUGR_MEM_STORE
     DRAUGR_PLUGIN_STORE
+    DRAUGR_REQUIRES DRAUGR_EXCLUSIVE DRAUGR_LINGER
     DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL
 )
 
@@ -596,6 +597,25 @@ _dr_defaults() {
     # directory has to be mountable into a mound and $HOME under WSL is not.
     # See docs/CLAUDE_PLUGINS.md.
     DRAUGR_PLUGIN_STORE=
+
+    # Run-state dependencies: other repositories whose mounds have to be RUNNING
+    # before this one's is any use. Empty and the feature does not exist - no
+    # claim is written, no directory is created, dr-up behaves exactly as it did.
+    # See docs/DEPENDENCIES.md.
+    DRAUGR_REQUIRES=
+
+    # The other two are read from the DEPENDENCY's config, never from the
+    # consumer's, because both describe what kind of resource this repo's mound
+    # is. Exclusivity is a property of the resource: a gateway fronting one
+    # desktop is exclusive, a queueing database is not - and leaving that to each
+    # consumer means one careless repository defeats it.
+    DRAUGR_EXCLUSIVE=false
+
+    # How long a mound that is up AS A DEPENDENCY stays up after its last user
+    # leaves. Not seconds, because the resource this was written for takes
+    # minutes to boot and a dr-up --recreate must not cost that. "off" keeps it
+    # up until somebody stops it. A mound you started yourself is never touched.
+    DRAUGR_LINGER=10m
 
     DRAUGR_SCAN=true
     DRAUGR_SCAN_PATTERNS=".env *.pem *.key id_rsa id_ed25519 credentials.json secrets.*"
@@ -2664,6 +2684,267 @@ dr_require_tracking_ref() {
     dr_die \
         "nothing fetched from the mound yet ($ref does not exist)" \
         "Fetch the agent's commits first:  dr-sync"
+}
+
+# ---------------------------------------------------------------------------
+# Run-state dependencies: claims, and what makes one valid
+#
+# A repository that names another in DRAUGR_REQUIRES needs that repository's
+# mound RUNNING, and says so by writing a claim. The design is docs/DEPENDENCIES.md;
+# what matters here is the single rule that keeps it honest:
+#
+#   A claim is never trusted because it exists. It counts only while its
+#   claimant is real - that repository's mound running, or the claim younger
+#   than the grace below, which covers the minute between claiming and building.
+#
+# That is what makes the mechanism self-healing rather than something to clean
+# up. A host that reboots wakes with every claim stale, because nothing is
+# running. A crashed dr-up leaves one that ages out. A mound stopped by hand
+# releases its claim by the act of stopping, whether or not anyone said so.
+# ---------------------------------------------------------------------------
+
+# Run-state, not configuration: deleted freely, never backed up, meaningless on
+# another machine, and it would make ~/.config/draugr unsafe to copy. House rule
+# 7 names this directory for that reason. $HOME is redirected under test, so
+# tests land in their own tree without a special case here.
+DR_RUN_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/draugr/run"
+
+# How long a claim counts before the claimant's mound exists. The window is
+# real: the dependency must be up BEFORE the consumer's mound is created, so a
+# consumer claims first and builds second, and a cold create costs about a
+# minute. Overridable so tests do not have to sleep.
+DR_DEP_GRACE=${DR_DEP_GRACE:-300}
+
+# SHA-256 of a string rather than of a file, for turning a repository path into
+# a file name. Same two-tool fallback as _dr_hash, and the same reason.
+_dr_hash_text() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$1" | sha256sum | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1
+    else
+        dr_die "no sha256sum or shasum available" "Install coreutils."
+    fi
+}
+
+# dr_dep_dir <key> - where the claims on one resource live.
+#
+# A key is a sandbox name, or something like "vm:UE5-Test" for a resource that
+# is not a mound at all: dr-forge claims the VM through this same code, so that
+# "exclusive" means one thing on the machine rather than two. Anything outside
+# the safe set becomes "_", because the key becomes a directory name.
+dr_dep_dir() {
+    printf '%s/%s' "$DR_RUN_DIR" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+}
+
+# dr_dep_claim_file <key> <repo> - one claimant's claim on one resource.
+#
+# Named after a hash of the claimant's path, because a path contains "/" and may
+# contain anything else; the path itself is inside the file, so nothing is lost.
+# Hashing the path is also what makes the claim per REPOSITORY: a second
+# terminal in the same project writes the same file rather than a second claim,
+# which is what "re-entrant" means in practice.
+dr_dep_claim_file() {
+    printf '%s/%s.claim' "$(dr_dep_dir "$1")" "$(_dr_hash_text "$2")"
+}
+
+# _dr_dep_field <file> <name> - one field out of a claim file.
+#
+# Claim files are "name=value" lines, read rather than sourced. Sourcing would
+# make a file that anything on the machine can write into shell code that this
+# process runs, and no claim is worth that.
+_dr_dep_field() {
+    sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1
+}
+
+# dr_dep_claim_valid <file> [<running-list>] - is this claim still real?
+#
+# The running list is passed in by callers that are about to check several
+# claims, so that one `sbx ls` answers for all of them instead of one per claim.
+dr_dep_claim_valid() {
+    local file=$1 running=${2-} sandbox age now since
+
+    # Younger than the grace: valid whatever sbx says, because the claimant is
+    # very likely still inside the dr-up that wrote it.
+    since=$(_dr_dep_field "$file" since_epoch)
+    now=$(date +%s)
+    age=$(( now - ${since:-0} ))
+    [ "$age" -lt "$DR_DEP_GRACE" ] && return 0
+
+    # Otherwise the claimant's mound decides. No sandbox recorded means the
+    # claim came from something that is not a mound; there is nothing to check
+    # against, so the grace above is all it ever gets.
+    sandbox=$(_dr_dep_field "$file" sandbox)
+    [ -n "$sandbox" ] || return 1
+    [ -n "$running" ] || running=$(dr_sandboxes_running || true)
+    printf '%s\n' "$running" | grep -qxF "$sandbox"
+}
+
+# dr_dep_claims <key> - every VALID claim, as "<repo>\t<sandbox>\t<since>".
+#
+# Read-only on purpose: a status command must not delete anything, so stale
+# files are ignored here and removed by dr_dep_prune, which the writers call.
+dr_dep_claims() {
+    local dir file running
+    dir=$(dr_dep_dir "$1")
+    [ -d "$dir" ] || return 0
+    running=$(dr_sandboxes_running || true)
+    for file in "$dir"/*.claim; do
+        [ -f "$file" ] || continue
+        dr_dep_claim_valid "$file" "$running" || continue
+        printf '%s\t%s\t%s\n' \
+            "$(_dr_dep_field "$file" repo)" \
+            "$(_dr_dep_field "$file" sandbox)" \
+            "$(_dr_dep_field "$file" since)"
+    done
+}
+
+# dr_dep_prune <key> - drop the claim files that no longer count.
+dr_dep_prune() {
+    local dir file running
+    dir=$(dr_dep_dir "$1")
+    [ -d "$dir" ] || return 0
+    running=$(dr_sandboxes_running || true)
+    for file in "$dir"/*.claim; do
+        [ -f "$file" ] || continue
+        dr_dep_claim_valid "$file" "$running" || rm -f "$file"
+    done
+}
+
+# dr_dep_claim <key> <repo> <sandbox> [exclusive] - claim a resource.
+#
+# Idempotent for the same repository: re-claiming refreshes the timestamp, which
+# is what makes a second terminal, and a dr-up that runs every morning, free.
+#
+# Exclusivity is checked against the other VALID claims, after pruning, so a
+# lock whose holder is gone is taken over rather than waiting for somebody to
+# delete a file. Two dr-ups racing are decided by mkdir, which is atomic: the
+# loser sees the winner's claim and is refused by name.
+dr_dep_claim() {
+    local key=$1 repo=$2 sandbox=$3 exclusive=${4:-false} file dir other
+
+    dir=$(dr_dep_dir "$key")
+    mkdir -p "$dir"
+    dr_dep_prune "$key"
+    file=$(dr_dep_claim_file "$key" "$repo")
+
+    # Refuse before writing anything, and name the holder: a lock that says only
+    # "in use" leaves the user with nothing to do next.
+    if dr_is_true "$exclusive" && [ ! -f "$file" ]; then
+        other=$(dr_dep_claims "$key" | head -1)
+        if [ -n "$other" ]; then
+            dr_die "$key is exclusive, and $(printf '%s' "$other" | cut -f1) has been using it since $(printf '%s' "$other" | cut -f3)" \
+                   "Its own config says DRAUGR_EXCLUSIVE=true, so one project at a time." \
+                   "Stop that project's mound, or release it there:  dr-dep release"
+        fi
+    fi
+
+    # Written whole and moved into place, so that a reader never sees half a
+    # claim: every field is written by one process and appears at once. The key
+    # is recorded as it was given, because the directory name has been through
+    # tr and "vm:UE5-Test" cannot be read back out of "vm_UE5-Test".
+    printf 'key=%s\nrepo=%s\nsandbox=%s\nsince=%s\nsince_epoch=%s\n' \
+        "$key" "$repo" "$sandbox" "$(date '+%Y-%m-%d %H:%M')" "$(date +%s)" > "$file.tmp"
+    mv "$file.tmp" "$file"
+}
+
+# dr_dep_unclaim <key> <repo> - give one resource back.
+dr_dep_unclaim() {
+    rm -f "$(dr_dep_claim_file "$1" "$2")"
+}
+
+# dr_dep_requires [<repo>] - the repositories this one needs, as absolute paths.
+#
+# Resolution follows DRAUGR_KIT's habit, because a path in a config file should
+# mean the same thing everywhere: "~" is the user's home, a relative path is
+# relative to the repository that asked, and an absolute path is itself.
+dr_dep_requires() {
+    local repo=${1:-$DR_REPO} entry path
+    local -a list
+    read -ra list <<< "${DRAUGR_REQUIRES:-}"
+    for entry in "${list[@]+"${list[@]}"}"; do
+        # A tilde written inside quotes is not expanded by the shell that sourced
+        # the config, and a list of two paths has to be quoted - so the first
+        # branch expands the literal prefix rather than leaving a path nobody can
+        # see is wrong. shellcheck reads that pattern as a failed expansion; it is
+        # a match against two characters.
+        # shellcheck disable=SC2088
+        case "$entry" in
+            '~/'*) path="$HOME/${entry#'~/'}" ;;
+            /*)    path=$entry ;;
+            *)     path="$repo/$entry" ;;
+        esac
+        # Canonical, so that two spellings of one repository are one claimant:
+        # the claim file is named after this string.
+        printf '%s\n' "$(cd "$path" 2>/dev/null && pwd || printf '%s' "$path")"
+    done
+}
+
+# dr_dep_trusted <repo> - refuse to treat an unreviewed repository as a dependency.
+#
+# Requiring a repository means running its dr-up, which sources its .draugr.conf
+# and runs its hooks, on this machine, as you. That is the exposure dr-trust
+# exists for - but dr_trust_check WARNS and carries on, and a config that never
+# gets sourced leaves DRAUGR_SANDBOX at its default "draugr-<leaf>". Claiming
+# and starting the wrong mound is the failure that produces, so this refuses
+# instead. Same check dr-trust records, one fatal step earlier.
+dr_dep_trusted() {
+    local repo=$1 file
+    for file in "$repo/.draugr.conf" "$repo/.draugr.local.conf"; do
+        [ -f "$file" ] || continue
+        dr_trust_is_trusted "$file" && continue
+        dr_die "$repo is required by this repo, and its config is untrusted" \
+               "It is shell code, and requiring it means running it." \
+               "Read it, then:  dr-trust $file"
+    done
+}
+
+# dr_dep_config <repo> <KEY> - one setting as that repository sees it.
+#
+# Asks dr-config rather than parsing the file: it is the only thing that applies
+# the whole cascade, and half-parsing a shell file with grep would be a second,
+# worse config reader. The trust check above runs first, so a value that came
+# from defaults-because-untrusted cannot reach us.
+dr_dep_config() {
+    local repo=$1 key=$2 bin
+    # Our own bin/, worked out from this file rather than taken from the caller:
+    # every command sets $_dr_bin, but a helper that depends on its caller having
+    # done so breaks the moment something new calls it.
+    bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../bin" && pwd)
+    ( cd "$repo" && env "${_DR_DEP_CLEAN_ENV[@]}" "$bin/dr-config" "$key" ) 2>/dev/null
+}
+
+# Every DRAUGR_* key, spelled as arguments that unset it: "env -u DRAUGR_AGENT …".
+#
+# A dependency's config is the authority on that dependency, so its commands run
+# with OURS out of the way. Ours could be in the environment for a reason that
+# has nothing to do with it - dr_hook exports all of them before running a hook,
+# and they stay exported for the rest of the process - and environment beats
+# every config file in the cascade. Without this, one repo with a pre-up hook
+# would silently claim and start another repo's mound under its own name.
+declare -ga _DR_DEP_CLEAN_ENV=()
+for _dr_k in "${DR_KEYS[@]}"; do _DR_DEP_CLEAN_ENV+=(-u "$_dr_k"); done
+unset _dr_k
+
+# dr_dep_seconds <duration> - "10m" -> 600. "off" and anything empty -> "".
+#
+# Three suffixes, because a linger is minutes and nobody should have to write
+# 600. An unparseable value is a config error rather than a guess.
+dr_dep_seconds() {
+    local v=$1 n=${1%[smh]}
+    case "$v" in
+        ''|off|never|false) printf '' ; return 0 ;;
+    esac
+    case "$n" in
+        ''|*[!0-9]*) dr_die "cannot read a duration from \"$v\"" \
+                            "Write it as 30s, 10m, 1h, or off." ;;
+    esac
+    case "$v" in
+        *s) printf '%s' "$n" ;;
+        *m) printf '%s' "$(( n * 60 ))" ;;
+        *h) printf '%s' "$(( n * 3600 ))" ;;
+        *)  printf '%s' "$n" ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------

@@ -578,6 +578,51 @@ else's, test against their implementation.
 
 ---
 
+## Pattern: a process that outlives the command that started it
+
+`dr-dep up` leaves a **warden** running: one process per running dependency,
+holding the session that stops `sbx` auto-stopping an idle mound after 30 s, and
+counting claims so the last user out can turn the lights off. It is the first
+thing in Draugr that keeps running after the command returns, and detaching one
+properly takes three things rather than one.
+
+```bash
+setsid "$_dr_bin/dr-dep" warden "$name" --sandbox "$name" --linger "$lingering" \
+    </dev/null >>"$(dr_dep_dir "$name")/warden.log" 2>&1 &
+```
+
+1. **`setsid`**, so it is not in the caller's process group and does not die
+   with the terminal that started it.
+2. **All three standard streams redirected**, stdin from `/dev/null` and both
+   outputs to a log beside its pid file. A daemon with nowhere to write is a
+   daemon that blocks on a full pipe.
+3. **Every inherited descriptor above stdio closed, by the child itself.** This
+   is the one that is easy to miss:
+
+   ```bash
+   for _fd in /proc/self/fd/*; do
+       case "${_fd##*/}" in 0|1|2|255) continue ;; esac
+       eval "exec ${_fd##*/}>&-" 2>/dev/null || true
+   done
+   ```
+
+   Redirecting 0, 1 and 2 says nothing about fd 3. Under `bats` the warden
+   inherited a pipe the test runner was reading and a handle on its output file,
+   so a suite that had printed every result still hung until something killed
+   it — the tests had passed and the run had not finished. 255 is bash's own
+   copy of the script and closing it kills the shell.
+
+**The pid file is a claim, not a fact.** `warden.pid` is checked with `kill -0`
+before another is started, exactly as a claim is checked against live state
+rather than believed: a stale pid file means nothing is running, and that is a
+condition to recover from rather than an error.
+
+**Decide which way it fails, and say so.** If the warden dies the mound stays
+up and the next `dr-up` starts another; nothing stops something that is in use.
+Any long-lived helper added later should choose the same direction.
+
+---
+
 ## Two traps that cost real time
 
 Neither is Draugr's doing, and both are silent.
@@ -628,8 +673,12 @@ confused because the answer lives in a different file?* If yes, it goes here.
    `sbx` command that ran so you can reproduce the problem without Draugr.
 6. **Internal helpers are `_dr_`-prefixed.** A project's `.draugr.conf` is
    sourced into our shell, so its variables could otherwise collide with ours.
-7. **Nothing is written outside** the repo, `~/.config/draugr`, and
-   `$DRAUGR_MEM_STORE`.
+7. **Nothing is written outside** the repo, `~/.config/draugr`,
+   `$DRAUGR_MEM_STORE`, and `${XDG_STATE_HOME:-~/.local/state}/draugr` for
+   run-state. The last one is separate from the config directory on purpose:
+   claims and warden pids are deleted freely, are never worth backing up, and
+   are meaningless on another machine, so keeping them in `~/.config/draugr`
+   would make that directory unsafe to copy.
 8. **A new structural pattern gets a section in this file**, in the same turn
    that introduces it. See *When you add a pattern* above.
 9. **No block of more than five lines of code without a comment.** Enforced by

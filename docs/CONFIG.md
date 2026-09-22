@@ -808,6 +808,63 @@ missing. See [docs/CLAUDE_PLUGINS.md](CLAUDE_PLUGINS.md).
 
 ---
 
+## Run-state dependencies
+
+One `dr-up` brings up whatever this repository's mound needs and is not already running, then the
+mound itself. Empty by default, so this does not exist until a project asks for it. The whole design,
+including what a claim is and why a stale one is harmless, is in
+[docs/DEPENDENCIES.md](DEPENDENCIES.md).
+
+### `DRAUGR_REQUIRES`
+Empty by default. Space-separated **repository paths** whose mounds must be running before this one
+is any use — the gateway that gives a forge VM its only way out being the case it was written for.
+
+```bash
+DRAUGR_REQUIRES="$HOME/code/draugr-gateway"
+```
+
+Each entry is a repository, not a sandbox name, because `dr-up` is what brings a mound up. Absolute
+paths, `~/`-relative and repo-relative all work. Bringing one up is that repository's own `dr-up`:
+idempotent, and it runs that repository's `post-up` hook, which is where a dependency's readiness
+check already lives. "Ready" means its `dr-up` returned 0.
+
+> **Requiring a repository means running its code.** Its `.draugr.conf` is shell and its hooks run on
+> your machine, as you. Draugr refuses a dependency whose config you have not accepted with
+> `dr-trust`, rather than carrying on with default values — a config that is not sourced would leave
+> `DRAUGR_SANDBOX` at `draugr-<leaf>`, and starting the wrong mound is worse than stopping.
+
+`dr-up --skip-deps` starts this mound alone. `dr-dep` shows what is required, what is running, and
+who else is using it.
+
+### `DRAUGR_EXCLUSIVE`
+Default `false`. Read from the **dependency's** config, never from the consumer's: exclusivity is a
+property of the resource. A gateway fronting one Windows desktop is exclusive; a database that
+queues its callers is not.
+
+With `true`, the second project to want it is refused by name:
+
+```text
+dr-up: gwmound is exclusive, and /home/you/code/TabuLua has been using it since 14:02
+```
+
+It is declared by the dependency rather than by the projects that use it, because leaving it to each
+consumer means one careless repository defeats it. A lock whose holder is gone is taken over rather
+than waited for, and a second terminal in the same project is never locked out by the first.
+
+### `DRAUGR_LINGER`
+Default `10m`. Also read from the dependency's config. How long a mound that is up **as a dependency**
+stays up after its last user leaves; `off` keeps it up until somebody stops it.
+
+The delay is the point. A `dr-up --recreate`, a crash and a retry, or one terminal closed and another
+opened all drop the count for a few seconds, and a forge VM that takes minutes to boot must not fall
+over because of it. A new user inside the window cancels the stop. Written as `30s`, `10m`, `1h`
+or `off`; anything else is a refusal rather than a guess.
+
+A mound you started yourself is never touched by this — only one that another repository's `dr-up`
+brought up.
+
+---
+
 ## Safety rails
 
 ### `DRAUGR_SCAN`

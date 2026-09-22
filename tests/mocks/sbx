@@ -4,6 +4,7 @@
 #
 #   DR_MOCK_LOG    file to append the argv to (one invocation per line)
 #   DR_MOCK_STATE  what 'ls --json' should report: absent|stopped|running
+#   DR_MOCK_STATES per-name overrides for it: "gw=running app=stopped"
 #   DR_MOCK_FAIL   exit non-zero for any subcommand named here
 #   DR_MOCK_MOUND  a directory standing in for the mound's filesystem. When set,
 #                  'exec' and 'cp' stop pretending and really run, against that
@@ -55,13 +56,27 @@ ls)
         printf '{\n  "sandboxes": [\n'
         _sep=
         for _n in "${_names[@]}"; do
+            # DR_MOCK_STATES overrides DR_MOCK_STATE per name, as
+            # "name=running other=stopped". One machine-wide state cannot
+            # express a dependency that is up while its consumer is not, which
+            # is the whole subject of dr-dep.
+            # Padded in the expansion as well as in the test: without the
+            # leading space, "${DR_MOCK_STATES##*" name="}" does not match the
+            # FIRST entry and hands back the whole string, which then reads as a
+            # status. Measured the hard way - it made a test pass for the wrong
+            # reason before it made one fail.
+            _s=$state
+            _pad=" ${DR_MOCK_STATES:-} "
+            case "$_pad" in
+                *" $_n="*) _s=${_pad##*" $_n="}; _s=${_s%% *} ;;
+            esac
             printf '%s' "$_sep"
             cat <<EOF
     {
       "name": "$_n",
       "id": "00000000-0000-0000-0000-000000000000",
       "agent": "claude",
-      "status": "$state",
+      "status": "$_s",
       "workspaces": [
         "C:\\\\Code\\\\testrepo"
       ]

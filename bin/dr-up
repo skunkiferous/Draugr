@@ -10,6 +10,7 @@
 #   dr-up --recreate   remove it first, so creation flags are re-applied
 #   dr-up --print      show the sbx command line, run nothing
 #   dr-up --force      with --recreate, also skip the unfetched/unexported checks
+#   dr-up --skip-deps  start this mound alone, without what DRAUGR_REQUIRES names
 set -euo pipefail
 
 DR_PROG=dr-up
@@ -29,12 +30,14 @@ _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 recreate=
 print=
 force=
+skip_deps=
 while [ $# -gt 0 ]; do
     case "$1" in
         --recreate) recreate=1 ;;
         --print|-n) print=1 ;;
         -y|--yes)   DR_ASSUME_YES=1 ;;
         -f|--force) force=1; DR_ASSUME_YES=1 ;;
+        --skip-deps) skip_deps=1 ;;
         -h|--help)  dr_help "$0"; exit 0 ;;
         *) dr_die "unknown option: $1" "Try: dr-up --help" ;;
     esac
@@ -229,6 +232,19 @@ if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
     fi
 fi
 
+
+# What this mound needs RUNNING, before anything here is destroyed or built.
+#
+# Before, for the reason the checks above are before: an exclusive dependency
+# held by another project refuses, and refusing after the removal would leave
+# you with no mound at all over a problem that was visible beforehand. It is
+# also the right order on its own terms - the gateway has to answer before the
+# mound that will use it exists.
+#
+# --print has already exited above, so a dry run never starts anything.
+if [ -z "$skip_deps" ] && [ -n "${DRAUGR_REQUIRES:-}" ]; then
+    "$_dr_bin/dr-dep" up || exit 1
+fi
 
 # --recreate exists because creation flags are frozen into the sandbox spec: the
 # only way to change a port mapping or the memory limit is to build a new mound.
