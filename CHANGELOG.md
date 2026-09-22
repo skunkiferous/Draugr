@@ -18,6 +18,32 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- **`dr-kit apply` never worked, and now does the one thing it honestly can.** It ran
+  `sbx kit add <kit> --sandbox <name>`; `sbx` wants `sbx kit add <name> <kit>` and has no such flag.
+  The test counted `kit add` calls without looking at them, and the mock accepted any arguments, so
+  nothing noticed. The new tests assert the argument vector.
+
+  Fixing the order exposed the real question, now answered on a throwaway mound *(measured, sbx
+  0.37.1)*:
+
+  - `sbx kit add` **refuses** a kit whose name the sandbox already has: `duplicate kit name "x" —
+    each kit in a composition must have a unique name`. An edited kit cannot be re-applied this way.
+  - Adding a kit with a **new** name recreates the container from every kit's current source and
+    writes their rules as a new rule, **without deleting the old one**. A narrowing edit applied that
+    way narrows nothing: the host you removed stays reachable.
+  - That in-place recreate kept the clone and the agent's home, where `dr-up --recreate` destroys
+    both.
+
+  So `dr-kit apply` now adds kits **appended to the end of `DRAUGR_KIT`**, in place, and refuses
+  everything else — a kit edited, removed or reordered — naming `dr-up --recreate`, which is the only
+  thing that applies such a change. It also refuses a new kit whose name clashes with one the mound
+  has, before `sbx` gets to. Verified end to end against real `sbx`: an appended kit was added, an
+  edited one refused with the mound untouched, and the recreate it pointed to removed the stale rule.
+
+  To tell the cases apart, `.draugr/kit.applied` now records each kit's reference, name and hash
+  after the combined hash on its first line. A stamp written by an older Draugr still reads correctly
+  for drift; `apply` refuses to guess from one and asks for a rebuild.
+
 ## [0.5.0] — 2026-09-22
 
 ### Added

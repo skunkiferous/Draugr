@@ -306,8 +306,8 @@ the microVM cannot bind-mount a path behind the Windows network redirector — b
 on the host and packed, so the UNC spelling works. Measured end to end.
 
 `save` copies rather than links, so no repo silently changes another. Editing the library copy does
-put every repo using it into drift until its next `dr-kit apply` — which is the point of drift
-detection rather than a flaw in it.
+put every repo using it into drift until it is rebuilt with `dr-up --recreate` — which is the point
+of drift detection rather than a flaw in it.
 
 **Ports and extra material**
 
@@ -570,7 +570,7 @@ apply, and let memory be memory.
 | `dr-doctor` | Check every precondition and say exactly what to fix |
 | `dr-config` | The merged config, with the origin of each value |
 | `dr-scan` | Find credential-shaped files the agent would be able to read |
-| `dr-kit` | `validate`, `show`, `apply` this project's kits — and warn when they have drifted |
+| `dr-kit` | `validate` and `show` this project's kits, warn when they have drifted, and `apply` kits added to the end of the list |
 | `dr-kit save`/`list` | keep a library of named kits, shared across repositories |
 | `dr-policy` | Show the network rules in force; `--allow <host>` for a temporary hole |
 | `dr-ports` | Publish a port to an already-running sandbox |

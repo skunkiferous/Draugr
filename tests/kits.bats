@@ -316,12 +316,147 @@ make_kit() {
     [[ "$output" == *"only its NAME is compared"* ]]
 }
 
-@test "dr-kit apply: adds every kit in the list" {
+# --- dr-kit apply ---------------------------------------------------------------
+#
+# Measured on sbx 0.37.1 against a throwaway mound, and every test below is a
+# consequence: `sbx kit add` refuses a kit whose name the sandbox already has,
+# and adding a new one writes a fresh rule WITHOUT deleting the old - so an edit
+# that narrows a kit would leave the wider rule in force. apply therefore does
+# exactly one thing, adding kits to the end of the list, and refuses the rest.
+#
+# The test this replaces counted `kit add` calls and passed for ages while the
+# argv it counted was wrong: the kit first, then a --sandbox flag sbx does not
+# have. These assert the argv itself.
+
+# A mound built from the current list, so the stamp records what it was built
+# with - the state every apply starts from.
+build_mound() {
+    DR_MOCK_STATE=absent dr-up >/dev/null 2>&1
+}
+
+@test "dr-kit apply: nothing to do when the kits match what the mound was built with" {
+    make_kit "$REPO/.draugr/kit"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    : > "$DR_MOCK_LOG"
+    run dr-kit apply --yes
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to apply"* ]]
+    [ -z "$(calls kit)" ]
+}
+
+@test "dr-kit apply: a kit added at the end is added, sandbox first" {
     make_kit "$REPO/.draugr/kit"
     make_kit "$DRAUGR_KIT_STORE/lua"
-    DRAUGR_KIT=".draugr/kit lua" run dr-kit apply --yes
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    : > "$DR_MOCK_LOG"
+    export DRAUGR_KIT=".draugr/kit lua"
+    run dr-kit apply --yes
     [ "$status" -eq 0 ]
-    [ "$(calls kit | grep -c "kit add")" -eq 2 ]
+    # Exactly one call, for the new kit only, and in sbx's order: SANDBOX REF.
+    [ "$(calls kit | grep -c "^kit add ")" -eq 1 ]
+    [[ "$(calls kit)" == "kit add $DR_MOCK_NAME "* ]]
+    [[ "$(calls kit)" == *lua* ]]
+    [[ "$(calls kit)" != *--sandbox* ]]
+}
+
+@test "dr-kit apply: records the added kit, so a second apply has nothing to do" {
+    make_kit "$REPO/.draugr/kit"
+    make_kit "$DRAUGR_KIT_STORE/lua"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    export DRAUGR_KIT=".draugr/kit lua"
+    dr-kit apply --yes >/dev/null 2>&1
+    run dr-kit apply --yes
+    [[ "$output" == *"nothing to apply"* ]]
+    run dr-kit drift
+    [ "$status" -eq 0 ]
+}
+
+@test "dr-kit apply: an EDITED kit is refused, and names dr-up --recreate" {
+    make_kit "$REPO/.draugr/kit"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    : > "$DR_MOCK_LOG"
+    printf 'description: narrowed\n' >> "$REPO/.draugr/kit/spec.yaml"
+    run dr-kit apply --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"has changed"* ]]
+    [[ "$output" == *"dr-up --recreate"* ]]
+    [ -z "$(calls kit)" ]
+}
+
+@test "dr-kit apply: a REMOVED kit is refused - sbx has no way to take one out" {
+    make_kit "$REPO/.draugr/kit"
+    make_kit "$DRAUGR_KIT_STORE/lua"
+    export DRAUGR_KIT=".draugr/kit lua"
+    build_mound
+    export DRAUGR_KIT=".draugr/kit"
+    run dr-kit apply --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"dr-up --recreate"* ]]
+}
+
+@test "dr-kit apply: a kit inserted in the MIDDLE is refused, not appended out of order" {
+    make_kit "$REPO/.draugr/kit"
+    make_kit "$DRAUGR_KIT_STORE/lua"
+    make_kit "$DRAUGR_KIT_STORE/web"
+    export DRAUGR_KIT=".draugr/kit web"
+    build_mound
+    export DRAUGR_KIT=".draugr/kit lua web"
+    run dr-kit apply --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no longer starts with"* ]]
+}
+
+@test "dr-kit apply: a new kit named like one the mound has is refused before sbx sees it" {
+    make_kit "$REPO/.draugr/kit"
+    mkdir -p "$DRAUGR_KIT_STORE/other"
+    # Same name: as the project kit, in a different directory.
+    printf 'schemaVersion: "2"\nkind: mixin\nname: kit\ndisplayName: clash\n' \
+        > "$DRAUGR_KIT_STORE/other/spec.yaml"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    : > "$DR_MOCK_LOG"
+    export DRAUGR_KIT=".draugr/kit other"
+    run dr-kit apply --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'named "kit"'* ]]
+    [ -z "$(calls kit)" ]
+}
+
+@test "dr-kit apply: a stamp from before per-kit records refuses rather than guesses" {
+    make_kit "$REPO/.draugr/kit"
+    make_kit "$DRAUGR_KIT_STORE/lua"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    # What an older Draugr wrote: the combined hash and nothing else.
+    head -1 "$REPO/.draugr/kit.applied" > "$REPO/.draugr/kit.stamp.old"
+    mv "$REPO/.draugr/kit.stamp.old" "$REPO/.draugr/kit.applied"
+    export DRAUGR_KIT=".draugr/kit lua"
+    run dr-kit apply --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot tell which kits"* ]]
+}
+
+@test "dr-kit drift: still reads a one-line stamp an older Draugr wrote" {
+    make_kit "$REPO/.draugr/kit"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    head -1 "$REPO/.draugr/kit.applied" > "$REPO/.draugr/kit.stamp.old"
+    mv "$REPO/.draugr/kit.stamp.old" "$REPO/.draugr/kit.applied"
+    run dr-kit drift
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"matches"* ]]
+}
+
+@test "dr_kit_spec_name: reads the name sbx composes by, quoted or not" {
+    mkdir -p "$DR_TMP/a" "$DR_TMP/b"
+    printf 'schemaVersion: "2"\nname: plain\n' > "$DR_TMP/a/spec.yaml"
+    printf 'schemaVersion: "2"\nname: "quoted"  # a comment\n' > "$DR_TMP/b/spec.yaml"
+    [ "$(dr_kit_spec_name "$DR_TMP/a")" = plain ]
+    [ "$(dr_kit_spec_name "$DR_TMP/b")" = quoted ]
 }
 
 @test "dr-kit validate: checks every kit in the list" {

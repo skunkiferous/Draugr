@@ -263,11 +263,13 @@ report_drift() {
     local stamp changed
     if dr_kit_refs >/dev/null; then
         stamp=$(dr_kit_stamp)
-        if [ -f "$stamp" ] && [ "$(dr_kit_hash_all)" != "$(cat "$stamp")" ]; then
+        # First line only: the stamp also records each kit, for dr-kit apply.
+        if [ -f "$stamp" ] && [ "$(dr_kit_hash_all)" != "$(dr_kit_stamp_hash)" ]; then
             dr_warn "the kit has changed since $DRAUGR_SANDBOX was built"
             printf '  %sThe mound still has the old rules and setup. Apply them with:%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
-            printf '  %s  dr-kit apply      (recreates the container)%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %s  dr-kit apply      (says whether it can, or needs a recreate)%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
         fi
     fi
 
@@ -375,7 +377,7 @@ absent)
     # are kits; the settings one always, because every mound has settings.
     mkdir -p "$DR_REPO/.draugr"
     if dr_kit_refs >/dev/null; then
-        dr_kit_hash_all > "$(dr_kit_stamp)"
+        dr_kit_stamp_write
     fi
     dr_create_facts > "$(dr_create_stamp)"
 

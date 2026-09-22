@@ -746,10 +746,11 @@ assumption.
   - `dr-policy --check` is presented as authoritative, but checks names while enforcement is per IP.
   - Wildcard semantics are undocumented: `*.` is one label, `**.` is the apex and any depth, both
     quoted.
-  - **`dr-kit apply` has never worked on `sbx` 0.37.1**: it runs `sbx kit add <kit> --sandbox <name>`,
-    and `sbx` wants `sbx kit add <name> <kit>` *(measured)*. The test mock accepts any arguments, so
-    nothing caught it. Separately, `kit add` appends to the sandbox's kit list, so whether applying
-    an *edited* kit can remove a rule is unmeasured; if it cannot, `apply` should rebuild instead.
+  - ~~**`dr-kit apply` has never worked on `sbx` 0.37.1**~~ — **fixed 2026-09-22.** The argument
+    order was wrong (`sbx kit add <name> <kit>`, no `--sandbox` flag), and the open question behind
+    it is now answered *(measured)*: `kit add` refuses a kit the sandbox already has, and adding a
+    new one leaves the old rules in force. So `apply` adds kits appended to the list, in place, and
+    refuses anything else in favour of `dr-up --recreate` — for the gateway, every kit change.
 - **Upstream — the snapshot bug.** Filed: the issue with the analysis,
   [#152](https://github.com/jamesstringer90/appsandbox/issues/152), and a fix built on 0.1.8 with the
   released drivers and tested on a throwaway VM,

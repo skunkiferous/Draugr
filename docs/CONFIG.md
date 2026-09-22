@@ -278,7 +278,12 @@ write the field, because freezing today's agent into a committed file would make
 an edit rather than a setting.
 
 `dr-up` warns when the list has changed since the mound was built, because applying it recreates the
-container — that must be a decision, not a side effect. `dr-kit apply` does it. A remote reference
+container — that must be a decision, not a side effect. **How** depends on the change, because `sbx`
+can only ever add a kit to a running mound *(measured)*: kits added to the end of the list go in with
+`dr-kit apply`, in place, keeping the clone; a kit edited, removed or reordered needs `dr-up
+--recreate`. The reason is not caution. `sbx kit add` refuses a kit the sandbox already has, and when it
+adds a new one it leaves the old rules in force beside the new ones, so a narrowing edit applied that
+way would narrow nothing. `dr-kit apply` checks which case you are in and says so. A remote reference
 contributes only its *name* to that comparison; a tag that moved under you is drift Draugr cannot see,
 and `dr-kit drift` says so rather than implying a clean bill of health.
 
@@ -299,8 +304,8 @@ for the mound, skips whatever the kit already declares, and writes the rest into
 block; a kit it does not recognise is reported and left untouched rather than guessed at.
 
 `save` copies rather than symlinks, so editing one side never silently changes the other. Editing the
-library copy does put every repo that uses it into drift until its next `dr-kit apply` — which is the
-point of drift detection, not a flaw in it. For sharing across *machines*, `sbx kit pack` and
+library copy does put every repo that uses it into drift until it is rebuilt with `dr-up --recreate`
+— which is the point of drift detection, not a flaw in it. For sharing across *machines*, `sbx kit pack` and
 `sbx kit push` already work, and an OCI reference is a valid `DRAUGR_KIT` entry.
 
 ### `DRAUGR_PORTS`

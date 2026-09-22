@@ -44,13 +44,15 @@ Every claim carries one of three labels:
    session cost the strict policy exactly one host; see [step 3](#done-2026-09-20-measured) and
    [the run](#a-real-tool-through-the-narrowed-gateway-2026-09-20-measured). Visual Studio through
    the *narrowed* gateway is still untested, as is F5.
-3. **`dr-kit apply` does not work on `sbx` 0.37.1.** It passes `--sandbox`, which `sbx kit add` does
-   not accept; and `kit add` *appends* a kit, so whether re-adding an edited kit can remove a rule is
-   unmeasured *(measured: the failure)*. Until it is fixed, apply a kit change with
-   `dr-up --recreate --yes`, which the gateway can afford: it holds no state. A Draugr fix, tracked as
-   [track B](FORGE.md#order-of-work).
+3. **`dr-kit apply` fixed in Draugr, 2026-09-22 — and it cannot apply an edit, by design.** Measured
+   on a throwaway mound: `sbx kit add` refuses a kit the sandbox already has (`duplicate kit name`),
+   and adding a *new* kit re-reads every kit and writes their rules as a new rule **without deleting
+   the old one**. So a kit edit that narrows the gateway would narrow nothing through `kit add`. Every
+   change to `kits/unreal` or `.draugr/kit` is therefore `dr-up --recreate --yes`, which the gateway
+   can afford — it holds no state — and which is also what runs the `post-up` hook. `dr-kit apply` now
+   refuses an edited kit and says so.
 4. **A5** (a real reboot) and **A7** (a one-file kit change) are unmeasured. On 2026-09-20 every
-   step of A5 except the reboot itself ran in order; A7 waits on the `dr-kit apply` bug above.
+   step of A5 except the reboot itself ran in order; A7's recipe is now `dr-up --recreate --yes`.
 
 ---
 
@@ -657,10 +659,9 @@ state.
 5. Run `dr-kit adopt`, which writes into `.draugr/kit`, then move those lines into
    `kits/unreal/spec.yaml` with a comment each. Use `"**.domain"` for a vendor's own domain, and
    exact names for shared CDNs.
-6. Run `dr-kit validate`, `dr-kit apply`, and then **`dr-up`**. `dr-kit apply` recreates the container
-   and runs no hooks, so without `dr-up` there is no keeper and no tinyproxy. **On `sbx` 0.37.1
-   `dr-kit apply` fails** ([open items](#open-items)); use `dr-up --recreate --yes` instead, which
-   rebuilds the gateway and runs the hook in one step.
+6. Run `dr-kit validate`, then **`dr-up --recreate --yes`**, which rebuilds the gateway and runs the
+   hook in one step. Not `dr-kit apply`: `kits/unreal` already exists in the mound, and `sbx` can
+   only ever *add* a kit, never re-apply one ([open items](#open-items)).
 7. If the host is in `.draugr/kit`'s deny list (step 5), delete that line first: a deny wins over
    every allow, `dr-policy --allow` included.
 
@@ -746,7 +747,7 @@ would appear. `api.nuget.org` was never requested.
    - `www.google.com`, which the editor used for an unknown purpose; test before denying it.
 4. List each host you close. Never deny `**`.
 5. Check each with `dr-policy --check <host>`, which should report `denied by local rule
-   "kit:draugr-gateway:deny"`. Then run `dr-kit validate`, `dr-kit apply` and `dr-up`.
+   "kit:draugr-gateway:deny"`. Then run `dr-kit validate` and `dr-up --recreate --yes`.
 
 ### Done, 2026-09-19 *(measured)*
 
@@ -803,7 +804,7 @@ Two consequences worth knowing before the next change:
 | A4 | The gateway stays up unattended | 5 minutes after `dr-up`, with nobody attached, it is running and A1 passes | measured with a keeper (80 s+, then 45 s+) |
 | A5 | Reboot recovery | After a reboot: start AppSandbox elevated, start the VM, `dr-up` in the gateway repo, start `vm-tunnel.ps1`, then A1 | pieces measured; on 2026-09-20 the whole sequence except the reboot itself ran in order — VM started, `dr-up`, `vm-tunnel.ps1`, then A1 from inside the guest. A real reboot is still unmeasured |
 | A6 | Daemon restart recovery | `sbx daemon stop`, `dr-up`, then A1 | measured with the hook; re-measured 2026-09-20 after the daemon had exited on its own — one `dr-up` restored keeper, tinyproxy and the probe in 65 s, and the 226 allow / 147 deny rules were still in place |
-| A7 | Adding a domain touches one file | Edit `kits/unreal`, run `dr-kit validate && dr-kit apply && dr-up`, then A1 for that host | unmeasured |
+| A7 | Adding a domain touches one file | Edit `kits/unreal`, run `dr-kit validate && dr-up --recreate --yes`, then A1 for that host | unmeasured; the recipe changed on 2026-09-22 because `sbx kit add` cannot re-apply a kit |
 | A8 | `dr-policy --check` predicts the guest | Five sampled hosts agree with A1 and A2 | measured for 4 hosts; on 2026-09-20, 23 hosts behaved from inside the guest exactly as the kits predict — 20 reachable, 3 refused — and the three sampled with `sbx policy check` agreed |
 | A9 | Narrowing is real | `dr-policy --check api.anthropic.com` is denied by the kit, and the guest gets `500` | **measured on the real gateway, 2026-09-20**: from inside the VM, `api.anthropic.com` is refused by the proxy, as are `learn.microsoft.com` and `example.com`. The VM cannot reach the agent's own API |
 | A10 | Each Unreal tool works while Windows reports offline | Step 4 | **measured** for the Epic Games Launcher (sign-in, Fab, Library, a 131 MB download), Unreal Editor 5.8 (Fab plugin, lighting build through Swarm, Play), the Visual Studio Installer, Visual Studio 2022 and a C++ project build; **unmeasured** for F5 debugging |
@@ -901,7 +902,8 @@ core rather than here — see [FORGE.md, track B](FORGE.md#order-of-work). Each 
 - **The liveness chain is long:** AppSandbox → VM → tunnel supervisor → keeper → tinyproxy →
   gateway. A reboot or a `sandboxd` restart breaks the keeper and tinyproxy until `dr-up` runs again.
   The guest preflight is the backstop.
-- **A kit change is an outage** (`dr-kit apply`, then `dr-up`).
+- **A kit change is an outage** (`dr-up --recreate --yes`, about a minute): `sbx` cannot apply an
+  edited kit to a running mound, and adding one leaves the old rules in force.
 - **The policy log is not an audit trail,** because it lives in daemon memory.
 - **Clients that connect by IP address.** A CONNECT to one address with a different SNI reached the
   SNI host, not the address. TLS without SNI is unmeasured.

@@ -10,14 +10,17 @@
 #
 #   DRAUGR_KIT=".draugr/kit lua"
 #
-# What Draugr adds is noticing when they change. Applying a kit recreates the
-# container, so dr-up records a hash of the whole list at creation and reports
-# drift instead of quietly rebuilding your sandbox.
+# What Draugr adds is noticing when they change. dr-up records every kit at
+# creation and reports drift instead of quietly rebuilding your sandbox.
+#
+# Only one change can be applied to a running mound: kits ADDED to the end of
+# the list. sbx refuses to re-add a kit it already has, and cannot remove one,
+# so an edited or removed kit needs `dr-up --recreate` - apply says which.
 #
 #   dr-kit validate    check every kit, with sbx's own diagnostics
 #   dr-kit show        what they declare
 #   dr-kit drift       have they changed since the mound was built?
-#   dr-kit apply       apply them - RECREATES the container
+#   dr-kit apply       add new kits in place, or say why only a recreate can
 #   dr-kit list        the named kits in your library
 #   dr-kit save NAME   copy this project's kit into the library as NAME
 #   dr-kit adopt       write hosts opened with dr-policy --allow into the kit
@@ -144,7 +147,7 @@ save)
     printf '  %s  DRAUGR_KIT=".draugr/kit %s"%s\n' "$_DR_DIM" "$save_name" "$_DR_OFF" >&2
     printf '  %sThis is a COPY. Editing one does not change the other, and editing%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sthe library copy makes every repo using it drift until dr-kit apply.%s\n' \
+    printf '  %sthe library copy makes every repo using it drift until dr-up --recreate.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     exit 0
     ;;
@@ -261,7 +264,8 @@ drift)
         printf '  %sdr-up records one when it creates the mound.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
         exit 0
     fi
-    was=$(cat "$hash_file")
+    # The first line is the combined hash; the lines after it name each kit.
+    was=$(dr_kit_stamp_hash)
     if [ "$now" = "$was" ]; then
         dr_ok "the kit list matches what the mound was built with"
         # Said out loud rather than implied: a moved OCI tag is drift that no
@@ -274,40 +278,122 @@ drift)
     else
         dr_warn "the kit list has changed since the mound was built"
         printf '  %sThe running sandbox still has the OLD rules and setup.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %sApply them (recreates the container):  dr-kit apply%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sKits added at the end:  dr-kit apply.  Anything else:  dr-up --recreate%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
         exit 1
     fi
     ;;
 
-# apply is the destructive one: sbx kit add rebuilds the container. Kit-owned
-# volumes and the clone survive, but anything installed by hand inside does not.
+# apply adds kits to a running mound, and that is ALL it can do. Measured on sbx
+# 0.37.1 against a throwaway mound, and the reason this is shaped as it is:
+#
+#  - `sbx kit add SANDBOX REF` REFUSES a kit whose name the sandbox already has:
+#    'duplicate kit name "x" - each kit in a composition must have a unique
+#    name'. So an edited kit cannot be re-applied this way at all.
+#  - Adding a kit with a NEW name recreates the container from every kit's
+#    CURRENT source, and writes their rules as a new policy rule WITHOUT
+#    deleting the previous one. An edit that narrows a kit therefore does not
+#    narrow anything: the old, wider rule stays in force beside the new one.
+#  - The clone and the agent's home survived that recreate, where dr-up
+#    --recreate destroys both - which is why the in-place path is worth keeping
+#    for the one case it handles honestly.
+#
+# That case is: every kit the mound was built with is unchanged and still first
+# in the list, and there are new ones after them. Anything else - a kit edited,
+# removed, reordered, or a stamp too old to say which kits it had - is refused
+# with the command that does work.
 apply)
     dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
         "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up  (which applies the kits)"
 
+    recreate_hint="Rebuild it with the kits as they are now:  dr-up --recreate"
+
+    # What the mound was built from, kit by kit. A stamp from before per-kit
+    # records existed has only the combined hash, which can say "unchanged" but
+    # never "only added to" - so it gets the safe answer.
+    mapfile -t built < <(dr_kit_stamp_kits)
+    if [ ${#built[@]} -eq 0 ]; then
+        if [ "$(dr_kit_hash_all)" = "$(dr_kit_stamp_hash)" ]; then
+            dr_ok "nothing to apply: the kits match what $DRAUGR_SANDBOX was built with"
+            exit 0
+        fi
+        dr_die "cannot tell which kits $DRAUGR_SANDBOX was built with" \
+               "Its record predates per-kit tracking, and sbx cannot list a sandbox's kits." \
+               "$recreate_hint"
+    fi
+
+    # The built kits must be the start of the current list, each one unchanged.
+    # A kit that changed cannot be re-added (sbx refuses the duplicate name), and
+    # one that was removed cannot be taken out: add is the only verb sbx has.
+    i=0
+    for line in "${built[@]}"; do
+        IFS=$'\t' read -r b_ref _ b_hash <<< "$line"
+        now_ref=${refs[$i]:-}
+        if [ "$now_ref" != "$b_ref" ]; then
+            dr_die "the kit list no longer starts with what $DRAUGR_SANDBOX was built with" \
+                   "Built with $b_ref in position $((i + 1)); DRAUGR_KIT now has ${now_ref:-nothing} there." \
+                   "sbx can only ADD a kit to a mound - it cannot remove or reorder one." \
+                   "$recreate_hint"
+        fi
+        if [ -d "$now_ref" ]; then now_hash=$(dr_dir_hash "$now_ref"); else now_hash=$now_ref; fi
+        if [ "$now_hash" != "$b_hash" ]; then
+            dr_die "$now_ref has changed since $DRAUGR_SANDBOX was built" \
+                   "sbx will not re-add a kit the mound already has, and adding another one" \
+                   "would apply this edit only where it ADDS something: a rule the edit" \
+                   "removed would stay in force (measured). So only a rebuild applies it." \
+                   "$recreate_hint"
+        fi
+        i=$((i + 1))
+    done
+
+    # Whatever is left is new, in order.
+    new_refs=("${refs[@]:$i}")
+    new_args=("${kit_args[@]:$i}")
+    if [ ${#new_refs[@]} -eq 0 ]; then
+        dr_ok "nothing to apply: the kits match what $DRAUGR_SANDBOX was built with"
+        exit 0
+    fi
+
+    # A new kit named like one the mound already has would be refused by sbx in
+    # its own words, halfway through. Checked here so it is refused before any
+    # container is touched, and with the names side by side.
+    for r in "${new_refs[@]}"; do
+        [ -d "$r" ] || continue
+        n=$(dr_kit_spec_name "$r")
+        for line in "${built[@]}"; do
+            IFS=$'\t' read -r b_ref b_name _ <<< "$line"
+            [ -n "$n" ] && [ "$n" = "$b_name" ] && dr_die \
+                "$r is named \"$n\", like $b_ref which $DRAUGR_SANDBOX already has" \
+                "sbx refuses two kits with one name in the same sandbox." \
+                "Rename one in its spec.yaml, or rebuild:  dr-up --recreate"
+        done
+    done
+
     # Spell out the cost before asking, not after: "recreates the container" is
     # not something to discover from a prompt you already clicked through.
-    dr_warn "applying a kit RECREATES the container"
-    printf '  %sThe agent'"'"'s clone and kit-owned volumes survive. Anything installed%s\n' \
+    dr_warn "adding ${#new_refs[@]} kit(s) recreates the container, in place"
+    printf '  %sThe clone and the agent'"'"'s home survive (measured). A running agent is%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sby hand inside the mound does not, and a running agent is interrupted.%s\n' \
+    printf '  %sinterrupted, and anything installed by hand outside those may not be.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    for k in "${kit_args[@]}"; do
+    for k in "${new_args[@]}"; do
         printf '    %s\n' "$k" >&2
     done
-    dr_confirm "Apply ${#kit_args[@]} kit(s) to $DRAUGR_SANDBOX?" || dr_die "cancelled"
+    dr_confirm "Add ${#new_refs[@]} kit(s) to $DRAUGR_SANDBOX?" || dr_die "cancelled"
 
-    # One at a time, in order, because that is how sbx merges them - and a
-    # failure halfway names the kit that failed rather than the whole list.
-    for k in "${kit_args[@]}"; do
-        dr_sbx kit add "$k" --sandbox "$DRAUGR_SANDBOX" || dr_die \
-            "could not apply $k" \
+    # One at a time, in order, so a failure names the kit that failed. The
+    # sandbox comes FIRST: `sbx kit add SANDBOX REFERENCE`. The old code passed
+    # the kit first and a --sandbox flag sbx does not have, and no test noticed
+    # because the mock accepted any argv - see tests/kits.bats.
+    for k in "${new_args[@]}"; do
+        dr_sbx kit add "$DRAUGR_SANDBOX" "$k" || dr_die \
+            "could not add $k to $DRAUGR_SANDBOX" \
             "sbx refuses on sandboxes created before kits shipped; dr-up --recreate rebuilds one."
     done
 
     mkdir -p "$DR_REPO/.draugr"
-    dr_kit_hash_all > "$hash_file"
-    dr_ok "applied ${#kit_args[@]} kit(s), and recorded the new hash"
+    dr_kit_stamp_write
+    dr_ok "added ${#new_refs[@]} kit(s) to $DRAUGR_SANDBOX, and recorded them"
     ;;
 # --- adopt --------------------------------------------------------------------
 #

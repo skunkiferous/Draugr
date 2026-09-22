@@ -2108,6 +2108,52 @@ dr_kit_stamp() {
     printf '%s/.draugr/kit.applied' "$DR_REPO"
 }
 
+# dr_kit_spec_name <dir> - the kit's own name, from its spec.yaml.
+#
+# This is the name sbx composes by, and refuses to see twice: measured on
+# 0.37.1, re-adding a kit whose name the sandbox already has fails with
+# 'duplicate kit name "x" - each kit in a composition must have a unique name'.
+dr_kit_spec_name() {
+    sed -n 's/^name:[[:space:]]*"\{0,1\}\([^"#[:space:]]*\).*/\1/p' "$1/spec.yaml" 2>/dev/null | head -1
+}
+
+# The stamp, line by line:
+#
+#   <combined hash>                     line 1, exactly what it has always been
+#   kit<TAB><ref><TAB><name><TAB><hash>  one per kit, in DRAUGR_KIT order
+#
+# Line 1 stays alone and first so that a stamp written by an older Draugr - one
+# line, nothing else - still reads correctly for drift. The per-kit lines are
+# what let dr-kit apply tell "a kit was added at the end", which sbx can do in
+# place, from "a kit changed", which it cannot.
+dr_kit_stamp_write() {
+    local ref
+    {
+        dr_kit_hash_all
+        while IFS= read -r ref; do
+            if [ -d "$ref" ]; then
+                printf 'kit\t%s\t%s\t%s\n' "$ref" "$(dr_kit_spec_name "$ref")" "$(dr_dir_hash "$ref")"
+            else
+                # A remote reference: its string is all we can honestly record,
+                # for the reason dr_kit_hash_all gives.
+                printf 'kit\t%s\t\t%s\n' "$ref" "$ref"
+            fi
+        done < <(dr_kit_refs)
+    } > "$(dr_kit_stamp)"
+}
+
+# The combined hash the mound was built with, or nothing if there is no stamp.
+dr_kit_stamp_hash() {
+    head -1 "$(dr_kit_stamp)" 2>/dev/null
+}
+
+# The per-kit lines, as "<ref>\t<name>\t<hash>". Empty for an old stamp, which
+# only ever recorded the combined hash - and "we do not know which kits" is an
+# answer the callers have to handle, not paper over.
+dr_kit_stamp_kits() {
+    sed -n 's/^kit\t//p' "$(dr_kit_stamp)" 2>/dev/null
+}
+
 # ---------------------------------------------------------------------------
 # Network policy, and the loop it makes possible
 #

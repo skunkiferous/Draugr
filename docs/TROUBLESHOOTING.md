@@ -266,12 +266,18 @@ machine-wide rules already apply, so the domain may be allowed for a reason you 
 ### The kit changed but the sandbox did not
 
 Applying a kit recreates the container, so Draugr will not do it as a side effect. `dr-up` warns
-about the drift; `dr-kit apply` performs it.
+about the drift, and what fixes it depends on what changed:
 
 ```bash
 dr-kit validate     # before you find out the hard way
-dr-kit show
+dr-kit apply        # kits ADDED to the end of DRAUGR_KIT: added in place, clone kept
+dr-up --recreate    # a kit EDITED, removed or reordered: the only thing that applies it
 ```
+
+`dr-kit apply` tells you which one you need. It cannot do the second, and neither can `sbx`: `kit add`
+refuses a kit the sandbox already has (`duplicate kit name`), and when it adds another it leaves the
+old rules in force *(measured)* — so a host you deleted from a kit would still be reachable. If you
+see `duplicate kit name` from `sbx` directly, that is the same thing.
 
 ### `dr-up` fails with `500 Internal Server Error: failed to run sandbox container`
 

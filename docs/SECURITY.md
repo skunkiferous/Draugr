@@ -144,7 +144,10 @@ Two things still rest on review alone:
 - **The kit** (`.draugr/kit/`) is not trust-checked. It cannot run anything on your host — it
   configures the inside of the mound — but it does declare the network allowlist, so a merged change
   could widen what the agent can reach. `dr-up` warns when the kit differs from the one the mound was
-  built with, and applying it is an explicit `dr-kit apply`.
+  built with, and applying it is an explicit command: `dr-kit apply` for a kit added to the list,
+  `dr-up --recreate` for one that changed. The second matters here: `sbx kit add` keeps the old
+  rules in force beside the new ones *(measured)*, so a kit edit that narrows the allowlist only
+  takes effect on a rebuild. `dr-kit apply` refuses an edited kit for exactly that reason.
 - **`.draugr.local.conf`** is gitignored, so it cannot travel through a merge at all. That is the
   place to put anything you do not want a repository able to influence.
 
