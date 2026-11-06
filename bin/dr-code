@@ -49,11 +49,11 @@ if [ -n "$subdir" ]; then
     target="$target/${subdir#/}"
 fi
 
-# VS Code's remote URI format. The authority is ssh-remote+<host>, and the host
-# is the same <name>.sbx that dr-setup taught WSL about - so this needs no
-# separate configuration of its own, and breaks in exactly the same way dr-shell
-# would if the SSH block were missing.
-uri="vscode-remote://ssh-remote+$DRAUGR_SANDBOX.sbx$target"
+# VS Code's remote URI format. The authority is ssh-remote+<host>, and the host is whatever
+# ssh already reaches: the <name>.sbx that dr-setup taught WSL about, or - when this project's
+# far end is the forge - the VM's own alias. Either way it needs no configuration of its own,
+# and breaks in exactly the same way dr-shell would if the ssh block were missing.
+uri="vscode-remote://ssh-remote+$(dr_sandbox_ssh_host)$target"
 
 if [ -n "$print_only" ]; then
     printf '%s\n' "$uri"

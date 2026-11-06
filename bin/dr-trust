@@ -79,10 +79,11 @@ if [ ${#files[@]} -eq 0 ]; then
 fi
 
 # --revoke: filter the path out of the trust file. Entries are keyed by absolute
-# path, so resolve whatever was typed before matching.
+# path, so resolve whatever was typed before matching - and fold its case, because
+# on a Windows drive `pwd` reports the spelling you typed (dr_path_canon_case).
 if [ "$action" = revoke ]; then
     for f in "${files[@]}"; do
-        abs=$(cd "$(dirname "$f")" && pwd)/$(basename "$f")
+        abs=$(dr_path_canon_case "$(cd "$(dirname "$f")" && pwd)/$(basename "$f")")
         if [ -f "$DR_TRUST_FILE" ] && grep -qF "  $abs" "$DR_TRUST_FILE"; then
             grep -vF "  $abs" "$DR_TRUST_FILE" > "$DR_TRUST_FILE.tmp" || :
             mv "$DR_TRUST_FILE.tmp" "$DR_TRUST_FILE"
@@ -96,7 +97,7 @@ fi
 
 for f in "${files[@]}"; do
     [ -f "$f" ] || dr_die "no such file: $f"
-    abs=$(cd "$(dirname "$f")" && pwd)/$(basename "$f")
+    abs=$(dr_path_canon_case "$(cd "$(dirname "$f")" && pwd)/$(basename "$f")")
 
     if dr_trust_is_trusted "$abs"; then
         dr_ok "already trusted, unchanged: $abs"

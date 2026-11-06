@@ -421,6 +421,17 @@ adopt)
         exit 0
     fi
 
+    # A host name contains neither a quote nor a backslash, so one here means the policy
+    # list is not what this code thinks it is. Refuse, rather than write a kit sbx will
+    # reject - or, worse, one it accepts with a meaning nobody intended.
+    for _h in "${hosts[@]}"; do
+        case $_h in
+            *'"'*|*\\*) dr_die "refusing to write an implausible host into the kit: $_h" \
+                               "A host name contains neither a quote nor a backslash." \
+                               "Check what dr-policy reports:  dr-policy --denied" ;;
+        esac
+    done
+
     # Shown before the prompt: these become a committed promise about what the
     # project may reach, and every teammate who clones it inherits them.
     dr_warn "${#hosts[@]} host(s) will be written into $kit/spec.yaml"
@@ -438,39 +449,97 @@ adopt)
     mkdir -p "$tmp"
     out="$tmp/spec.yaml.$$"
 
-    # A targeted edit rather than a YAML rewriter: find `allow:` under
-    # `network:`, take its indent, and insert the new entries as list items two
-    # spaces deeper. `allow: []` becomes `allow:` on the way past, since the two
-    # cannot both be true. Anything it does not recognise is left alone and
-    # reported below, because a kit half-written by a guess is worse than one
-    # you were asked to edit yourself.
-    awk -v add="$(printf '%s\n' "${hosts[@]}")" '
-        BEGIN { split(add, want, "\n") }
-        !done && /^[[:space:]]*network:[[:space:]]*$/ { innet = 1 }
-        !done && innet && /^[[:space:]]*allow:[[:space:]]*(\[\])?[[:space:]]*$/ {
-            match($0, /^[[:space:]]*/); ind = substr($0, 1, RLENGTH)
-            sub(/allow:.*/, "allow:")
-            print
-            for (i in want) if (want[i] != "") print ind "  - " want[i]
-            done = 1
-            next
-        }
-        { print }
-        END { if (!done) exit 3 }
-    ' "$kit/spec.yaml" > "$out" || {
-        rm -f "$out"
-        dr_warn "could not find caps.network.allow in $kit/spec.yaml"
-        printf '  %sNothing was changed. Add this block by hand:%s\n' \
-            "$_DR_DIM" "$_DR_OFF" >&2
-        printf '\n  caps:\n    network:\n      allow:\n' >&2
-        printf '        - %s\n' "${hosts[@]}" >&2
-        exit 1
+    # A targeted edit rather than a YAML rewriter, tried two ways.
+    #
+    # append: find `allow:` under `network:`, take its indent, and insert the new
+    #   entries as list items two spaces deeper. `allow: []` becomes `allow:` on the
+    #   way past, since the two cannot both be true.
+    # create: there was no `allow:` key at all, so write one directly under `network:`.
+    #
+    # THE SECOND PASS IS NOT AN EDGE CASE. A network block that declares only `deny:`
+    # is an ordinary kit - draugr-gateway's own gateway kit is exactly that, narrowing
+    # sbx's defaults while allowing nothing itself - and without `create` the adopt
+    # loop dead-ends there, printing a block for the user to paste in by hand. Having
+    # to hand-edit the file is the thing dr-kit exists to prevent (reported,
+    # after a real `dr-up --recreate` refused to discard seven hosts that could not be
+    # written down). The test fixture always had an `allow:` key, which is why this
+    # lived so long.
+    #
+    # Entries go in the order dr_policy_unadopted reported them. `for (i in want)`
+    # would NOT do that - awk leaves that iteration order unspecified - and this file
+    # is committed and diffed, so an arbitrary order is a spurious diff every time.
+    #
+    # Anything neither pass recognises is left alone and reported below, because a kit
+    # half-written by a guess is worse than one you were asked to edit yourself.
+    _dr_adopt_into() {
+        awk -v add="$(printf '%s\n' "${hosts[@]}")" -v mode="$1" '
+            BEGIN { n = split(add, want, "\n") }
+
+            # A BARE YAML SCALAR STARTING WITH * IS AN ALIAS REFERENCE, so a wildcard
+            # host has to be quoted or the kit does not parse at all - sbx answers
+            # "did not find expected alphabetic or numeric character" and names a line
+            # number, not the entry (measured, on "**.live.com"). Plain host
+            # names stay bare so adopted entries look like the hand-written ones around
+            # them; the deny lists in these kits already quote their wildcards the same
+            # way. Nothing is escaped inside the quotes because the loop above has
+            # already refused anything that would need it.
+            function yq(s) {
+                if (s ~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) return s
+                return "\"" s "\""
+            }
+            !done && /^[[:space:]]*network:[[:space:]]*$/ {
+                match($0, /^[[:space:]]*/); netind = substr($0, 1, RLENGTH)
+                innet = 1
+                if (mode == "create") {
+                    print
+                    print netind "  allow:"
+                    for (i = 1; i <= n; i++) if (want[i] != "") print netind "    - " yq(want[i])
+                    done = 1
+                    next
+                }
+            }
+            !done && mode == "append" && innet && /^[[:space:]]*allow:[[:space:]]*(\[\])?[[:space:]]*$/ {
+                match($0, /^[[:space:]]*/); ind = substr($0, 1, RLENGTH)
+                sub(/allow:.*/, "allow:")
+                print
+                for (i = 1; i <= n; i++) if (want[i] != "") print ind "  - " yq(want[i])
+                done = 1
+                next
+            }
+            { print }
+            END { if (!done) exit 3 }
+        ' "$kit/spec.yaml"
     }
+
+    # Append first, create only if there was no `allow:` to append to, give up only if
+    # there is no `network:` either. Each pass writes the WHOLE file to the temp copy,
+    # so a failed append costs nothing - `>` truncates before the next one runs, and
+    # the kit itself is not touched until the mv below.
+    created=
+    if ! _dr_adopt_into append > "$out"; then
+        created=1
+        if ! _dr_adopt_into create > "$out"; then
+            rm -f "$out"
+            dr_warn "could not find caps.network in $kit/spec.yaml"
+            printf '  %sNothing was changed. Add this block by hand:%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '\n  caps:\n    network:\n      allow:\n' >&2
+            printf '        - %s\n' "${hosts[@]}" >&2
+            exit 1
+        fi
+    fi
 
     # The move is the commit point: everything above it worked on a copy, so an
     # interrupted run leaves the kit exactly as it was rather than half-edited.
     mv "$out" "$kit/spec.yaml"
-    dr_ok "wrote ${#hosts[@]} host(s) into $kit/spec.yaml"
+    # Worth distinguishing: creating the key changed the kit's SHAPE, so the result is
+    # worth a longer look than an append - a comment that said "nothing is allowed here"
+    # may now sit above a list of allows.
+    if [ -n "$created" ]; then
+        dr_ok "created caps.network.allow in $kit/spec.yaml with ${#hosts[@]} host(s)"
+    else
+        dr_ok "wrote ${#hosts[@]} host(s) into $kit/spec.yaml"
+    fi
     printf '  %sCheck it, then commit it - it is the record every teammate gets:%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %s  dr-kit validate%s\n' "$_DR_DIM" "$_DR_OFF" >&2

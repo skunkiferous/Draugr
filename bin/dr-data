@@ -66,7 +66,9 @@ dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
 mapfile -t filters < <(dr_data_filters)
 
 mound=$(dr_path_mound "$DR_REPO")
-remote="$DRAUGR_SANDBOX.sbx:$mound/"
+# dr_sandbox_ssh_host, not "$DRAUGR_SANDBOX.sbx": the far end may be the forge VM, whose host
+# is an ssh_config alias. Spelled out here once, it would disagree with dr-sync's URL.
+remote="$(dr_sandbox_ssh_host):$mound/"
 local_dir="$DR_REPO/"
 
 # -a keeps permissions and times; -m prunes the empty directories; --chmod

@@ -12,6 +12,13 @@
 #   dr-setup           write the block if it is missing, create the library
 #   dr-setup --force   rewrite it even if something is already there
 #   dr-setup --print   print what would be written, change nothing
+#   dr-setup --forge   also write the `Host *.forge` block, for a forge VM
+#   dr-setup --forge-gateway <mound>   the same, naming the gateway mound
+#
+# THE FORGE BLOCK IS OPT-IN AND STICKY. Opt-in because a machine with no forge VM
+# should never carry a block mentioning one. Sticky because the strip-and-rewrite
+# below removes managed blocks before putting them back, so a later plain run has
+# to mean "leave it as it was" rather than "delete it".
 set -euo pipefail
 
 DR_PROG=dr-setup
@@ -25,10 +32,19 @@ _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # --print is a dry run: it shows the block and touches nothing.
 force=
 print=
+forge=
+forge_gw=
+forge_given=
 while [ $# -gt 0 ]; do
     case "$1" in
         --force|-f) force=1 ;;
         --print|-n) print=1 ;;
+        --forge)    forge=1; forge_given=1 ;;
+        --forge-gateway)
+            shift
+            [ -n "${1:-}" ] || dr_die "--forge-gateway needs the gateway mound's name" \
+                "For example:  dr-setup --forge-gateway draugr-gateway"
+            forge=1; forge_given=1; forge_gw=$1 ;;
         -h|--help)  dr_help "$0"; exit 0 ;;
         *) dr_die "unknown option: $1" "Try: dr-setup --help" ;;
     esac
@@ -41,6 +57,30 @@ done
 # makes DRAUGR_KIT_STORE readable below - including when you have moved it.
 dr_load_config
 
+# Hoisted above --print so the dry run can report the forge block too, and so the block that
+# is already there can be found before anything is written.
+config="$HOME/.ssh/config"
+
+# Already there? Then it stays, whether or not this run asked for it.
+forge_had=
+if grep -qE '^# >>> draugr forge \(managed\) >>>$' "$config" 2>/dev/null; then
+    forge_had=1
+    forge=1
+fi
+
+# The gateway mound's name is the one thing in that block that varies, and it is REMEMBERED
+# from the block rather than re-defaulted: a plain re-run must not quietly repoint the route
+# at a mound that is not serving it.
+if [ -z "$forge_gw" ] && [ -n "$forge_had" ]; then
+    forge_gw=$(sed -n 's/^[[:space:]]*ProxyCommand ssh .*[[:space:]]\([^[:space:]]*\)\.sbx socat .*/\1/p' \
+               "$config" | head -1)
+fi
+# Draugr generates the gateway, so Draugr gets to name it: the default is the name it uses.
+[ -n "$forge_gw" ] || forge_gw=draugr-gateway
+
+forge_key="$HOME/.ssh/draugr_forge_ed25519"
+forge_known="$HOME/.ssh/draugr_forge_known_hosts"
+
 sbx_exe=$(dr_find_sbx) || dr_die \
     "cannot find sbx.exe" \
     "Install it first:  winget install Docker.sbx" \
@@ -52,9 +92,15 @@ sbx_home=$(dirname "$(dirname "$sbx_exe")")
 known_hosts="$sbx_home/sandboxes/config/ssh/known_hosts"
 if [ ! -d "$sbx_home/sandboxes" ]; then
     # WinGet installs a shim in Links/; fall back to LOCALAPPDATA in that case.
+    # An `if`, not `[ -n "$lad" ] && ...`: as the last command in this branch that && list
+    # returns 1 when cmd.exe answers nothing, and `set -e` then kills dr-setup in silence -
+    # exit 1, no message, nothing written. cmd.exe answers nothing whenever the working
+    # directory is WSL-native, which it is for anyone running this from their home directory.
     if command -v cmd.exe >/dev/null 2>&1; then
-        lad=$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r\n')
-        [ -n "$lad" ] && sbx_home="$(dr_path_from_win "$lad")/DockerSandboxes"
+        lad=$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r\n') || lad=
+        if [ -n "$lad" ]; then
+            sbx_home="$(dr_path_from_win "$lad")/DockerSandboxes"
+        fi
         known_hosts="$sbx_home/sandboxes/config/ssh/known_hosts"
     fi
 fi
@@ -66,8 +112,22 @@ snippet=$(sed \
     -e "s|@KNOWN_HOSTS@|$known_hosts|" \
     "$DRAUGR_SHARE/ssh-config.snippet")
 
+# Rendered even for --print, and empty when the forge was neither asked for nor already there -
+# which is what keeps the block out of the file, and out of the dry run, on every other machine.
+forge_snippet=
+if [ -n "$forge" ]; then
+    forge_snippet=$(sed \
+        -e "s|@FORGE_GATEWAY@|$forge_gw|" \
+        -e "s|@FORGE_KEY@|$forge_key|" \
+        -e "s|@FORGE_KNOWN_HOSTS@|$forge_known|" \
+        "$DRAUGR_SHARE/ssh-config-forge.snippet")
+fi
+
+# The dry run, before anything is created: the blocks as they would be written, and the library
+# only described. Nothing below this point runs, which is the whole promise of --print.
 if [ -n "$print" ]; then
     printf '%s\n' "$snippet"
+    [ -n "$forge_snippet" ] && printf '\n%s\n' "$forge_snippet"
     printf '\n# Would also create the kit library at %s\n' "$(dr_kit_store)"
     exit 0
 fi
@@ -89,11 +149,22 @@ else
         "$_DR_DIM" "$_DR_OFF" >&2
 fi
 
-config="$HOME/.ssh/config"
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
 touch "$config"
 chmod 600 "$config"
+
+# A SEPARATE key from the Windows-side admin one, for two reasons that both still hold: ssh
+# refuses a key read off /mnt/c, where Windows files present as world-readable, and a second
+# credential can be revoked without touching the first. Minted here because the block names it
+# and an alias pointing at a file that does not exist fails at connect time, not at write time.
+if [ -n "$forge" ]; then
+    if [ ! -f "$forge_key" ]; then
+        ssh-keygen -t ed25519 -N '' -C 'draugr-forge-wsl' -f "$forge_key" >/dev/null
+        dr_ok "minted $forge_key"
+    fi
+    chmod 600 "$forge_key"
+fi
 
 existing=
 if grep -qE '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$config" 2>/dev/null; then
@@ -103,7 +174,10 @@ fi
 # Something is already there and we were not told to force. Two cases: a working
 # sbx block (leave it alone and say so), or something else wearing the same Host
 # pattern (refuse - we do not rewrite ssh config we did not author).
-if [ -n "$existing" ] && [ -z "$force" ]; then
+# --forge and --forge-gateway skip this exit on purpose. Without that, asking for the forge
+# block on a machine set up before the forge existed would print "already configured" and do
+# nothing at all. Rewriting is safe: it is idempotent and the previous file is backed up.
+if [ -n "$existing" ] && [ -z "$force" ] && [ -z "$forge_given" ]; then
     proxy=$(grep -A8 -E '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$config" \
             | grep -i ProxyCommand | head -1 || true)
     if printf '%s' "$proxy" | grep -q sbx; then
@@ -132,9 +206,11 @@ cp "$config" "$backup"
 tmp=$(mktemp)
 awk '
     /^# >>> draugr \(managed\) >>>$/           { skip = 1 }
+    /^# >>> draugr forge \(managed\) >>>$/     { skip = 1 }
     /^# >>> docker sandboxes \(managed\) >>>$/ { skip = 1 }
     skip != 1 { print }
     /^# <<< draugr \(managed\) <<<$/           { skip = 0 }
+    /^# <<< draugr forge \(managed\) <<<$/     { skip = 0 }
     /^# <<< docker sandboxes \(managed\) <<<$/ { skip = 0 }
 ' "$config" > "$tmp"
 
@@ -157,6 +233,7 @@ fi
     cat "$tmp"
     printf '\n'
     printf '%s\n' "$snippet"
+    [ -n "$forge_snippet" ] && printf '\n%s\n' "$forge_snippet"
 } > "$config.new"
 
 # Collapse runs of blank lines left behind by the deletions above, so repeated
@@ -168,8 +245,22 @@ awk 'NF == 0 { blank++; next } { while (blank-- > 1) print ""; blank = 0; print 
 rm -f "$tmp" "$config.new"
 chmod 600 "$config"
 
-dr_ok "wrote the *.sbx block into $config"
+if [ -n "$forge_snippet" ]; then
+    dr_ok "wrote the *.sbx and *.forge blocks into $config"
+else
+    dr_ok "wrote the *.sbx block into $config"
+fi
 printf '  %sbacked up the previous file to %s%s\n' "$_DR_DIM" "$backup" "$_DR_OFF" >&2
 printf '  %ssbx.exe:     %s%s\n' "$_DR_DIM" "$sbx_exe" "$_DR_OFF" >&2
 printf '  %sknown_hosts: %s%s\n' "$_DR_DIM" "$known_hosts" "$_DR_OFF" >&2
+if [ -n "$forge_snippet" ]; then
+    printf '  %sforge gateway mound: %s%s\n' "$_DR_DIM" "$forge_gw" "$_DR_OFF" >&2
+    printf '  %sforge key:   %s%s\n' "$_DR_DIM" "$forge_key" "$_DR_OFF" >&2
+    # The public half, because somebody has to authorise it inside the guest before the route
+    # carries anything. Printed rather than installed: this command cannot reach the VM.
+    printf '\n  %sAuthorise this in the guest (dr-forge init will, once it exists):%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %s\n' "$(cat "$forge_key.pub")" >&2
+fi
+
 printf '\n  %sVerify with:  dr-doctor%s\n' "$_DR_DIM" "$_DR_OFF" >&2

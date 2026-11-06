@@ -159,3 +159,106 @@ teardown() { dr_test_teardown; }
     WSL_DISTRO_NAME=Ubuntu run dr_path_win /home/me/project
     [ "$status" -ne 0 ]
 }
+
+# --- dr_path_canon_case -------------------------------------------------------
+#
+# What these guard is not hypothetical. A repo trusted as /mnt/c/Code/draugr-gateway
+# read as untrusted from /mnt/c/code/draugr-gateway, and the only visible symptoms
+# were a refused hook and a config silently skipped - after which the run used
+# default settings for everything the config was supposed to say.
+
+@test "dr_path_canon_case: leaves a non-drive path alone" {
+    # ext4 is case-sensitive: folding here would merge two different files.
+    run dr_path_canon_case /home/me/Code/Project
+    [ "$status" -eq 0 ]
+    [ "$output" = /home/me/Code/Project ]
+}
+
+@test "dr_path_canon_case: leaves a bare drive root alone" {
+    run dr_path_canon_case /mnt/c
+    [ "$status" -eq 0 ]
+    [ "$output" = /mnt/c ]
+}
+
+@test "dr_path_canon_case: keeps a component that is not on disk" {
+    # It reports a spelling; it does not claim the path exists.
+    run dr_path_canon_case /mnt/c/NoSuchDir-draugr-test/Nope
+    [ "$status" -eq 0 ]
+    [ "$output" = /mnt/c/NoSuchDir-draugr-test/Nope ]
+}
+
+@test "dr_path_canon_case: returns the spelling on disk, not the one asked for" {
+    root=$(dr_win_root) || skip "no writable Windows drive path"
+    # EXACTLY the name dr_test_teardown derives, so this cannot leak a directory
+    # onto a real drive - see the comment on dr_make_win_repo.
+    dir="$root/draugr-test.${DR_TMP##*/}"
+    mkdir -p "$dir/MixedCase/.draugr/hooks" || skip "cannot write to $root"
+
+    # Asked for in the wrong case, including a DOTFILE component - which needs
+    # dotglob, and is the component the real bug tripped over.
+    run dr_path_canon_case "$dir/mixedcase/.DRAUGR/HOOKS"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$dir/MixedCase/.draugr/hooks" ]
+}
+
+@test "dr_path_canon_case: an exact spelling survives unchanged" {
+    root=$(dr_win_root) || skip "no writable Windows drive path"
+    dir="$root/draugr-test.${DR_TMP##*/}"
+    mkdir -p "$dir/MixedCase" || skip "cannot write to $root"
+
+    run dr_path_canon_case "$dir/MixedCase"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$dir/MixedCase" ]
+}
+
+@test "dr_path_canon_case: restores the glob options it needed" {
+    # It sets dotglob and nullglob to do its work, and noglob to split the path.
+    # Leaving any of them changed would alter globbing for every later caller,
+    # which is the kind of bug that surfaces a long way from here.
+    shopt -u dotglob
+    shopt -u nullglob
+    set +f
+    dr_path_canon_case /mnt/c/Windows >/dev/null
+    run shopt -q dotglob
+    [ "$status" -ne 0 ]
+    run shopt -q nullglob
+    [ "$status" -ne 0 ]
+    case $- in *f*) false ;; *) true ;; esac
+}
+
+@test "trust survives the case the path was typed in" {
+    # The whole bug, end to end: record a file by one spelling, look it up by
+    # another, where the filesystem says both name the same file.
+    root=$(dr_win_root) || skip "no writable Windows drive path"
+    dir="$root/draugr-test.${DR_TMP##*/}/MixedCase"
+    mkdir -p "$dir" || skip "cannot write to $root"
+    printf 'DRAUGR_AGENT=shell\n' > "$dir/.draugr.conf"
+
+    dr_trust_add "$dir/.draugr.conf"
+    run dr_trust_is_trusted "$dir/.draugr.conf"
+    [ "$status" -eq 0 ]
+
+    # The same file, named in another case. Before the fix this returned 1.
+    wrong=${dir/MixedCase/mixedcase}
+    run dr_trust_is_trusted "$wrong/.draugr.conf"
+    [ "$status" -eq 0 ]
+
+    # And one record, in the canonical spelling - not two.
+    run grep -c . "$DR_TRUST_FILE"
+    [ "$output" = 1 ]
+    run grep -cF "  $dir/.draugr.conf" "$DR_TRUST_FILE"
+    [ "$output" = 1 ]
+}
+
+@test "trust records the canonical spelling even when given the wrong one" {
+    root=$(dr_win_root) || skip "no writable Windows drive path"
+    dir="$root/draugr-test.${DR_TMP##*/}/MixedCase"
+    mkdir -p "$dir" || skip "cannot write to $root"
+    printf 'DRAUGR_AGENT=shell\n' > "$dir/.draugr.conf"
+
+    # Added by the WRONG spelling: the record must still name the disk's.
+    wrong=${dir/MixedCase/mixedcase}
+    dr_trust_add "$wrong/.draugr.conf"
+    run grep -cF "  $dir/.draugr.conf" "$DR_TRUST_FILE"
+    [ "$output" = 1 ]
+}

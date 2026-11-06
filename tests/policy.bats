@@ -41,6 +41,15 @@ make_kit_with() {
     } > "$REPO/.draugr/kit/spec.yaml"
 }
 
+# A kit that narrows the defaults without allowing anything of its own: network: is
+# present, allow: is absent entirely. Ordinary, and the shape make_kit_with can never
+# produce - which is exactly why `dr-kit adopt` could not handle it until it was fixed.
+make_kit_deny_only() {
+    mkdir -p "$REPO/.draugr/kit"
+    printf 'schemaVersion: "2"\nkind: mixin\nname: k\ncaps:\n  network:\n    deny:\n      - telemetry.bad.example\npublishedPorts:\n  - container: 5173\n' \
+        > "$REPO/.draugr/kit/spec.yaml"
+}
+
 # --- reading a kit's allow list ------------------------------------------------
 
 @test "dr_kit_allow_list: reads the hosts a kit declares" {
@@ -126,6 +135,22 @@ make_kit_with() {
     [ "$output" = "opened.example.com" ]
 }
 
+@test "dr_policy_unadopted: a host adopted into a SECOND kit is not unadopted" {
+    # dr-kit adopt writes into the repo's own kit, but a host counts as written
+    # down whichever kit holds it. Reading only the first one told a project with
+    # several that hosts already in a kit were about to be lost, and offered
+    # --force - which is exactly what throws away the ones that really were
+    # unadopted. Measured against a real gateway with three kits.
+    make_kit_with something.else.example
+    mkdir -p "$REPO/kits/extra"
+    printf 'schemaVersion: "2"\nkind: mixin\nname: extra\ncaps:\n  network:\n    allow:\n      - %s\n' \
+        opened.example.com > "$REPO/kits/extra/spec.yaml"
+    DRAUGR_KIT=".draugr/kit kits/extra"
+    export DR_MOCK_ADHOC="opened.example.com"
+    run dr_policy_unadopted
+    [ -z "$output" ]
+}
+
 @test "dr_policy_unadopted: with no kit at all, everything is unadopted" {
     # There is nowhere for it to have been written down, so nothing has been.
     export DR_MOCK_ADHOC="opened.example.com"
@@ -189,6 +214,68 @@ make_kit_with() {
     [[ "$output" == *"opened.example.com"* ]]
 }
 
+@test "dr-kit adopt: creates allow: when the kit has only deny:" {
+    make_kit_deny_only
+    export DR_MOCK_ADHOC="opened.example.com"
+    run dr-kit adopt -y
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"created caps.network.allow"* ]]
+    run dr_kit_allow_list "$REPO/.draugr/kit"
+    [[ "$output" == *"opened.example.com"* ]]
+}
+
+@test "dr-kit adopt: creating allow: leaves deny and publishedPorts alone" {
+    make_kit_deny_only
+    export DR_MOCK_ADHOC="opened.example.com"
+    dr-kit adopt -y >/dev/null 2>&1
+    grep -q "telemetry.bad.example" "$REPO/.draugr/kit/spec.yaml"
+    grep -q "container: 5173" "$REPO/.draugr/kit/spec.yaml"
+}
+
+@test "dr-kit adopt: writes hosts in the order they were reported" {
+    # `for (i in want)` in awk has unspecified order, and this file is committed, so
+    # an arbitrary order would be a spurious diff on every adopt.
+    #
+    # Read the FILE, not dr_kit_allow_list: that helper pipes through `sort -u`, so
+    # comparing against it would pass whatever order adopt happened to write.
+    make_kit_with
+    export DR_MOCK_ADHOC="b.example.com a.example.com"
+    expected=$(dr_policy_unadopted)
+    dr-kit adopt -y >/dev/null 2>&1
+    # Scoped to the allow: block. A bare `sed -n 's/^      - //p'` would also pick up
+    # deny:, whose items sit at the same indent.
+    written=$(awk '/^    allow:/ { f = 1; next }
+                   f && /^      - / { sub(/^      - /, ""); print; next }
+                   f { exit }' "$REPO/.draugr/kit/spec.yaml")
+    [ "$expected" = "$written" ]
+}
+
+@test "dr-kit adopt: quotes a wildcard, which YAML reads as an alias when bare" {
+    make_kit_with
+    export DR_MOCK_ADHOC="**.example.com"
+    dr-kit adopt -y >/dev/null 2>&1
+    grep -qF '      - "**.example.com"' "$REPO/.draugr/kit/spec.yaml"
+}
+
+@test "dr-kit adopt: quotes a wildcard when CREATING the allow: key too" {
+    make_kit_deny_only
+    export DR_MOCK_ADHOC="**.example.com"
+    dr-kit adopt -y >/dev/null 2>&1
+    grep -qF '      - "**.example.com"' "$REPO/.draugr/kit/spec.yaml"
+    # And it still reads back as the same host, quotes stripped, so a second adopt
+    # does not add it all over again.
+    run dr_kit_allow_list "$REPO/.draugr/kit"
+    [ "$output" = "**.example.com" ]
+}
+
+@test "dr-kit adopt: leaves a plain host unquoted" {
+    make_kit_with
+    export DR_MOCK_ADHOC="opened.example.com"
+    dr-kit adopt -y >/dev/null 2>&1
+    grep -qF '      - opened.example.com' "$REPO/.draugr/kit/spec.yaml"
+    ! grep -qF '"opened.example.com"' "$REPO/.draugr/kit/spec.yaml"
+}
+
 @test "dr-kit adopt: running it twice adds nothing the second time" {
     make_kit_with
     export DR_MOCK_ADHOC="opened.example.com"
@@ -199,16 +286,21 @@ make_kit_with() {
     [ "$(grep -c 'opened.example.com' "$REPO/.draugr/kit/spec.yaml")" -eq 1 ]
 }
 
-@test "dr-kit adopt: a kit with no allow: key is reported, not guessed at" {
-    # Refusing beats writing the block somewhere that happens to parse: a kit
-    # edited by a guess is worse than one you were asked to edit yourself.
+@test "dr-kit adopt: a kit with no network: block is reported, not guessed at" {
+    # Still a refusal, and still for the original reason: with no caps.network
+    # anywhere there is no unambiguous place for the block, and a kit edited by a
+    # guess is worse than one you were asked to edit yourself.
+    #
+    # Note what changed in: a kit that HAS network: but no allow: is no
+    # longer this case. There the location is not a guess, so adopt creates the key
+    # rather than refusing - see "creates allow: when the kit has only deny:".
     mkdir -p "$REPO/.draugr/kit"
     printf 'schemaVersion: "2"\nkind: mixin\nname: k\n' > "$REPO/.draugr/kit/spec.yaml"
     before=$(cat "$REPO/.draugr/kit/spec.yaml")
     export DR_MOCK_ADHOC="opened.example.com"
     run dr-kit adopt -y
     [ "$status" -ne 0 ]
-    [[ "$output" == *"could not find caps.network.allow"* ]]
+    [[ "$output" == *"could not find caps.network"* ]]
     [ "$(cat "$REPO/.draugr/kit/spec.yaml")" = "$before" ]
 }
 

@@ -406,6 +406,66 @@ replace rather than extend and a replacement inside the mound breaks the session
   than the hosted one, and Draugr's loop is nothing but long tool chains. This is a tier for work
   that cannot leave the machine, not a cheaper way to do the same work.
 
+## The forge, if you turn it on
+
+[`DRAUGR_FORGE`](CONFIG.md#draugr_forge) is empty by default and nothing on this page changes while
+it stays that way. Everything below applies only to projects that name a VM in it — a config file
+you had to `dr-trust` before Draugr would read it.
+
+**The claim this page can make about the forge is weaker than the one it makes about a mound, and
+it is weaker on purpose.** If you enable it, the mound still cannot reach your machine; it can now
+reach *a machine you own*, over one port, with no network of its own except through the same policy
+that governs the mound.
+
+**It is not a mound, and almost none of this page's guarantees transfer.** There is no read-only
+source mount, no four-mounts rule, no credential scan. Whatever the agent does in the guest it does
+as a Windows user who is an administrator there — an ssh session lands elevated with a full token
+(*measured: writes System32, reads HKLM, controls services, never prompted*). The guest keeps no
+secrets from it, and neither of the forge's two passwords is a boundary against it: both are
+recoverable from inside the guest in cleartext or near enough
+([FORGE.md](FORGE.md#the-two-passwords-and-why-they-are-not-one) has the measurements).
+
+**What does carry over is the network.** The VM has no adapter, no route and no DNS of its own;
+everything leaves through the gateway mound's `sbx` policy, and an administrator in the guest cannot
+get out another way (*measured*). And the daemon's bearer token — the one that can create, start,
+stop and delete VMs — **never enters the mound**. The agent holds one ssh key to one port. That
+split is why a compromised mound cannot destroy the VM it works in.
+
+### Four things worth knowing before you enable it
+
+**A store account in the guest is the agent's to spend.** Sign the guest into a vendor's launcher —
+the Epic Games Launcher, say — and its session lives in the guest where the agent can read it, while
+stores like Fab sell paid assets. With the Unreal kit the gateway
+allows `**.fab.com` and `**.epicgames.com`, so the allowlist will not stop a purchase, and `dr-scan`
+cannot see inside a VM. **Use an account with no saved payment method** — ideally one used for
+nothing else, at the cost of that account's library being its own.
+
+**GPU passthrough widens the *host's* attack surface.** A paravirtualised GPU is a path from guest
+code into your machine's real GPU driver and display driver. That is the trade `gpuMode=1` makes,
+and it is not one a VM boundary undoes.
+
+**The guest photographs its own desktop.** `dr-forge init` installs a scheduled task with an
+**interactive** principal, and `dr-forge pull` brings the image to the host. That is what makes the
+forge usable by an agent, which cannot look at a screen — but it means anything visible on the
+autologin desktop can reach the host, including whatever a browser or a signed-in application has on
+it. The task has no trigger and runs only when asked.
+
+**`DRAUGR_FORGE_NOSCAN` set to `*` disables Defender in the guest outright**, rather than narrowing
+it ([`DRAUGR_FORGE_NOSCAN`](CONFIG.md#draugr_forge_noscan)). `dr-forge init` warns when it does this.
+Two cautions: it is a real-time protection you are turning off on a machine that reaches the
+internet, and **that path has never been exercised** — Tamper Protection may refuse it while the
+cmdlet returns quietly, so verify in the guest rather than assuming the warning means it worked.
+
+### One alias, every VM
+
+Every forge VM's ssh alias resolves to the same pinned host port, so **the name you type does not
+identify the far end** — what answers is whichever VM the tunnel supervisor is serving. A per-VM ssh
+block left behind after its VM was deleted therefore reaches a *different* guest rather than failing,
+which is how a `push` lands in the wrong machine. `dr-setup --forge` writes one wildcard block for
+exactly this reason, and `dr-forge doctor` is what tells the two apart.
+
+---
+
 ## Things Draugr refuses to do
 
 Each of these is a refusal by default with an explicit override, because the point of a guard you
@@ -423,6 +483,10 @@ can silence permanently is unclear.
 | `dr-data pull` offering an absolute or `..` path | none — inspect the mound |
 | A repo that is not on a Windows drive | none — `sbx` cannot mount it |
 | A directory that is not a git repository | [`DRAUGR_ON_MISSING_REPO`](CONFIG.md#draugr_on_missing_repo) |
+| `dr-forge rm` when the VM's folder holds a frozen layer, a read-only disk, or another VM | none — move the disk out first |
+| `dr-forge base` when a baseline already exists | none — only the first snapshot captures current state |
+| `dr-forge base` when the guest will not shut down gracefully | none — a baseline is not taken from a guest whose power was cut |
+| `dr-forge rollback` without confirmation | `dr-forge rollback -y` |
 
 `DRAUGR_CLONE=false` is the one that has no config-file override at all. It bind-mounts your real
 working tree read-write, which is precisely the thing this project exists to prevent, so `dr-go`

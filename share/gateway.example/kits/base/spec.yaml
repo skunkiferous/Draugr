@@ -1,0 +1,154 @@
+schemaVersion: "2"
+kind: mixin
+name: base
+displayName: Base VM tooling
+description: Hosts any forge VM needs for its own toolchain, whatever it is built for.
+
+# This kit is deliberately NOT about Unreal. It holds what a Windows VM needs to
+# assemble its own working environment, so the same list serves a VM built for
+# something else entirely. Unreal's hosts stay in kits/unreal.
+#
+# The guiding rule is one an agent's autonomy depends on: a package manager earns
+# a place here only if it can be pinned to a FIXED set of hosts. Then allowing it
+# once lets the agent install anything it needs without asking again, and anything
+# outside that set still surfaces as a refusal a human sees.
+#
+# What else belongs here: anything WINDOWS ITSELF needs in order to be a usable VM, as
+# opposed to anything a particular workload needs. Microsoft-account sign-in is the
+# clear case - it is the operating system's own identity stack, and a VM without it can
+# neither use the Store nor sign in to any Windows-integrated tool.
+
+caps:
+  network:
+    allow:
+      # MSYS2 - the Unix layer for a Windows guest: git, rsync, openssh, perl,
+      # python, make, as native Windows binaries that speak Windows paths.
+      #
+      # MEASURED, and the reason this is one line rather than twenty:
+      # MSYS2 ships a rotating mirrorlist of about 21 third-party mirrors
+      # (download.nus.edu.sg, repo.extreme-ix.org, university mirrors). Pin every
+      # /etc/pacman.d/mirrorlist.* to its repo.msys2.org line and pacman dials
+      # this host and nothing else - verified by watching the refusals name only
+      # this name. With it allowed, `pacman -S git rsync openssh perl` installed
+      # all four through the gateway.
+      #
+      # An unpinned MSYS2 would reach hosts this list never named, so the pinning
+      # is part of the guest's setup, not an optimisation.
+      - repo.msys2.org
+
+      # Python, for the UIA MCP server - the only way an agent reads a window's
+      # controls instead of guessing at pixels. It is a Python program, so the guest
+      # needs a Python, and the base image has none.
+      #
+      # These four are the whole set, and they satisfy the rule above: PyPI ships no
+      # rotating mirrorlist, so pip and uv dial exactly these names, every time.
+      # MEASURED: astral.sh/uv/install.ps1 is a 301 to releases.astral.sh, so the
+      # exact name is not enough - the installer dies with no bytes read.
+      - "**.astral.sh"         # the uv installer script, and uv's own updates
+      - pypi.org               # the package index
+      - files.pythonhosted.org # the wheels themselves; every download lands here
+      # uv fetches the interpreter itself from GitHub releases
+      # (astral-sh/python-build-standalone), not from python.org. Both names are in
+      # sbx's machine-wide defaults already, and are named here anyway so this kit
+      # states what it needs rather than depending on a default that may change.
+      - github.com
+      - objects.githubusercontent.com
+
+      # AutoHotkey v2, for replaying a path through a window that has no UIA tree at
+      # all (Slate, CEF): the coordinates are discovered once by a human or a vision
+      # pass, and replayed without a model in the loop. Vendor's own domain, so "**".
+      - "**.autohotkey.com"
+
+      # Visual Studio Code, and only the two hosts that install it. Not an Unreal thing:
+      # it is the editor any Windows VM would want, and Unreal Angelscript happens to
+      # require it - that fork's documentation names VS Code and its "Unreal Angelscript"
+      # extension as the way to get auto-completion and debugging.
+      #
+      # Both are in sbx's machine-wide defaults already, so strictly this changes nothing
+      # by itself - what mattered was DELETING them from .draugr/kit's deny list, because
+      # deny beats allow and no `dr-policy --allow` can reach past it. They are named here
+      # anyway, by the same rule as github.com above: this kit states what it needs rather
+      # than depending on a default that may change.
+      #
+      # vscode.dev IS here, and the comment that used to sit in this spot said the
+      # opposite - "the browser editor, which nothing needs". That was wrong, and it cost
+      # an evening. vscode.dev/redirect is the OAuth redirect broker for DESKTOP VS Code:
+      # GitHub requires an OAuth app to register one fixed redirect URI, "http://127.0.0.1"
+      # on a port chosen per-attempt cannot be registered, so Microsoft registered
+      # https://vscode.dev/redirect and has that page bounce the browser to the loopback
+      # URL it carries in `state`. Sign-in therefore fails AFTER the password and the 2FA
+      # code are accepted, which is the worst possible place to put a wall.
+      #
+      # The extension itself comes from marketplace.visualstudio.com, covered by the
+      # already-allowed "**.visualstudio.com", and its CDN is a *.vsassets.io name that no
+      # deny rule touches - so a refusal there would show up in `dr-policy --denied` rather
+      # than failing silently.
+      - code.visualstudio.com               # the installer download page and its redirect
+      - vscode.download.prss.microsoft.com  # the CDN that redirect lands on
+      - vscode.dev                          # /redirect: the OAuth bounce back to 127.0.0.1
+      - github.githubassets.com             # every stylesheet and script on github.com
+      # The extension CDN, which the note above predicted would surface in
+      # `dr-policy --denied` - and it did: it was opened by hand on the running mound and was
+      # still only machine state, so `dr-up --recreate` refused rather than
+      # discard it. Written down here, in the mixin where every egress host belongs, instead
+      # of adopted into .draugr/kit, which only narrows.
+      - "**.vsassets.io"                    # marketplace.visualstudio.com's asset CDN
+
+      # Microsoft account sign-in, for the WINDOWS IDENTITY STACK itself rather than for
+      # any one application. Every "sign in with a Microsoft account" dialog in the guest
+      # is served by Windows' own account broker, not by the application's embedded
+      # browser: the Store, Windows-integrated sign-in anywhere, and Visual Studio 2022's
+      # account UI. A VM that cannot do this cannot install from the Store and cannot sign
+      # in to a Windows-integrated tool, and it fails at it in a way that reads as a
+      # network fault. Draugr's docs/FORGE.md has the phase this belongs to.
+      #
+      # These hosts are NECESSARY BUT NOT SUFFICIENT. The guest also has to look online to
+      # itself, and the broker's AppContainer has to be allowed to reach the proxy at all -
+      # six separate faults, applied by guest/install-windows-online.ps1. Opening these
+      # names without that does nothing, and the failure names no host, so the gateway's
+      # own log stays silent while it happens. MEASURED.
+      - "**.live.com"      # the sign-in flow itself; covers login.live.com
+      - "**.msauth.net"    # the auth CDN; covers aadcdn.msauth.net
+      - "**.msftauth.net"  # the same CDN under its second name; covers aadcdn.msftauth.net
+      - lgincdnmsftuswe2.azureedge.net  # the sign-in page's assets. A shared CDN, so exact
+      # The next three were opened while chasing that failure and are kept
+      # exactly as they were, but NONE of them was shown to be needed: what fixed sign-in
+      # was install-windows-online.ps1, not opening these. management.core.windows.net was
+      # measured to change nothing on its own. Prune them by measurement on a fresh guest,
+      # not by guessing - removing a host that turns out to matter costs an evening.
+      - graph.microsoft.com
+      - management.azure.com
+      - management.core.windows.net
+      #
+      # login.microsoftonline.com is deliberately NOT named here. It is already one of
+      # sbx's machine-wide defaults, and .draugr/kit leaves it open rather than denying it.
+
+      # Sign in with a GOOGLE account, which GitHub now offers alongside passkeys and
+      # Apple. Here rather than in kits/unreal on purpose: an identity provider is general
+      # infrastructure, like the Microsoft block above, and has nothing to do with Unreal.
+      #
+      # **.gstatic.com is Google's static asset CDN and is taken WHOLE rather than by
+      # subdomain. That is a deliberate widening, by the same bargain as "**.msauth.net"
+      # above: the sign-in page pulls css, fonts and images from several gstatic names, a
+      # missing one produces an unstyled page with dead buttons and NO error, and
+      # enumerating them by trial is an evening. It serves static files, not an API.
+      # It had to be DELETED from .draugr/kit's deny list first - deny beats allow.
+      #
+      # apis.google.com is deliberately NOT here and stays denied. It is the JS API host
+      # for Google's Identity Services widget, and a plain server-side OAuth redirect
+      # should never reach it. If sign-in fails anyway, `dr-policy --denied` will name it -
+      # which is a measurement, and this file prefers those to guesses.
+      #
+      # WORTH KNOWING BEFORE RELYING ON THIS: it moves the second factor, it does not
+      # remove it. If the Google account is itself protected by a phone prompt or a
+      # passkey, the guest hits the same wall one provider further along. A TOTP code is
+      # the factor that crosses machines, because it is six digits read off any screen.
+      - accounts.google.com  # the sign-in page and the OAuth endpoints
+      - "**.gstatic.com"     # its css, fonts and images; see the note above
+
+# winget is deliberately absent. Measured: its source-backed commands
+# fail in an ssh session (session 0) with 0x8a15000f "Data required by the source
+# is missing", even with its CDN reachable (HTTP 200) and `winget source update`
+# succeeding. An agent working over ssh cannot use it, so allowing its hosts would
+# buy nothing. Windows applications are installed by downloading the installer and
+# running it silently, which needs only the vendor's own host.

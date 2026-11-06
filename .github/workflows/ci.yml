@@ -19,7 +19,7 @@ jobs:
         # bin/* and tests/mocks/* have no extension, so they are globbed rather
         # than named - a new mock is then linted without anyone remembering to
         # add it here.
-        run: shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh install.sh tests/mocks/* bin/* .githooks/* tests/executable-paths.sh share/ollama-proxy/ollama-proxy
+        run: shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh lib/forge/*.sh install.sh tests/mocks/* bin/* .githooks/* tests/executable-paths.sh share/ollama-proxy/ollama-proxy
 
       - name: Comment density
         # Draugr's premise is that you can read a file before you trust it, so
@@ -29,6 +29,20 @@ jobs:
         # running it locally checks exactly what CI checks. It used to be spelled
         # out here, and the bare local invocation silently checked nothing.
         run: ./tests/lint-comments.sh
+
+      - name: Inverted assertions that cannot fail
+        # set -e is ignored for a command preceded by `!`, so a mid-test `! cmd`
+        # in a .bats file passes whatever it finds. Sixteen of the suite's
+        # assertions were dead when this check was written, and the test job
+        # below reported all of them as green. See docs/HACKING.md.
+        run: ./tests/lint-inverted.sh
+
+      - name: Native stderr that Stop will make fatal
+        # PowerShell 5.1 wraps a REDIRECTED native stderr line as a NativeCommandError,
+        # and $ErrorActionPreference = 'Stop' makes it terminating. A guard whose only
+        # job was to notice an ABSENT scheduled task therefore threw whenever it was
+        # absent - which is every first install. See docs/FORGE.md.
+        run: ./tests/lint-native-stderr.sh
 
   test:
     runs-on: ubuntu-latest
@@ -60,12 +74,24 @@ jobs:
         # A skip is invisible in a green tick: if /mnt/c ever stops being
         # writable, every mound test turns into a no-op and the job still passes.
         # This turns "tested nothing" into a failure.
+        #
+        # TWO REASONS ARE ALLOWED, and only these two: tests/forge-api.bats runs
+        # the real PowerShell against a mock daemon, which a Linux runner cannot
+        # do, so it skips by design here. That is a declared fact about the
+        # runner rather than something that quietly stopped working.
+        #
+        # An ALLOWLIST of reasons, not of files, on purpose: a new skip reason in
+        # that same file is news, and the build should say so. In particular "no
+        # Windows-visible scratch directory" stays fatal - that one IS the
+        # degradation this step was written to catch.
         run: |
-          if grep -q '# skip' bats.log; then
-            grep '# skip' bats.log
+          if grep '# skip' bats.log \
+               | grep -vE 'skip (no real powershell\.exe - not a Windows host|only the mock is on PATH)$' \
+               | grep . ; then
             echo "::error::tests skipped - see docs/HACKING.md, 'Pattern: mocking sbx'"
             exit 1
           fi
+          echo "platform skips, allowed: $(grep -c '# skip' bats.log)"
 
   # The documentation checks live in tests/docs.bats and run with everything
   # else. They were a separate advisory job while the README specified commands

@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# A stand-in for powershell.exe, so the forge commands can be tested off Windows.
+#
+# dr-forge reaches the Windows side ONLY through powershell.exe - that is the measured
+# constraint the whole bridge is built on (lib/forge/common.sh) - which makes this one file
+# enough to test all of it. Nothing here interprets PowerShell; it answers as the real thing
+# would and records what it was asked, and the tests decode that themselves.
+#
+#   DR_MOCK_LOG         file to append the argv to, prefixed "powershell " so the existing
+#                       calls() helper picks it out alongside the sbx and ssh lines
+#   DR_MOCK_FAIL        containing "powershell" makes every invocation fail
+#   DR_MOCK_PROBE       a file of key=value lines to answer a probe.ps1 call with; without
+#                       it, a healthy forge named by DR_MOCK_PROBE_VM is reported
+#   DR_MOCK_PROBE_VM    the VM name the default probe answer claims to serve (default mock-vm)
+#   DR_MOCK_GUEST_RC    what a guest.ps1 call exits with, standing in for the code the GUEST
+#                       returned - which is the one thing dr-forge exec must not invent
+#
+# The default probe answer is a HEALTHY forge on purpose: a test then overrides only the fact
+# it cares about, instead of restating fifteen keys to change one.
+set -euo pipefail
+
+if [ -n "${DR_MOCK_LOG:-}" ]; then
+    printf 'powershell %s\n' "$*" >> "$DR_MOCK_LOG"
+fi
+
+case " ${DR_MOCK_FAIL:-} " in
+    *" powershell "*) printf 'mock powershell: cannot run\n' >&2; exit 1 ;;
+esac
+
+# Which script was asked for. -File is what dr-forge always uses - a -Command string loses a
+# layer of quoting at every parser it crosses - so that is the only form answered here.
+script=
+mode=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -File) script=${2:-}; shift ;;
+        # vm.ps1 does three different things behind one file, so the mode has to be read to
+        # answer it - which is also what lets a test assert that `up` asked for them in order.
+        -Mode) mode=${2:-}; shift ;;
+    esac
+    shift
+done
+
+case "$script" in
+    *probe.ps1)
+        if [ -n "${DR_MOCK_PROBE:-}" ] && [ -f "$DR_MOCK_PROBE" ]; then
+            cat "$DR_MOCK_PROBE"
+        else
+            vm=${DR_MOCK_PROBE_VM:-mock-vm}
+            cat <<EOF
+vm=$vm
+daemon=up
+daemon_version=AppSandbox 0.1.8
+vm_state=online
+vm_running=yes
+vm_agent=yes
+vm_gpu=1
+vm_network=0
+vms_known=$vm
+ssh_port=57350
+ssh_user=forge
+ssh_listening=yes
+port_18888=up
+port_18445=up
+port_18765=up
+port_18000=up
+tunnel_task=Running
+tunnel_vm=$vm
+fwd_pid=31836
+fwd_proc=ssh.exe
+fwd_vm=$vm
+tunnel_mutex=visible
+ssh_exec=yes
+guest_proxy_code=403
+guest_egress=yes
+EOF
+        fi
+        ;;
+    *guest.ps1)
+        # No output of its own: exec's stdout belongs to the guest, and inventing some here
+        # would hide a dr-forge that printed nothing.
+        exit "${DR_MOCK_GUEST_RC:-0}"
+        ;;
+    *rm.ps1)
+        # rm.ps1 inspects a folder on the Windows side and then asks the daemon to delete, so
+        # both halves are stubbed: the facts come from a file, the outcome from a code.
+        #
+        #   DR_MOCK_RM_FACTS  a file of key=value lines to answer with
+        #   DR_MOCK_RM_RC     what it exits with (default 0)
+        if [ -n "${DR_MOCK_RM_FACTS:-}" ] && [ -f "$DR_MOCK_RM_FACTS" ]; then
+            cat "$DR_MOCK_RM_FACTS"
+        else
+            printf 'folder=C:\\ForgeLayers\\mock-vm\nexists=yes\nbytes=33279705088\n'
+            printf 'entry=disk.vhdx\nentry=layer.json\nrunning=no\nsafe=yes\n'
+        fi
+        exit "${DR_MOCK_RM_RC:-0}"
+        ;;
+    *init.ps1)
+        # init.ps1 reaches into the GUEST over ssh, so there is nothing here to simulate: the
+        # tests care that dr-forge named the VM, handed over the WSL public key as a path, and
+        # acted on the code that came back. The argv is in DR_MOCK_LOG for the first two.
+        #
+        #   DR_MOCK_INIT_RC   what it exits with (default 0)
+        printf 'mock init.ps1\n'
+        exit "${DR_MOCK_INIT_RC:-0}"
+        ;;
+    *snap.ps1)
+        # snap.ps1 answers with the snapshot tree in every mode, so the facts are stubbed the
+        # way rm's are. The default is the interesting case for `base`: a VM with no baseline.
+        #
+        #   DR_MOCK_SNAP_FACTS  a file of key=value lines to answer with
+        #   DR_MOCK_SNAP_RC     what the ACTING modes exit with (default 0)
+        #
+        # THE READ AND THE ACT NEED SEPARATE CODES. base and rollback describe before they
+        # act, which is two calls to this file, and the failures worth testing belong to the
+        # second one - a single code would fail the description instead and never reach it.
+        if [ -n "${DR_MOCK_SNAP_FACTS:-}" ] && [ -f "$DR_MOCK_SNAP_FACTS" ]; then
+            cat "$DR_MOCK_SNAP_FACTS"
+        else
+            printf 'running=no\nbaseline=no\nsnapshots=0\ncurrent_snap=-1\ncurrent_branch=-1\n'
+        fi
+        if [ "$mode" = status ]; then
+            exit "${DR_MOCK_SNAP_STATUS_RC:-0}"
+        fi
+        exit "${DR_MOCK_SNAP_RC:-0}"
+        ;;
+    *provision.ps1)
+        # provision builds a Windows guest from an ISO: an hour of API calls, ssh and an
+        # unattended install, none of which exists off Windows. What dr-layer is tested on is
+        # what it SENT - the argv line above - and whether it brought the gateway up first.
+        #
+        #   DR_MOCK_PROVISION_RC  what it exits with (default 0)
+        printf 'mock provision.ps1\n'
+        exit "${DR_MOCK_PROVISION_RC:-0}"
+        ;;
+    *layer.ps1)
+        # layer.ps1 edits vms.cfg and drives the VHD cmdlets, neither of which exists off
+        # Windows - so nothing here simulates a layer. What dr-layer is tested on is what it
+        # SENT (the argv line above) and what it did with the code that came back.
+        #
+        #   DR_MOCK_LAYER_RC  what it exits with (default 0). 3, 20, 21 and 24 are the codes
+        #                     layer.ps1 documents, and each one makes dr-layer say something
+        #                     different while relaying the code unchanged.
+        printf 'mock layer.ps1: %s\n' "${mode:-no mode}"
+        exit "${DR_MOCK_LAYER_RC:-0}"
+        ;;
+    *vm.ps1)
+        # vm.ps1 drives the VM's lifecycle through the daemon's API, so there is nothing here
+        # to simulate: the tests care that dr-forge asked for the right mode, passed the right
+        # tunnel script, and handled the code that came back.
+        #
+        #   DR_MOCK_VM_RC_<MODE>  what that one mode exits with - DR_MOCK_VM_RC_TUNNEL=12
+        #   DR_MOCK_VM_RC         what any other mode exits with (default 0)
+        printf 'mock vm.ps1: %s\n' "${mode:-no mode}"
+        _rc_var="DR_MOCK_VM_RC_$(printf '%s' "$mode" | tr '[:lower:]' '[:upper:]')"
+        # The indirect read is wrapped: under `set -u` a name that was never set is an error,
+        # and "this mode has no override" is the ordinary case rather than a fault.
+        if [ -n "${!_rc_var:-}" ]; then exit "${!_rc_var}"; fi
+        exit "${DR_MOCK_VM_RC:-0}"
+        ;;
+esac
+exit 0

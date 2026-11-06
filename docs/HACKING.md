@@ -239,6 +239,90 @@ command || return 1          # bail out on failure
 [ -f "$f" ] || continue      # skip this loop iteration
 ```
 
+### The same exemption kills bats assertions, silently
+
+`set -e` is **also** ignored for a command preceded by `!`, and in a `.bats` test that
+turns an inverted assertion into a no-op. Measured:
+
+| the test | what bats reports |
+|---|---|
+| `@test "x" { ! true; }` | `not ok` — it fails, correctly |
+| `@test "x" { ! true; true; }` | **`ok`** — it passes |
+| `@test "x" { false; true; }` | `not ok` — it fails, correctly |
+
+A mid-test `! cmd` therefore finds whatever it finds and the test carries on. It only
+appears to work in the **last** position, where the test's own exit status carries the
+failure — which is why the pattern survived so long: the first one anybody writes usually
+is last.
+
+When this was found, the suite held 59 inverted assertions and **sixteen** were dead. Two
+of them had been written that same day and had already passed a mutation test that
+reintroduced the exact bug they existed to catch. One of the sixteen was also simply
+**wrong** — it grepped a whole config file for `18445` where the file's own comment
+explains when `18445` is published — and that was found the first time it was able to fail.
+An assertion that cannot fail is worse than an absent one, because the suite reports it as
+checked.
+
+So: an inverted assertion carries its own failure.
+
+```bash
+! grep -q nope "$f" || return 1              # do this
+! grep -q nope "$f"                          # dead unless it is the last line
+run grep -q nope "$f"; [ "$status" -ne 0 ]   # also fine - but it overwrites $output
+```
+
+`tests/lint-inverted.sh` enforces it, and accepts any `! cmd || return …` or
+`! cmd || fail …`. Grep for the whole file only when you mean the whole file: a positive
+assertion beside the negative one (`grep -q 'DRAUGR_PORTS="…"'`) is what actually pinned
+the behaviour in the case above.
+
+---
+
+## Native stderr under `Stop`
+
+> While `$ErrorActionPreference` is `'Stop'`, a native command's stderr must not be
+> redirected — not with `2>$null`, not with `2>&1` — unless the preference is dropped
+> for the length of the call.
+
+PowerShell 5.1 wraps each line a native command writes to a **redirected** stderr as a
+`NativeCommandError`, and `Stop` makes that terminating. Unredirected stderr passes
+through harmlessly, so the redirection is the whole defect.
+
+Measured in the guest, `Stop` in force, the task absent:
+
+| form | result |
+|---|---|
+| `schtasks /query /tn draugr-shot /fo list 2>$null` | **threw** — `NativeCommandError` |
+| `Get-ScheduledTask -TaskName draugr-shot -ErrorAction SilentlyContinue` | `$null`, no error |
+
+What it cost: `install-shot.ps1` asked `schtasks` whether its task already existed, so as
+to register it **only when absent** — and `schtasks` writes `ERROR: The system cannot find
+the file specified.` to stderr for a task that is not there. The guard whose only job was
+to notice absence therefore threw whenever it was absent, which is **every first install**.
+The phase reported `FAILED (1)` with its two files written and no task registered.
+
+Three files had each met this separately and fixed it in place — `mount-vault.ps1`,
+`install-netfx3.ps1` and `install-vscode.ps1` all carry their own save/restore, one of them
+with a comment explaining the whole mechanism — and a fourth then wrote the bug again. **A
+lesson learned three times in three files is a rule that does not exist.**
+
+The two fixes, in order of preference:
+
+```powershell
+# 1. Do not ask a native command a question a cmdlet answers.
+Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue   # not schtasks /query
+Get-Service $n -ErrorAction SilentlyContinue                   # not sc query
+
+# 2. When the native command IS the right tool - and when its stderr is WANTED, which is
+#    usually why it was redirected - drop the preference around the call.
+$eapWas = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try { $out = & thing.exe -args 2>&1 } finally { $ErrorActionPreference = $eapWas }
+```
+
+`lib/forge/provision.ps1` wraps the second form in `Invoke-Native { … }`, which the linter
+recognises and accepts.
+
 ---
 
 ## Quoting
@@ -683,6 +767,19 @@ confused because the answer lives in a different file?* If yes, it goes here.
    that introduces it. See *When you add a pattern* above.
 9. **No block of more than five lines of code without a comment.** Enforced by
    `tests/lint-comments.sh`, and explained below.
+10. **An inverted bats assertion carries its own failure**: `! cmd || return 1`.
+    Anywhere but the last line of a test, a bare `! cmd` cannot fail. Enforced by
+    `tests/lint-inverted.sh`, and explained under *`set -e` and `&&` chains*.
+11. **In a PowerShell script with `$ErrorActionPreference = 'Stop'`, do not redirect a
+    native command's stderr.** Any line it writes becomes a terminating error. Enforced by
+    `tests/lint-native-stderr.sh`, and explained under *Native stderr under `Stop`*.
+12. **A test that greps a source file strips comments first, and anchors the pattern.**
+    A fix's own comment names the thing the fix removed - that is what comments are for - so
+    an unfiltered grep matches the explanation instead of the code and passes on a file whose
+    behaviour was reverted. An unanchored name matches a renamed one as a prefix. This has
+    happened **five** times here, every time caught by reverting the fix and re-running the
+    test, and never once by reading it. A new check is not finished until it has been seen to
+    fail.
 
 ---
 

@@ -271,6 +271,29 @@
 # warn | block
 #DRAUGR_SCAN_FAIL=block
 
+# --- The forge (optional, and off) ------------------------------------------
+#
+# A Windows 11 VM for Unreal Engine work, driven through AppSandbox. Setting this
+# to the VM's name is the only thing that turns it on; dr-forge refuses to act
+# while it is empty. If you do not know what this is, you do not want it.
+# See docs/FORGE.md.
+#DRAUGR_FORGE=layer-3-myproject
+
+# Guest paths dr-forge init excludes from Defender, separated by SEMICOLONS
+# (a Windows path has spaces in it and no semicolons). Empty leaves Defender
+# alone. Only ever adds - it will not remove an exclusion you made by hand.
+#DRAUGR_FORGE_NOSCAN="C:\UE_4.27;D:\work\MyGame"
+#
+# A single "*" disables Defender in the guest altogether instead of excluding
+# paths. Read the CONFIG.md section before using it.
+#DRAUGR_FORGE_NOSCAN="*"
+
+# Where dr-layer keeps the forge's disk layers. Default empty, meaning C:\ForgeLayers.
+# It must be your FASTEST disk rather than your biggest: reads walk the chain, so the
+# frozen parents - Windows, Visual Studio, the engine - are the hot read path. Layer
+# stores on more than one drive are normal; --root overrides this for one command.
+#DRAUGR_FORGE_LAYERS="D:\ForgeLayers" 
+
 # --- Run-state dependencies -------------------------------------------------
 #
 # Other repositories whose mounds have to be RUNNING before this one is any use.

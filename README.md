@@ -12,9 +12,17 @@ In Norse folklore a *draugr* is an undead creature that guards its burial mound.
 strong, and it never leaves. That is the deal here: the agent is powerful inside the mound and has
 no reach outside it.
 
+**Optionally, a Windows VM.** A mound is Linux, so an agent in one can write Windows code it has no
+way to compile or run. The *forge* closes that gap: a Windows 11 VM on the host, driven from a
+mound through [AppSandbox](https://github.com/jamesstringer90/appsandbox), with no network adapter
+of its own and one filtered way out. For building Windows software, or for running something you
+would rather not host yourself — an unknown mod off GitHub, say. It is **off unless `DRAUGR_FORGE`
+names a VM**, so a machine that wants none behaves exactly as before. See
+[docs/FORGE.md](docs/FORGE.md).
+
 **WARNING:** This entire project has been "vibe-coded" by [Claude Code](https://claude.ai).
 
-> **Status: 0.2.0 — ready to be used rather than read.** Every command in the tables below exists
+> **Status: 0.6.0 — ready to be used rather than read.** Every command in the tables below exists
 > and has tests; the mechanics are verified against `sbx` v0.37.1 on Windows 11 + WSL2. It has not
 > yet been used by anyone but its author, so expect rough edges in the places nobody has walked.
 >
@@ -29,6 +37,7 @@ no reach outside it.
 | [docs/WORKFLOW.md](docs/WORKFLOW.md) | The daily loop, review, data, memory, skills |
 | [docs/CONFIG.md](docs/CONFIG.md) | Every `DRAUGR_*` key, and what happens if you get it wrong |
 | [docs/CLAUDE_PLUGINS.md](docs/CLAUDE_PLUGINS.md) | Using Claude Code plugins in a mound without installing them on your host |
+| [docs/FORGE.md](docs/FORGE.md) | The optional Windows VM: what it is for, and the boundary it keeps |
 | [docs/SECURITY.md](docs/SECURITY.md) | What the agent can and cannot reach, and how that was measured |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptoms, causes, fixes |
 | [docs/DESIGN.md](docs/DESIGN.md) | Why it is shaped this way, including what was tried and rejected |
@@ -524,6 +533,78 @@ start. `ssh://` needs no port, crosses no NAT, and starts a stopped sandbox by i
 | `dr-plugin enable` / `disable` | The switch only. No mound, instant |
 | `dr-plugin clean` | Drop superseded versions, which nothing else reaps |
 | `dr-plugin rollback` | Swap back to the previous library |
+
+### The forge (optional, and off by default)
+
+| Command | |
+|---|---|
+| `dr-forge` | Status: the whole liveness chain on the host side, in one screen |
+| `dr-forge status --deep` | Also asks the **guest** whether it can reach the internet |
+| `dr-forge doctor` | Every link, checked by effect, each naming its own fix |
+| `dr-forge exec <command>` | Run it in the guest, and return the **guest's** exit code |
+| `dr-forge push <local> <guest path>` | Copy one path in — the file-level primitive, not the data loop |
+| `dr-forge pull <guest path> <local>` | Copy one path out |
+| `dr-forge init` | Make a registered VM usable: its name, keys-only `sshd`, the tunnel key, the desktop camera. Idempotent |
+| `dr-forge up` / `down` | The gateway mound, the VM and the tunnel, up in that order and back down again |
+| `dr-forge screen` | The guest's desktop on screen, on a forge already up |
+| `dr-forge base` / `rollback` | One baseline, and the way back to it |
+| `dr-forge rm` | Delete the VM, after showing what goes with it |
+| `dr-forge gateway <dir>` | Generate the gateway mound from Draugr's template. Writes files; starts nothing |
+| `dr-forge daemon <verb>` | AppSandbox itself: `status`, `stop`, `start`, `restart`. Every `dr-layer` verb that rewrites `vms.cfg` needs it stopped; only `start` raises a UAC prompt |
+| `dr-layer` | The VM's disk layers: `list`, `adopt`, `new`, `freeze`, `thaw`, `drop` |
+| `dr-layer new <name> --parent <layer>` | A differencing child on a frozen parent |
+| `dr-layer provision <name> --iso <path>` | Build a base: create the VM, install Windows unattended, set the guest up |
+| `dr-layer provision <name> --skip-screen` | ... leaving one phase out; `--help` names them all |
+| `dr-layer provision <name> --netfx <cab>` | ... and .NET 3.5, from a cab off the matching ISO |
+
+The forge is a Windows 11 VM an agent drives through AppSandbox, for work a Linux mound cannot do —
+building a Windows game, or running untrusted Windows code such as a mod off GitHub. It
+is **off unless `DRAUGR_FORGE` names a VM**, and if you do not already know what it is, you do not
+want it — see [docs/FORGE.md](docs/FORGE.md). All of it lives in `bin/dr-forge`, `bin/dr-layer` and
+`lib/forge/`, and no core script sources any of them, so deleting those leaves the rest of Draugr
+untouched.
+
+**`dr-layer` is the one exception to "off unless `DRAUGR_FORGE` names a VM"**, and it cannot be
+otherwise: its verbs *create* the thing that key would name, so gating it there would mean never
+building a first forge. Its preconditions are the opposite of `dr-forge`'s too — every disk verb
+needs the AppSandbox daemon **down**, because the daemon rewrites its config whenever anything
+changes and an edit made underneath it is simply lost. That is why the layers are a separate command
+rather than more `dr-forge` verbs.
+
+`status` and `doctor` are **read-only and start nothing**, deliberately: the moment you most want to
+look at the forge is while something else is using it. The verbs that *act* are built; what is left
+is in [docs/FORGE.md](docs/FORGE.md)'s order of work, and each unbuilt thing there names what to do
+meanwhile rather than half-working.
+
+`gateway` is the odd one out: it writes a directory rather than touching the VM. The gateway mound is
+nearly all mechanism — tinyproxy with no destination filtering, a keeper session, an SMB share, and a
+deny list that narrows `sbx`'s defaults to the hosts the VM's tools were *seen* to use — so it is
+**generated from a template and regenerated when the work changes**, not kept as a repository anybody
+maintains. Nothing in it is tracked by git. Re-running never clobbers an edit: a file that differs is
+kept and named, and `-y` is how you take the template anyway.
+
+`exec` sends its command as **UTF-16LE base64**, which is not ceremony. A command typed in WSL
+crosses bash, WSL's argv translation, PowerShell's parser, `ssh`, and the guest's PowerShell — and
+two of those are *measured* to damage ordinary quoting: PowerShell 5.1 silently strips `{` and `}`
+from native-command arguments, and `powershell -Command -` reads piped stdin line by line, so a
+multi-line block is swallowed with exit code 0 and no output. Base64 is the one form none of them can
+touch. The arguments are joined with single spaces and run as one command line — argv is not
+preserved, and `exec` sends no stdin, because neither can be promised honestly across that crossing.
+What *is* promised is the exit code: the guest's own, carried out through a wrapper that reads both
+`$LASTEXITCODE` and `$?`, because `powershell -EncodedCommand` exits 0 for a cmdlet that failed.
+
+**Why a chain rather than a health flag.** It runs AppSandbox → VM → sshd → tunnel supervisor →
+keeper → tinyproxy → gateway, and a break anywhere surfaces far from the cause. In one case every
+link was healthy except the tunnel supervisor, which a host reboot had quietly removed, and the
+symptom appeared three links away as *the application in the guest reporting no internet*. So every link
+is checked by its **effect**: `doctor` asks the guest to fetch a page rather than looking for an
+`ssh.exe` on the host, because a forward being open here proves nothing about the far end.
+
+`dr-forge` is a front end, not a reimplementation, and that is forced rather than chosen. AppSandbox
+binds the **Windows** loopback, and inside WSL2 `127.0.0.1` is WSL's own: *measured*,
+`host.json` is readable over `/mnt/c` while neither `127.0.0.1:8787` nor the Windows host address
+accepts a connection. Only a process on the Windows side can dial it, so `lib/forge/probe.ps1` goes
+through `powershell.exe` and answers in `key=value` lines.
 
 A plugin is **code that runs** — hooks, MCP servers, `bin/` on the Bash tool's `PATH` — so it is
 never installed on your host. `dr-plugin` builds the library inside a mound it throws away, and your

@@ -97,6 +97,28 @@ Sandbox names come from the repo folder, filtered to `sbx`'s charset — it reje
 The alternative is hand-parsing `sbx ls --json` in bash, which is exactly the kind of fragile
 cleverness this project should not contain. `dr-doctor` checks for it.
 
+### The forge is off by default, and `dr-forge` speaks verbs
+
+The forge is a Windows 11 VM an agent drives: a GPU partition, an installed toolchain and a
+desktop, none of which a Linux microVM can offer. It is the least general thing in
+Draugr, and two decisions keep it from costing anything to the people who will never want it.
+
+**It does not exist unless [`DRAUGR_FORGE`](CONFIG.md#draugr_forge) names a VM.** Empty is the
+default, so there is no extra dependency, no prompt, no line in `dr-doctor` to explain away, and
+nothing in [SECURITY.md](SECURITY.md)'s guarantees that moves. With the key empty `dr-forge` says so
+and stops rather than adopting a VM it found lying around. The cost lands on the people who do turn
+it on, and it is a real one: the guest is a machine the agent administers, not a mound, so almost
+none of the mound's guarantees transfer
+([SECURITY.md](SECURITY.md#the-forge-if-you-turn-it-on) states the weaker claim in full).
+
+**`dr-forge`'s surface is verbs, never the backend's nouns** — `status`, `doctor`, `init`, `up`,
+`down`, `screen`, `base`, `rollback`, `rm`, `exec`, `push`, `pull`. AppSandbox is what sits behind
+them today; a replacement would have to match the verbs, not the API. The one place that abstraction
+is deliberately thin is `base`/`rollback`, which offer a single baseline rather than a history
+because of the upstream bug in the risks below — the shape of a defect, visible in the surface.
+
+[FORGE.md](FORGE.md) is the design, with the measurements it rests on.
+
 ---
 
 ## Directories that are not repositories
@@ -205,3 +227,22 @@ Named so nobody has to wonder whether they were forgotten:
 - **`sbx settings` is undocumented** — absent from `sbx --help` — and Draugr reads
   `feature.shareSkills` through it. If that command changes, `dr-skills list` loses its ability to
   report whether the skills mount can be declined.
+- **The forge's backend is six months old and one person's project.** AppSandbox is at 0.1.8, and
+  its author treats pull requests as "suggestions and examples of possible solutions" that he is
+  "unlikely to formally review or merge", using them as a reference for his own fix (*read*: the
+  repository's PR template). So a bug Draugr finds is fixed on his schedule, not Draugr's, and
+  Draugr must keep working on **released** versions — never on a patched build nobody else has. Two
+  things make that acceptable rather than reckless: `dr-forge`'s surface is verbs, so the backend
+  stays swappable, and the whole feature is invisible unless `DRAUGR_FORGE` is set. One thing cuts
+  the other way, and it is worth saying: AppSandbox ships EV-Authenticode-signed binaries with
+  Microsoft-attestation-signed drivers, which is not maturity but is evidence that somebody is home.
+- **The snapshot bug under the forge's undo is open upstream, and waiting is no longer a plan.**
+  Only the *first* snapshot of a VM captures its current state; every later one branches from the
+  base disk, silently discarding the work it was taken to protect
+  ([#152](https://github.com/jamesstringer90/appsandbox/issues/152)). The author replied asking for
+  a version that keeps parent disks immutable and recovers from failure partway; that version is
+  [#199](https://github.com/jamesstringer90/appsandbox/pull/199), in the form the author asks for.
+  Nothing says whether or when it lands, so "wait for upstream" means "wait indefinitely" — which is
+  why `dr-forge base` takes one baseline and refuses a second, rather than pretending to keep a
+  history. If #199 ever lands, that restriction can be lifted and nothing else in the design has to
+  move ([FORGE.md](FORGE.md#backup-and-rollback) has the call sequence).

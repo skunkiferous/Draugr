@@ -21,4 +21,47 @@ case " ${DR_MOCK_FAIL:-} " in
     *" ssh "*) printf 'mock ssh: connection failed\n' >&2; exit 255 ;;
 esac
 
+# `ssh -G <host>` prints the configuration ssh WOULD use and connects to nothing. dr-forge asks
+# it to find out whether the forge's alias is defined, so the mock has to answer it rather than
+# exiting silently - which would read as "no alias" in every test.
+#
+#   DR_MOCK_SSH_ALIAS=<host>:<port>   a DEFINED alias, with a proxy through the mound
+#   unset                             the bare defaults ssh prints when no Host block matches:
+#                                     the name echoed back as hostname, port 22, no proxy.
+#                                     That is exactly what "undefined" looks like.
+case " $* " in
+    *" -G "*)
+        if [ -n "${DR_MOCK_SSH_ALIAS:-}" ]; then
+            printf 'hostname %s\n' "${DR_MOCK_SSH_ALIAS%%:*}"
+            printf 'port %s\n' "${DR_MOCK_SSH_ALIAS##*:}"
+            printf 'user forge\n'
+            printf 'proxycommand ssh mock-mound.sbx socat - PROXY:gateway.docker.internal:%%h:%%p,proxyport=3128\n'
+        else
+            printf 'hostname %s\n' "${*##* }"
+            printf 'port 22\n'
+            printf 'user nobody\n'
+        fi
+        exit 0 ;;
+esac
+
+# The liveness probe dr-forge runs over that alias. It can only answer when there is an alias
+# to run over, so the two are kept consistent: no alias, no chain.
+#
+#   DR_MOCK_SSH_CHAIN=no   a DEFINED alias whose chain still does not carry. Measured
+#                         : the supervisor's forward was bound and the guest refused
+#                          every channel over it, because sshd binds the tunnel key's permitopen
+#                          at authentication time and the list had been widened since. Links 6
+#                          and 7 passed throughout, so this state has to be expressible
+#                          separately from "no alias" or the advice cannot be tested.
+case " $* " in
+    *DRAUGR_WSL_OK*)
+        if [ "${DR_MOCK_SSH_CHAIN:-}" = no ]; then
+            printf 'mock ssh: channel 1: open failed: administratively prohibited\n' >&2
+            exit 255
+        fi
+        if [ -n "${DR_MOCK_SSH_ALIAS:-}" ]; then printf 'DRAUGR_WSL_OK\n'; exit 0; fi
+        printf 'mock ssh: no alias, so nothing to connect to\n' >&2
+        exit 255 ;;
+esac
+
 exit "${DR_MOCK_SSH_RC:-0}"

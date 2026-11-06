@@ -106,7 +106,7 @@ load_helpers() {
     run dr-hostport 11434
     [ "$status" -eq 0 ]
     [[ "$output" == *"already open"* ]]
-    ! grep -q "policy allow" "$DR_MOCK_LOG"
+    ! grep -q "policy allow" "$DR_MOCK_LOG" || return 1
     ! grep -q "policy rm" "$DR_MOCK_LOG"
 }
 
@@ -235,7 +235,7 @@ load_helpers() {
 @test "dr-hostport: listing changes nothing" {
     export DR_MOCK_ADHOC="10.0.0.5:11434"
     run dr-hostport
-    ! grep -q "policy allow" "$DR_MOCK_LOG"
+    ! grep -q "policy allow" "$DR_MOCK_LOG" || return 1
     ! grep -q "policy rm" "$DR_MOCK_LOG"
 }
 

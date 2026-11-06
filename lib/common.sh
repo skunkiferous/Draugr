@@ -16,7 +16,7 @@
 [ -n "${_DR_COMMON_LOADED:-}" ] && return 0
 _DR_COMMON_LOADED=1
 
-DRAUGR_VERSION="0.5.0"
+DRAUGR_VERSION="0.6.0"
 
 # --- work out where Draugr itself is installed ------------------------------
 #
@@ -393,6 +393,93 @@ dr_require_win_path() {
         "Move the project under /mnt/c/ (or any Windows drive) and work on it from there."
 }
 
+# dr_path_canon_case <path> - a path on a Windows drive, spelled the way the disk
+# spells it. Anything else is returned untouched.
+#
+# WHY THIS EXISTS. Windows drives are case-INSENSITIVE, so /mnt/c/code and
+# /mnt/c/Code are one directory - but git, pwd and $PWD all hand back whichever
+# spelling you happened to type, and bash compares strings case-SENSITIVELY. So
+# everything keyed by the path quietly disagrees with itself depending on how you
+# cd'd in.
+#
+# MEASURED, which is why this is not a tidy-up: a repo trusted as
+# /mnt/c/Code/draugr-gateway read as UNTRUSTED from /mnt/c/code/draugr-gateway.
+# Identical file, identical hash - the record is "<hash>  <path>" and the lookup
+# is a grep -xF, so one letter's case was the whole difference. The hook was
+# refused (fatal) and .draugr.conf was skipped (a warning), which left the run
+# using DEFAULTS for the agent, the sandbox name, the ports and the mounts.
+# Nothing looked broken. It cost an evening, twice.
+#
+# ONLY /mnt/<drive>/ paths are folded. WSL's own ext4 IS case-sensitive, where two
+# names differing in case are two different files and folding them would be the
+# bug rather than the fix.
+#
+# Component by component, because only the filesystem knows the real spelling:
+# `[ -e ]` cannot tell you - on a case-insensitive drive it answers yes to every
+# spelling, which is exactly what makes this class of bug invisible.
+dr_path_canon_case() {
+    local p=$1 out rest comp pick lc entry name
+
+    case "$p" in
+        /mnt/[A-Za-z]/*) : ;;
+        *) printf '%s' "$p"; return 0 ;;
+    esac
+
+    out=/mnt/${p:5:1}
+    rest=${p:7}
+
+    # SPLIT FIRST, WITH GLOBBING OFF. `set -- $rest` is subject to pathname
+    # expansion, so a directory honestly named "[0-9]" or "*" would expand to
+    # something else entirely, or - once nullglob is on below - to nothing at all.
+    # $- holds the current option letters, which is how to ask whether noglob is
+    # already set without disturbing it.
+    local had_f=0
+    case $- in *f*) had_f=1 ;; esac
+    set -f
+    local oldifs=$IFS
+    IFS=/
+    # shellcheck disable=SC2086  # splitting on "/" is the whole point
+    set -- $rest
+    IFS=$oldifs
+    if [ "$had_f" = 0 ]; then set +f; fi
+
+    # NOW globbing, for the directory listings: dotglob to see .draugr - the very
+    # component the real bug tripped over - and nullglob so a directory that is
+    # not there yields nothing rather than the pattern itself. Both are put back
+    # before returning, because leaving them on would change globbing for every
+    # caller afterwards.
+    #
+    # `if shopt -q` rather than `shopt -q x && y=1`: under `set -e` the second
+    # form EXITS THE SHELL whenever the option happens to be off, because the
+    # whole && list then returns non-zero. An `if` asks instead of failing.
+    local had_dot=0 had_null=0
+    if shopt -q dotglob; then had_dot=1; fi
+    if shopt -q nullglob; then had_null=1; fi
+    shopt -s dotglob nullglob
+
+    for comp in "$@"; do
+        [ -n "$comp" ] || continue
+        pick=''
+        lc=${comp,,}
+        for entry in "$out"/*; do
+            name=${entry##*/}
+            # An exact match wins outright. Otherwise keep the first
+            # case-insensitive one and carry on looking for an exact: a drive can
+            # be mounted case-sensitively, and then both spellings may exist and
+            # the one that was asked for is the right answer.
+            if [ "$name" = "$comp" ]; then pick=$name; break; fi
+            if [ -z "$pick" ] && [ "${name,,}" = "$lc" ]; then pick=$name; fi
+        done
+        # Nothing of that name on disk: keep what was asked for. This reports a
+        # spelling; it does not assert that the path exists.
+        out="$out/${pick:-$comp}"
+    done
+
+    if [ "$had_dot" = 0 ]; then shopt -u dotglob; fi
+    if [ "$had_null" = 0 ]; then shopt -u nullglob; fi
+    printf '%s' "$out"
+}
+
 # ---------------------------------------------------------------------------
 # Repository helpers
 # ---------------------------------------------------------------------------
@@ -405,7 +492,10 @@ dr_repo_root() {
         "Draugr works on one repository at a time: the sandbox gets a clone of it." \
         "Run 'git init' here, or cd into your project." \
         "To have Draugr create one for you, set DRAUGR_ON_MISSING_REPO and run dr-init."
-    printf '%s' "$root"
+    # ONE spelling, whatever case you cd'd in with. git reports the path as typed,
+    # and DR_REPO keys the trust record, the kit stamp and the sandbox name - so the
+    # folding belongs here, once, rather than separately in each of them.
+    dr_path_canon_case "$root"
 }
 
 # Empty, and successful, when there is no repository or no commit yet. git exits
@@ -473,6 +563,7 @@ DR_KEYS=(
     DRAUGR_PLUGIN_STORE
     DRAUGR_REQUIRES DRAUGR_EXCLUSIVE DRAUGR_LINGER
     DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL
+    DRAUGR_FORGE DRAUGR_FORGE_NOSCAN DRAUGR_FORGE_LAYERS
 )
 
 # One DRAUGR_AGENT_ARGS_<AGENT> per agent, appended rather than typed out.
@@ -620,6 +711,31 @@ _dr_defaults() {
     DRAUGR_SCAN=true
     DRAUGR_SCAN_PATTERNS=".env *.pem *.key id_rsa id_ed25519 credentials.json secrets.*"
     DRAUGR_SCAN_FAIL=block
+
+    # The name of the forge VM, and the ONLY switch the forge has. Empty means
+    # there is no forge, which is the right answer for almost everybody: it is
+    # a Windows 11 VM for building Windows software, driven through AppSandbox,
+    # and it is of interest to one person in a hundred. dr-forge refuses every action while
+    # this is empty, so the feature cannot be stumbled into.
+    #
+    # It names a VM, not a path, because the VM is the thing that exists on both
+    # sides of the boundary: AppSandbox knows it by name, and so does the tunnel
+    # supervisor. See docs/FORGE.md.
+    DRAUGR_FORGE=
+
+    # Guest paths dr-forge init excludes from Defender, separated by SEMICOLONS because a
+    # Windows path contains spaces and does not contain semicolons - the same reason Windows
+    # uses them in PATH. Empty means Defender is left exactly as it is, which is the right
+    # default: init is generic, and only the project knows which trees are its build output
+    # rather than something worth scanning.
+    DRAUGR_FORGE_NOSCAN=
+    # Where dr-layer keeps the forge's disk layers. Empty means C:\ForgeLayers, which is
+    # layer.ps1's own default - and the two must stay the same literal, because a value
+    # forwarded from here would be reported as a choice somebody made rather than as the
+    # default it is. It must be your FASTEST disk rather than your biggest: reads walk the
+    # chain, so the frozen parents holding Windows, Visual Studio and the engine are the hot
+    # read path. A store per drive is normal - the engine layers are the big ones.
+    DRAUGR_FORGE_LAYERS=
 }
 
 # --- how provenance is worked out -------------------------------------------
@@ -851,12 +967,18 @@ _dr_hash() {
 dr_trust_is_trusted() {
     local file=$1 hash
     [ -f "$DR_TRUST_FILE" ] || return 1
+    # Both halves of the record have to be canonical or this misses a file it has
+    # already seen: see dr_path_canon_case. dr_repo_root folds the usual path in,
+    # but a file named on the command line arrives exactly as it was typed.
+    file=$(dr_path_canon_case "$file")
     hash=$(_dr_hash "$file")
     grep -qxF "$hash  $file" "$DR_TRUST_FILE" 2>/dev/null
 }
 
 dr_trust_add() {
     local file=$1 hash
+    # Recorded canonically, so the lookup above can match it: dr_path_canon_case.
+    file=$(dr_path_canon_case "$file")
     hash=$(_dr_hash "$file")
     mkdir -p "$DR_CONFIG_USER"
     # Drop any previous entry for this path, then record the current hash.
@@ -984,11 +1106,24 @@ dr_repo_create() {
                 'DRAUGR_DATA="*"' \
                 'DRAUGR_ON_MISSING_REPO=create-data-only' > "$dir/.draugr.conf"
             dr_trust_add "$dir/.draugr.conf"
+            # SET HERE, AND ONLY HERE: inside the branch that just WROTE that value to the
+            # file. The default has to agree with what a child process will read back, and a
+            # child re-reads the file - it does not inherit this shell.
+            #
+            # MEASURED, on the first dr-up of a freshly generated gateway: setting
+            # it unconditionally made dr-up hold '*' for a config that says nothing about
+            # data, pass its own `-n "$DRAUGR_DATA"` guard, and call dr-data - which read the
+            # file, found nothing, and died. dr-up reported "auto data push failed" as the
+            # first thing a new gateway ever says, about a push that was never needed.
+            #
+            # A data-only repo whose config exists and names no data has named no data. That
+            # is a complete answer, and `dr-forge gateway` relies on it: a gateway carries a
+            # proxy and an allowlist, and the mound already mounts its source read-only.
+            [ -n "${DRAUGR_DATA:-}" ] || {
+                DRAUGR_DATA='*'
+                DR_ORIGIN[DRAUGR_DATA]="data-only mode"
+            }
         fi
-        [ -n "${DRAUGR_DATA:-}" ] || {
-            DRAUGR_DATA='*'
-            DR_ORIGIN[DRAUGR_DATA]="data-only mode"
-        }
         DR_REPO_CREATED=$mode
         dr_ok "created a data-only repository in $dir"
         ;;
@@ -1466,10 +1601,77 @@ dr_sandbox_name() {
     printf 'draugr-%s' "$leaf"
 }
 
+# dr_sbx_json <text> - the JSON out of sbx's stdout, without its chatter.
+#
+# `sbx ls --json` is not only JSON: when a newer sbx exists it draws an upgrade
+# banner on stdout, around the document. Everything before the first "{" is that
+# banner, and jq fails on anything after the document - so callers judge by the
+# output they got, never by jq's exit status.
+dr_sbx_json() {
+    local text=$1
+    case $text in
+        *'{'*) printf '%s' "${text#"${text%%\{*}"}" ;;
+        *)     printf '%s' "$text" ;;
+    esac
+}
+
 # dr_sandbox_state <name> -> absent|stopped|running (whatever sbx reports)
 dr_sandbox_state() {
-    local name=$1 json
-    json=$(dr_sbx ls --json 2>/dev/null) || { printf 'unknown'; return 1; }
+    local name=$1 json status _err _errf
+    # AN UNREACHABLE sandboxd MUST NOT BE SILENT, and this used to be exactly that:
+    #
+    #   json=$(dr_sbx ls --json 2>/dev/null) || { printf 'unknown'; return 1; }
+    #
+    # Every caller writes `state=$(dr_sandbox_state ...)`, and under `set -euo pipefail` a
+    # command substitution that exits non-zero ABORTS THE WHOLE SCRIPT WITHOUT PRINTING
+    # ANYTHING. MEASURED: `dr-up --recreate` returned instantly, printed not one
+    # character, changed nothing, and sent its user looking for a mistake in a config that
+    # was correct. The `2>/dev/null` then discarded the one thing that explained it - sbx's
+    # own "previous sandboxd (PID 3700) did not exit within 10s".
+    #
+    # Nothing relied on the `return 1`: all four call sites (dr-up, dr-status, dr-stop,
+    # dr-dep) assign it bare, so every one of them died the same silent death. Dying here,
+    # out loud, is what they all wanted. "absent" still returns normally - that is an answer,
+    # not a failure.
+    #
+    # stderr goes to a file rather than being folded into stdout with 2>&1: the comment below
+    # explains that sbx already mixes a banner into stdout, and adding its error text to the
+    # same stream is how a parser that nearly works starts failing on the interesting days.
+    #
+    # MEASURED, on the failure that prompted all this: sandboxd was running
+    # ELEVATED and perfectly healthy - its log answered /daemon/health 200 throughout - while
+    # an unelevated client could not open its pipe, reported "Status: stopped", and then said
+    # "previous sandboxd (PID 3700) did not exit within 10s" about a process it was not
+    # allowed to see. Elevation is the first thing to suspect here, not a wedged daemon:
+    # acting on the latter would stop a working one for nothing.
+    #
+    # The daemon was elevated because forge-provision.ps1 runs elevated for AppSandbox and
+    # reached dr-up through wsl.exe, which passes that token on; post-up's keeper session
+    # then held the daemon open for nine hours, so the elevation it was born with outlived
+    # every shell involved. The advice below says MATCH it rather than escalate, because
+    # telling people to run everything elevated cures the symptom by making it permanent.
+    _errf=$(mktemp)
+    json=$(dr_sbx ls --json 2>"$_errf") || {
+        _err=$(cat "$_errf" 2>/dev/null); rm -f "$_errf"
+        dr_die "cannot ask sandboxd what state '$name' is in" \
+               "${_err:-sbx ls failed without saying why}" \
+               "Most often this is ELEVATION, not a broken daemon. sandboxd belongs to" \
+               "whichever shell started it, a client below that level cannot open its pipe," \
+               "and sbx then reads 'no daemon', starts its own, finds the lock held, and" \
+               "reports that the process it cannot even see \"did not exit\"." \
+               "Confirm it with 'sbx daemon status' in an elevated shell and an ordinary" \
+               "one: running+connected in the first and stopped in the second IS this, and" \
+               "the daemon is healthy. Stopped in BOTH means it really is down." \
+               "The fix is to MATCH it, not to escalate: integrity runs one way, so an" \
+               "elevated shell can use an ordinary daemon but never the other way round." \
+               "  keep going now ....  run dr-* from WSL started in an ELEVATED PowerShell" \
+               "  get back to normal .. dr-stop, wait ~30s for sandboxd to idle out after" \
+               "                        its last session, then dr-up from an ORDINARY WSL" \
+               "An elevated daemon here usually came from forge-provision.ps1, which runs" \
+               "elevated for AppSandbox and used to start one itself. It now refuses to."
+    }
+    rm -f "$_errf"
+    json=$(dr_sbx_json "$json")
 
     # The jq program, read left to right:
     #   (.sandboxes // [])   the sandboxes array, or an empty one if absent
@@ -1479,15 +1681,62 @@ dr_sandbox_state() {
     # --arg n "$name" passes the name in as a jq variable rather than splicing
     # it into the program text, so a name with quotes in it cannot break jq.
     #
-    # If no sandbox matched, jq prints nothing, `grep .` (match any character)
-    # finds no line and fails, and the || branch reports "absent".
-    printf '%s' "$json" | jq -r --arg n "$name" \
-        '(.sandboxes // [])[] | select(.name == $n) | .status' 2>/dev/null \
-        | head -1 | grep . || printf 'absent'
+    # Judged by what came out, not by the pipeline's exit status. sbx prints an
+    # upgrade banner on stdout beside the JSON, and jq then prints the status and
+    # *then* fails on the trailing text - which under `set -o pipefail` used to
+    # append "absent" to a perfectly good answer and make dr-up refuse a stopped
+    # mound (measured). No sandbox matched means empty, means absent.
+    status=$(printf '%s' "$json" | jq -r --arg n "$name" \
+        '(.sandboxes // [])[] | select(.name == $n) | .status' 2>/dev/null | head -1)
+    [ -n "$status" ] || status=absent
+    printf '%s' "$status"
 }
 
+# dr_forge_available - load lib/forge on demand, or say why it is not there.
+#
+# A SOFT DEPENDENCY, deliberately. lib/forge/ must stay deletable: the forge is one person's
+# feature, and docs/FORGE.md promises that removing those files leaves the rest of Draugr
+# exactly as it was. So core never sources it at startup - it reaches for it only once
+# DRAUGR_FORGE names a VM, which on every machine that has not opted in is never.
+dr_forge_available() {
+    if declare -f dr_forge_far_end_running >/dev/null 2>&1; then return 0; fi
+    local lib="$DRAUGR_ROOT/lib/forge/common.sh"
+    if [ ! -r "$lib" ]; then
+        dr_warn "DRAUGR_FORGE names '$DRAUGR_FORGE', but $lib is missing - treating it as absent."
+        return 1
+    fi
+    # source-path, because `source=` alone is resolved against the CWD and shellcheck then
+    # reports a file that plainly exists as missing - the same trap bin/dr-forge documents.
+    # shellcheck source-path=SCRIPTDIR
+    # shellcheck source=forge/common.sh
+    . "$lib"
+}
+
+# dr_sandbox_exists <name> - is the far end this name refers to actually there?
+#
+# THE FORGE IS A FAR END TOO, and this is where that becomes true for the twelve commands that
+# gate on this function. The forge's code and data live in the VM rather than in a mound - the
+# gateway mound is there to control what the VM may reach and holds no clone - so the git loop
+# and the file loop have to be able to address it, and every one of them refused here first.
+#
+# NOTHING CHANGES FOR A MACHINE WITHOUT A FORGE, which is the condition this was built under.
+# The forge branch needs BOTH a configured forge AND a name that matches it, so with
+# DRAUGR_FORGE empty - the default, and everyone who has not opted in - this is the same single
+# dr_sandbox_state call it always was: no AppSandbox, no powershell.exe, no extra process, and
+# no lib/forge sourced. tests/forge.bats asserts that, by failing if powershell.exe is invoked
+# at all on that path.
+#
+# dr_sandbox_state is deliberately NOT given the same treatment. dr-up, dr-stop and dr-dep read
+# it to decide whether to create or start a MOUND, and answering those with a VM's state would
+# have them act on the wrong thing - a far worse failure than the refusal this removes.
 dr_sandbox_exists() {
-    [ "$(dr_sandbox_state "$1")" != "absent" ]
+    local name=$1
+    if [ -n "${DRAUGR_FORGE:-}" ] && [ "$name" = "$DRAUGR_FORGE" ]; then
+        dr_forge_available || return 1
+        dr_forge_far_end_running "$name"
+        return
+    fi
+    [ "$(dr_sandbox_state "$name")" != "absent" ]
 }
 
 # dr_sandboxes_running - the name of every running sandbox, one per line.
@@ -1500,6 +1749,7 @@ dr_sandbox_exists() {
 dr_sandboxes_running() {
     local json
     json=$(dr_sbx ls --json 2>/dev/null) || return 1
+    json=$(dr_sbx_json "$json")
     printf '%s' "$json" | jq -r \
         '(.sandboxes // [])[] | select(.status == "running") | .name' 2>/dev/null
 }
@@ -2343,14 +2593,21 @@ dr_hostport_managed() {
 # for it to have been written to.
 dr_policy_unadopted() {
     local kit have host
-    # Spelled out rather than as have=$([ -n "$kit" ] && ...), which under set -e
-    # aborts the whole function when there is no kit - silently turning "every
-    # host is unadopted" into "there is nothing to report", which is the wrong
-    # answer in the one direction that loses data.
+    # EVERY kit, not just the repo's own. dr-kit adopt writes into one kit, but a
+    # host is adopted whichever kit holds it - and a project with several would
+    # otherwise be told that hosts already written down are about to be lost, and
+    # offered --force, which is how you lose the ones that really were unadopted.
+    #
+    # Spelled out rather than as have=$(...), which under set -e aborts the whole
+    # function when there is no kit - silently turning "every host is unadopted"
+    # into "there is nothing to report", the wrong answer in the one direction
+    # that loses data.
     have=
-    if kit=$(dr_kit_repo_dir); then
-        have=$(dr_kit_allow_list "$kit")
-    fi
+    while IFS= read -r kit; do
+        [ -d "$kit" ] || continue
+        have="$have
+$(dr_kit_allow_list "$kit")"
+    done < <(dr_kit_refs)
     while IFS= read -r host; do
         [ -n "$host" ] || continue
         # A rule dr-hostport wrote is restored automatically, so it is neither
@@ -2611,7 +2868,39 @@ dr_sandbox_url() {
     local mound
     mound=$(dr_path_mound "$DR_REPO") || dr_die \
         "$DR_REPO is not on a Windows drive, so it has no path inside the mound"
-    printf 'ssh://%s.sbx%s' "$DRAUGR_SANDBOX" "$mound"
+
+    # THE SAME PATH WORKS IN THE VM, which is the happy accident that makes this one line
+    # instead of a translation layer. The mound path is the WSL path with /mnt removed, so
+    # /mnt/c/Code/MyGame becomes /c/Code/MyGame - and MEASURED in the guest, git
+    # 2.56.0 from MSYS2 resolves /c/Users to C:\Users: `git -C /c/Users rev-parse` answered
+    # "not a git repository" rather than "cannot change to". So only the ssh HOST differs.
+    printf 'ssh://%s%s' "$(dr_sandbox_ssh_host)" "$mound"
+}
+
+# dr_sandbox_ssh_host - the ssh host that reaches this project's far end.
+#
+# ONE PLACE, because three commands build it and they must agree: dr-sync through
+# dr_sandbox_url, dr-data's rsync target, and dr-code's vscode-remote URI. They used to spell
+# "$DRAUGR_SANDBOX.sbx" each for themselves, which was fine while a mound was the only possible
+# far end and a silent inconsistency the moment one was not - dr-sync reaching the VM while
+# dr-data reached the mound is the kind of split that takes a day to see.
+#
+# A mound is <name>.sbx, resolved by the ProxyCommand sbx installs in ~/.ssh/config. A forge VM
+# is <name>.forge, resolved by the single `Host *.forge` block `dr-setup --forge` writes - one
+# block for every VM, because the host port is pinned and a per-VM block would be the same
+# bytes with a different Host line (docs/FORGE.md, "The pinned port has a price"). Neither is a
+# config key: one name for one machine is less to keep in sync than two, and `dr-forge doctor`
+# checks the alias resolves rather than leaving git to fail with "could not resolve hostname".
+#
+# The suffix is spelled here AND in lib/forge/common.sh, which is not a duplication to tidy
+# away: no core script may source the forge library (docs/FORGE.md, "Optional by
+# construction"), so the two cannot share a definition. tests/forge.bats asserts they agree.
+dr_sandbox_ssh_host() {
+    if [ -n "${DRAUGR_FORGE:-}" ] && [ "${DRAUGR_SANDBOX:-}" = "$DRAUGR_FORGE" ]; then
+        printf '%s.forge' "$DRAUGR_FORGE"
+        return 0
+    fi
+    printf '%s.sbx' "${DRAUGR_SANDBOX:-}"
 }
 
 # dr_remote_ensure - point $DRAUGR_REMOTE at the mound, creating it if absent.

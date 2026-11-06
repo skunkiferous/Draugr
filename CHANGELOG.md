@@ -18,6 +18,50 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+## [0.6.0] — 2026-11-06
+
+### Added
+
+- **The forge** — an optional Windows VM, run by AppSandbox on the host and driven from a mound, so
+  an agent whose own world is Linux can build, run and look at Windows software. Two new commands:
+  `dr-forge` (status, doctor, init, up/down, screen, exec, push/pull, base/rollback, rm, and the
+  AppSandbox daemon itself) and `dr-layer` (its disks). Three new keys — `DRAUGR_FORGE`,
+  `DRAUGR_FORGE_NOSCAN` and `DRAUGR_FORGE_LAYERS` — all empty by default. Nothing here acts while
+  `DRAUGR_FORGE` is empty, so a machine that wants no VM behaves exactly as before.
+
+  The guest reaches the network only through one generated gateway mound, whose proxy that mound's
+  own sbx policy filters, and the share it serves the VM is read-only. The design, the boundary it
+  keeps and the failure catalogue behind it are [docs/FORGE.md](docs/FORGE.md). Proven end to end on
+  a real VM, including a multi-hour engine install driven through the gateway with the `unreal` kit.
+
+- **`dr-layer`** — the VM's disk as a chain of differencing VHDXs, each frozen read-only once built,
+  with only the top one ever registered as a VM. Rebuilding the work disk then costs minutes instead
+  of the day a fresh Windows, toolchain and engine install takes, and `dr-layer provision` builds the
+  base layer from an ISO in named, re-runnable phases.
+  [docs/FORGE-DISKS.md](docs/FORGE-DISKS.md) is the hierarchy.
+
+- **`dr-forge gateway <dir>`** — writes that gateway mound from Draugr's template, with the vault and
+  scratch paths it serves, so the one mound the VM depends on is generated rather than hand-built.
+
+### Removed
+
+- **`docs/FORGE-GATEWAY.md`** — the hand-build log `dr-forge gateway` replaces. Its one durable
+  section, the loopback adapter the host needs, moved into [docs/FORGE.md](docs/FORGE.md).
+
+### Fixed
+
+- **`dr-forge gateway` refused to generate whenever the Windows side was unreachable.** It writes a
+  directory and starts nothing, but `bin/dr-forge` probed the VM before dispatching it — so a
+  daemon that is down, a VM that does not exist yet, or a checkout outside `/mnt` (where
+  `lib/forge/probe.ps1` has no Windows spelling unless `WSL_DISTRO_NAME` is set) each turned the
+  generator into a refusal. Those are the moments you most want to generate a gateway.
+
+  It passed everywhere it was run by hand, which is why it survived: a checkout on `/mnt/c`
+  converts, and a WSL shell sets `WSL_DISTRO_NAME` anyway. CI is the one place neither holds, and
+  it failed 24 of `tests/forge-gateway.bats`'s 25 tests there while every local run stayed green.
+  The regression test asserts the gate in the source rather than by behaviour, because no run on a
+  WSL host can observe a gate that the host satisfies.
+
 - **`dr-kit apply` never worked, and now does the one thing it honestly can.** It ran
   `sbx kit add <kit> --sandbox <name>`; `sbx` wants `sbx kit add <name> <kit>` and has no such flag.
   The test counted `kit add` calls without looking at them, and the mock accepted any arguments, so
@@ -899,5 +943,10 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 390 tests run in CI.
   name instead.
 - One repository per mound.
 
-[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.6.0
+[0.5.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.5.0
+[0.4.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.4.0
+[0.3.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.3.0
+[0.2.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.2.0
 [0.1.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.1.0

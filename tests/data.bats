@@ -155,8 +155,8 @@ tmp/x.bin" ]
 
 @test "dr_data_matches: rejects what the filters exclude" {
     DRAUGR_DATA="tmp/** *.parquet scratch/raw/"
-    ! dr_data_matches "README.md"
-    ! dr_data_matches "lib/code.py"
+    ! dr_data_matches "README.md" || return 1
+    ! dr_data_matches "lib/code.py" || return 1
     ! dr_data_matches "scratch/cooked/c1"
 }
 
@@ -307,10 +307,10 @@ tmp/x.bin" ]
 @test "dr_data_exec_shaped: stays quiet on ordinary data" {
     # The important half. A warning that fires on every parquet file is one
     # people learn to scroll past, and then it protects nothing.
-    ! dr_data_exec_shaped "model.parquet"
-    ! dr_data_exec_shaped "report.csv"
-    ! dr_data_exec_shaped "notes.txt"
-    ! dr_data_exec_shaped "tmp/x.bin"
+    ! dr_data_exec_shaped "model.parquet" || return 1
+    ! dr_data_exec_shaped "report.csv" || return 1
+    ! dr_data_exec_shaped "notes.txt" || return 1
+    ! dr_data_exec_shaped "tmp/x.bin" || return 1
     ! dr_data_exec_shaped "capture.ts"
 }
 

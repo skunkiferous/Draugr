@@ -886,7 +886,97 @@ Default `block`. `block` turns a finding into a refusal; `warn` reports and cont
 Leave it at `block`. `.gitignore` hides files from git, not from the filesystem: an untracked `.env`
 is fully readable through the read-only mount even though it is absent from the agent's clone.
 
+### `DRAUGR_FORGE`
+Default empty, which means **there is no forge** — the right answer unless you need work done
+inside a Windows VM. Set it to the VM's name and `dr-forge` starts working; leave it and
+`dr-forge` refuses every action, so the feature cannot be stumbled into.
+
+It names a **VM**, not a path, because the VM is what exists on both sides of the boundary:
+AppSandbox knows it by name and so does the tunnel supervisor. Everything else — which disk, which
+engine, where the layers live — follows from that name. See [FORGE.md](FORGE.md).
+
+**It is the only key the forge needs to exist**, and `dr-forge up` keeps it that way. It needs the gateway
+mound running, and takes that from [`DRAUGR_REQUIRES`](#draugr_requires), which already means "this
+repo needs that one's mound running" — `dr-dep up` brings up everything named there, so nothing has
+to work out which of them is the gateway. So a game project that uses the forge names it exactly as
+it would name any other mound it depends on, and nothing forge-specific appears in the config.
+
+Run from inside the gateway's own directory, `dr-forge up` starts that repository's own mound instead,
+recognising it by its `DRAUGR_PORTS` publishing `127.0.0.1:18888` — the port the VM's only way out
+arrives on. Every other piece `up` needs ships in Draugr, including the tunnel supervisor, so no
+other repository has to be present or laid out in any particular way.
+
+### `DRAUGR_FORGE_NOSCAN`
+Default empty. Guest paths that `dr-forge init` excludes from Microsoft Defender, separated by
+**semicolons** — a Windows path contains spaces and does not contain semicolons, which is why
+Windows itself separates paths that way.
+
+```bash
+DRAUGR_FORGE_NOSCAN="C:\UE_4.27;D:\work\MyGame;D:\work\MyGame\DerivedDataCache"
+```
+
+**Why this is a key rather than a built-in list.** Real-time protection reads every file a build
+writes and every file it reads back, and in a forge VM that is the write pattern a differencing
+disk punishes hardest ([FORGE.md](FORGE.md#what-is-a-layer-not-the-base)). But `init` is generic:
+it cannot know which trees are regenerable build output and which hold something worth scanning.
+So Draugr supplies the mechanism and your project supplies the paths.
+
+**It only ever adds.** An exclusion `init` did not create is left alone — removing one somebody
+added by hand, on the grounds that it is absent from a config file, is not a decision a setup
+script should take. So emptying this key does not undo what it did; `Remove-MpPreference` in the
+guest does.
+
+**`*` disables Defender entirely**, rather than excluding anything:
+
+```bash
+DRAUGR_FORGE_NOSCAN="*"
+```
+
+The list is reused as the switch because one key with a sentinel is less to keep in step than two
+keys that can disagree, and `*` cannot be a real path. Any other entries alongside it have nothing
+left to exclude, and `init` says so.
+
+**Think about this one.** The guest downloads installers and assets from vendor stores, so the protection has
+a job; excluding the build trees takes the hot path out of its way without removing it, which is why
+that is the default shape. What makes `*` defensible when it is defensible: the guest has **no
+network adapter**, so every byte it fetches has already passed the gateway's allowlist, and the
+forge's security claim is [already weaker than a mound's](SECURITY.md). What makes it a real
+decision: an agent driving that guest can run anything the allowlist reaches.
+
+Two practical notes. **Tamper Protection blocks it** — on by default on Windows 11 — and the cmdlet
+can return without error, so `init` checks by effect and tells you when the change did not take.
+And Windows may re-enable real-time protection after an update, so this is not permanent; re-running
+`init` turns it off again.
+
 ---
+
+### `DRAUGR_FORGE_LAYERS`
+Default empty, which means `C:\ForgeLayers`. Where
+[`dr-layer`](FORGE.md#the-layer-mechanism-as-a-command-dr-layer) keeps the forge's disk layers.
+
+```bash
+DRAUGR_FORGE_LAYERS="D:\ForgeLayers"
+```
+
+**It must be your fastest disk rather than your biggest.** Reads walk the chain: anything the top
+layer does not hold is fetched from its parent, and so on down. The frozen parents are therefore the
+hot read path — they hold Windows, Visual Studio and the engine — so putting them on a spinning disk
+to save space on an SSD punishes every read the project makes. Archives are the opposite case and
+belong on the big slow disk, since nothing reads them until a restore.
+
+It must also be **outside AppSandbox's own tree**, though not for the reason it looks like. Deleting
+a VM removes *its disk's folder* recursively, so the risk follows the VM **registration**, not the
+path: a base under `C:\ForgeLayers` with a VM still pointing at it is exactly as deletable as one
+under `ProgramData`. `dr-layer freeze --unregister` is what ends that. Being outside AppSandbox's
+tree buys something different and worth having: nothing AppSandbox does to its own directory — an
+uninstall, a reset, a future tidy-up — can reach a layer that was never in it.
+
+**Layer stores on more than one drive are normal**, not exotic: the engine layers are the big ones,
+so they often live on the big disk while `layer-0` stays on the fast one. This key is the default,
+and `dr-layer --root <path>` overrides it for one command. The guards that look for a layer's
+children search every fixed drive's `ForgeLayers` whatever this is set to, because a chain that
+crosses drives is the shape this machine actually has — *measured*, when a check that
+scanned one root found no children for a layer that had four on another drive.
 
 ## Hooks
 

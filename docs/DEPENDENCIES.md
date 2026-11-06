@@ -54,7 +54,7 @@ built on the same claim helper.**
 
 ---
 
-## Decided already (2026-09-20)
+## Decided already
 
 These came from the user and are not reopened here.
 
@@ -147,16 +147,20 @@ The counting is done by the **warden**, one bash process per running dependency,
 2. Every 60 s it counts valid claims. Non-zero: nothing to do. Zero: note when zero began.
 3. When zero has lasted `DRAUGR_LINGER`, it kills the keeper, stops the mound, and exits.
 
-**The gateway's post-up keeper becomes core's dependency keeper**, and that hook loses a job. A
-mound that an agent attaches to does not need a keeper — the session is the keeper — which is why
-this is a dependency behaviour rather than a `dr-up` behaviour.
+**Core keeps a dependency up; a hook no longer has to.** A mound that an agent attaches to does not
+need a keeper — the session is the keeper — which is why this is a dependency behaviour rather than
+a `dr-up` behaviour. But that only covers a mound started *as* a dependency: a plain `dr-up` in the
+dependency's own repository starts no warden, so a repository that is also brought up by hand keeps
+its own keeper. `draugr-gateway`'s `post-up` hook is exactly that case. Two keepers cost nothing and
+never fight: the warden kills only the one recorded in its own `keeper.pid`, and the `sbx stop` that
+follows ends every session anyway.
 
 Two deaths are worth naming, because both are safe in the same direction:
 
 - **The warden dies** (WSL shuts down on idle, the terminal is killed): the keeper is a Windows
   process and survives, so the dependency **stays up**. The next `dr-up` re-arms a warden.
 - **The keeper dies** (a reboot, `sbx daemon` restart): the dependency stops within 30 s, and the
-  next `dr-up` brings it back — *measured 2026-09-20: 65 s for the gateway, with rules intact*.
+  next `dr-up` brings it back — *measured: 65 s for the gateway, with rules intact*.
 
 The failure direction is always "something stayed up that could have stopped", never "something
 stopped while in use".
@@ -277,7 +281,7 @@ exists for, so it is the same answer:
 | Its `dr-up` fails (create fails, `post-up` probe fails) | refuses, printing that repository's own error. `--skip-deps` starts this mound alone |
 | It is exclusive and someone else holds it | refuses, naming the holder and since when |
 | A cycle: A requires B requires A | refuses, printing the cycle |
-| The host rebooted | every claim is stale by the validity rule; the first `dr-up` rebuilds the chain — this is acceptance criterion A5 of [FORGE-GATEWAY.md](FORGE-GATEWAY.md#step-6-acceptance-criteria) |
+| The host rebooted | every claim is stale by the validity rule; the first `dr-up` rebuilds the chain |
 | The warden was killed | the dependency stays up; the next `dr-up` re-arms one |
 | A consumer's mound is stopped by sbx's own 30 s timer | its claim becomes invalid at the next warden tick; the linger then runs normally |
 | Two `dr-up`s race for an exclusive resource | `mkdir` decides; the loser is refused by name |
@@ -332,7 +336,7 @@ the linger and the poll interval are injectable, and the warden is driven one ti
 
 | # | Criterion | State |
 |---|---|---|
-| B1 | One `dr-up` brings up a chain | **measured against real `sbx`, 2026-09-20**: from everything stopped, `dr-dep up` in a repo requiring `draugr-gateway` had it running and claimed in 68 s. Also tested through the mock |
+| B1 | One `dr-up` brings up a chain | **measured against real `sbx`**: from everything stopped, `dr-dep up` in a repo requiring `draugr-gateway` had it running and claimed in 68 s. Also tested through the mock |
 | B2 | Idempotent | covered by `dr-up`'s own idempotence, which predates this; the second run above started nothing |
 | B3 | Order | **tested**: the claim exists, and the dependency is up, before this repo's mound is created |
 | B4 | Readiness is the dependency's own | **measured**: the gateway's `post-up` ran and probed (`gateway answers -> 403`) before `dr-dep up` returned. A hook that fails fails the consumer's `dr-up` |
