@@ -816,21 +816,35 @@ Two more, worth knowing before they bite you:
 draugr/
 ├── bin/                    one script per command — all of it, nothing hidden
 │   ├── dr                  dispatcher: `dr go` → `dr-go`
-│   ├── dr-go  dr-up  dr-shell  dr-stop  dr-rm  dr-ls  dr-status
+│   ├── dr-init  dr-up  dr-go  dr-shell  dr-stop  dr-rm  dr-ls  dr-status
 │   ├── dr-sync  dr-log  dr-diff  dr-merge  dr-send  dr-cp
-│   ├── dr-data  dr-mem  dr-skills
-│   └── dr-doctor  dr-config  dr-scan  dr-kit  dr-policy  dr-ports  dr-hostport  dr-code  dr-setup
-│       dr-init  dr-trust
+│   ├── dr-data  dr-mem  dr-skills  dr-plugin
+│   ├── dr-doctor  dr-config  dr-scan  dr-kit  dr-policy  dr-ports  dr-hostport
+│   │   dr-code  dr-setup  dr-trust  dr-dep
+│   └── dr-forge  dr-layer  the forge, and the only two commands that need it.
+│                           Delete them with lib/forge/ and nothing else notices
 ├── lib/
 │   ├── common.sh           config loading, path translation, guards, output
-│   └── agents/             one file per agent, for the parts that differ
-│       ├── default.sh      the interface, and the answer for an unmeasured agent
-│       └── claude.sh       where Claude Code keeps its memory
+│   ├── agents/             one file per agent, for the parts that differ
+│   │   ├── default.sh      the interface, and the answer for an unmeasured agent
+│   │   ├── claude.sh       where Claude Code keeps its memory
+│   │   └── codex.sh        the same for Codex, which files memory differently
+│   └── forge/              the Windows side — PowerShell, reached through powershell.exe
+│       ├── common.sh       the only bash here; the rest runs across the boundary
+│       ├── probe.ps1       the liveness chain, answered as key=value lines
+│       ├── guest.ps1  vm.ps1  snap.ps1  init.ps1  layer.ps1  provision.ps1
+│       ├── tunnel.ps1  screen.ps1  hostkey.ps1  daemon.ps1  rm.ps1  vmscfg.ps1
+│       ├── screen-access.ps1  vault-access.ps1
+│       └── guest/          eighteen scripts that run INSIDE the VM, one phase each
 ├── share/
 │   ├── config.example      the user-home config, fully commented
 │   ├── project.example     .draugr.conf starter, written by dr-init
 │   ├── kit.example/        starter sbx kit, also written by dr-init
-│   └── ssh-config.snippet  the *.sbx block dr-setup installs
+│   ├── gateway.example/    the gateway mound, written by dr-forge gateway
+│   ├── skills/             Draugr's own skills, installed by dr-skills install
+│   ├── ollama-proxy/       a query-only front door for a local Ollama
+│   ├── ssh-config.snippet  the *.sbx block dr-setup installs
+│   └── ssh-config-forge.snippet   the same shape, for reaching the VM
 ├── docs/
 │   ├── SETUP.md            bare machine → working session
 │   ├── WORKFLOW.md         the daily loop, data, memory, skills
@@ -838,9 +852,17 @@ draugr/
 │   ├── SECURITY.md         the boundary, and how each claim was measured
 │   ├── TROUBLESHOOTING.md  symptoms → causes → fixes
 │   ├── DESIGN.md           why it is shaped this way, and what was rejected
+│   ├── DEPENDENCIES.md     DRAUGR_REQUIRES: one repo's mound needing another's
+│   ├── CLAUDE_PLUGINS.md   plugins in a mound, uninstalled on your host
+│   ├── FORGE.md            the optional Windows VM, and the boundary it keeps
+│   ├── FORGE-DISKS.md      its disk layers, and which directories you keep
+│   ├── TODO-host-vscode.md host-side VS Code notes, not part of the tool
 │   └── HACKING.md          the bash this project uses, and the house rules
-├── tests/                  bats
+├── tests/                  27 .bats files, four standalone checks, and mocks/
+├── .githooks/pre-commit    sets the executable bit git cannot carry from /mnt/c
+├── .github/workflows/      the two CI jobs: tests, and shellcheck with three lints
 ├── CHANGELOG.md
+├── LICENSE
 └── install.sh
 ```
 

@@ -823,22 +823,83 @@ rather than padding with prose.
 
 ---
 
+## Working on Draugr
+
+Draugr sandboxes other people's projects, and it can sandbox its own. That is the recommended way
+to work on it: `dr-go` in your clone builds a mound whose agent edits a clone of your clone, while
+your checkout is mounted **read-only** and kernel-enforced. The only writes it ever receives are
+the merges you accept through `dr-sync` and `dr-diff`.
+
+`dr-init` writes `.draugr.conf` and `.draugr/kit/spec.yaml` (commit both) and adds three entries to
+`.gitignore`: `.draugr/kit.applied`, `.draugr/create.applied` and `.draugr/tmp/`. Those are not
+tidiness. With `DRAUGR_REQUIRE_CLEAN=true` an untracked state file **blocks `dr-go`**, so a repo
+missing them stops working the first time a mound is built.
+
+**The whole suite runs in there**, because none of it needs a hypervisor: CI proves that by running
+all 983 tests on Ubuntu with no sbx, no Windows and no WSL. Two things the mound does not have by
+default and the suite needs:
+
+- `bats`, `jq` and `shellcheck`, installed from the kit's `commands.install`. Mind the rule that
+  applies to every kit: install commands run **before** the repository is in the workspace, so they
+  cannot read a file from it.
+- a writable `/mnt/c`. `dr_win_root` looks for `/mnt/c/Temp` and then `/mnt/c`, and with neither
+  every mound test **skips** rather than failing. `sudo mkdir -p /mnt/c/Temp && sudo chmod 1777
+  /mnt/c/Temp` fixes it, and the agent user has passwordless sudo. CI does precisely this, for
+  precisely this reason.
+
+### What cannot happen in a mound
+
+A mound has no `sbx`, no `powershell.exe` and no WSL interop, so three things need a host:
+
+- **The ten `forge-api.bats` tests**, which need a real `powershell.exe` — but **not** a real
+  AppSandbox. The daemon they talk to is `tests/appsandbox_mock.py`, so any Windows machine will
+  do, with no VM anywhere.
+- **`dr-forge` and `dr-layer` live runs**, which need AppSandbox on a Windows 11 host with
+  `VirtualMachinePlatform` enabled. This one is irreducible: the code drives a hypervisor, and it
+  cannot be verified without one.
+- **The live tier** described under [Testing strategy](#testing-strategy), which needs a real mound
+  and therefore real sbx.
+
+Everything else — writing code, the 983 tests, the lints, shellcheck — runs anywhere.
+
+### Keep a live run off your own configuration
+
+The live tier runs *unreviewed* Draugr code on a host, as you. That is inherent rather than a
+shortcoming: acting on the host is what Draugr is for, so testing it means running it there. Two
+habits make it cheap:
+
+- **`DRAUGR_CONFIG_HOME=$(mktemp -d)`** moves the user config, the trust store and the kit library
+  somewhere disposable, so a live run cannot corrupt the configuration you work with. Run state is
+  separate and follows `XDG_STATE_HOME`, so redirect both if a test claims dependencies. Neither is
+  in `DR_KEYS`: they are development hatches, not part of the config surface, which is why
+  `dr-config` does not list them and `CONFIG.md` does not document them.
+- **Point live verbs at a throwaway repository** under `/mnt/<drive>/Temp`, never at a real project.
+  The suite's own fixtures do exactly that, and `dr_win_root` is how they find somewhere to put one.
+
+---
+
 ## Running the checks
 
 ```bash
 sudo apt install jq shellcheck bats     # jq is a runtime dependency; the others are for development
 
-shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh install.sh \
-    tests/mocks/* bin/* .githooks/* tests/executable-paths.sh share/ollama-proxy/ollama-proxy
+shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh lib/forge/*.sh \
+    install.sh tests/mocks/* bin/* .githooks/* tests/executable-paths.sh \
+    share/ollama-proxy/ollama-proxy
 ./tests/lint-comments.sh                # the comment-density rule, below
+./tests/lint-inverted.sh                # `! cmd` assertions that cannot fail
+./tests/lint-native-stderr.sh           # native stderr that `Stop` would make fatal
 bats -j 8 tests/                        # -j 8 takes the suite from ~280s to ~70s
 ```
 
-All three must be clean before a commit, and CI runs exactly these.
+All five must be clean before a commit, and CI runs exactly these.
 
 The shellcheck list is spelled out here because `.github/workflows/ci.yml` spells it out, and it has
 drifted once already: the workflow gained `lib/agents/`, `.githooks/` and `share/ollama-proxy/` while
 this line still named four paths, so the obvious local invocation quietly checked less than CI did.
+It then drifted a second time when the forge landed: `lib/forge/*.sh` and two of the three lint
+scripts were in the workflow and not here. Same failure, same consequence — so when you change
+either one, diff this block against the other.
 The globs are what keep it honest in between - a new command, mock or hook is covered without anyone
 remembering. `./tests/lint-comments.sh` takes no arguments at all, for the reason its own header
 gives.
@@ -879,7 +940,7 @@ rather than failing.
 
 ### The runner is not this machine
 
-Two green-here-red-there bugs have now come from the same place: the tests run on Ubuntu with a
+Three green-here-red-there bugs have now come from the same place: the tests run on Ubuntu with a
 recent toolchain, and they are written under WSL on `/mnt/c`, with whatever that distribution
 shipped.
 
@@ -889,6 +950,18 @@ shipped.
   git 2.43 that ref never appears, so `dr_other_branches` mis-skipping it was invisible here and
   failed three tests on every push. `git --version` on the runner is worth knowing before spending
   an afternoon on a test that passes locally.
+
+- **The checkout's own path.** A repository on `/mnt/c` has a Windows spelling; one anywhere else
+  needs the UNC form, and that needs `WSL_DISTRO_NAME` — exported by WSL, unset on a runner.
+  `dr-forge gateway` probed the Windows side before dispatching, could not spell
+  `lib/forge/probe.ps1`, and failed 24 of `forge-gateway.bats`'s 25 tests on every CI run for four
+  days while all 983 passed here. Both conditions hold on a development machine and neither holds
+  on the runner, so no local run could see it.
+
+When CI disagrees with a local run, **reproduce the runner rather than theorising**. A `git clone`
+into WSL's own filesystem, with `WSL_DISTRO_NAME` unset and Windows interop off `PATH`, differs from
+a working checkout in all three ways above, and takes a minute. Three guesses went by before that
+was tried for the bug named above.
 
 The lesson for tests rather than for code: when the thing under test is a state some *other*
 version produces, construct that state in the test instead of provoking it. The regression tests for
@@ -929,5 +1002,8 @@ Three rules that came out of getting this wrong:
    tracked files, and so never saw the untracked script that broke CI. Ask what
    the check would have to see to fail.
 3. **A skip is invisible in a green tick.** CI greps the bats output for skips and
-   fails the job if it finds any, because the mound tests skip without a writable
-   `/mnt/<drive>` and would otherwise turn into a silent no-op.
+   fails the job on any reason it does not recognise, because the mound tests skip
+   without a writable `/mnt/<drive>` and would otherwise turn into a silent no-op.
+   Two reasons are allowed, both saying the runner is not Windows, because
+   `forge-api.bats` cannot run real PowerShell there. The allowlist is of *reasons*,
+   not of files, so a new kind of skip in that same file still fails the build.
