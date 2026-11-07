@@ -4,6 +4,8 @@
 #
 #   dr-plugin                          what the library holds, and whether it is wired up
 #   dr-plugin list                     the plugins in it, with versions
+#   dr-plugin skills                   the skills those plugins ship, and from which
+#   dr-plugin kit [<plugin>@<mkt>...]  write the per-mound install out as a kit
 #   dr-plugin add <owner>/<repo> [<plugin>...]  register the MARKETPLACE, install, enable
 #   dr-plugin update [<plugin>@<mkt>]  all of them, or one
 #   dr-plugin remove <plugin>@<mkt>    uninstall, deregister, disable
@@ -80,9 +82,10 @@ _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 action=${1:-status}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
-    status|list|add|update|remove|enable|disable|clean|rollback) shift || : ;;
+    status|list|skills|kit|add|update|remove|enable|disable|clean|rollback) shift || : ;;
     *) dr_die "unknown action: $action" \
-              "One of: status, list, add, update, remove, enable, disable, clean, rollback" ;;
+              "One of: status, list, skills, kit, add, update, remove, enable," \
+              "disable, clean, rollback" ;;
 esac
 
 # Options are read once for every verb rather than per verb: rejecting --yes on
@@ -139,6 +142,30 @@ BUILD_SANDBOX=draugr-plugin-build
 # Where the CLI actually works, inside the mound. Rootfs, so that a git clone can
 # be renamed - see the header.
 WORK=/home/agent/seed
+
+# Force github to HTTPS for every git the plugin CLI runs.
+#
+# WHY: a mound has no SSH key and must not be given one, but `claude plugin
+# install` clones a github plugin source over SSH and does NOT fall back -
+# unlike `claude plugin marketplace add`, which prints "SSH not configured,
+# cloning via HTTPS" and retries. Measured against iha2/superlite: the
+# marketplace cloned fine over HTTPS and the install then died with
+# "Connection closed by 140.82.121.4 port 22", which is what GitHub says to an
+# SSH client it cannot authenticate. Egress was never the problem.
+#
+# GIT_CONFIG_COUNT rather than `git config --global`: this rides on the env that
+# build_run is already setting, so nothing has to guess which HOME the CLI runs
+# under, no file is written into the mound, and the redirect reaches every git
+# the CLI spawns. insteadOf is multi-valued, so both spellings share one key.
+#
+# It can only widen what works: an SSH clone could never have succeeded in here.
+_DR_GIT_HTTPS=(
+    GIT_CONFIG_COUNT=2
+    "GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf"
+    "GIT_CONFIG_VALUE_0=git@github.com:"
+    "GIT_CONFIG_KEY_1=url.https://github.com/.insteadOf"
+    "GIT_CONFIG_VALUE_1=ssh://git@github.com/"
+)
 
 # Which variables redirect this agent's library. Both come from the agent module
 # because they are its private business - see lib/agents/claude.sh.
@@ -264,6 +291,12 @@ build_begin() {
     rm -rf "$BUILD"
     mkdir -p "$BUILD"
     if [ -d "$SEED" ]; then
+        # Announced because it is slow and was silent. A library of three plugins
+        # measures 43 MB over 4581 files, most of it the marketplaces' own git
+        # clones, and it is being copied on a WINDOWS drive. Before this the
+        # command printed nothing at all for the first several seconds, with
+        # nothing to say which of its three slow steps was running.
+        dr_info "copying the library aside to work on ($SEED)"
         cp -a "$SEED" "$BUILD/seed"
     else
         mkdir -p "$BUILD/seed"
@@ -316,7 +349,8 @@ build_run() {
     # over `installed()` has the rest of its list eaten by the first iteration -
     # measured as an `update` that reported success having touched exactly one
     # plugin of three, which is the worst way for this to be wrong.
-    dr_sbx exec "$BUILD_SANDBOX" env "$CACHE_VAR=$WORK" "${argv[@]}" </dev/null \
+    dr_sbx exec "$BUILD_SANDBOX" env "$CACHE_VAR=$WORK" "${_DR_GIT_HTTPS[@]}" \
+        "${argv[@]}" </dev/null \
         || dr_die "plugin command failed: ${argv[*]}" \
                   "The library was not changed - $SEED is untouched."
 }
@@ -353,13 +387,17 @@ build_mound_start() {
     # something later is still removed. No kit, no ports, no clone: this mound
     # exists to run one CLI against one directory.
     trap build_mound_stop EXIT INT TERM
-    dr_info "building in $BUILD_SANDBOX"
+    # Naming the step rather than just the sandbox: creating a microVM takes
+    # seconds and says nothing while it does.
+    dr_info "creating the build mound $BUILD_SANDBOX"
     dr_sbx create --name "$BUILD_SANDBOX" -q "$DRAUGR_AGENT" "$(dr_path_win "$BUILD")" \
         || dr_die "could not create the build mound" \
                   "Check that sbx works:  dr-doctor"
     _dr_mound_up=1
 
-    # The working copy, in the rootfs, for the rename reason in the header.
+    # The working copy, in the rootfs, for the rename reason in the header. The
+    # third of the slow steps, and the third that used to be silent.
+    dr_info "staging the library into the mound's rootfs"
     dr_sbx exec "$BUILD_SANDBOX" sh -c \
         'rm -rf "$1" && cp -a "$2" "$1"' sh "$WORK" "$(dr_path_mound "$BUILD/seed")" \
         || dr_die "could not stage the library inside $BUILD_SANDBOX"
@@ -471,6 +509,124 @@ list)
         esac
         printf '%s %s %s\n' "$_id" "$_ver" "$_state"
     done < <(installed)
+    ;;
+
+# --- skills -------------------------------------------------------------------
+#
+# A plugin's skills are NOT in the shared skills store and never will be: they
+# load from the plugin itself. dr-skills reports the same list under a heading of
+# its own, and the walk they share is dr_plugin_skills in lib/common.sh.
+skills)
+    _rows=$(dr_plugin_skills "$STORE")
+    # Nothing is a normal answer, not a fault: plenty of plugins ship no skill.
+    [ -n "$_rows" ] || { dr_info "no installed plugin ships a skill"; exit 0; }
+
+    # Content on stdout, like `list`, so a pipe keeps it. See dr-status.
+    printf '%s\n' "$_rows" | while read -r _s _id _v; do
+        printf '%-32s %s %s\n' "$_s" "$_id" "$_v"
+    done
+    ;;
+
+# --- kit ----------------------------------------------------------------------
+#
+# The seed removes the marketplace add and the network fetch. It does not remove
+# the INSTALL, which lands in each mound's own rootfs and dies with dr-rm - and
+# that one repeated step is what this writes out as a kit.
+#
+# ONE KIT PER PLUGIN, because sbx can only ADD a kit to a running mound. A single
+# combined kit would have to be EDITED whenever a plugin was added, and an edited
+# kit needs dr-up --recreate; separate kits make adding a plugin an append, which
+# is the one change that applies in place.
+#
+# NO VERSION IS PINNED. The install line names <plugin>@<marketplace> and nothing
+# more, so it resolves against whatever the seed holds when a mound is created.
+# That is what keeps `dr-plugin update` and this verb independent: after an update
+# the same kit installs the new version. See docs/CLAUDE_PLUGINS.md.
+kit)
+    # The kit runs INSIDE a mound, so the seed has to be named in the mound's
+    # spelling - the same translation `status` checks the wiring against.
+    _seed_mound=$(dr_path_mound "$SEED") || dr_die \
+        "the seed is not on a Windows drive, so no mound could be pointed at it" \
+        "  $SEED"
+    _ks=$(dr_kit_store)
+
+    # With nothing named, every installed plugin - the same shape as `add`: all
+    # of it, or only the ones you name.
+    _want=()
+    if [ ${#args[@]} -gt 0 ]; then
+        _want=("${args[@]}")
+    else
+        while read -r _id _; do
+            [ -n "$_id" ] && _want+=("$_id")
+        done < <(installed)
+    fi
+    [ ${#_want[@]} -gt 0 ] || dr_die "no plugin is installed" \
+        "Add one first:  dr-plugin add <owner>/<repo>"
+
+    mkdir -p "$_ks"
+    _made=()
+    for _p in "${_want[@]}"; do
+        # Installed is the precondition, and the version is read only to prove
+        # it - nothing written below records a version.
+        _ver=$(installed | awk -v id="$_p" '$1 == id {print $2; exit}')
+        [ -n "$_ver" ] || dr_die "not installed: $_p" \
+            "A kit can only install what the seed holds, and the id is in full," \
+            "as <plugin>@<marketplace>. See what there is:  dr-plugin list"
+
+        # sbx constrains `name` to lowercase alphanumeric and hyphens, so the
+        # plugin half of the id is slugged rather than used as it stands.
+        _slug=plugin-$(printf '%s' "${_p%@*}" | tr '[:upper:]' '[:lower:]' \
+            | tr -cs 'a-z0-9' '-')
+        _slug=${_slug%-}
+        _dir="$_ks/$_slug"
+
+        # A kit already in the library may have been edited by hand, so
+        # replacing one is a decision rather than a detail.
+        if [ -d "$_dir" ] && [ -z "$force" ]; then
+            dr_warn "$_slug is already in the kit library"
+            printf '  %s%s%s\n' "$_DR_DIM" "$_dir/spec.yaml" "$_DR_OFF" >&2
+            dr_confirm "Overwrite it?" || { dr_info "kept $_slug"; continue; }
+        fi
+
+        # Unquoted heredoc: the id, the slug and the seed path are substituted,
+        # and there is nothing else in here that a shell would touch.
+        mkdir -p "$_dir"
+        cat > "$_dir/spec.yaml" <<YAML
+schemaVersion: "2"
+kind: mixin
+name: $_slug
+displayName: Install $_p into the mound
+description: >-
+  Generated by dr-plugin kit. Installs the plugin named below from the seed as
+  the mound is created. No version is pinned: it resolves against whatever the
+  seed holds, so dr-plugin update needs no regeneration here.
+
+commands:
+  install:
+    - command: "env HOME=/home/agent $SEED_VAR=$_seed_mound claude plugin install $_p -y"
+      user: "1000"
+      description: Install $_p from the seed, with no marketplace add and no clone
+YAML
+        _made+=("$_slug")
+        dr_ok "wrote $_dir/spec.yaml  ($_p $_ver)"
+    done
+
+    # Nothing to say if every kit was already there and kept.
+    [ ${#_made[@]} -gt 0 ] || exit 0
+
+    # Draugr does not parse kit YAML - sbx does - so dr-kit is the authority on
+    # whether what was just written is valid, not this command.
+    dr_info "validate it, then add it to a project's kit list:"
+    printf '  dr-kit validate\n' >&2
+    printf '  DRAUGR_KIT=".draugr/kit %s"\n' "${_made[*]}" >&2
+
+    # Both halves, because only one of them is measured: a kit added to the end
+    # of the list can be applied to a running mound, but whether commands.install
+    # runs on apply or only at creation is still open.
+    printf '  %sA mound built from now on installs it as it is created. For the one\n' "$_DR_DIM" >&2
+    printf '  you are in, "dr-kit apply" adds the kit in place - then confirm with\n' >&2
+    printf '  "dr-shell -- claude plugin list", and install once by hand if it is\n' >&2
+    printf '  absent. See docs/CLAUDE_PLUGINS.md.%s\n' "$_DR_OFF" >&2
     ;;
 
 # --- add ----------------------------------------------------------------------
@@ -603,6 +759,21 @@ remove)
     done
     build_commit
     for _p in "${args[@]}"; do settings_write "$_p" drop; done
+
+    # A generated kit installs this plugin by name, and the plugin is now gone
+    # from the seed - so that kit would send a mound to the network for it, or
+    # fail. Reported, NOT deleted: a kit in your library may have been edited
+    # since it was generated, and removing a plugin is not consent to discard it.
+    _ks=$(dr_kit_store)
+    if [ -d "$_ks" ]; then
+        for _p in "${args[@]}"; do
+            _hits=$(grep -rlF "claude plugin install $_p " "$_ks" 2>/dev/null) || continue
+            [ -n "$_hits" ] || continue
+            dr_warn "a kit in your library still installs $_p:"
+            printf '%s\n' "$_hits" | sed "s|^|    |" >&2
+            dr_info "drop it from DRAUGR_KIT, or delete that directory"
+        done
+    fi
     ;;
 
 # --- enable / disable ---------------------------------------------------------

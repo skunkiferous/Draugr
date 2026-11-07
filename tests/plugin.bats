@@ -417,3 +417,165 @@ register_source() {
     [[ "$output" == *"already exists"* ]]
     [[ "$output" == *"--force"* ]]
 }
+
+# --- the skills a plugin ships, and the kit that installs it ------------------
+
+# A skill inside the installed plugin. The directory name and the front matter's
+# `name:` differ on purpose: one test below is about which of the two is used.
+make_plugin_skill() {
+    local dir="$STORE/seed/cache/mkt-a/plug-a/1.0.0/skills/$1"
+    mkdir -p "$dir"
+    printf -- '---\nname: %s\ndescription: whatever\n---\n' "${2:-$1}" > "$dir/SKILL.md"
+}
+
+@test "dr-plugin skills: names the skills an installed plugin ships" {
+    setup_store || skip "no writable Windows drive path"
+    make_plugin_skill alpha alpha-skill
+
+    run dr-plugin skills
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"alpha-skill"* ]]
+    # And the plugin it came from, because that is the thing you have to install.
+    [[ "$output" == *"plug-a@mkt-a"* ]]
+}
+
+@test "dr-plugin skills: the front matter name wins over the directory name" {
+    setup_store || skip "no writable Windows drive path"
+    make_plugin_skill alpha alpha-skill
+
+    # A substring test cannot tell these apart, since "alpha-skill" contains
+    # "alpha" - so the first field is compared outright.
+    run dr-plugin skills
+    [ "$(printf '%s\n' "$output" | awk 'NR == 1 {print $1}')" = alpha-skill ]
+}
+
+@test "dr-plugin skills: a directory with no SKILL.md is not a skill" {
+    setup_store || skip "no writable Windows drive path"
+    make_plugin_skill alpha
+    mkdir -p "$STORE/seed/cache/mkt-a/plug-a/1.0.0/skills/notaskill"
+
+    # The agent ignores one too, so reporting it would invent a skill.
+    run dr-plugin skills
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"alpha"* ]]
+    [[ "$output" != *"notaskill"* ]]
+}
+
+@test "dr-plugin skills: a skill under a version that is not installed is ignored" {
+    setup_store || skip "no writable Windows drive path"
+    # installed_plugins.json says 1.0.0. A skill cached under another version is
+    # a superseded copy - what dr-plugin clean reaps - and naming it would
+    # advertise a skill no mound is going to load.
+    mkdir -p "$STORE/seed/cache/mkt-a/plug-a/2.0.0/skills/ghost"
+    printf -- '---\nname: ghost\n---\n' \
+        > "$STORE/seed/cache/mkt-a/plug-a/2.0.0/skills/ghost/SKILL.md"
+
+    run dr-plugin skills
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"ghost"* ]]
+}
+
+@test "dr-plugin skills: says so when no plugin ships one" {
+    setup_store || skip "no writable Windows drive path"
+    # Plenty of plugins carry only commands or hooks, so this is an answer and
+    # not a failure - commit-commands is one of them.
+    run dr-plugin skills
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no installed plugin ships a skill"* ]]
+}
+
+@test "dr-plugin kit: writes a mixin that installs the plugin, pinning no version" {
+    setup_store || skip "no writable Windows drive path"
+    export DRAUGR_KIT_STORE="$DR_TMP/kits"
+
+    run dr-plugin kit -y
+    [ "$status" -eq 0 ]
+    spec="$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml"
+    [ -f "$spec" ]
+    grep -q '^kind: mixin' "$spec"
+    grep -q 'claude plugin install plug-a@mkt-a -y' "$spec"
+
+    # The seed has to be named the way the MOUND spells it, not the host.
+    grep -q 'CLAUDE_CODE_PLUGIN_SEED_DIR=/c/' "$spec"
+
+    # And the version must be absent. A pinned kit would need editing on every
+    # dr-plugin update, and an edited kit cannot be applied to a running mound -
+    # so pinning would turn each plugin update into a rebuild of every mound.
+    ! grep -q '1\.0\.0' "$spec"
+}
+
+@test "dr-plugin kit: refuses a plugin that is not installed" {
+    setup_store || skip "no writable Windows drive path"
+    export DRAUGR_KIT_STORE="$DR_TMP/kits"
+
+    # A kit can only install what the seed holds, so this would generate a file
+    # whose one job fails inside every mound built from it.
+    run dr-plugin kit nope@mkt-a
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not installed"* ]]
+    [ ! -e "$DRAUGR_KIT_STORE/plugin-nope" ]
+}
+
+@test "dr-plugin kit: will not quietly replace a kit already in the library" {
+    setup_store || skip "no writable Windows drive path"
+    export DRAUGR_KIT_STORE="$DR_TMP/kits"
+    run dr-plugin kit -y
+    [ "$status" -eq 0 ]
+
+    # A library kit may have been edited by hand since it was generated, so the
+    # second run asks - and with no terminal, asking means refusing.
+    printf 'sentinel\n' >> "$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml"
+    run dr-plugin kit
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already in the kit library"* ]]
+    grep -q sentinel "$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml"
+}
+
+@test "dr-plugin remove: says when a kit still installs what it dropped" {
+    setup_store || skip "no writable Windows drive path"
+    export DRAUGR_KIT_STORE="$DR_TMP/kits"
+    run dr-plugin kit -y
+    [ "$status" -eq 0 ]
+
+    # The plugin leaves the seed and the kit stays, still naming it - so a mound
+    # built from that kit would go to the network for it, or fail. Reported and
+    # NOT deleted: the kit is yours, and may have been edited since.
+    run dr-plugin remove plug-a@mkt-a
+    [[ "$output" == *"still installs plug-a@mkt-a"* ]]
+    [ -f "$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml" ]
+}
+
+# --- the build mound's own environment ----------------------------------------
+
+@test "dr-plugin add: redirects github to HTTPS for the plugin CLI" {
+    setup_store || skip "no writable Windows drive path"
+
+    # A mound has no SSH key and must not be given one, but `claude plugin
+    # install` clones a github plugin SOURCE over SSH and does not fall back the
+    # way `marketplace add` does. Measured against iha2/superlite: the
+    # marketplace cloned over HTTPS and the install then died with "Connection
+    # closed by 140.82.121.4 port 22" - GitHub refusing an unauthenticated SSH
+    # client. Egress was never the problem.
+    run dr-plugin add owner/repo plug-b@mkt-b
+    [ "$status" -eq 0 ]
+    grep -qF 'GIT_CONFIG_COUNT=2' "$DR_MOCK_LOG"
+    grep -qF 'GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf' "$DR_MOCK_LOG"
+    grep -qF 'GIT_CONFIG_VALUE_0=git@github.com:' "$DR_MOCK_LOG"
+
+    # Both spellings, because git uses either and insteadOf is multi-valued.
+    grep -qF 'GIT_CONFIG_VALUE_1=ssh://git@github.com/' "$DR_MOCK_LOG"
+}
+
+@test "dr-plugin add: names each slow step while it is running" {
+    setup_store || skip "no writable Windows drive path"
+
+    # Three slow steps used to run silently - a tens-of-MB copy on a Windows
+    # drive, a microVM create, and the staging copy into its rootfs - so the
+    # command said nothing at all until the CLI spoke, and there was no way to
+    # tell which of them was being waited on.
+    run dr-plugin add owner/repo plug-b@mkt-b
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"copying the library"* ]]
+    [[ "$output" == *"creating the build mound"* ]]
+    [[ "$output" == *"staging the library"* ]]
+}

@@ -744,6 +744,47 @@ That loop belongs to the repository rather than to the seed, and deliberately so
 machine-wide and invisible; a hole in a network policy is exactly the kind of decision that should be
 committed somewhere a reviewer will see it.
 
+### Install-time network: github over SSH, which a mound cannot do
+
+`claude plugin install` clones a github plugin **source** over SSH, and it does not fall back the
+way `claude plugin marketplace add` does. Measured against `iha2/superlite`, in one `dr-plugin add`:
+
+```text
+Adding marketplace…SSH not configured, cloning via HTTPS: https://github.com/iha2/superlite.git
+✔ Successfully added marketplace: superlite-dev
+
+Installing plugin "superlite@superlite-dev"...✘ Failed to install plugin:
+  Failed to clone repository: Cloning into '/home/agent/seed/cache/temp_github_…'
+  Connection closed by 140.82.121.4 port 22
+```
+
+The marketplace step detected no SSH and said so; the install step tried port 22 anyway. **Egress
+was never the problem** — a blocked host arrives as HTTP 403 from the proxy, and this got through to
+GitHub, which closed it because it had no key to authenticate. A mound has no SSH key and must not
+be given one, so an SSH clone can never succeed in there.
+
+> **The failing clone was not the plugin you asked for.** `superlite` declares `"source": "./"` and
+> needs no clone at all. Its marketplace also lists `claude-agent-map` with
+> `{"source": "github", "repo": "iha2/claude-agent-map"}`, and `superlite` depends on it — so the
+> clone that died was the **dependency's**, reported under the parent's name. That is why the error
+> looked like a repository that had just been cloned successfully could not be cloned.
+
+`dr-plugin` therefore sets git's own redirect for every plugin command it runs:
+
+```bash
+GIT_CONFIG_COUNT=2
+GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf   GIT_CONFIG_VALUE_0=git@github.com:
+GIT_CONFIG_KEY_1=url.https://github.com/.insteadOf   GIT_CONFIG_VALUE_1=ssh://git@github.com/
+```
+
+Environment rather than `git config --global`, because it rides on the env `build_run` already
+sets: nothing has to guess which `HOME` the CLI runs under, no file is written into the mound, and
+the redirect reaches every `git` the CLI spawns. `insteadOf` is multi-valued, so both spellings
+share one key. It can only widen what works, since SSH could not have succeeded there anyway.
+
+With it, the same command installs `superlite` **and** its dependency, and `dr-plugin skills` reports
+the eleven skills it ships.
+
 ### Layering more than one seed
 
 `CLAUDE_CODE_PLUGIN_SEED_DIR` accepts several paths separated by `:`, searched in order, first match
@@ -818,6 +859,122 @@ Why it is a follow-up rather than the recommendation:
 
 Worth having for a plugin you never update, or for trying one before committing it to the seed. Not
 a replacement for option 4.
+
+## Which plugins ship skills, and where they are
+
+A plugin's skills are **not** in the shared skills store and will never appear in `dr-skills list`.
+They live inside the plugin, and Claude Code loads them from there at session start. The two are
+different directories with different trust properties, which is the whole argument of
+[option 5](#5-the-shared-skills-store):
+
+| | skills store | plugin library |
+|---|---|---|
+| Host directory | `…\DockerSandboxes\sandboxes\state\agent-skills` | `$DRAUGR_PLUGIN_STORE` |
+| Managed by | `dr-skills` | `dr-plugin` |
+| Mounted into a mound | `~/.claude/skills`, **read-write** | read-only, via `DRAUGR_MOUNTS` |
+| Contents | only what is copied in | marketplaces and plugin content |
+
+That split is correct and worth keeping, but it made `dr-skills list` misleading: it reported one
+skill on a machine whose plugin library held fifteen, with nothing to say they existed.
+
+**Discovery is a directory walk, not a query.** `plugin.json` declares hooks, MCP servers and the
+rest, and says nothing about skills — they are the convention `skills/<name>/SKILL.md`. Measured
+against the three plugins in use here:
+
+| Plugin | Skills |
+|---|---|
+| `commit-commands` 1.0.0 | none — no `skills/` directory at all |
+| `simple-english` 2.1.1 | 1 |
+| `superpowers` 6.3.0 | 14 |
+
+Each `SKILL.md` opens with YAML front matter carrying `name:` and `description:`, and the `name:` is
+preferred over the directory name because it is what the agent matches on and the two are free to
+differ.
+
+> **The front matter is read with `sed`, one scalar, and no YAML parser.** `description:` is already
+> a block scalar (`description: |`, six lines) in one of those three and a quoted one-liner in
+> another, so a naive read of it would be wrong — and Draugr's dependencies are `git`, `jq` and
+> `rsync`. `name:` is always a plain scalar, so it is safe, and `dr-kit` reads `displayName:` the
+> same shallow way. A listing is not worth a new dependency.
+
+So two commands report it:
+
+```bash
+dr-plugin skills      # every skill an installed plugin ships, with the plugin it comes from
+dr-skills list        # the store, then the same list under "also shipped by plugins"
+```
+
+`dr-skills` gains the section rather than the knowledge: the walk is `dr_plugin_skills` in
+`lib/common.sh`, which both commands call. Shelling out from one command to the other would couple
+two things that currently share nothing, and the section is **silent when `DRAUGR_PLUGIN_STORE` is
+unset**, because the plugin feature is off by default and an empty heading on a plugin-free machine
+would be worse than no heading.
+
+The wording there carries a condition, and it matters. These skills are not available the way a
+store entry is available: they arrive only after the plugin is installed **in that mound**, which is
+the step the next section is about. Saying "also available" would recreate the original confusion in
+the opposite direction.
+
+## `dr-plugin kit`: the per-mound install, generated
+
+`dr-plugin` manages the host library thoroughly — add, update, remove, enable, clean, rollback — but
+the one step you have to repeat it did not touch: [installing into each
+mound](#what-a-seed-actually-saves). Every new mound, every plugin, by hand.
+
+`dr-plugin kit` writes that install as a composable kit in your kit library:
+
+```bash
+dr-plugin kit                                   # one kit per installed plugin
+dr-plugin kit simple-english@simple-english     # or only the ones you name
+```
+
+It generates `$DRAUGR_KIT_STORE/plugin-<plugin>/spec.yaml` — a `kind: mixin` holding the single
+`commands.install` entry from [the partners section](#what-a-seed-actually-saves), with the seed path
+already in its mound spelling — then prints the `DRAUGR_KIT` entry to add. This is the same shape as
+`dr-forge gateway`: generate a directory from what is known, then say what to do with it.
+
+**One kit per plugin, not one kit for all of them**, and the reason is a constraint rather than a
+preference. From `dr-kit`'s own contract:
+
+> Only one change can be applied to a running mound: kits **ADDED** to the end of the list. sbx
+> refuses to re-add a kit it already has, and cannot remove one, so an edited or removed kit needs
+> `dr-up --recreate`.
+
+A combined `plugins` kit would have to be *edited* every time you added a plugin, forcing a recreate
+of every existing mound. Separate kits mean adding a plugin appends a name to the list, which is
+exactly the one change that applies in place.
+
+### Why the generated kit pins no version
+
+The install line names `<plugin>@<marketplace>` and nothing more, so it resolves against whatever the
+seed holds at the moment a mound is created. That is deliberate, and it is what makes `dr-plugin
+update` and this verb independent: **after an update the same kit installs the new version, with no
+regeneration.**
+
+Pinning would invert that. A version in the kit would mean every `dr-plugin update` edited a kit,
+and an edited kit cannot be applied to a running mound — so each plugin update would become a
+rebuild of every mound that used it. The seed is the single answer to "which version", and the kit
+defers to it.
+
+Two consequences follow, and neither is a defect of the kit:
+
+- **A mound created before an update keeps the old version.** The install already ran, and it landed
+  in that mound's own `~/.claude/plugins/cache`, which is rootfs. It stays as it was until the mound
+  is recreated, or until the install is re-run inside it.
+- **`dr-plugin remove` can leave a kit pointing at a plugin the seed no longer has.** `remove`
+  therefore says so when a generated kit names what it is about to drop. It does not delete the kit:
+  a kit in your library may have been edited, and removing a plugin is not consent to discard it.
+
+### Open: does `commands.install` run on apply?
+
+Unsettled, and it changes only what the command prints at the end. If `install` runs when a kit is
+*applied* to an already-running mound, then generate, add, `dr-kit apply` is the whole story. If it
+runs only at creation, the kit pays off from the next mound onward and the mound you are sitting in
+still needs one `dr-shell` install.
+
+Until it is measured, the generated kit's closing advice says both, because that is true either way.
+The related measurement is not encouraging: sbx kit **startup** commands are known to go dead after
+a daemon restart, so `install` should not be assumed to behave as documented either.
 
 ## Checks worth running once
 

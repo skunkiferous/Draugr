@@ -2690,6 +2690,49 @@ dr_skills_dir() {
     printf '%s/sandboxes/state/agent-skills' "$(dirname "$(dirname "$sbx_exe")")"
 }
 
+# dr_plugin_skills <plugin store> - "<skill> <plugin>@<marketplace> <version>" a
+# line, for every skill shipped by an INSTALLED plugin in that library.
+#
+# Here rather than in dr-plugin because dr-skills reports it too: a shell-out
+# between two commands that otherwise share nothing is a worse coupling than one
+# function they both call.
+#
+# A plugin DECLARES nothing about its skills - plugin.json carries hooks, MCP
+# servers and the rest - because skills are the convention skills/<name>/SKILL.md.
+# So this is a walk, not a query, and a directory with no SKILL.md is not a skill
+# and is skipped, which is what the agent does with it too.
+#
+# The front matter's `name:` wins over the directory name: it is what the agent
+# matches on, and the two are free to differ. Read with sed, one scalar, and no
+# YAML parser - `description:` is a block scalar in one shipped plugin already,
+# so a naive read of THAT would be wrong, and Draugr's dependencies are git, jq
+# and rsync. Same shallow read dr-kit uses for displayName.
+#
+# Sorted, so the order does not depend on the order of keys in the JSON.
+dr_plugin_skills() {
+    local seed=$1/seed
+    [ -f "$seed/installed_plugins.json" ] || return 0
+    {
+        local id ver plug mkt dir name
+        while read -r id ver; do
+            # Both, and as two tests rather than A && B || C, which is not
+            # if-then-else. The version is half the cache path, so an entry
+            # without one cannot be located at all.
+            [ -n "$id" ] || continue
+            [ -n "$ver" ] || continue
+            plug=${id%@*}; mkt=${id#*@}
+            for dir in "$seed/cache/$mkt/$plug/$ver"/skills/*/; do
+                [ -f "${dir}SKILL.md" ] || continue
+                name=$(sed -n 's/^name:[[:space:]]*//p' "${dir}SKILL.md" | head -1)
+                # An unnamed skill still loads, so fall back to the directory.
+                [ -n "$name" ] || { name=${dir%/}; name=${name##*/}; }
+                printf '%s %s %s\n' "$name" "$id" "$ver"
+            done
+        done < <(jq -r '.plugins // {} | to_entries[] | "\(.key) \(.value[0].version // "")"' \
+                     "$seed/installed_plugins.json" 2>/dev/null)
+    } | sort
+}
+
 # ---------------------------------------------------------------------------
 # Path keys, and the memory store
 #

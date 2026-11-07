@@ -20,6 +20,12 @@
 #   dr-skills import     seed the store from your own host skill directories
 #   dr-skills install    put Draugr's own skills into the store
 #
+# `list` also names the skills your PLUGINS ship. Those are a different thing in
+# a different directory: they load from the plugin, never from this store, and
+# only in a mound the plugin has been installed into - see docs/CLAUDE_PLUGINS.md
+# and `dr-plugin kit`. They are listed here because not listing them left this
+# command reporting one skill on a machine whose plugin library held fifteen.
+#
 # diff exits 1 when something has changed, so it can be used as a test.
 set -euo pipefail
 
@@ -54,10 +60,19 @@ done
 
 # No dr_context: the store is machine-wide, so this is one of the few commands
 # that has nothing to do with the repository you happen to be standing in.
+#
+# The CONFIG still matters, though, and dr_load_config with no repository loads
+# exactly the machine-wide layer, skipping both project ones. Without this call
+# the command ran on built-in defaults alone: DRAUGR_SBX in your config did
+# nothing here, and DRAUGR_PLUGIN_STORE was always empty - which silenced the
+# plugin section at the end of `list` however many plugin skills you had.
+dr_load_config
+
 skills_dir=$(dr_skills_dir) || dr_die \
     "cannot find sbx.exe" \
-    "The skills store is located relative to it." \
-    "Point Draugr at it:  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
+    "The skills store is located relative to it. Name it in" \
+    "your ~/.config/draugr/config, or in the environment:" \
+    "  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
 
 # What you last said you had looked at. In the user config directory rather than
 # the repo, because the store is not a property of any one project.
@@ -153,6 +168,33 @@ list)
     printf '  both paths are read by their agent - one store, every mound\n'
     printf '  survives dr-rm\n'
     report_optout
+
+    # Also reachable, but NOT from here. A plugin's skills load from the plugin,
+    # so they never appear in the store above however many there are - and saying
+    # nothing left this command reporting one skill on a machine whose plugin
+    # library held fifteen, with no hint that the rest existed.
+    #
+    # Two guards, and they suppress the heading INDEPENDENTLY: with no library
+    # this test is false and the walk never runs, while a library holding no
+    # skill-bearing plugin is caught by the emptiness check below instead. So
+    # the section is silent unless there is something to put under it, and
+    # removing either one alone changes no output - both mutation-tested.
+    if [ -n "${DRAUGR_PLUGIN_STORE:-}" ]; then
+        plug_rows=$(dr_plugin_skills "$DRAUGR_PLUGIN_STORE")
+        if [ -n "$plug_rows" ]; then
+            heading "also shipped by plugins you already have"
+            printf '%s\n' "$plug_rows" | while read -r name id _; do
+                printf '    %-30s %s\n' "$name" "$id"
+            done
+            # The condition is the point. These are not available the way a
+            # store entry is: nothing loads them until the plugin is installed
+            # in that mound, and claiming otherwise would mislead the other way.
+            printf '  %snot in the store above, and not loaded until the plugin is%s\n' \
+                "$_DR_DIM" "$_DR_OFF"
+            printf '  %sINSTALLED in that mound:  dr-plugin kit%s\n' \
+                "$_DR_DIM" "$_DR_OFF"
+        fi
+    fi
     ;;
 
 # --- diff, against what you last accepted -----------------------------------

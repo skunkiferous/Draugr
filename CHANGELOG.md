@@ -12,11 +12,22 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- `dr-plugin skills` names the skills your plugins ship, and `dr-skills list` now names them too
+  under a heading of their own. They load from the plugin and never from the shared store, so
+  nothing previously said they existed — on this machine that was fifteen skills reported as one.
+- `dr-plugin kit` writes the per-mound `claude plugin install` out as a composable kit, one per
+  plugin so adding another is an append rather than an edit — the only change sbx can apply to a
+  running mound. No version is pinned, so `dr-plugin update` needs no regeneration.
+
 ### Removed
 
 ### Changed
 
 - Specific warnings about the importance of .gitignore
+- `dr-plugin remove` says when a generated kit still installs the plugin it dropped. The kit is not
+  deleted: one in your library may have been edited since it was generated.
+- `dr-plugin` names each of its three slow steps as it reaches them — the library copy, the build
+  mound, and the staging copy — instead of printing nothing for the first several seconds.
 
 ### Fixed
 
@@ -25,6 +36,14 @@ people reading the source, not for people calling it.
   missing name. It now names the marketplace the source is registered as, what is installed from it
   and whether it is enabled, and points at `dr-plugin update`; a bare plugin name is completed from
   the registry rather than refused.
+- `dr-skills` loaded no configuration at all. It skips `dr_context`, and `dr_context` is what
+  sources the config — so `DRAUGR_SBX` named in a config file did nothing there, and
+  `DRAUGR_PLUGIN_STORE` was always empty. It now loads the machine-wide layer, which is the one that
+  applies to a machine-wide store.
+- `dr-plugin add` and `update` failed on any plugin whose source is a github repository, including
+  one pulled in as another plugin's dependency: `claude plugin install` clones it over SSH and does
+  not fall back to HTTPS the way `marketplace add` does, and a mound has no SSH key. Every plugin
+  command now carries git's own `insteadOf` redirect for github.
 
 ## [0.6.0] — 2026-11-06
 

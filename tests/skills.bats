@@ -213,3 +213,77 @@ make_skill() {
     [[ "$output" == *"name: draugr-kit"* ]]
     [[ "$output" == *"description:"* ]]
 }
+
+# --- the skills your plugins ship ---------------------------------------------
+#
+# A plugin's skills load from the plugin, never from this store, so they can
+# never appear in the section above. Saying nothing about them left dr-skills
+# reporting one skill on a machine whose plugin library held fifteen.
+
+# A plugin library with one installed plugin carrying one skill. NOT on a Windows
+# drive, deliberately: dr-skills only reads the directory, and unlike dr-plugin
+# it never has to mount it into anything.
+fake_plugin_lib() {
+    local dir
+    export DRAUGR_PLUGIN_STORE="$DR_TMP/plugins"
+    dir="$DRAUGR_PLUGIN_STORE/seed/cache/mkt-a/plug-a/1.0.0/skills/writing-plans"
+    mkdir -p "$dir"
+    printf -- '---\nname: writing-plans\n---\n' > "$dir/SKILL.md"
+    printf '{"version": 2, "plugins": {"plug-a@mkt-a": [{"version": "1.0.0"}]}}\n' \
+        > "$DRAUGR_PLUGIN_STORE/seed/installed_plugins.json"
+}
+
+@test "dr-skills list: names the skills your plugins ship, under their own heading" {
+    fake_plugin_lib
+    run dr-skills list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"also shipped by plugins"* ]]
+    [[ "$output" == *"writing-plans"* ]]
+    # The plugin too, since installing it is what makes the skill reachable.
+    [[ "$output" == *"plug-a@mkt-a"* ]]
+
+    # The condition is the whole point. These are not available the way a store
+    # entry is, and claiming they were would mislead in the opposite direction.
+    [[ "$output" == *"INSTALLED in that mound"* ]]
+}
+
+@test "dr-skills list: a plugin's skill is not counted as being in the store" {
+    fake_plugin_lib
+    make_skill deploy
+    run dr-skills list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"deploy"* ]]
+    # Once, under the plugin heading - not also among the store's own contents.
+    [ "$(printf '%s\n' "$output" | grep -c 'writing-plans')" -eq 1 ]
+}
+
+@test "dr-skills list: reads the library named in your config, not just the environment" {
+    fake_plugin_lib
+    # THE REAL FAILURE this guards, and the one the two tests above cannot see
+    # because they export the variable: DRAUGR_PLUGIN_STORE normally lives in a
+    # config FILE. dr-skills loads no repository, so without a machine-wide
+    # config load it ran on built-in defaults, the store read as empty, and the
+    # section never appeared however many plugin skills there were.
+    printf 'DRAUGR_PLUGIN_STORE="%s"\n' "$DRAUGR_PLUGIN_STORE" \
+        > "$DRAUGR_CONFIG_HOME/config"
+    unset DRAUGR_PLUGIN_STORE
+
+    run dr-skills list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"also shipped by plugins"* ]]
+    [[ "$output" == *"writing-plans"* ]]
+}
+
+@test "dr-skills list: silent about plugins when no library is configured" {
+    unset DRAUGR_PLUGIN_STORE
+    make_skill deploy
+    run dr-skills list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"deploy"* ]]
+
+    # An empty heading on a machine with no library is worse than no heading.
+    # Note what mutation-testing showed: dr-skills guards this TWICE and either
+    # guard alone suffices, so this goes red only when both are removed - never
+    # when one is. Worth knowing before "simplifying" either of them.
+    [[ "$output" != *"also shipped by plugins"* ]]
+}
