@@ -94,6 +94,21 @@ if dr_is_true "$DRAUGR_REQUIRE_CLEAN" && [ -z "$dirty" ] && dr_is_true "$DRAUGR_
             fi
         fi
 
+        # .GITIGNORE IS THE CIRCULAR ONE, and the reason this block says more than
+        # "commit it". Adding a pattern to .gitignore is how you stop other files
+        # blocking - and that edit then blocks by itself, so the obvious conclusion is
+        # that .gitignore should be exempt. It must not be: the clone ignores what the
+        # COMMITTED .gitignore ignores, so an uncommitted rule changes nothing for the
+        # agent, and DRAUGR_DATA files rsync'd in under one look untracked to it. The
+        # status prefix is three characters wide; a rename prints "old -> new".
+        if dr_data_dirty_blockers "$DR_REPO" |
+               sed 's/^...//; s/.* -> //' | grep -qxF .gitignore; then
+            dr_info ".gitignore is one of them. Commit it: the clone ignores what the"
+            dr_info "COMMITTED .gitignore ignores, so an uncommitted rule changes nothing"
+            dr_info "for the agent. For a rule only THIS checkout should have, use"
+            dr_info ".git/info/exclude - it is untracked, so it never reaches this check."
+        fi
+
         # Not "stash them": a stash is still in .git, and .git is inside the
         # read-only mount, so stashing hides the change from the agent's clone
         # AND from dr-scan while leaving it readable. Committing or reverting

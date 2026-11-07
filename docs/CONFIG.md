@@ -665,6 +665,18 @@ dr-go: your working tree has uncommitted changes
 dr-go: 15 more match DRAUGR_DATA and are exempt - these are not
 ```
 
+**`.gitignore` is the circular one, and it is not exempt.** Adding a pattern to it is how you stop
+other files blocking — and that edit then blocks on its own account. Exempting it would be worse than
+the inconvenience: the mound gets a clone, a clone contains only commits, so an **uncommitted ignore
+rule is one the agent's clone does not have**. `DRAUGR_DATA` files rsync'd in under such a rule look
+untracked to the agent, which is how a scratch directory you believed was ignored ends up committed.
+Commit the `.gitignore` instead — that is the step that makes the rule true on both sides.
+
+For a rule that only *this* checkout should have, use **`.git/info/exclude`**. It is untracked, so it
+never reaches this check and never needs committing. The same caveat applies in reverse: `git clone`
+does not copy it, so the agent's clone will not honour it either — the difference is that there you
+chose the divergence.
+
 ### `DRAUGR_STOP_ON_EXIT`
 Default `false`. When true, `dr-go` stops the mound after you leave the agent — last of all, once the
 sync, the memory export and the data pull have run, because each of those needs it alive.

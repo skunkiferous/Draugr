@@ -223,6 +223,14 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     grep -qx '\.draugr/create\.applied' "$REPO/.gitignore"
 }
 
+# dr-init leaves .draugr.conf and the kit untracked and .gitignore modified, so the very
+# next dr-go refuses. Saying so where it happens is cheaper than the refusal teaching it.
+@test "dr-init: says the tree it just dirtied will refuse dr-go" {
+    run dr-init
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"refuses while these are uncommitted"* ]]
+}
+
 # --- dr-go -------------------------------------------------------------------
 
 @test "dr-go: a dirty tree blocks, and explains why" {
@@ -231,6 +239,30 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [ "$status" -ne 0 ]
     [[ "$output" == *"clone only contains commits"* ]]
     ! attached
+}
+
+# .gitignore IS THE CIRCULAR CASE: adding a pattern to it is how you stop other files
+# blocking, and that edit then blocks on its own account. It cannot be exempted - the clone
+# ignores what the COMMITTED .gitignore ignores - so the refusal has to say why, and name the
+# per-checkout alternative. docs/HACKING.md, "Working on Draugr".
+@test "dr-go: a dirty .gitignore says why it cannot be exempted" {
+    printf 'scratch/\n' >> "$REPO/.gitignore"
+    DR_MOCK_STATE=running run dr-go
+    [ "$status" -ne 0 ]
+    [[ "$output" == *".gitignore is one of them"* ]]
+    [[ "$output" == *".git/info/exclude"* ]]
+    ! attached
+}
+
+# THE NEGATIVE HALF, and the reason the one above is worth having: advice that prints for
+# every dirty file is advice nobody reads, and a message test without this cannot tell a
+# targeted message from a constant one.
+@test "dr-go: an ordinary dirty file gets no .gitignore advice" {
+    printf 'wip\n' > "$REPO/scratch.txt"
+    DR_MOCK_STATE=running run dr-go
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"info/exclude"* ]]
+    [[ "$output" != *".gitignore is one of them"* ]]
 }
 
 @test "dr-go: --dirty overrides the clean-tree check" {

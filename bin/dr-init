@@ -160,8 +160,16 @@ cat >&2 <<EOF
     1. Edit ${_DR_BOLD}${kitdir#"$repo"/}/spec.yaml${_DR_OFF} - list the domains your build needs
        under network.allowedDomains, and your setup under commands.install.
        The agent reaches nothing you do not list.
-    2. Commit both files. A teammate then gets the same mound in one command.
+    2. Commit what this wrote. A teammate then gets the same mound in one command.
     3. ${_DR_BOLD}dr-go${_DR_OFF}
 
   Check anything with:  dr-doctor   dr-config
 EOF
+
+# CHECKED, not assumed: in the modes that create the repository, dr_repo_commit_setup
+# above has already committed all of this, and telling someone to commit a clean tree is
+# how a reader learns to ignore the next instruction too.
+if ! dr_repo_is_clean "$repo"; then
+    dr_info "dr-go refuses while these are uncommitted: the mound gets a CLONE, and a"
+    dr_info "clone contains only commits."
+fi

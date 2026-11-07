@@ -16,6 +16,8 @@ people reading the source, not for people calling it.
 
 ### Changed
 
+- Specific warnings about the importance of .gitignore
+
 ### Fixed
 
 ## [0.6.0] — 2026-11-06
