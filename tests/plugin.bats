@@ -327,13 +327,83 @@ JSON
 @test "dr-plugin add: a bare plugin name refuses rather than guessing a marketplace" {
     setup_store || skip "no writable Windows drive path"
 
-    # The registered name is discovered by watching what appeared, and the mock
-    # registers nothing - so there is no name to complete "plug-b" with. Guessing
-    # one would install nothing and report success.
+    # Two routes to the name and neither can supply it: the mock registers
+    # nothing, so discovery sees no arrival, and setup_store's fixture leaves
+    # .source.repo absent, so the registry does not name owner/repo either.
+    # Guessing would install nothing and report success.
     run dr-plugin add owner/repo plug-b
     [ "$status" -ne 0 ]
     [[ "$output" == *"cannot tell which marketplace"* ]]
+    [[ "$output" == *"no registered marketplace"* ]]
     [[ "$output" == *"<plugin>@<marketplace>"* ]]
+}
+
+# A source the registry already knows about. setup_store's fixture deliberately
+# leaves .source.repo absent, so the tests that need one say so themselves. What
+# the four below are about is the marketplace being ALREADY registered for the
+# source named - which is what a second `dr-plugin add` of the same repo hits,
+# and what used to be reported as a failure with advice that could not work.
+register_source() {
+    printf '{"mkt-a": {"source": {"source": "github", "repo": "%s"}}}\n' "$1" \
+        > "$STORE/seed/known_marketplaces.json"
+}
+
+@test "dr-plugin add: an already-registered source says so, and what is installed" {
+    setup_store || skip "no writable Windows drive path"
+    register_source owner/repo
+
+    run dr-plugin add owner/repo
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already registered, as mkt-a"* ]]
+
+    # The state the old message never mentioned: installed, at which version,
+    # and which side of the switch it is on.
+    [[ "$output" == *"plug-a@mkt-a 1.0.0 disabled"* ]]
+    [[ "$output" == *"dr-plugin update <plugin>@mkt-a"* ]]
+
+    # And it must not hand back the advice that cannot work - a bare <plugin>,
+    # which the bare-name branch then refuses for want of the very same name.
+    [[ "$output" != *"Name the plugin instead"* ]]
+}
+
+@test "dr-plugin add: already registered with nothing installed asks for a plugin" {
+    setup_store || skip "no writable Windows drive path"
+    register_source owner/repo
+    # The marketplace is known but the library holds nothing from it, so there is
+    # no state to report - only the one id that would work.
+    printf '{"version": 2, "plugins": {}}\n' > "$STORE/seed/installed_plugins.json"
+
+    run dr-plugin add owner/repo
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already registered, as mkt-a"* ]]
+    [[ "$output" == *"Nothing from it is installed yet"* ]]
+    [[ "$output" == *"dr-plugin add owner/repo <plugin>@mkt-a"* ]]
+}
+
+@test "dr-plugin add: a bare plugin name completes from the registry" {
+    setup_store || skip "no writable Windows drive path"
+    register_source owner/repo
+
+    # Discovery finds nothing, but the registry names what owner/repo is already
+    # registered as - so the bare name completes, where before it refused. This
+    # is the behaviour change the message fix carries with it.
+    run dr-plugin add owner/repo plug-b
+    [ "$status" -eq 0 ]
+    [ "$(grep -c 'plugin install plug-b@mkt-a' "$DR_MOCK_LOG")" -eq 1 ]
+    [ "$(jq -r '.enabledPlugins["plug-b@mkt-a"]' "$STORE/settings.json")" = true ]
+}
+
+@test "dr-plugin add: an unregistered source refuses without suggesting a bare plugin" {
+    setup_store || skip "no writable Windows drive path"
+    register_source owner/other
+
+    # The registry names a marketplace for owner/other, not for owner/repo, so
+    # neither route can name one here and the refusal stands.
+    run dr-plugin add owner/repo
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"registered no new marketplace"* ]]
+    [[ "$output" == *"No registered marketplace names that source"* ]]
+    [[ "$output" != *"Name the plugin instead"* ]]
 }
 
 @test "dr-plugin: refuses to start on top of a crashed run's build mound" {

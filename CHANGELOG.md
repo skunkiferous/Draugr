@@ -20,6 +20,12 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `dr-plugin add` on an already-registered marketplace said "registered no new marketplace" and
+  advised naming a bare plugin — which the next branch then refused for want of the very same
+  missing name. It now names the marketplace the source is registered as, what is installed from it
+  and whether it is enabled, and points at `dr-plugin update`; a bare plugin name is completed from
+  the registry rather than refused.
+
 ## [0.6.0] — 2026-11-06
 
 ### Added

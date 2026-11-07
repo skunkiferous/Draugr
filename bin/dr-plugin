@@ -17,7 +17,9 @@
 # after it - so there is no separate step for adding a marketplace. The name it
 # registers under is discovered rather than typed, because a repository decides
 # that for itself: obra/superpowers arrives as superpowers-marketplace. A plugin
-# you name may therefore be bare, and gets completed with whatever appeared.
+# you name may therefore be bare, and gets completed with whatever appeared - or,
+# on a REPEAT add, where nothing appears because the marketplace is registered
+# already, with the name the registry holds for that source.
 #
 # A plugin is code that runs - hooks fire on session start, MCP servers are
 # processes, bin/ lands on the Bash tool's PATH. So the rule is the one in
@@ -192,6 +194,40 @@ enabled_ids() {
     [ -f "$SETTINGS" ] || return 0
     jq -r '.enabledPlugins // {} | to_entries[] | select(.value) | .key' \
         "$SETTINGS" 2>/dev/null | tr '\n' ' ' || true
+}
+
+# marketplace_for_source <owner>/<repo> - the name that source is ALREADY
+# registered under, or empty.
+#
+# `add` discovers a marketplace's name by watching for one to APPEAR, which
+# answers nothing on a second add: the marketplace is already there, so nothing
+# appears - and that name is exactly what the refusal then needs in order to say
+# anything useful. The registry records each source, so it can simply be asked.
+marketplace_for_source() {
+    [ -f "$SEED/known_marketplaces.json" ] || return 0
+    # shellcheck disable=SC2016  # $src is jq's variable, not the shell's
+    jq -r --arg src "$1" \
+        '. // {} | to_entries[] | select(.value.source.repo == $src) | .key' \
+        "$SEED/known_marketplaces.json" 2>/dev/null | head -1 || true
+}
+
+# installed_from <marketplace> - "<id> <version> enabled|disabled" a line, for
+# whatever the library already holds from that marketplace.
+#
+# Both halves, because installed and enabled are different questions and a
+# plugin that is one but not the other is the confusing case - the same reason
+# `dr-plugin list` prints both.
+installed_from() {
+    local mkt=$1 en id ver
+    en=$(enabled_ids)
+    while read -r id ver; do
+        [ -n "$id" ] || continue
+        case "$id" in *"@$mkt") ;; *) continue ;; esac
+        case " $en " in
+            *" $id "*) printf '%s %s enabled\n'  "$id" "$ver" ;;
+            *)         printf '%s %s disabled\n' "$id" "$ver" ;;
+        esac
+    done < <(installed)
 }
 
 # --- the switch ---------------------------------------------------------------
@@ -453,29 +489,58 @@ add)
     _mkt=$(comm -13 <(printf '%s\n' "$_before" | sort) \
                     <(work_marketplaces | sort) | head -1)
 
+    # Nothing NEW is not the same as nothing there: a repeat add registers no
+    # marketplace because the library already holds it. Discovery cannot name it
+    # - it watches for an arrival - so the registry is asked instead, which is
+    # what turns both refusals below into answers rather than dead ends.
+    _known=
+    [ -n "$_mkt" ] || _known=$(marketplace_for_source "$_source")
+
     # With no plugin named, install everything the new marketplace offers. Its
     # catalogue is on disk by now, because market-add cloned it.
     if [ ${#args[@]} -ge 2 ]; then
-        # A bare name is completed with the marketplace just discovered, because
-        # requiring <plugin>@<marketplace> here would be asking for a name that
-        # cannot be known until this command has already run.
+        # A bare name is completed with the marketplace this add discovered, or
+        # failing that the one the registry already holds for this source.
+        # Demanding <plugin>@<marketplace> up front would be asking for a name a
+        # FIRST add cannot know - and a repeat add knows only via the registry.
         _plugins=()
         for _p in "${args[@]:1}"; do
             case "$_p" in
                 *@*) _plugins+=("$_p") ;;
-                *)   [ -n "$_mkt" ] || dr_die \
+                *)   _m=${_mkt:-$_known}
+                     [ -n "$_m" ] || dr_die \
                          "cannot tell which marketplace $_p belongs to" \
-                         "$_source registered nothing new, so there is no name to complete it" \
-                         "with. Give the full id:  dr-plugin add $_source <plugin>@<marketplace>" \
+                         "$_source registered nothing new, and no registered marketplace" \
+                         "names that source either. Give the full id:" \
+                         "  dr-plugin add $_source <plugin>@<marketplace>" \
                          "The registered names are listed by:  dr-plugin"
-                     _plugins+=("$_p@$_mkt") ;;
+                     _plugins+=("$_p@$_m") ;;
             esac
         done
     else
-        [ -n "$_mkt" ] || dr_die \
-            "$_source registered no new marketplace" \
-            "It may already be registered. Name the plugin instead:" \
-            "  dr-plugin add $_source <plugin>"
+        # Nothing new is not a failure to report as one. The advice that used to
+        # stand here sent you to `dr-plugin add <source> <plugin>`, which the
+        # bare-name branch above then refused over the very same missing name.
+        if [ -z "$_mkt" ]; then
+            [ -n "$_known" ] || dr_die \
+                "$_source registered no new marketplace" \
+                "No registered marketplace names that source either, so there is" \
+                "nothing here to install from." \
+                "The registered names are listed by:  dr-plugin"
+
+            # Registered already, so this is a repeat: report what is there, and
+            # name the verb that acts on it.
+            mapfile -t _have < <(installed_from "$_known")
+            [ ${#_have[@]} -gt 0 ] || dr_die \
+                "$_source is already registered, as $_known" \
+                "Nothing from it is installed yet. Name what you want:" \
+                "  dr-plugin add $_source <plugin>@$_known"
+            dr_die "$_source is already registered, as $_known" \
+                "Installed from it:" \
+                "${_have[@]/#/  }" \
+                "To refresh it:    dr-plugin update <plugin>@$_known" \
+                "To add another:   dr-plugin add $_source <plugin>@$_known"
+        fi
         mapfile -t _plugins < <(work_cat "marketplaces/$_mkt/.claude-plugin/marketplace.json" \
             | jq -r '.plugins[]?.name' 2>/dev/null)
         [ ${#_plugins[@]} -gt 0 ] || dr_die "no plugins listed in $_mkt"

@@ -39,6 +39,12 @@ The marketplace's *registered* name is discovered rather than typed, because the
 it: `obra/superpowers` arrives as `superpowers-marketplace`. So the plugin you name may be bare, and
 `dr-plugin` completes it with whatever appeared.
 
+**On a second `add` of the same repository nothing appears** — the marketplace is already there — so
+the name comes from the registry, which records the source each one was added from. That is what
+makes a repeat `add` answerable rather than circular: with no plugin named it reports the marketplace
+the source is registered as, what is installed from it and whether it is switched on, then points at
+`dr-plugin update`.
+
 `dr-plugin` with no arguments checks the three settings that make the library reachable from a mound
 and prints the exact lines when they are missing, so the only one you have to know is the store.
 
