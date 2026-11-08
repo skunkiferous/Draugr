@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
-# dr-rm - destroy the mound. The agent's clone goes with it.
+# dr-rm: destroy the mound. The clone of the agent goes with it.
 #
-# Everything the agent committed but you never fetched is gone for good, which is
-# why this asks first. dr-stop is the one you want if you just wish it would stop
-# using memory.
+# All that the agent committed, and you never fetched, is lost forever. That is
+# why this asks first. If you only want it to stop using memory, use dr-stop.
 #
-#   dr-rm              destroy this repo's mound
+#   dr-rm              destroy the mound of this repo
 #   dr-rm <name>       destroy one by name
-#   dr-rm --yes        skip the confirmation prompt
-#   dr-rm --force      also skip the unfetched-commits check. This throws work away.
+#   dr-rm --yes        skip the question
+#   dr-rm --force      also skip the test for unfetched commits. This discards work.
 set -euo pipefail
 
 DR_PROG=dr-rm
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# A bare word is a sandbox name, which is how you remove one belonging to a repo
-# you have since deleted - the commonest reason to reach for dr-rm by name.
+# A word without a dash is a sandbox name. Use it to remove the mound of a repo
+# that you deleted. That is the usual reason for dr-rm with a name.
 #
-# --yes and --force are deliberately different. --yes means "stop asking me", and
-# still refuses to destroy work you have not fetched. --force means "I know there
-# is unfetched work and I want it gone" - two separate decisions, so answering
-# one does not silently answer the other.
+# --yes and --force are different, on purpose. --yes means "stop asking me", and
+# still refuses to destroy work that you did not fetch. --force means "I know
+# that there is unfetched work, and I want it gone". These are two decisions, so
+# an answer to one does not silently answer the other.
 name=
 force=
 while [ $# -gt 0 ]; do
@@ -39,8 +38,8 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# $repo stays empty when a name was given, because there may not be a repo to
-# find - and the unsynced-work check below has nothing to compare against then.
+# With a name, $repo stays empty, because a repo possibly does not exist. Then
+# the test for unsynced work below has nothing to compare with.
 repo=
 if [ -z "$name" ]; then
     dr_context
@@ -48,81 +47,81 @@ if [ -z "$name" ]; then
     repo=$DR_REPO
 fi
 
-[ "$(dr_sandbox_state "$name")" != absent ] || dr_die "$name does not exist" "See what does:  dr-ls"
+[ "$(dr_sandbox_state "$name")" != absent ] || dr_die "$name does not exist" "See the mounds that exist:  dr-ls"
 
-# Ask the mound what it has before destroying it. This costs a few seconds and
-# will start a stopped sandbox, because the only way to know whether the agent
-# committed something you never fetched is to ask it - a local tracking ref only
-# says what was true at the last dr-sync. Worth it: the alternative is losing
-# work permanently. Skipped when a bare name was given, since without a repo
-# there is nothing to compare against.
+# Ask the mound what it has, before the destruction. This costs a few seconds,
+# and starts a stopped sandbox. Only the mound can tell whether the agent
+# committed something that you never fetched. A local tracking ref tells only
+# the state at the last dr-sync. The cost is small, because the other risk is
+# lost work. With only a name, the code skips this, because without a repo there
+# is nothing to compare with.
 if [ -z "$force" ] && [ -n "$repo" ] && [ -x "$_dr_bin/dr-sync" ]; then
     check=0
     "$_dr_bin/dr-sync" --check-only || check=$?
     case "$check" in
         1) dr_die \
-               "$name has commits you have not fetched" \
+               "$name has commits that you did not fetch" \
                "Fetch them first with:  dr-sync" \
-               "Then dr-rm again. To throw them away instead:  dr-rm --force" ;;
-        # Could not reach the mound. Not proof that it is safe, so say so and let
-        # the confirmation below be an informed one rather than a formality.
-        2) dr_warn "could not reach $name to check for unfetched commits"
-           printf '  %sIf the agent committed something you never fetched, this destroys it.%s\n' \
+               "Then run dr-rm again. To discard them:  dr-rm --force" ;;
+        # No connection to the mound. That is no proof of safety. Thus say so,
+        # so that you know the facts at the question below.
+        2) dr_warn "could not connect to $name to look for unfetched commits"
+           printf '  %sIf the agent committed something that you never fetched, this destroys it.%s\n' \
                "$_DR_DIM" "$_DR_OFF" >&2 ;;
     esac
 fi
 
-# The same question again for the other thing a mound holds that exists nowhere
-# else. Commits at least leave a trace in the clone's reflog until it is gone;
-# memory the agent wrote is simply the disk image, and dr-rm deletes that.
+# The same question for the other thing that exists only in a mound. Commits
+# leave a trace in the reflog of the clone, until the clone is gone. The memory
+# of the agent is only in the disk image, and dr-rm deletes that.
 #
-# DRAUGR_MEM_SYNC=off skips it: that value means "I do not keep agent memory",
-# and refusing to remove a mound over something you have said you do not want is
-# just an obstacle. manual still checks - it only turns off the automatic half.
+# DRAUGR_MEM_SYNC=off skips it. That value means "I do not keep agent memory". A
+# refusal because of something that you do not want is only an obstacle. manual
+# still tests. It only turns off the automatic half.
 if [ -z "$force" ] && [ -n "$repo" ] && [ "${DRAUGR_MEM_SYNC:-}" != off ] \
    && [ -x "$_dr_bin/dr-mem" ]; then
     mcheck=0
     "$_dr_bin/dr-mem" check || mcheck=$?
     case "$mcheck" in
         1) dr_die \
-               "$name has memory you have not exported" \
+               "$name has memory that you did not export" \
                "Export it first with:  dr-mem export" \
-               "Then dr-rm again. To throw it away instead:  dr-rm --force" ;;
-        2) dr_warn "could not reach $name to check for unexported memory" ;;
+               "Then run dr-rm again. To discard it:  dr-rm --force" ;;
+        2) dr_warn "could not connect to $name to look for memory that is not exported" ;;
     esac
 fi
 
-# And the third thing that exists only here. A host opened with
-# dr-policy --allow is a rule scoped to this sandbox, and measured, it does not
-# outlive it: after sbx rm, looking the rule up by id gives "policy or rule not
-# found". So the allow list you arrived at by running the build is destroyed
-# along with the mound, with no reflog and no export to recover it from.
+# The third thing that exists only here. A host that you opened with
+# dr-policy --allow is a rule for this sandbox, and it dies with the sandbox (a
+# test showed this). After sbx rm, a lookup of the rule by id gives "policy or
+# rule not found". Thus the allow list that you found with the build dies with
+# the mound. No reflog and no export can bring it back.
 #
-# Only the ones the kit does not already declare, so a project that has run
-# dr-kit adopt is never asked about this twice.
+# Only the hosts that the kit does not declare. Thus a project that ran dr-kit
+# adopt never gets this question twice.
 if [ -z "$force" ] && [ -n "$repo" ]; then
     mapfile -t _opened < <(dr_policy_unadopted)
     if [ ${#_opened[@]} -gt 0 ]; then
-        dr_die "$name has ${#_opened[@]} host(s) opened by hand and not in the kit" \
+        dr_die "$name has ${#_opened[@]} host(s) that you opened, and that are not in the kit" \
                "$(printf '%s ' "${_opened[@]}")" \
                "Write them into the kit first with:  dr-kit adopt" \
-               "Then dr-rm again. To throw them away instead:  dr-rm --force"
+               "Then run dr-rm again. To discard them:  dr-rm --force"
     fi
 fi
 
-dr_confirm "Destroy $name and its clone? Any commits you have not fetched are lost." \
+dr_confirm "Destroy $name and its clone? All commits that you did not fetch are lost." \
     || dr_die "cancelled"
 
 dr_hook pre-rm "${repo:-$PWD}"
-# --force does two jobs here: it skips sbx's own confirmation, which we have
-# already asked in our own words, and it removes a sandbox that still has an SSH
-# connection open - a stale one otherwise blocks removal for no good reason.
+# --force does two jobs here. It skips the question of sbx, because we already
+# asked in our own words. It also removes a sandbox that still has an open SSH
+# connection. Otherwise an old connection blocks the removal, for no reason.
 dr_sbx rm --force "$name" >/dev/null || dr_die "could not remove $name"
 dr_ok "removed $name"
 
-# The mound this repo claimed with is gone, so its claims are stale by
-# definition. Dropped here rather than left to age out, because a destroyed
-# mound is the one case where nobody is coming back.
+# The mound of the claims of this repo is gone, so the claims are old. Remove
+# them here. Do not wait until they expire, because nobody comes back to a
+# destroyed mound.
 if [ -n "$repo" ] && [ -x "$_dr_bin/dr-dep" ]; then
-    "$_dr_bin/dr-dep" release >/dev/null || dr_warn "could not release claims; see:  dr-dep"
+    "$_dr_bin/dr-dep" release >/dev/null || dr_warn "could not release claims. See:  dr-dep"
 fi

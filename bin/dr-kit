@@ -1,42 +1,43 @@
 #!/usr/bin/env bash
-# dr-kit - check, show and apply this project's sbx kits, and keep a library.
+# dr-kit: test, show, and apply the sbx kits of this project, and keep a
+# library.
 #
 # A kit declares what the agent gets INSIDE the mound: network rules, install
-# commands, ports, environment. Draugr does not parse it - sbx does, and these
-# are thin wrappers so the error text you get is sbx's own.
+# commands, ports, and environment. Draugr does not parse it. sbx does. These
+# are thin wrappers, so that you get the error text of sbx itself.
 #
-# DRAUGR_KIT is a LIST, because sbx merges kits rather than choosing between
-# them, so a project kit and a shared "lua" kit from your library compose:
+# DRAUGR_KIT is a LIST. sbx merges kits, and does not select one. Thus a project
+# kit and a shared "lua" kit from your library compose:
 #
 #   DRAUGR_KIT=".draugr/kit lua"
 #
-# What Draugr adds is noticing when they change. dr-up records every kit at
-# creation and reports drift instead of quietly rebuilding your sandbox.
+# Draugr adds one thing: it sees their changes. dr-up records each kit at
+# creation, and reports drift. It does not rebuild your sandbox silently.
 #
-# Only one change can be applied to a running mound: kits ADDED to the end of
-# the list. sbx refuses to re-add a kit it already has, and cannot remove one,
-# so an edited or removed kit needs `dr-up --recreate` - apply says which.
+# You can apply only one change to a running mound: kits ADDED to the end of the
+# list. sbx refuses to add a kit that it already has, and cannot remove one.
+# Thus a changed or removed kit needs `dr-up --recreate`. apply tells which.
 #
-#   dr-kit validate    check every kit, with sbx's own diagnostics
+#   dr-kit validate    test each kit, with the diagnostics of sbx
 #   dr-kit show        what they declare
-#   dr-kit drift       have they changed since the mound was built?
-#   dr-kit apply       add new kits in place, or say why only a recreate can
+#   dr-kit drift       did they change since the mound was built?
+#   dr-kit apply       add new kits in place, or tell why only a recreate can
 #   dr-kit list        the named kits in your library
-#   dr-kit save NAME   copy this project's kit into the library as NAME
+#   dr-kit save NAME   copy the kit of this project into the library as NAME
 #   dr-kit adopt       write hosts opened with dr-policy --allow into the kit
 set -euo pipefail
 
 DR_PROG=dr-kit
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# The action is the first positional, defaulting to the harmless one. `shift ||
-# :` because with no arguments at all there is nothing to shift and set -e would
-# take that as a failure.
+# The action is the first positional argument. The default is the safe one.
+# `shift || :`, because with no arguments there is nothing to shift, and set -e
+# sees that as a failure.
 action=${1:-show}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
@@ -45,8 +46,9 @@ case "$action" in
               "One of: validate, show, drift, apply, list, save, adopt" ;;
 esac
 
-# -y is read by dr_confirm, which `apply` and `save` both use. The lone
-# positional belongs to `save`; anywhere else it is a typo worth naming.
+# dr_confirm reads -y, and `apply` and `save` both use it. The one positional
+# argument is for `save`. For other actions, it is a typo, and the code names
+# it.
 save_name=
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -66,25 +68,25 @@ store=$(dr_kit_store)
 
 # --- the library --------------------------------------------------------------
 #
-# These two are about the store rather than this project's kit list, so they run
-# before the checks that insist DRAUGR_KIT resolves to something. Saving a kit
-# from a repo whose own kit is fine but whose library entry is misspelled should
-# not be blocked by the misspelling.
+# These two are about the store, not the kit list of this project. Thus they run
+# before the tests that require DRAUGR_KIT to resolve. In a repo with a good own
+# kit and a library entry with a spelling error, the error must not block a
+# save.
 
 case "$action" in
 
 list)
-    # An absent store is the normal state until you save something, so it is an
-    # invitation rather than a warning.
+    # Until you save something, the store does not exist. That is normal, so the
+    # message is an invitation, not a warning.
     if [ ! -d "$store" ]; then
         dr_info "no kit library yet at $store"
-        printf '  %sSave this project'"'"'s kit as a reusable one:  dr-kit save <name>%s\n' \
+        printf '  %sSave the kit of this project for use in other projects:  dr-kit save <name>%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         exit 0
     fi
 
-    # One level only: a kit is a directory of files, so anything nested inside
-    # one belongs to that kit rather than being a kit of its own.
+    # Only one level. A kit is a directory of files, so a directory inside one
+    # is part of that kit, not a kit.
     mapfile -t names < <(find "$store" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)
     if [ ${#names[@]} -eq 0 ]; then
         dr_info "the kit library at $store is empty"
@@ -94,79 +96,79 @@ list)
 
     dr_heading "${#names[@]} kit(s) in $store"
     for n in "${names[@]}"; do
-        # displayName is the one human-written line in a spec, which makes it
-        # worth more in a listing than anything we could compute from the files.
+        # displayName is the one line of a spec that a person wrote. In a list,
+        # it is better than a value that the code calculates from the files.
         desc=$(sed -n 's/^displayName:[[:space:]]*//p' "$store/$n/spec.yaml" 2>/dev/null | head -1)
         printf '  %-20s %s%s%s\n' "$n" "$_DR_DIM" "${desc:-no displayName}" "$_DR_OFF" >&2
     done
-    printf '\n  %sUse one by adding its name to DRAUGR_KIT - it ADDS to the project'"'"'s kit:%s\n' \
+    printf '\n  %sTo use one, add its name to DRAUGR_KIT. It ADDS to the kit of the project:%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %s  DRAUGR_KIT=".draugr/kit %s"%s\n' "$_DR_DIM" "${names[0]}" "$_DR_OFF" >&2
     exit 0
     ;;
 
 save)
-    [ -n "$save_name" ] || dr_die "dr-kit save needs a name" "e.g.  dr-kit save lua"
+    [ -n "$save_name" ] || dr_die "dr-kit save needs a name" "For example:  dr-kit save lua"
 
-    # The name becomes a directory AND is what a bare DRAUGR_KIT entry is matched
-    # against, so a slash or a leading dot would resolve somewhere unintended.
+    # The name becomes a directory, AND a plain DRAUGR_KIT entry matches it.
+    # Thus a slash or a dot at the start resolves to the wrong place.
     case "$save_name" in
         */*|.*|*[!A-Za-z0-9._-]*)
             dr_die "'$save_name' is not a usable kit name" \
-                "Letters, digits, dot, dash and underscore. No slashes." ;;
+                "Letters, digits, dot, dash, and underscore. No slashes." ;;
     esac
 
-    # The project's OWN kit, not whatever happens to be first in the list: saving
-    # a library kit back into the library under a second name is not what anyone
-    # means by "save this project's kit".
+    # The OWN kit of the project, not the first entry in the list. "Save the kit
+    # of this project" does not mean "save a library kit again, with a second
+    # name".
     src=$(dr_kit_repo_dir) || dr_die \
-        "this project has no kit of its own to save" \
-        "DRAUGR_KIT is '$DRAUGR_KIT', and none of it resolves inside $DR_REPO." \
-        "Generate a starter one with:  dr-init"
+        "this project has no own kit to save" \
+        "DRAUGR_KIT is '$DRAUGR_KIT', and no entry resolves inside $DR_REPO." \
+        "Make a starter kit with:  dr-init"
 
-    # Overwriting is the destructive case, and its blast radius is every OTHER
-    # repo pointing at this name - which is exactly what the prompt has to say,
-    # because the repo you are standing in is not the one that will be surprised.
+    # An overwrite is the destructive case. It changes each OTHER repo that uses
+    # this name. The question must say that, because those repos get the
+    # surprise, not the current repo.
     dest="$store/$save_name"
     if [ -d "$dest" ]; then
         dr_warn "'$save_name' already exists in the library"
         printf '  %s%s%s\n' "$_DR_DIM" "$dest" "$_DR_OFF" >&2
-        printf '  %sEvery repo using it would get the new version at its next dr-up.%s\n' \
+        printf '  %sEach repo that uses it gets the new version at its next dr-up.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         dr_confirm "Overwrite it?" || dr_die "cancelled"
         rm -rf "$dest"
     fi
 
-    # A copy, not a symlink: symlinks on a Windows drive need privilege, and a
-    # library that silently tracked one repo's edits would be a shared mutable
-    # dependency nobody asked for.
+    # A copy, not a symlink. Symlinks on a Windows drive need privilege. Also, a
+    # library that silently follows the edits of one repo is a shared, changing
+    # dependency that nobody asked for.
     mkdir -p "$store"
     cp -r "$src" "$dest" || dr_die "could not copy $src to $dest"
     dr_ok "saved $src as '$save_name'"
-    printf '  %sUse it from any repo by adding it to DRAUGR_KIT:%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sTo use it from a repo, add it to DRAUGR_KIT:%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %s  DRAUGR_KIT=".draugr/kit %s"%s\n' "$_DR_DIM" "$save_name" "$_DR_OFF" >&2
-    printf '  %sThis is a COPY. Editing one does not change the other, and editing%s\n' \
+    printf '  %sThis is a COPY. A change to one does not change the other. A change to%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sthe library copy makes every repo using it drift until dr-up --recreate.%s\n' \
+    printf '  %sthe library copy gives drift to each repo that uses it, until dr-up --recreate.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     exit 0
     ;;
 esac
 
-# --- this project's kit list --------------------------------------------------
+# --- the kit list of this project --------------------------------------------
 
 [ -n "$DRAUGR_KIT" ] || dr_die \
     "DRAUGR_KIT is empty, so this project has no kit" \
-    "Generate a starter one with:  dr-init"
+    "Make a starter kit with:  dr-init"
 
-# Resolved through the same helpers dr-up uses, so what these commands check is
-# exactly what dr-up would hand to sbx - a wrapper that resolved differently
-# would be worse than no wrapper.
+# The same helpers as in dr-up resolve the kits. Thus these commands test what
+# dr-up gives to sbx. A wrapper that resolves differently is worse than no
+# wrapper.
 mapfile -t refs < <(dr_kit_refs)
 mapfile -t missing < <(dr_kit_missing)
 
-# Named, but not fatal on its own: one entry of three failing to resolve still
-# leaves two worth checking, and the report is more useful than a refusal.
+# Named, but not fatal alone. If one entry of three does not resolve, two are
+# still useful to test, and the report helps more than a refusal.
 for m in "${missing[@]+"${missing[@]}"}"; do
     dr_warn "no kit found for '$m'"
     printf '  %sLooked in %s and in the kit store %s%s\n' \
@@ -174,23 +176,24 @@ for m in "${missing[@]+"${missing[@]}"}"; do
 done
 
 [ ${#refs[@]} -gt 0 ] || dr_die \
-    "none of DRAUGR_KIT resolves to a kit" \
+    "no entry of DRAUGR_KIT resolves to a kit" \
     "DRAUGR_KIT is '$DRAUGR_KIT', from ${DR_ORIGIN[DRAUGR_KIT]}." \
-    "Generate a starter one with:  dr-init" \
-    "What is already in your library:  dr-kit list"
+    "Make a starter kit with:  dr-init" \
+    "The kits in your library:  dr-kit list"
 
 hash_file=$(dr_kit_stamp)
 
-# sbx.exe needs a Windows path for a directory; a remote reference goes through
-# as it stands. Precomputed once so every action below spells them the same way.
+# sbx.exe needs a Windows path for a directory. A remote reference goes as it
+# is. The code calculates them once, so that each action below writes them the
+# same way.
 kit_args=()
 for r in "${refs[@]}"; do
-    # dr_path_win_kit rather than dr_path_win, so a library kit on WSL's ext4 -
-    # which is where DRAUGR_KIT_STORE points by default - gets its UNC spelling
-    # instead of being refused. Kits are read on the host, never bind-mounted.
+    # dr_path_win_kit, not dr_path_win. Thus a library kit on the ext4 of WSL,
+    # the default location of DRAUGR_KIT_STORE, gets its UNC path, and no
+    # refusal. sbx reads kits on the host, and never bind-mounts them.
     if [ -d "$r" ]; then
         kit_args+=("$(dr_path_win_kit "$r")") || dr_die \
-            "cannot spell $r in a way sbx.exe can read" \
+            "cannot write $r as a path that sbx.exe can read" \
             "Kits outside /mnt/<drive> need \$WSL_DISTRO_NAME, which WSL sets."
     else
         kit_args+=("$r")
@@ -200,40 +203,40 @@ done
 case "$action" in
 
 validate)
-    # sbx's own words, deliberately. A wrapper that reworded these would be one
-    # more thing to keep in sync with a schema we do not own.
+    # The words of sbx, on purpose. A wrapper with other words must stay in sync
+    # with a schema that we do not own.
     for k in "${kit_args[@]}"; do
         dr_sbx kit validate "$k" || dr_die \
             "the kit is not valid: $k" \
-            "The message above is sbx's own. Schema: https://docs.docker.com/ai/sandboxes/customize/kits/"
+            "The message above is from sbx. Schema: https://docs.docker.com/ai/sandboxes/customize/kits/"
     done
 
-    # And then the one thing sbx's validate does NOT check. A kit pinned to
-    # another agent is entirely valid; it simply cannot be composed with this
-    # one, and finding that out at dr-up is finding it out too late.
+    # Then the one thing that sbx validate does NOT test. A kit for another
+    # agent is valid, but sbx cannot compose it with this one. At dr-up, you
+    # find that out too late.
     conflicts=0
     while IFS=' ' read -r k want; do
         [ -n "$k" ] || continue
         conflicts=1
         dr_warn "$k requires agent \"$want\", but DRAUGR_AGENT is \"$DRAUGR_AGENT\""
-        printf '  %sdr-up will refuse. Drop the "requires: agent:" line, or keep%s\n' \
+        printf '  %sdr-up refuses. Remove the "requires: agent:" line, or keep%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         printf '  %sa separate %s.%s/ for this agent.%s\n' \
             "$_DR_DIM" "$k" "$DRAUGR_AGENT" "$_DR_OFF" >&2
     done < <(dr_kit_agent_conflicts)
 
-    # The second compose hazard, and the one this command used to paper over: a
-    # kit whose own name is an agent name. sbx refuses the composition, sbx kit
-    # validate passes it, and the line below then called it composable.
+    # The second compose hazard. Before, this command hid it: a kit whose name
+    # is an agent name. sbx refuses the composition, sbx kit validate accepts
+    # it, and the line below then called it composable.
     while IFS=' ' read -r k nm; do
         [ -n "$k" ] || continue
         conflicts=1
         dr_warn "$k is named \"$nm\", which is also the name of an agent"
-        printf '  %sdr-up will refuse: sbx composes the agent kit with this one,%s\n' \
+        printf '  %sdr-up refuses. sbx composes the agent kit with this one,%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         printf '  %sand two kits in one composition cannot share a name.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %sRename it in %s/spec.yaml - only name: is constrained,%s\n' \
+        printf '  %sRename it in %s/spec.yaml. Only name: has rules,%s\n' \
             "$_DR_DIM" "$k" "$_DR_OFF" >&2
         printf '  %sdisplayName is free text. Try:  name: %s-project%s\n' \
             "$_DR_DIM" "$nm" "$_DR_OFF" >&2
@@ -241,154 +244,155 @@ validate)
     [ "$conflicts" -eq 0 ] && dr_ok "valid, and composable with $DRAUGR_AGENT"
     ;;
 
-# inspect prints what each kit asks for. The pointer matters because the kits are
-# only half the answer - the machine-wide defaults are the other half.
+# inspect prints what each kit asks for. The pointer is important, because the
+# kits are only half of the answer. The defaults of the machine are the other
+# half.
 show)
     for k in "${kit_args[@]}"; do
         dr_heading "$k"
         dr_sbx kit inspect "$k"
     done
-    printf '\n  %sThis is what the kits DECLARE, and they are merged rather than%s\n' \
+    printf '\n  %sThis is what the kits DECLARE. sbx merges them, and does not%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sranked. For what is actually in force, defaults included:  dr-policy%s\n' \
+    printf '  %srank them. For the rules in force, defaults included:  dr-policy%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     ;;
 
-# Drift matters because a kit change is invisible until something behaves oddly:
-# the sandbox keeps whatever it was built with until it is recreated. With a list
-# that now includes a library kit somebody else's repo edited.
+# Drift is important, because you cannot see a kit change until something works
+# strangely. The sandbox keeps its creation state until a recreate. The list can
+# now hold a library kit that the repo of somebody else changed.
 drift)
     now=$(dr_kit_hash_all)
     if [ ! -f "$hash_file" ]; then
         dr_warn "no record of an applied kit for this repo"
-        printf '  %sdr-up records one when it creates the mound.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sdr-up records one at the creation of the mound.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
         exit 0
     fi
-    # The first line is the combined hash; the lines after it name each kit.
+    # The first line is the combined hash. The next lines name each kit.
     was=$(dr_kit_stamp_hash)
     if [ "$now" = "$was" ]; then
         dr_ok "the kit list matches what the mound was built with"
-        # Said out loud rather than implied: a moved OCI tag is drift that no
-        # local hash can see, and a clean report should not suggest otherwise.
+        # Say it, do not imply it. A moved OCI tag is drift that no local hash
+        # can see. A clean report must not suggest the opposite.
         for r in "${refs[@]}"; do
             [ -d "$r" ] && continue
-            printf '  %s%s is a remote reference - only its NAME is compared.%s\n' \
+            printf '  %s%s is a remote reference. Only its NAME is compared.%s\n' \
                 "$_DR_DIM" "$r" "$_DR_OFF" >&2
         done
     else
-        dr_warn "the kit list has changed since the mound was built"
+        dr_warn "the kit list changed after the mound was built"
         printf '  %sThe running sandbox still has the OLD rules and setup.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %sKits added at the end:  dr-kit apply.  Anything else:  dr-up --recreate%s\n' \
+        printf '  %sKits added at the end:  dr-kit apply.  All other changes:  dr-up --recreate%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         exit 1
     fi
     ;;
 
-# apply adds kits to a running mound, and that is ALL it can do. Measured on sbx
-# 0.37.1 against a throwaway mound, and the reason this is shaped as it is:
+# apply adds kits to a running mound, and it can do NOTHING more. Tests with sbx
+# 0.37.1 on a test mound showed this, and they are the reason for this design:
 #
-#  - `sbx kit add SANDBOX REF` REFUSES a kit whose name the sandbox already has:
+#  - `sbx kit add SANDBOX REF` REFUSES a kit with a name that the sandbox has:
 #    'duplicate kit name "x" - each kit in a composition must have a unique
-#    name'. So an edited kit cannot be re-applied this way at all.
-#  - Adding a kit with a NEW name recreates the container from every kit's
-#    CURRENT source, and writes their rules as a new policy rule WITHOUT
-#    deleting the previous one. An edit that narrows a kit therefore does not
-#    narrow anything: the old, wider rule stays in force beside the new one.
-#  - The clone and the agent's home survived that recreate, where dr-up
-#    --recreate destroys both - which is why the in-place path is worth keeping
-#    for the one case it handles honestly.
+#    name'. Thus this way cannot apply a changed kit.
+#  - A kit with a NEW name recreates the container from the CURRENT source of
+#    each kit. It writes their rules as a new policy rule, and does NOT delete
+#    the previous rule. Thus an edit that makes a kit narrower changes nothing.
+#    The old, wider rule stays in force next to the new one.
+#  - The clone and the home of the agent stayed after that recreate. dr-up
+#    --recreate destroys both. Thus the in-place path is useful for the one case
+#    that it handles correctly.
 #
-# That case is: every kit the mound was built with is unchanged and still first
-# in the list, and there are new ones after them. Anything else - a kit edited,
-# removed, reordered, or a stamp too old to say which kits it had - is refused
-# with the command that does work.
+# That case: each kit of the mound is unchanged and still at the start of the
+# list, and new kits follow them. The code refuses all other cases: a changed,
+# removed, or moved kit, or a stamp too old to name its kits. It names the
+# command that works.
 apply)
     dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
-        "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up  (which applies the kits)"
+        "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up  (it applies the kits)"
 
-    recreate_hint="Rebuild it with the kits as they are now:  dr-up --recreate"
+    recreate_hint="Build it again with the current kits:  dr-up --recreate"
 
-    # What the mound was built from, kit by kit. A stamp from before per-kit
-    # records existed has only the combined hash, which can say "unchanged" but
-    # never "only added to" - so it gets the safe answer.
+    # The kits of the mound at creation, one by one. An old stamp, from before
+    # the records for each kit, has only the combined hash. That hash can say
+    # "unchanged", but never "only added to". Thus it gets the safe answer.
     mapfile -t built < <(dr_kit_stamp_kits)
     if [ ${#built[@]} -eq 0 ]; then
         if [ "$(dr_kit_hash_all)" = "$(dr_kit_stamp_hash)" ]; then
-            dr_ok "nothing to apply: the kits match what $DRAUGR_SANDBOX was built with"
+            dr_ok "nothing to apply: the kits are the same as at the creation of $DRAUGR_SANDBOX"
             exit 0
         fi
         dr_die "cannot tell which kits $DRAUGR_SANDBOX was built with" \
-               "Its record predates per-kit tracking, and sbx cannot list a sandbox's kits." \
+               "Its record is older than the records for each kit, and sbx cannot list the kits of a sandbox." \
                "$recreate_hint"
     fi
 
-    # The built kits must be the start of the current list, each one unchanged.
-    # A kit that changed cannot be re-added (sbx refuses the duplicate name), and
-    # one that was removed cannot be taken out: add is the only verb sbx has.
+    # The kits of the mound must be the start of the current list, and each one
+    # unchanged. sbx cannot add a changed kit again (it refuses the duplicate
+    # name), and it cannot take out a removed one. add is its only verb.
     i=0
     for line in "${built[@]}"; do
         IFS=$'\t' read -r b_ref _ b_hash <<< "$line"
         now_ref=${refs[$i]:-}
         if [ "$now_ref" != "$b_ref" ]; then
-            dr_die "the kit list no longer starts with what $DRAUGR_SANDBOX was built with" \
-                   "Built with $b_ref in position $((i + 1)); DRAUGR_KIT now has ${now_ref:-nothing} there." \
-                   "sbx can only ADD a kit to a mound - it cannot remove or reorder one." \
+            dr_die "the kit list no longer starts with the kits of $DRAUGR_SANDBOX" \
+                   "Built with $b_ref in position $((i + 1)). DRAUGR_KIT now has ${now_ref:-nothing} there." \
+                   "sbx can only ADD a kit to a mound. It cannot remove or move one." \
                    "$recreate_hint"
         fi
         if [ -d "$now_ref" ]; then now_hash=$(dr_dir_hash "$now_ref"); else now_hash=$now_ref; fi
         if [ "$now_hash" != "$b_hash" ]; then
-            dr_die "$now_ref has changed since $DRAUGR_SANDBOX was built" \
-                   "sbx will not re-add a kit the mound already has, and adding another one" \
-                   "would apply this edit only where it ADDS something: a rule the edit" \
-                   "removed would stay in force (measured). So only a rebuild applies it." \
+            dr_die "$now_ref changed after $DRAUGR_SANDBOX was built" \
+                   "sbx does not add a kit again that the mound already has. Another kit" \
+                   "applies this edit only where it ADDS something. A rule that the edit" \
+                   "removed stays in force (a test showed this). Thus only a rebuild applies it." \
                    "$recreate_hint"
         fi
         i=$((i + 1))
     done
 
-    # Whatever is left is new, in order.
+    # The other kits are new, in order.
     new_refs=("${refs[@]:$i}")
     new_args=("${kit_args[@]:$i}")
     if [ ${#new_refs[@]} -eq 0 ]; then
-        dr_ok "nothing to apply: the kits match what $DRAUGR_SANDBOX was built with"
+        dr_ok "nothing to apply: the kits are the same as at the creation of $DRAUGR_SANDBOX"
         exit 0
     fi
 
-    # A new kit named like one the mound already has would be refused by sbx in
-    # its own words, halfway through. Checked here so it is refused before any
-    # container is touched, and with the names side by side.
+    # sbx refuses a new kit with the name of a kit in the mound, in its own
+    # words, in the middle of the change. This test refuses it before a
+    # container changes, and shows the two names together.
     for r in "${new_refs[@]}"; do
         [ -d "$r" ] || continue
         n=$(dr_kit_spec_name "$r")
         for line in "${built[@]}"; do
             IFS=$'\t' read -r b_ref b_name _ <<< "$line"
             [ -n "$n" ] && [ "$n" = "$b_name" ] && dr_die \
-                "$r is named \"$n\", like $b_ref which $DRAUGR_SANDBOX already has" \
+                "$r is named \"$n\", as $b_ref, which $DRAUGR_SANDBOX already has" \
                 "sbx refuses two kits with one name in the same sandbox." \
-                "Rename one in its spec.yaml, or rebuild:  dr-up --recreate"
+                "Rename one in its spec.yaml, or build again:  dr-up --recreate"
         done
     done
 
-    # Spell out the cost before asking, not after: "recreates the container" is
-    # not something to discover from a prompt you already clicked through.
+    # Tell the cost before the question, not after. You must not learn
+    # "recreates the container" from a question that you already answered.
     dr_warn "adding ${#new_refs[@]} kit(s) recreates the container, in place"
-    printf '  %sThe clone and the agent'"'"'s home survive (measured). A running agent is%s\n' \
+    printf '  %sThe clone and the home of the agent stay (a test showed this). A running agent%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sinterrupted, and anything installed by hand outside those may not be.%s\n' \
+    printf '  %sstops. Software that you installed yourself outside those can be lost.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     for k in "${new_args[@]}"; do
         printf '    %s\n' "$k" >&2
     done
     dr_confirm "Add ${#new_refs[@]} kit(s) to $DRAUGR_SANDBOX?" || dr_die "cancelled"
 
-    # One at a time, in order, so a failure names the kit that failed. The
-    # sandbox comes FIRST: `sbx kit add SANDBOX REFERENCE`. The old code passed
-    # the kit first and a --sandbox flag sbx does not have, and no test noticed
-    # because the mock accepted any argv - see tests/kits.bats.
+    # One at a time, in order, so that a failure names the kit. The sandbox
+    # comes FIRST: `sbx kit add SANDBOX REFERENCE`. The old code gave the kit
+    # first, and a --sandbox flag that sbx does not have. No test found it,
+    # because the mock accepted any argv. See tests/kits.bats.
     for k in "${new_args[@]}"; do
         dr_sbx kit add "$DRAUGR_SANDBOX" "$k" || dr_die \
             "could not add $k to $DRAUGR_SANDBOX" \
-            "sbx refuses on sandboxes created before kits shipped; dr-up --recreate rebuilds one."
+            "sbx refuses on sandboxes that are older than kits. dr-up --recreate builds one again."
     done
 
     mkdir -p "$DR_REPO/.draugr"
@@ -397,92 +401,95 @@ apply)
     ;;
 # --- adopt --------------------------------------------------------------------
 #
-# The end of the build-your-own-kit loop. `dr-policy --allow` opens a host on the
-# running mound so the build can be retried at once, but that rule is MACHINE
-# state scoped to this sandbox - measured, it does not outlive it: after sbx rm,
-# looking the rule up by id gives "policy or rule not found". So the set you
-# arrived at empirically is destroyed by the very recreate that would apply it.
+# The end of the loop to build your own kit. `dr-policy --allow` opens a host on
+# the running mound, so that you can try the build again at once. But that rule
+# is MACHINE state for this sandbox, and it dies with the sandbox (a test showed
+# this). After sbx rm, a lookup of the rule by id gives "policy or rule not
+# found". Thus the recreate that applies the set that you found also destroys
+# it.
 #
-# This writes it down instead. Only rules this repo's kit does not already
-# declare, so running it twice is a no-op rather than a duplicate list.
+# This command writes the set down. Only rules that the kit of this repo does
+# not declare. Thus a second run does nothing, and makes no duplicate list.
 adopt)
     kit=$(dr_kit_repo_dir) || dr_die \
-        "this project has no kit of its own" \
-        "A host allowed for the mound has nowhere to be written down." \
+        "this project has no own kit" \
+        "There is no place to write down a host that the mound allows." \
         "Create one:  dr-init"
 
     dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
         "$DRAUGR_SANDBOX does not exist" \
-        "The rules live with the mound, so there is nothing left to adopt."
+        "The rules are part of the mound, so there is nothing to adopt."
 
     mapfile -t hosts < <(dr_policy_unadopted)
     if [ ${#hosts[@]} -eq 0 ]; then
-        dr_ok "nothing to adopt - the kit already declares everything opened by hand"
+        dr_ok "nothing to adopt. The kit already declares all hosts that you opened."
         exit 0
     fi
 
-    # A host name contains neither a quote nor a backslash, so one here means the policy
-    # list is not what this code thinks it is. Refuse, rather than write a kit sbx will
-    # reject - or, worse, one it accepts with a meaning nobody intended.
+    # A host name has no quote and no backslash. If one is here, the policy list
+    # is not what this code expects. Refuse. Do not write a kit that sbx
+    # refuses, or worse, a kit that it accepts with a meaning that nobody
+    # wanted.
     for _h in "${hosts[@]}"; do
         case $_h in
-            *'"'*|*\\*) dr_die "refusing to write an implausible host into the kit: $_h" \
-                               "A host name contains neither a quote nor a backslash." \
-                               "Check what dr-policy reports:  dr-policy --denied" ;;
+            *'"'*|*\\*) dr_die "refusing to write a strange host into the kit: $_h" \
+                               "A host name has no quote and no backslash." \
+                               "Look at the report of dr-policy:  dr-policy --denied" ;;
         esac
     done
 
-    # Shown before the prompt: these become a committed promise about what the
-    # project may reach, and every teammate who clones it inherits them.
-    dr_warn "${#hosts[@]} host(s) will be written into $kit/spec.yaml"
+    # Show them before the question. They become a committed promise about what
+    # the project can connect to, and each teammate who clones it gets them.
+    dr_warn "${#hosts[@]} host(s) go into $kit/spec.yaml"
     printf '  %s\n' "${hosts[@]}" >&2
-    printf '  %sThey are in force for this mound now, and would be lost by a recreate.%s\n' \
+    printf '  %sThey are in force for this mound now. A recreate removes them.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sCommitted, they travel with the project - so read them once more.%s\n' \
+    printf '  %sAfter a commit, they go with the project. Thus read them once more.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     dr_confirm "Write ${#hosts[@]} host(s) into the kit?" || dr_die "cancelled"
 
-    # Written through a temp file and moved into place, so an interrupted run
-    # cannot leave a half-edited spec - which sbx would then refuse, in the
-    # middle of a session, about a file you did not knowingly touch.
+    # The code writes a temp file and moves it into place. Thus a stopped run
+    # cannot leave a half-edited spec. sbx refuses such a spec in the middle of
+    # a session, about a file that you did not know you touched.
     tmp="$DR_REPO/.draugr/tmp"
     mkdir -p "$tmp"
     out="$tmp/spec.yaml.$$"
 
-    # A targeted edit rather than a YAML rewriter, tried two ways.
+    # A small, exact edit, not a YAML rewriter, in two ways.
     #
-    # append: find `allow:` under `network:`, take its indent, and insert the new
-    #   entries as list items two spaces deeper. `allow: []` becomes `allow:` on the
-    #   way past, since the two cannot both be true.
-    # create: there was no `allow:` key at all, so write one directly under `network:`.
+    # append: find `allow:` under `network:`, take its indent, and insert the
+    # new entries as list items two spaces deeper. `allow: []` becomes `allow:`,
+    # because the two cannot both be true.
+    # create: there is no `allow:` key, so write one directly under `network:`.
     #
-    # THE SECOND PASS IS NOT AN EDGE CASE. A network block that declares only `deny:`
-    # is an ordinary kit - draugr-gateway's own gateway kit is exactly that, narrowing
-    # sbx's defaults while allowing nothing itself - and without `create` the adopt
-    # loop dead-ends there, printing a block for the user to paste in by hand. Having
-    # to hand-edit the file is the thing dr-kit exists to prevent (reported,
-    # after a real `dr-up --recreate` refused to discard seven hosts that could not be
-    # written down). The test fixture always had an `allow:` key, which is why this
-    # lived so long.
+    # THE SECOND PASS IS NOT A RARE CASE. A network block that declares only
+    # `deny:` is a usual kit. The gateway kit of draugr-gateway is like that. It
+    # makes the defaults of sbx narrower, and allows nothing. Without `create`,
+    # the adopt loop stops there, and prints a block for the user to paste.
+    # dr-kit exists so that you do not have to edit the file yourself. (A user
+    # reported it. A real `dr-up --recreate` refused to discard seven hosts that
+    # nobody was able to write down.) The test fixture always had an
+    # `allow:` key, so this bug lived for a long time.
     #
-    # Entries go in the order dr_policy_unadopted reported them. `for (i in want)`
-    # would NOT do that - awk leaves that iteration order unspecified - and this file
-    # is committed and diffed, so an arbitrary order is a spurious diff every time.
+    # The entries go in the order of dr_policy_unadopted. `for (i in want)` does
+    # NOT keep that order, because awk does not specify it. This file is
+    # committed and diffed, so a random order gives a false diff each time.
     #
-    # Anything neither pass recognises is left alone and reported below, because a kit
-    # half-written by a guess is worse than one you were asked to edit yourself.
+    # If neither pass knows the layout, the code does not touch it, and reports
+    # it below. A kit that a guess half-wrote is worse than an edit that you
+    # must do.
     _dr_adopt_into() {
         awk -v add="$(printf '%s\n' "${hosts[@]}")" -v mode="$1" '
             BEGIN { n = split(add, want, "\n") }
 
-            # A BARE YAML SCALAR STARTING WITH * IS AN ALIAS REFERENCE, so a wildcard
-            # host has to be quoted or the kit does not parse at all - sbx answers
-            # "did not find expected alphabetic or numeric character" and names a line
-            # number, not the entry (measured, on "**.live.com"). Plain host
-            # names stay bare so adopted entries look like the hand-written ones around
-            # them; the deny lists in these kits already quote their wildcards the same
-            # way. Nothing is escaped inside the quotes because the loop above has
-            # already refused anything that would need it.
+            # A PLAIN YAML SCALAR THAT STARTS WITH * IS AN ALIAS REFERENCE. Thus
+            # a wildcard host needs quotes, or the kit does not parse. sbx
+            # answers "did not find expected alphabetic or numeric character",
+            # and names a line number, not the entry (a test on "**.live.com"
+            # showed this). Plain host names get no quotes, so that they look
+            # like the entries that people wrote. The deny lists in these kits
+            # already quote their wildcards the same way. Nothing in the quotes
+            # needs an escape, because the loop above refused all such values.
             function yq(s) {
                 if (s ~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) return s
                 return "\"" s "\""
@@ -511,17 +518,17 @@ adopt)
         ' "$kit/spec.yaml"
     }
 
-    # Append first, create only if there was no `allow:` to append to, give up only if
-    # there is no `network:` either. Each pass writes the WHOLE file to the temp copy,
-    # so a failed append costs nothing - `>` truncates before the next one runs, and
-    # the kit itself is not touched until the mv below.
+    # Append first. If there is no `allow:`, create. If there is also no
+    # `network:`, stop. Each pass writes the WHOLE file to the temp copy, so a
+    # failed append costs nothing. `>` truncates before the next pass, and the
+    # kit does not change until the mv below.
     created=
     if ! _dr_adopt_into append > "$out"; then
         created=1
         if ! _dr_adopt_into create > "$out"; then
             rm -f "$out"
             dr_warn "could not find caps.network in $kit/spec.yaml"
-            printf '  %sNothing was changed. Add this block by hand:%s\n' \
+            printf '  %sNothing changed. Add this block yourself:%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
             printf '\n  caps:\n    network:\n      allow:\n' >&2
             printf '        - %s\n' "${hosts[@]}" >&2
@@ -529,21 +536,21 @@ adopt)
         fi
     fi
 
-    # The move is the commit point: everything above it worked on a copy, so an
-    # interrupted run leaves the kit exactly as it was rather than half-edited.
+    # The move is the commit point. All the steps above worked on a copy. Thus a
+    # stopped run leaves the kit as it was, not half-edited.
     mv "$out" "$kit/spec.yaml"
-    # Worth distinguishing: creating the key changed the kit's SHAPE, so the result is
-    # worth a longer look than an append - a comment that said "nothing is allowed here"
-    # may now sit above a list of allows.
+    # These two cases differ. A new key changed the LAYOUT of the kit, so the
+    # result needs a longer look than an append. A comment that says "nothing is
+    # allowed here" can now be above a list of allowed hosts.
     if [ -n "$created" ]; then
         dr_ok "created caps.network.allow in $kit/spec.yaml with ${#hosts[@]} host(s)"
     else
         dr_ok "wrote ${#hosts[@]} host(s) into $kit/spec.yaml"
     fi
-    printf '  %sCheck it, then commit it - it is the record every teammate gets:%s\n' \
+    printf '  %sRead it, then commit it. Each teammate gets this record:%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %s  dr-kit validate%s\n' "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sThe mound already has these rules, so no recreate is needed now.%s\n' \
+    printf '  %sThe mound already has these rules, so it needs no recreate now.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     ;;
 

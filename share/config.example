@@ -1,141 +1,141 @@
-# ~/.config/draugr/config - Draugr's user-home configuration.
+# ~/.config/draugr/config: the user-home configuration of Draugr.
 #
-# Plain shell. KEY=value, comments with #, sourced by every dr-* command. Because
-# it is sourced you can compute values:  DRAUGR_PORTS="$(cat ~/.ports)"
+# Plain shell. KEY=value, and comments with #. Each dr-* command sources it. Thus
+# you can compute values:  DRAUGR_PORTS="$(cat ~/.ports)"
 #
 # Precedence, lowest to highest:
 #   built-in defaults -> THIS FILE -> <repo>/.draugr.conf -> <repo>/.draugr.local.conf
 #     -> DRAUGR_* in the environment -> command-line flags
 #
-# Everything below is commented out and shows the built-in default. Uncomment
-# only what you want to change; `dr-config` will tell you where each value came
-# from once you have.
+# All below is commented out, and shows the built-in default. Uncomment only the
+# values that you want to change. After that, `dr-config` tells you the source
+# of each value.
 
-# --- Which agent, and how big a mound ---------------------------------------
+# --- Which agent, and the size of the mound ---------------------------------
 
 # claude | codex | copilot | cursor | docker-agent | droid | gemini | kiro |
 # opencode | shell
 #
-# Everything but MEMORY works the same for all of them. Draugr knows where two
-# of them keep theirs - see lib/agents/ - and dr-mem declines for the rest
-# rather than copying into a directory the agent will never read.
+# All except MEMORY works the same for all of them. Draugr knows where two of
+# them keep their memory (see lib/agents/). For the rest, dr-mem refuses. It does
+# not copy into a directory that the agent never reads.
 #DRAUGR_AGENT=claude
 
-# Arguments passed to the agent on every dr-go, as if you had typed
+# Arguments for the agent at each dr-go, as if you typed
 #   dr-go -- <these>
-# Empty is today's behaviour: the agent starts with nothing extra. The common
-# reason to set it is to resume by default rather than starting fresh each time:
+# Empty is the current behavior: the agent starts with nothing extra. The usual
+# reason to set it is to resume by default, and not start new each time:
 #
 #   DRAUGR_AGENT_ARGS="--continue"        # Claude Code
 #   DRAUGR_AGENT_ARGS="resume --last"     # Codex
 #
-# These are the AGENT's flags, not Draugr's, so they depend on DRAUGR_AGENT and
-# neither of those means anything to `shell`. Draugr does not interpret them;
-# whatever is here is split on spaces and handed over.
+# These are flags of the AGENT, not of Draugr. Thus they depend on DRAUGR_AGENT,
+# and neither of those means something to `shell`. Draugr does not interpret
+# them. It splits the value on spaces, and gives it to the agent.
 #
 # Codex on a ChatGPT plan usually needs a model named here. sbx sets the provider
-# in the mound's config.toml but no model, so codex falls back to its own default
-# - and on a ChatGPT account that default is often one you are not entitled to,
-# which fails EVERY prompt with "... is not supported when using Codex with a
-# ChatGPT account". It looks like a login problem and is not. See docs/CONFIG.md.
+# in the config.toml of the mound, but no model. Thus codex uses its own default.
+# On a ChatGPT account, you often do not have the right to use that default. Then
+# EACH prompt fails with "... is not supported when using Codex with a ChatGPT
+# account". It looks like a login problem, but it is not. See docs/CONFIG.md.
 #DRAUGR_AGENT_ARGS="--model gpt-5.6-terra"
 #
-# To override for one run:  dr-go -- <other args>   (replaces, does not add to)
+# To override for one run:  dr-go -- <other args>   (replaces, does not add)
 # To pass nothing for one run:  dr-go --bare
 #DRAUGR_AGENT_ARGS=
 
-# One per agent, which is what you want in THIS file if you run more than one.
-# The key above holds the agent's own flags, so a machine-wide value is handed to
-# every agent including the ones that have never heard of it - "--settings" is
-# Claude Code's and would fail a codex mound at every attach. The per-agent key
-# wins whenever that agent is the one configured:
+# One for each agent. If you run more than one agent, use these in THIS file. The
+# key above holds the flags of the agent. Thus a machine-wide value goes to each
+# agent, also to the agents that do not know it. "--settings" belongs to Claude
+# Code, and makes a codex mound fail at each attach. The per-agent key wins if
+# that agent is the configured one:
 #
 #   DRAUGR_AGENT_ARGS_CLAUDE    DRAUGR_AGENT_ARGS_CODEX     DRAUGR_AGENT_ARGS_COPILOT
 #   DRAUGR_AGENT_ARGS_CURSOR    DRAUGR_AGENT_ARGS_DROID     DRAUGR_AGENT_ARGS_GEMINI
 #   DRAUGR_AGENT_ARGS_KIRO      DRAUGR_AGENT_ARGS_OPENCODE  DRAUGR_AGENT_ARGS_SHELL
-#   DRAUGR_AGENT_ARGS_DOCKER_AGENT     - the hyphen becomes an underscore
+#   DRAUGR_AGENT_ARGS_DOCKER_AGENT     (the hyphen becomes an underscore)
 #
-# It REPLACES the generic key rather than adding to it, the same rule
-# .draugr/kit.<agent>/ follows. Note that a conditional here cannot do this job:
-# this file is sourced BEFORE the project's, so $DRAUGR_AGENT is still the
-# default while it runs, whatever the project goes on to say.
+# It REPLACES the generic key, and does not add to it. .draugr/kit.<agent>/ uses
+# the same rule. A conditional here cannot do this job. Draugr sources this file
+# BEFORE the file of the project. Thus, while it runs, $DRAUGR_AGENT is still
+# the default, whatever the project says later.
 #
-# Setting one to the empty string is a deliberate "nothing for this agent" and
-# beats a generic value; leaving it unset falls through to the key above.
+# An empty string means "nothing for this agent", on purpose, and wins over a
+# generic value. If it is unset, the key above applies.
 #DRAUGR_AGENT_ARGS_CLAUDE="--continue"
 #DRAUGR_AGENT_ARGS_CODEX="resume --last"
 
-# ssh | sbx - how dr-go and dr-shell get a terminal inside the mound.
+# ssh | sbx: how dr-go and dr-shell get a terminal in the mound.
 #
-# ssh is the only one where Ctrl-Z works. It suspends the agent and hands you a
-# shell INSIDE the mound; fg goes back, with the session as you left it. Through
-# sbx.exe - a Windows binary WSL runs over interop - Ctrl-Z suspends the relay
-# instead, and the session dies with "inspect exec: context deadline exceeded".
+# Ctrl-Z works only with ssh. It suspends the agent, and gives you a shell IN the
+# mound. fg goes back, with the session as you left it. sbx.exe is a Windows
+# binary that WSL runs over interop. Through it, Ctrl-Z suspends the relay, and
+# the session dies with "inspect exec: context deadline exceeded".
 #
 # Set sbx only if a future sbx breaks its ssh proxy, or to compare the two.
 #DRAUGR_ATTACH=ssh
 
-# Sandbox name. Empty derives draugr-<repo-folder-name>, which is what you want
-# unless two projects share a folder name.
+# Sandbox name. Empty gives draugr-<repo-folder-name>. That is correct, unless
+# two projects have the same folder name.
 #DRAUGR_SANDBOX=
 
-# Empty means sbx's own defaults: 50% of host RAM capped at 32 GiB, and all CPUs.
+# Empty means the defaults of sbx: 50% of host RAM, up to 32 GiB, and all CPUs.
 #DRAUGR_MEMORY=8g
 #DRAUGR_CPUS=4
 
 # Container image. Empty means the agent's stock image.
 #DRAUGR_TEMPLATE=
 
-# false bind-mounts your working tree READ-WRITE instead of giving the agent a
-# private clone. That is the setting that undoes the entire point of Draugr, so
-# it prompts for confirmation every single time. No config key silences that.
+# false bind-mounts your working tree READ-WRITE, and gives the agent no private
+# clone. That removes the full purpose of Draugr, so it asks for confirmation each
+# time. No configuration key silences that.
 #DRAUGR_CLONE=true
 
 # --- What the agent is allowed to reach -------------------------------------
 #
-# Network rules and setup commands are NOT Draugr settings: they live in an sbx
-# kit, which is a first-party declarative format that already does this job and
-# travels with the repo. dr-init writes a starter one.
+# Network rules and setup commands are NOT Draugr configuration. They are in an
+# sbx kit. That is a first-party declarative format that already does this job,
+# and goes with the repo. dr-init writes a starter kit.
 #
 #   https://docs.docker.com/ai/sandboxes/customize/kits/
 #
-# Path to the kit, relative to the repo root, or an absolute path, git ref or OCI
-# reference. Empty disables kit loading entirely.
+# Path to the kit, relative to the repo root, or an absolute path, git ref, or
+# OCI reference. Empty disables all kit loading.
 #DRAUGR_KIT=.draugr/kit
 
-# A LIST: sbx merges kits rather than choosing between them, so a shared kit
-# ADDS to the project's. Each entry is looked for as an absolute path, then in
-# the repo, then in the kit store below, then treated as an OCI/git reference.
+# A LIST. sbx merges kits, and does not choose one. Thus a shared kit ADDS to the
+# kit of the project. Draugr looks for each entry as an absolute path, then in
+# the repo, then in the kit store below. Last, it is an OCI/git reference.
 #DRAUGR_KIT=".draugr/kit lua"
 
-# Your library of named kits, shared across repositories. Put one there with
-# `dr-kit save lua` from the repo whose kit you want to reuse, and see what is
-# already there with `dr-kit list`.
+# Your library of named kits, shared by all repositories. To put one there, run
+# `dr-kit save lua` in the repo with the kit. To see the contents, run `dr-kit
+# list`.
 #DRAUGR_KIT_STORE=~/.config/draugr/kits
 
 # --- Ports and extra material -----------------------------------------------
 
-# Published to Windows loopback. Applied at creation; use dr-ports mid-session.
+# Published to Windows loopback. Applied at creation. In a session, use dr-ports.
 #DRAUGR_PORTS="5173:5173 8080:8080"
 
-# The other direction: ports on THIS machine the mound is allowed to reach, as
-# bare port numbers. Re-applied on every dr-up, because the address they belong
-# to is handed out per boot and cannot be pinned. See dr-hostport.
+# The other direction: ports on THIS machine that the mound can reach, as bare
+# port numbers. Applied again at each dr-up, because their address changes at
+# each boot, and nothing can pin it. See dr-hostport.
 #DRAUGR_HOST_PORTS="11434"
 
-# Extra workspaces. Append :ro for read-only, which is almost always what you
-# want - a read-only mount is strictly safer than copying data in.
+# Extra workspaces. Append :ro for read-only. You almost always want that. A
+# read-only mount is safer than a copy of the data.
 #DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"
 
-# --- The agent's own model --------------------------------------------------
+# --- The own model of the agent ---------------------------------------------
 
-# Run the AGENT on a model you host, instead of its vendor's cloud. Empty is the
-# default and changes nothing. This is NOT the same thing as DRAUGR_HOST_PORTS
-# above: that lets the code you are working on call a local service, this changes
-# what the agent is. Read docs/SECURITY.md before relying on it to keep code in -
-# the mound can still reach the network it always could.
+# Run the AGENT on a model that you host, not on the cloud of its vendor. Empty is
+# the default, and changes nothing. This is NOT the same as DRAUGR_HOST_PORTS
+# above. That lets your code call a local service. This changes what the agent
+# is. Before you trust it to keep code in, read docs/SECURITY.md. The mound can
+# still reach the same network as before.
 #DRAUGR_MODEL="qwen3.8:27b"
-# Alternatively, for a more compact qwen3.8:27b:
+# Or, for a smaller qwen3.8:27b:
 #DRAUGR_MODEL="qwen3.8-27b-128k"
 # Created from https://huggingface.co/byteshape/Qwen3.8-27B-GGUF using:
 # $ cat > /tmp/Modelfile <<'EOF'
@@ -145,90 +145,89 @@
 # ollama create qwen3.8-27b-128k -f /tmp/Modelfile
 
 # Where that model is served: a bare port on THIS machine, or a full URL. A bare
-# port must also be in DRAUGR_HOST_PORTS, and dr-go refuses to start when it is
-# not. The default is the query-only proxy in share/ollama-proxy, not Ollama's
-# own 11434, which serves DELETE /api/delete through the same door as inference.
+# port must also be in DRAUGR_HOST_PORTS. If not, dr-go refuses to start. The
+# default is the query-only proxy in share/ollama-proxy, not 11434 of Ollama.
+# That port serves DELETE /api/delete through the same door as inference.
 #DRAUGR_MODEL_URL="11435"
 
-# The cheap background tier. Defaults to DRAUGR_MODEL, because two models are
-# only faster if both stay resident on the card at once.
+# The cheap background tier. The default is DRAUGR_MODEL, because two models are
+# faster only if both stay on the card at the same time.
 #DRAUGR_MODEL_FAST="qwen3:8b"
 
 # --- Environment for the agent ----------------------------------------------
 
-# Space-separated NAME=value pairs, exported into the agent's session. The
-# escape hatch for anything with no key of its own - the pair below caps where
-# Claude Code compacts, which matters on a local model whose real window is far
-# smaller than the one it advertises.
+# Space-separated NAME=value pairs, exported into the session of the agent. Use
+# it for each value that has no key of its own. The pair below limits where
+# Claude Code compacts. That is important on a local model whose real window is
+# much smaller than the advertised one.
 #
-# Values cannot contain spaces, because spaces separate entries. Entries are
-# validated: a malformed one is refused by dr-go rather than silently ignored by
-# the agent, which is how a typo here would otherwise cost you an afternoon.
+# Values cannot contain spaces, because spaces separate entries. dr-go tests the
+# entries, and refuses a malformed one. Without that, the agent silently ignores
+# it, and a typo here can cost you an afternoon.
 #DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=25"
-# Alternatively, with a more compact qwen3.8:27b:
+# Or, with a smaller qwen3.8:27b:
 #DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=56"
 
 # --- Data files that are not ready to commit --------------------------------
 #
-# Repo-relative globs, synced with rsync alongside git rather than through it.
-# Paths matching these are exempt from the DRAUGR_REQUIRE_CLEAN check.
+# Repo-relative globs, synced with rsync beside git, not through it. Paths that
+# match these are not part of the DRAUGR_REQUIRE_CLEAN test.
 #DRAUGR_DATA="tmp/** *.parquet scratch/raw/"
 
-# auto | manual | off.  push is host -> sandbox before the agent starts;
-# pull is sandbox -> host when you detach. Never both at once: there is no merge
-# algorithm for a parquet file, so each transfer declares a winner.
+# auto | manual | off.  push is host -> sandbox, before the agent starts.
+# pull is sandbox -> host, when you detach. Never both at once. No merge
+# algorithm exists for a parquet file, so each transfer declares a winner.
 #DRAUGR_DATA_PUSH=auto
 #DRAUGR_DATA_PULL=manual
 
-# Propagate deletions (rsync --delete). Off by default, because a push after you
-# tidied a directory would otherwise delete the agent's generated output.
+# Copy deletions too (rsync --delete). Off by default. If not, a push after you
+# clean a directory deletes the generated output of the agent.
 #DRAUGR_DATA_DELETE=false
 
-# /mnt/c is mode 777 under WSL; normalise on the way in. Note that this cannot
-# work on the way OUT: DrvFs ignores chmod, so a pulled file is executable on a
-# Windows drive whatever you put here. dr-data flags runnable-looking names
-# instead - see docs/SECURITY.md.
+# /mnt/c is mode 777 under WSL. This sets the mode on the way in. It cannot work
+# on the way OUT. DrvFs ignores chmod, so a pulled file on a Windows drive is
+# always executable. In its place, dr-data flags names that look runnable (see
+# docs/SECURITY.md).
 #DRAUGR_DATA_CHMOD=D755,F644
 
-# Per-file ceiling for `dr-data diff`, in bytes. Bigger text files are reported
-# by name and size instead of content; binaries always are. Raise it when you
-# have a large generated file you genuinely need to read before accepting it.
+# The limit for each file of `dr-data diff`, in bytes. For a bigger text file,
+# the report gives the name and the size, not the content. Binaries always get
+# that. Raise it if you must read a large generated file before you accept it.
 #DRAUGR_DATA_DIFF_MAX=262144
 
-# --- Git behaviour ----------------------------------------------------------
+# --- Git behavior -----------------------------------------------------------
 
-# Empty tracks whichever branch you have checked out.
+# Empty tracks your current branch.
 #DRAUGR_BRANCH=
 
-# Name of the git remote pointing at the sandbox. Draugr never touches origin.
+# Name of the git remote that points to the sandbox. Draugr never touches origin.
 #DRAUGR_REMOTE=draugr
 
-# The clone contains committed history only, so uncommitted work is simply not
-# there and the agent would quietly build on stale code. This catches that.
+# The clone has only committed history. Uncommitted work is not there, and the
+# agent silently builds on old code. This catches that.
 #DRAUGR_REQUIRE_CLEAN=true
 
-# Run dr-sync automatically when you detach. This is the mechanism that makes
-# the mound safe to lose, not a convenience - leave it on unless you intend to
-# run dr-sync yourself.
+# Run dr-sync automatically when you detach. This makes the loss of the mound
+# safe. It is not only a convenience. Keep it on, unless you run dr-sync
+# yourself.
 #DRAUGR_AUTO_SYNC=true
 
-# Stop the mound when you leave the agent, after the sync has run. Off because a
-# running mound is what people expect, and because stopping kills anything the
-# kit serves through publishedPorts or startup commands. An idle mound holds
-# around 1.4 GB; restarting one costs about four seconds. Turn it on for projects
-# that serve nothing.
+# Stop the mound when you leave the agent, after the sync. Off, because people
+# expect a running mound. Also, a stop kills all that the kit serves through
+# publishedPorts or startup commands. An idle mound holds about 1.4 GB. A restart
+# costs about four seconds. Turn it on for projects that serve nothing.
 #DRAUGR_STOP_ON_EXIT=false
 
-# What to do when you point Draugr at a directory that is not a git repository.
-# Clone mode needs one, and clone mode is what keeps your files read-only to the
-# agent - so the default is to refuse rather than quietly do something weaker.
+# What to do if you point Draugr at a directory that is not a git repository.
+# Clone mode needs one, and clone mode keeps your files read-only for the agent.
+# Thus the default is to refuse, and not silently do something weaker.
 #
 #   fail              refuse, and name these alternatives
-#   create-add-all    commit what is there; an ordinary repo from then on
-#   create-data-only  track nothing (.gitignore of "*"); files travel by
-#                     DRAUGR_DATA instead. For folders of documents or data.
+#   create-add-all    commit what is there. A normal repo after that
+#   create-data-only  track nothing (.gitignore of "*"). Files go through
+#                     DRAUGR_DATA. For folders of documents or data.
 #
-# Only dr-init and dr-up ever create one.
+# Only dr-init and dr-up create one.
 #DRAUGR_ON_MISSING_REPO=fail
 
 # --- Memory -----------------------------------------------------------------
@@ -236,35 +235,35 @@
 # auto | manual | off
 #DRAUGR_MEM_SYNC=auto
 
-# The store is <project key>/<agent>/ under this, because two agents' memories
-# of one project are different things in different shapes.
+# The store is <project key>/<agent>/ under this. The memories of two agents for
+# one project are different things, with different shapes.
 #DRAUGR_MEM_STORE="$HOME/.local/share/draugr/memory"
 
 # --- Plugins ----------------------------------------------------------------
 #
-# The plugin library dr-plugin manages and every mound reads. Empty by default,
-# so the feature is off until you set it. Unlike the memory store this MUST be on
-# a Windows drive: a mound has to be pointed at it, and an sbx workspace is a
-# Windows path.
+# The plugin library that dr-plugin manages, and that each mound reads. Empty by
+# default, so the feature is off until you set it. Unlike the memory store, this
+# MUST be on a Windows drive. A mound must point at it, and an sbx workspace is
+# a Windows path.
 #
-# A plugin is code that runs, so it is never installed on your host - dr-plugin
-# builds the library inside a throwaway mound and your host only stores the
-# result. See docs/CLAUDE_PLUGINS.md.
+# A plugin is code that runs, so it never goes on your host. dr-plugin builds the
+# library in a throwaway mound, and your host only stores the result. See
+# docs/CLAUDE_PLUGINS.md.
 #DRAUGR_PLUGIN_STORE="/mnt/c/Code/claude-plugins"
 
-# Setting the line above makes dr-plugin work. Making the plugins reach your
-# mounds is three more settings, and they are machine-wide rather than per
-# project - run `dr-plugin` with no arguments and it prints the exact lines:
+# The line above makes dr-plugin work. For the plugins to reach your mounds, you
+# need three more values. They are machine-wide, not for each project. Run
+# `dr-plugin` with no arguments, and it prints the exact lines:
 #
 #   DRAUGR_MOUNTS               the library, mounted read-only
 #   DRAUGR_ENV                  the seed path the agent reads at startup
-#   DRAUGR_AGENT_ARGS_CLAUDE    the settings file holding the on/off switches
+#   DRAUGR_AGENT_ARGS_CLAUDE    the settings file with the on/off switches
 
 # --- Safety rails -----------------------------------------------------------
 #
-# .gitignore hides files from git, not from the filesystem: an untracked .env is
-# absent from the agent's clone but fully readable through the read-only mount.
-# This finds those before the agent can.
+# .gitignore hides files from git, not from the filesystem. An untracked .env is
+# not in the clone of the agent, but the agent can read it through the read-only
+# mount. This finds those before the agent can.
 #DRAUGR_SCAN=true
 #DRAUGR_SCAN_PATTERNS=".env *.pem *.key id_rsa id_ed25519 credentials.json secrets.*"
 
@@ -273,45 +272,44 @@
 
 # --- The forge (optional, and off) ------------------------------------------
 #
-# A Windows 11 VM for Unreal Engine work, driven through AppSandbox. Setting this
-# to the VM's name is the only thing that turns it on; dr-forge refuses to act
-# while it is empty. If you do not know what this is, you do not want it.
-# See docs/FORGE.md.
+# A Windows 11 VM for Unreal Engine work, controlled through AppSandbox. Only the
+# name of the VM here turns it on. While it is empty, dr-forge refuses to act. If
+# you do not know what this is, you do not want it. See docs/FORGE.md.
 #DRAUGR_FORGE=layer-3-myproject
 
-# Guest paths dr-forge init excludes from Defender, separated by SEMICOLONS
-# (a Windows path has spaces in it and no semicolons). Empty leaves Defender
-# alone. Only ever adds - it will not remove an exclusion you made by hand.
+# Guest paths that dr-forge init excludes from Defender, separated by SEMICOLONS
+# (a Windows path has spaces, and no semicolons). Empty does not touch Defender.
+# It only adds. It does not remove an exclusion that you made by hand.
 #DRAUGR_FORGE_NOSCAN="C:\UE_4.27;D:\work\MyGame"
 #
-# A single "*" disables Defender in the guest altogether instead of excluding
-# paths. Read the CONFIG.md section before using it.
+# A single "*" disables all of Defender in the guest, and excludes no paths.
+# Before you use it, read the CONFIG.md section.
 #DRAUGR_FORGE_NOSCAN="*"
 
-# Where dr-layer keeps the forge's disk layers. Default empty, meaning C:\ForgeLayers.
-# It must be your FASTEST disk rather than your biggest: reads walk the chain, so the
-# frozen parents - Windows, Visual Studio, the engine - are the hot read path. Layer
-# stores on more than one drive are normal; --root overrides this for one command.
+# Where dr-layer keeps the disk layers of the forge. Empty by default: C:\ForgeLayers.
+# It must be your FASTEST disk, not your biggest. Reads walk the chain, so the frozen
+# parents (Windows, Visual Studio, the engine) get the most reads. Layer stores on more
+# than one drive are normal. --root overrides this for one command.
 #DRAUGR_FORGE_LAYERS="D:\ForgeLayers" 
 
 # --- Run-state dependencies -------------------------------------------------
 #
-# Other repositories whose mounds have to be RUNNING before this one is any use.
-# One dr-up here brings them up first, in order, and claims them; the last
-# project to leave lets them stop. Empty and none of this exists.
+# Other repositories whose mounds must RUN before this one is useful. One dr-up
+# here starts them first, in order, and claims them. The last project to leave
+# lets them stop. If empty, none of this exists.
 #
-# Requiring a repository means running its config and its hooks, as you, so an
-# untrusted one is refused rather than guessed at. See docs/DEPENDENCIES.md.
+# To require a repository runs its configuration and its hooks, as you. Thus
+# Draugr refuses an untrusted one, and does not guess. See docs/DEPENDENCIES.md.
 #DRAUGR_REQUIRES="$HOME/code/draugr-gateway"
 
-# The next two describe what kind of resource THIS repo's mound is, and are read
-# from here by the projects that require it - not the other way round.
+# The next two describe the type of resource of the mound of THIS repo. The
+# projects that require it read them from here, not the other way.
 #
-# true means one project at a time, refused by name: right for a gateway that
-# fronts one desktop, wrong for a database that queues its callers.
+# true means one project at a time. Others are refused by name. Correct for a
+# gateway in front of one desktop. Wrong for a database that queues its callers.
 #DRAUGR_EXCLUSIVE=false
 
-# How long this mound stays up after its last user leaves, when it is up as
-# somebody's dependency. Late on purpose: a dr-up --recreate must not cost the
-# minutes a forge VM takes to boot. 30s, 10m, 1h, or off.
+# How long this mound stays up after its last user leaves, if it runs as the
+# dependency of somebody. Late on purpose. A dr-up --recreate must not cost the
+# minutes that a forge VM needs to boot. 30s, 10m, 1h, or off.
 #DRAUGR_LINGER=10m

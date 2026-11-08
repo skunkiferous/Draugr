@@ -1,29 +1,30 @@
 #!/usr/bin/env bash
-# dr-stop - shut the mound down without destroying it.
+# dr-stop: shut down the mound, and do not destroy it.
 #
-# The clone, the agent's history and anything installed inside all survive; a
-# later dr-go starts it back up in a few seconds rather than rebuilding it. This
-# is what you want at the end of the day. dr-rm is the one that destroys things.
+# The clone, the history of the agent, and all software installed inside stay. A
+# later dr-go starts it again in a few seconds, with no rebuild. Use this at the
+# end of your work day. dr-rm destroys things.
 #
-# Stopping is hygiene, not durability. What protects the agent's work is dr-sync
-# having fetched it, which dr-go does for you on the way out. Stopping reclaims
-# the memory a running microVM holds, and leaves less to go wrong if the host
-# goes down unexpectedly.
+# A stop keeps things clean, but it does not protect work. The fetch of dr-sync
+# protects the work of the agent. dr-go does that fetch for you at exit. A
+# stop frees the memory of a running microVM. If the host stops suddenly, less
+# can go wrong.
 #
-#   dr-stop            stop this repo's mound
+#   dr-stop            stop the mound of this repo
 #   dr-stop <name>     stop one by name
-#   dr-stop --all      stop every running sandbox on this machine
+#   dr-stop --all      stop each running sandbox on this machine
 set -euo pipefail
 
 DR_PROG=dr-stop
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# A bare word is a sandbox name; without one we fall back to this repo's mound.
+# A word without a dash is a sandbox name. Without one, the code uses the mound
+# of this repo.
 name=
 all=
 while [ $# -gt 0 ]; do
@@ -37,10 +38,10 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# --- every running sandbox --------------------------------------------------
+# --- each running sandbox ---------------------------------------------------
 #
-# No dr_context: this is a machine-level command and the usual moment to want it
-# is on your way out of a terminal that is not in any repository.
+# No dr_context. This is a command for the machine. You usually want it as you
+# leave a terminal that is not in a repository.
 if [ -n "$all" ]; then
     [ -z "$name" ] || dr_die "--all takes no sandbox name" "Try: dr-stop --help"
 
@@ -50,27 +51,27 @@ if [ -n "$all" ]; then
         exit 0
     fi
 
-    # Listed and confirmed rather than assumed, because this reaches past the
-    # sandboxes Draugr created to any that sbx knows about - including ones from
-    # a plain `sbx run` that Draugr has no business stopping without asking.
+    # Listed with a question, not assumed. This also reaches sandboxes that
+    # Draugr did not create, but sbx knows. Draugr must not stop a sandbox from
+    # a plain `sbx run` without a question.
     dr_info "${#running[@]} running sandbox(es):"
     for s in "${running[@]}"; do printf '    %s\n' "$s" >&2; done
-    printf '  %sStopping keeps every clone and anything installed inside. It does NOT%s\n' \
+    printf '  %sA stop keeps each clone and all software installed inside. It does NOT%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sfetch the agents'"'"' commits - dr-sync does that, per repository.%s\n' \
+    printf '  %sfetch the commits of the agents. dr-sync does that, for each repository.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     dr_confirm "Stop all ${#running[@]}?" || dr_die "cancelled"
 
-    # sbx stop takes several names at once, so this is one call and one failure
-    # to report rather than a partial sweep that stops halfway.
+    # sbx stop takes several names at once. Thus this is one call, with one
+    # failure to report, not a partial pass that stops in the middle.
     dr_sbx stop "${running[@]}" >/dev/null || dr_die \
-        "could not stop them all" "See what is left:  dr-ls"
+        "could not stop all of them" "See the others:  dr-ls"
     dr_ok "stopped ${#running[@]} sandbox(es)"
     exit 0
 fi
 
-# A name on the command line means we do not need to be in a repo at all, which
-# is what lets you stop a mound you have wandered away from.
+# With a name on the command line, you do not have to be in a repo. Thus you can
+# stop a mound from a different directory.
 if [ -z "$name" ]; then
     dr_context
     name=$DRAUGR_SANDBOX
@@ -78,18 +79,18 @@ fi
 
 state=$(dr_sandbox_state "$name")
 case "$state" in
-    absent)  dr_die "$name does not exist" "See what does:  dr-ls" ;;
+    absent)  dr_die "$name does not exist" "See the mounds that exist:  dr-ls" ;;
     stopped) dr_ok "$name is already stopped"; exit 0 ;;
 esac
 
 dr_sbx stop "$name" >/dev/null || dr_die "could not stop $name"
 dr_ok "stopped $name"
 
-# A stopped mound stops being a valid claimant anyway - the warden would work
-# that out at its next tick - but releasing now starts the linger at the moment
-# you actually left, rather than up to a minute later. Only when we know which
-# repository we are in: `dr-stop <name>` from anywhere else has no claims to give
-# back, and DR_REPO would be somebody else's repository.
+# A stopped mound is no longer a valid claimant. The warden sees that at its
+# next tick. But a release now starts the linger at the time that you left, not
+# up to a minute later. This needs a known repository. `dr-stop <name>` from
+# another place has no claims to give back, and DR_REPO is the repository of
+# somebody else.
 if [ -n "${DR_REPO:-}" ] && [ -x "$_dr_bin/dr-dep" ]; then
-    "$_dr_bin/dr-dep" release >/dev/null || dr_warn "could not release claims; see:  dr-dep"
+    "$_dr_bin/dr-dep" release >/dev/null || dr_warn "could not release claims. See:  dr-dep"
 fi

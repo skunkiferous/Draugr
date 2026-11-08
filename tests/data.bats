@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 # DRAUGR_DATA: the filter rules, the matcher, and the clean-tree exemption.
 #
-# The rules are checked against REAL rsync, transferring between two local
-# directories. No sandbox is involved and none is needed - the filter language is
-# rsync's, so the only way to be sure of it is to let rsync decide.
+# These tests run the rules with REAL rsync, between two local directories. No
+# sandbox is necessary. The filter language belongs to rsync, so only rsync can
+# decide it with certainty.
 
 load helper
 
@@ -14,9 +14,9 @@ setup() {
 
 teardown() { dr_test_teardown; }
 
-# A tree with one of every awkward shape: a data dir, a nested data file, a
+# A tree with one of each difficult shape: a data dir, a nested data file, a
 # matching extension at the root AND deep in the source tree, and source files
-# that must never be swept up.
+# that must never go with the data.
 make_tree() {
     mkdir -p "$DR_TMP/src/tmp/deep" "$DR_TMP/src/scratch/raw" \
              "$DR_TMP/src/scratch/cooked" "$DR_TMP/src/lib" "$DR_TMP/dst"
@@ -30,7 +30,7 @@ make_tree() {
           "$DR_TMP/src/scratch/cooked/c1"
 }
 
-# What rsync would actually transfer, given the rules DRAUGR_DATA produces.
+# What rsync really transfers, with the rules that DRAUGR_DATA makes.
 transferred() {
     local filters
     mapfile -t filters < <(dr_data_filters)
@@ -38,22 +38,23 @@ transferred() {
         "$DR_TMP/src/" "$DR_TMP/dst/" | grep -v '/$' | sort
 }
 
-# --- plumbing that must never travel, whatever DRAUGR_DATA says ---------------
+# --- internal files that must never travel, whatever DRAUGR_DATA says --------
 
 @test "data filters: .git never travels, even for DRAUGR_DATA=*" {
     make_tree
-    # A real .git, because the bug is that rsync walks into it like any directory.
+    # A real .git, because the bug is that rsync walks into it as into each
+    # directory.
     mkdir -p "$DR_TMP/src/.git/hooks" "$DR_TMP/src/.draugr/tmp"
     touch "$DR_TMP/src/.git/config" "$DR_TMP/src/.git/hooks/pre-commit.sample" \
           "$DR_TMP/src/.draugr/tmp/leaked-memory.md"
 
     DRAUGR_DATA="*"
     run transferred
-    # Pushing the host's .git over the mound clone's would replace the agent's
-    # git metadata, remote and all.
+    # A push of the .git of the host over the one of the mound clone replaces
+    # the git metadata of the agent, also its remote.
     [[ "$output" != *".git/"* ]]
     [[ "$output" != *".draugr/"* ]]
-    # The actual data still moves - the guard is narrow, not a blanket refusal.
+    # The real data still moves. The guard is narrow, not a full refusal.
     [[ "$output" == *"a.parquet"* ]]
     [[ "$output" == *"tmp/x.bin"* ]]
 }
@@ -63,8 +64,8 @@ transferred() {
     mkdir -p "$DR_TMP/src/.git/hooks"
     touch "$DR_TMP/src/.git/hooks/pre-commit.sample" "$DR_TMP/src/keep.sample"
 
-    # Slashless entries are unanchored and match at every depth, so this used to
-    # collect git's own hook templates.
+    # Entries with no slash have no anchor, and match at all depths. Thus this
+    # once took the own hook templates of git.
     DRAUGR_DATA="*.sample"
     run transferred
     [[ "$output" != *".git"* ]]
@@ -73,9 +74,9 @@ transferred() {
 
 @test "dr_data_matches: agrees with the filters about the plumbing" {
     DRAUGR_DATA="*"
-    # Matching here but not transferring would exempt a path from the clean-tree
-    # check and then never send it - the disagreement the two functions exist to
-    # avoid. Checked for both, because "*" matches absolutely everything else.
+    # A match here with no transfer removes a path from the clean-tree test, and
+    # then never sends it. The two functions exist to prevent that difference.
+    # Tested for both, because "*" matches all else.
     run dr_data_matches ".git/config"
     [ "$status" -ne 0 ]
     run dr_data_matches ".draugr/kit.applied"
@@ -88,8 +89,8 @@ transferred() {
     make_tree
     touch "$DR_TMP/src/.gitignore"
 
-    # rsync patterns match whole names, not prefixes - worth pinning, because
-    # .gitignore is a file you might legitimately want on both sides.
+    # rsync patterns match whole names, not prefixes. Pin that, because you can
+    # legitimately want .gitignore on both sides.
     DRAUGR_DATA="*"
     run transferred
     [[ "$output" == *".gitignore"* ]]
@@ -142,7 +143,7 @@ tmp/deep/y.bin
 tmp/x.bin" ]
 }
 
-# --- the matcher, which must agree with the rules above ----------------------
+# --- the matcher, which must give the same result as the rules above ---------
 
 @test "dr_data_matches: agrees with the filters, shape by shape" {
     DRAUGR_DATA="tmp/** *.parquet scratch/raw/"
@@ -198,12 +199,12 @@ tmp/x.bin" ]
     ! dr_data_dirty_only "$repo"
 }
 
-# --- naming what actually blocks ---------------------------------------------
+# --- the name of what really blocks -----------------------------------------
 #
-# The exemption is all-or-nothing: one dirty source file stops the session even
-# when everything else is data. That is deliberate, but the report used to be
-# `git status --short` in full, so the one file that mattered arrived at the
-# bottom of a list of exempt ones and DRAUGR_DATA looked broken.
+# The exemption is all or nothing. One dirty source file stops the session, also
+# when all else is data. That is on purpose. But the report was the full output
+# of `git status --short`. Thus the one important file came at the bottom of a
+# list of exempt ones, and DRAUGR_DATA looked broken.
 
 @test "dr_data_dirty_blockers: exempt files are left out" {
     repo=$(dr_make_repo)
@@ -231,8 +232,8 @@ tmp/x.bin" ]
 }
 
 @test "dr_data_dirty_blockers: a rename is judged by its destination" {
-    # Same rule dr_data_dirty_only uses. Renaming a source file TO a data name
-    # makes it data; the reverse makes it a blocker.
+    # The same rule as dr_data_dirty_only. A rename of a source file TO a data
+    # name makes it data. The reverse makes it a blocker.
     repo=$(dr_make_repo)
     printf 'a\n' > "$repo/data.tsv"
     git -C "$repo" add -A
@@ -242,11 +243,11 @@ tmp/x.bin" ]
     [[ "$output" == *"notes.md"* ]]
 }
 
-# --- reviewing what a pull would land ----------------------------------------
+# --- a review of what a pull brings -----------------------------------------
 #
-# dr-data pull writes agent-authored bytes onto the host with no commit to read
-# first, so these three helpers are what stands between "rsync said 12 files" and
-# a reviewer who has actually seen what is arriving.
+# dr-data pull writes bytes from the agent onto the host, with no commit to read
+# first. These three helpers are the step between "rsync said 12 files" and a
+# reviewer who really saw what arrives.
 
 @test "dr_data_path_safe: an ordinary repo-relative path is fine" {
     dr_data_path_safe "tmp/out/report.csv"
@@ -261,8 +262,8 @@ tmp/x.bin" ]
 }
 
 @test "dr_data_path_safe: a .. buried mid-path is refused too" {
-    # The one that matters: rsync sanitises this, but Draugr is the thing doing
-    # the writing and should not need to know which rsync it got.
+    # The important one. rsync sanitizes this, but Draugr does the write, and
+    # must not depend on the version of rsync.
     ! dr_data_path_safe "out/../../escape"
 }
 
@@ -275,13 +276,13 @@ tmp/x.bin" ]
 }
 
 @test "dr_data_path_safe: a newline in a name is refused" {
-    # Not only a traversal question. Every caller parses the incoming list one
-    # name per line, so a newline would silently truncate the review itself.
+    # Not only a traversal question. Each caller parses the incoming list with
+    # one name on each line. Thus a newline silently cuts the review itself.
     ! dr_data_path_safe "$(printf "bad\nname")"
 }
 
 @test "dr_data_path_safe: terminal escapes in a name are refused" {
-    # A filename that repaints the screen could hide the rest of the report.
+    # A filename that redraws the screen can hide the rest of the report.
     ! dr_data_path_safe "$(printf "esc\033[2Jgone")"
 }
 
@@ -305,8 +306,8 @@ tmp/x.bin" ]
 }
 
 @test "dr_data_exec_shaped: stays quiet on ordinary data" {
-    # The important half. A warning that fires on every parquet file is one
-    # people learn to scroll past, and then it protects nothing.
+    # The important half. People learn to ignore a warning that fires on each
+    # parquet file, and then it protects nothing.
     ! dr_data_exec_shaped "model.parquet" || return 1
     ! dr_data_exec_shaped "report.csv" || return 1
     ! dr_data_exec_shaped "notes.txt" || return 1
@@ -335,15 +336,15 @@ tmp/x.bin" ]
 }
 
 @test "dr_data_is_text: an empty file counts as text" {
-    # So that "the agent emptied this file" shows up as a diff rather than
-    # being withheld as unreadable.
+    # So that "the agent emptied this file" shows as a diff, and is not hidden
+    # as unreadable.
     : > "$DR_TMP/t.empty"
     dr_data_is_text "$DR_TMP/t.empty"
 }
 
 @test "dr_data_is_text: only the first 8 KB is judged" {
-    # A huge CSV with one stray NUL at the end should still be diffable, and
-    # reading all of a 4 GB file to decide would defeat the point.
+    # A huge CSV with one stray NUL at the end must still get a diff. A read of
+    # a full 4 GB file to decide removes the benefit.
     head -c 20000 /dev/zero | tr "\000" "a" > "$DR_TMP/t.big"
     printf "\000" >> "$DR_TMP/t.big"
     dr_data_is_text "$DR_TMP/t.big"

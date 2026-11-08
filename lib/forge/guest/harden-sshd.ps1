@@ -1,31 +1,32 @@
-# harden-sshd.ps1 - take the guest's sshd off password authentication.
+# harden-sshd.ps1: turn off password authentication in the sshd of the guest.
 #
-# WHY IT IS NOT OPTIONAL. The gateway mound is given an sbx rule that lets it reach this sshd
-# (docs/FORGE.md, "The channel"), so a password login here is something a sandbox could sit and
-# guess at. Keys only, and this runs BEFORE the rule is granted - that order is the whole
-# point. Windows OpenSSH accepts passwords by DEFAULT, so a guest that has never been touched
-# is a guest that accepts them.
+# WHY IT IS NOT OPTIONAL. The gateway mound gets an sbx rule that lets it reach
+# this sshd (docs/FORGE.md, "The channel"). Thus a sandbox can try to guess a
+# password login here. Keys only, and this runs BEFORE the rule exists. That
+# order is the purpose. Windows OpenSSH accepts passwords by DEFAULT, so an
+# untouched guest accepts them.
 #
-# TWO TRAPS, both measured on a live guest, and both silent:
+# TWO TRAPS. Tests on a live guest showed both, and both are silent:
 #
-# 1. APPENDING DOES NOTHING. The default sshd_config ends with
+# 1. AN APPEND DOES NOTHING. The default sshd_config ends with
 #
 #        Match Group administrators
 #               AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
 #
-#    and everything after a Match line is conditional on it. Appended directives applied to
-#    administrators alone; `sshd -T`, which reports the GLOBAL config, kept answering
-#    "passwordauthentication yes"; and the server went on offering passwords. A setting that is
-#    in the file, is valid, and does nothing. So the directives are inserted ABOVE the first
+#    and all lines after a Match line depend on it. Appended directives applied only to
+#    administrators. `sshd -T`, which reports the GLOBAL configuration, still answered
+#    "passwordauthentication yes", and the server still offered passwords. The value is in the
+#    file and valid, but does nothing. Thus the code inserts the directives ABOVE the first
 #    Match line.
 #
-# 2. THE LISTENER HOLDS THE CONFIG. A new connection does not re-read it, so sshd must be
-#    restarted - and restarting it from a session sshd is serving can kill the restart halfway:
-#    the stop succeeds, the process carrying the start dies with the session, and the guest is
-#    left with no sshd at all. The restart is therefore handed to a one-shot SYSTEM scheduled
-#    task, which survives the session being cut.
+# 2. THE LISTENER HOLDS THE CONFIGURATION. A new connection does not read it
+# again, so sshd
+#    needs a restart. A restart from a session that sshd serves can stop in the middle. The
+#    stop works, the process that does the start dies with the session, and the guest has no
+#    sshd. Thus a one-shot SYSTEM scheduled task does the restart. It survives the cut of the
+#    session.
 #
-# It is IDEMPOTENT: run it twice and the second run says there is nothing to do.
+# It is IDEMPOTENT. A second run says that there is nothing to do.
 #
 #   powershell -ExecutionPolicy Bypass -File .\harden-sshd.ps1
 #   powershell -ExecutionPolicy Bypass -File .\harden-sshd.ps1 -NoRestart   # config only
@@ -37,8 +38,9 @@ if (-not (Test-Path $ConfigPath)) { Write-Error "no sshd_config at $ConfigPath";
 
 $lines = @(Get-Content $ConfigPath)
 
-# Judged on the GLOBAL section only - everything above the first Match - for the reason in
-# trap 1. A `PasswordAuthentication no` below a Match line is not the same setting.
+# Only the GLOBAL section counts, all above the first Match, for the reason in
+# trap 1. A `PasswordAuthentication no` below a Match line is not the same
+# value.
 $firstMatch = -1
 for ($i = 0; $i -lt $lines.Count; $i++) {
     if ($lines[$i] -match '^\s*Match\s') { $firstMatch = $i; break }
@@ -50,7 +52,7 @@ $already = ($global -match '^\s*PasswordAuthentication\s+no') -and
            ($global -match '^\s*KbdInteractiveAuthentication\s+no')
 
 if ($already) {
-    Write-Host 'password authentication is already off in the global section - nothing to do'
+    Write-Host 'password authentication is already off in the global section. Nothing to do.'
     Write-Host 'DRAUGR_CHANGED=0'
 } else {
     if (-not (Test-Path "$ConfigPath.draugr-bak")) {
@@ -58,25 +60,27 @@ if ($already) {
         Write-Host "backed up to $(Split-Path $ConfigPath -Leaf).draugr-bak"
     }
 
-    # Any existing (possibly contradictory) global setting is dropped rather than left to fight
-    # the new one: sshd takes the FIRST occurrence of a keyword, so a stray `yes` above would win.
-    # The block is FENCED so that a rewrite replaces the previous one instead of stacking a new
-    # one on top of it. MEASURED without the fence: the first Match line walked
-    # 85 -> 90 -> 97 across rewrites, because the old directives were dropped while the four
-    # comment lines above them stayed, and a config file that grows per run is a log.
+    # The code removes each existing global value (it can disagree), so that it
+    # does not fight the new one. sshd uses the FIRST occurrence of a keyword,
+    # so an old `yes` above wins. The block has FENCES, so that a rewrite
+    # replaces the previous block, and does not add a new one on top. A TEST
+    # WITHOUT THE FENCE showed this: the first Match line moved from 85 to 90 to
+    # 97 across rewrites. The code removed the old directives, but the four
+    # comment lines above them stayed. A configuration file that grows at each
+    # run is a log.
     $add = @(
         '# >>> Draugr keys-only, managed by harden-sshd.ps1 - edit between the fences >>>',
-        '# The gateway mound is given an sbx rule that lets it reach this sshd, so a password',
-        '# login here would be something a sandbox could sit and guess at. Keys only.',
-        '# These MUST stay above the first Match block: everything after a Match line is',
-        '# conditional on it, and sshd -T reports only the global config. See docs/FORGE.md.',
+        '# The gateway mound gets an sbx rule that lets it reach this sshd. Thus a sandbox',
+        '# can try to guess a password login here. Keys only.',
+        '# These MUST stay above the first Match block. All lines after a Match line depend',
+        '# on it, and sshd -T reports only the global configuration. See docs/FORGE.md.',
         'PasswordAuthentication no',
         'KbdInteractiveAuthentication no',
         '# <<< Draugr keys-only <<<',
         '')
-    # Bounded on purpose. A start fence with no end fence drops NOTHING: treating the rest of
-    # the file as "inside the block" would take the whole config with it, and a half-mangled
-    # fence is precisely when that would happen.
+    # Limited on purpose. A start fence with no end fence removes NOTHING. If
+    # the rest of the file counts as "inside the block", the whole configuration
+    # goes. That happens exactly with a half-damaged fence.
     $blockFrom = -1
     $blockTo = -1
     for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -86,9 +90,10 @@ if ($already) {
         } elseif ($lines[$i] -match '^#\s*<<<\s*Draugr keys-only') { $blockTo = $i; break }
     }
     if ($blockTo -lt 0) { $blockFrom = -1 }
-    # The block ships with a blank line after its closing fence, so the removal has to take one
-    # back - otherwise the fence stops the four comment lines accumulating and the blank line
-    # accumulates instead, one per rewrite. Found by the test, not by reading.
+    # The block has a blank line after its closing fence, so the removal must
+    # also remove one. Otherwise the fence stops the growth of the four comment
+    # lines, but the blank line grows instead, one for each rewrite. The test
+    # found this, not a reader.
     if (($blockTo -ge 0) -and (($blockTo + 1) -lt $lines.Count) -and ($lines[$blockTo + 1] -match '^\s*$')) {
         $blockTo++
     }
@@ -99,7 +104,8 @@ if ($already) {
         if ($inGlobal -and $lines[$i] -match '^\s*(PasswordAuthentication|KbdInteractiveAuthentication)\s') { continue }
         $keep += $lines[$i]
     }
-    # Recompute where the Match block starts, since dropping lines moved it.
+    # Find the start of the Match block again, because the removed lines moved
+    # it.
     $at = -1
     for ($i = 0; $i -lt $keep.Count; $i++) {
         if ($keep[$i] -match '^\s*Match\s') { $at = $i; break }
@@ -112,17 +118,18 @@ if ($already) {
         Write-Host "inserted above the Match block at line $($at + 1)"
     } else {
         $out = $keep + $add
-        Write-Host 'no Match block found - appended to the end'
+        Write-Host 'no Match block found. Appended to the end.'
     }
     Set-Content -Path $ConfigPath -Value $out -Encoding ASCII
     Write-Host 'DRAUGR_CHANGED=1'
 }
 
-Write-Host '--- the global config as sshd itself parses it ---'
-# `sshd -T 2>$null` under Stop would have killed this script the moment sshd had anything to
-# say - immediately after it rewrote sshd_config, which is exactly when a reader needs to
-# know what sshd makes of the file. Guarded, and sshd's complaints are now REPORTED rather
-# than swallowed: a config it refuses is the one outcome worth never hiding. docs/FORGE.md.
+Write-Host '--- the global configuration, as sshd parses it ---'
+# Under Stop, `sshd -T 2>$null` killed this script as soon as sshd said
+# something. That was directly after the rewrite of sshd_config. At exactly that
+# time, a reader must know what sshd thinks of the file. Now it has a guard, and
+# the code REPORTS the complaints of sshd, and does not hide them. A
+# configuration that sshd refuses must never be hidden. See docs/FORGE.md.
 $eapWas = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try { $sshdT = @(sshd -T 2>&1) } finally { $ErrorActionPreference = $eapWas }
@@ -130,22 +137,23 @@ $sshdT |
     Select-String -Pattern '^(passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication)' |
     ForEach-Object { "  $($_.Line)" }
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  sshd -T exited $LASTEXITCODE - it does not accept this config:" -ForegroundColor Yellow
+    Write-Host "  sshd -T exited $LASTEXITCODE. It does not accept this configuration:" -ForegroundColor Yellow
     $sshdT | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
 }
 
 if ($already -or $NoRestart) {
-    if ($NoRestart) { Write-Host 'not restarting, as asked - the running sshd still accepts what it accepted' }
+    if ($NoRestart) { Write-Host 'no restart, as you asked. The running sshd still accepts what it accepted before' }
     exit 0
 }
 
-# Handed to the scheduler, as SYSTEM, for the reason in trap 2. The fallback matters: if the
-# restart throws after stopping, a plain Start-Service still brings sshd back.
-Write-Host 'restarting sshd through a one-shot SYSTEM task, so the restart cannot die with this session'
+# The scheduler does it, as SYSTEM, for the reason in trap 2. The fallback is
+# important. If the restart throws after the stop, a plain Start-Service still
+# starts sshd again.
+Write-Host 'restarting sshd through a one-shot SYSTEM task, so that the restart cannot die with this session'
 $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument `
     '-NoProfile -Command "try { Restart-Service sshd -Force -ErrorAction Stop } catch { Start-Service sshd }"'
 $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 Register-ScheduledTask -TaskName 'DraugrSshdRestart' -Action $a -Principal $p -Force | Out-Null
 Start-ScheduledTask -TaskName 'DraugrSshdRestart'
-Write-Host 'restart requested. This session may be cut; that is expected.'
-Write-Host 'The caller should verify from OUTSIDE: ssh must offer publickey only.'
+Write-Host 'restart requested. This session can stop. That is expected.'
+Write-Host 'The caller must make sure from OUTSIDE that ssh offers only publickey.'

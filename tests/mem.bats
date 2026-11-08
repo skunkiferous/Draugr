@@ -1,23 +1,24 @@
 #!/usr/bin/env bats
-# dr-mem: the project-key translation, and moving memory across the boundary.
+# dr-mem: the project-key translation, and the move of memory across the
+# boundary.
 #
-# The key rules are pure string functions and are tested against literal strings,
-# so they run anywhere. Everything else runs against a real directory tree
-# standing in for the mound's disk (see dr_mound_memory_dir), which means the
-# paths dr-mem computes have to be right for the files to be found at all.
+# The key rules are pure string functions. Their tests use literal strings, so
+# they run in all places. All else runs against a real directory tree that acts
+# as the disk of the mound (see dr_mound_memory_dir). Thus the paths of dr-mem
+# must be correct, or the files are not found.
 
 load helper
 
 setup() {
     dr_test_setup
     dr_load_common
-    # Never the developer's real store.
+    # Never the real store of the developer.
     export DRAUGR_MEM_STORE="$DR_TMP/memstore"
 }
 
 teardown() { dr_test_teardown; }
 
-# --- the three keys, the whole reason this command exists --------------------
+# --- the three keys, the full reason for this command ------------------------
 
 @test "mem key: the README's own example, all three sides" {
     [ "$(dr_mem_key 'C:\src\myproject')" = 'c--src-myproject' ]
@@ -26,8 +27,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "mem key: measured against this machine's real directories" {
-    # Not invented: C:\Code\claude really is filed as c--Code-claude on the host
-    # and -c-Code-claude inside its mound.
+    # Not made up. C:\Code\claude really is filed as c--Code-claude on the host,
+    # and as -c-Code-claude in its mound.
     [ "$(dr_mem_key 'C:\Code\claude')" = 'c--Code-claude' ]
     [ "$(dr_mem_key '/c/Code/claude')" = '-c-Code-claude' ]
 }
@@ -55,7 +56,7 @@ teardown() { dr_test_teardown; }
     DRAUGR_AGENT=claude
     run dr_mem_store_dir /mnt/c/src/myproject
     [ "$output" = "/tmp/store/c--src-myproject/claude" ]
-    # A leading "-" would be read as an option by anything you typed it at.
+    # Each tool reads a leading "-" as an option.
     [[ "$output" != *"/-"* ]]
 }
 
@@ -65,7 +66,7 @@ teardown() { dr_test_teardown; }
     a=$(DRAUGR_AGENT=claude dr_mem_store_dir /mnt/c/src/myproject)
     b=$(DRAUGR_AGENT=codex  dr_mem_store_dir /mnt/c/src/myproject)
     [ "$a" != "$b" ]
-    # Repo first, so everything about one project stays in one place.
+    # Repo first, so that all about one project stays in one place.
     [ "$(dirname "$a")" = "$(dirname "$b")" ]
 }
 
@@ -77,7 +78,8 @@ teardown() { dr_test_teardown; }
     printf 'from before the split\n' > "$old/memory/a.md"
     printf 'repo:    /mnt/c/src/myproject\n' > "$old/.draugr-export"
 
-    # Migrating while configured for codex must NOT file Claude's memories there.
+    # A migration while configured for codex must NOT file the memories of
+    # Claude there.
     DRAUGR_AGENT=codex dr_mem_store_migrate /mnt/c/src/myproject
 
     [ -f "$old/claude/memory/a.md" ]
@@ -94,8 +96,8 @@ teardown() { dr_test_teardown; }
     printf 'first\n' > "$old/memory/a.md"
     dr_mem_store_migrate /mnt/c/src/myproject
 
-    # A later export writes memory/ under claude/. Running the migration again
-    # must not walk it back up a level.
+    # A later export writes memory/ under claude/. A second run of the migration
+    # must not move it back up one level.
     printf 'second\n' > "$old/claude/memory/b.md"
     dr_mem_store_migrate /mnt/c/src/myproject
     [ -f "$old/claude/memory/b.md" ]
@@ -107,14 +109,14 @@ teardown() { dr_test_teardown; }
     [ "$output" = "/home/agent/.claude/projects/-c-src-myproject" ]
 }
 
-# --- moving it -----------------------------------------------------------------
+# --- the move ------------------------------------------------------------------
 
-# A repo on a Windows drive with a stand-in mound filesystem behind it. Prints
-# the mound's memory directory; the repo path lands in $REPO.
+# A repo on a Windows drive, with a stand-in mound filesystem behind it. Prints
+# the memory directory of the mound. The repo path goes into $REPO.
 setup_mound() {
     REPO=$(dr_make_win_repo) || return 1
     cd "$REPO" || return 1
-    # Sets DR_MEMDIR and DR_MOCK_MOUND; calling it in $(…) would lose the export.
+    # Sets DR_MEMDIR and DR_MOCK_MOUND. A call in $(…) loses the export.
     dr_mound_memory_dir "$REPO"
     MEMDIR=$DR_MEMDIR
     export DR_MOCK_STATE=running
@@ -126,7 +128,7 @@ setup_mound() {
     setup_mound || skip "no writable Windows drive path"
     run dr-mem export
     [ "$status" -eq 0 ]
-    [[ "$output" == *"nothing to export"* ]]
+    [[ "$output" == *"Nothing to export"* ]]
 }
 
 @test "dr-mem export: memory lands in the store under the host key" {
@@ -140,7 +142,7 @@ setup_mound() {
     store=$(dr_mem_store_dir "$REPO")
     [ -f "$store/memory/build.md" ]
     grep -q "cmake" "$store/memory/build.md"
-    # The marker is what makes a later import trust this without asking.
+    # The marker lets a later import trust this, with no question.
     grep -qxF "repo:    $REPO" "$store/.draugr-export"
 }
 
@@ -158,7 +160,7 @@ setup_mound() {
     store=$(dr_mem_store_dir "$REPO")
     [ -f "$store/memory/b.md" ]
     [ ! -f "$store/memory/a.md" ]
-    # One mv away from getting it back.
+    # One mv gets it back.
     [ -f "$store/memory.previous/a.md" ]
 }
 
@@ -171,7 +173,7 @@ setup_mound() {
     run dr-mem import --yes
     [ "$status" -eq 0 ]
 
-    # The whole point: written to -c-…, which is where the agent will look.
+    # The full purpose: written to -c-…, where the agent looks.
     [ -f "$MEMDIR/note.md" ]
     grep -q "remember this" "$MEMDIR/note.md"
 }
@@ -191,9 +193,9 @@ setup_mound() {
     store=$(dr_mem_store_dir "$REPO")
     mkdir -p "$store/memory"
     printf 'do something surprising\n' > "$store/memory/note.md"
-    # No .draugr-export marker: this could be anyone's.
+    # No .draugr-export marker. This can belong to anybody.
 
-    # No terminal and no --yes, so dr_confirm refuses rather than assuming.
+    # No terminal and no --yes, so dr_confirm refuses, and does not assume.
     run dr-mem import
     [ "$status" -ne 0 ]
     [ ! -f "$MEMDIR/note.md" ]
@@ -206,7 +208,7 @@ setup_mound() {
     dr-mem export >/dev/null 2>&1
     rm -rf "$MEMDIR"
 
-    # Still no terminal and still no --yes: this must not prompt at all.
+    # Still no terminal, and still no --yes. This must never prompt.
     run dr-mem import
     [ "$status" -eq 0 ]
     [ -f "$MEMDIR/note.md" ]
@@ -221,7 +223,7 @@ setup_mound() {
 
     run dr-mem import --if-empty --yes
     [ "$status" -eq 0 ]
-    # Untouched: this is the check that makes DRAUGR_MEM_SYNC=auto safe on dr-up.
+    # No change. This test makes DRAUGR_MEM_SYNC=auto safe on dr-up.
     [ -f "$MEMDIR/fresh.md" ]
     [ ! -f "$MEMDIR/note.md" ]
 }
@@ -265,11 +267,11 @@ setup_mound() {
     [[ "$output" == *"only in mound: only-mound.md"* ]]
     [[ "$output" == *"only in store: only-store.md"* ]]
     [[ "$output" == *"changed:"*"changes.md"* ]]
-    # Present on both sides and identical, so it is not a difference.
+    # Present on both sides, and identical, so it is not a difference.
     [[ "$output" != *"both.md"* ]]
 }
 
-# --- the check dr-rm leans on --------------------------------------------------
+# --- the test that dr-rm depends on ------------------------------------------
 
 @test "dr-mem check: an exported mound is safe to destroy" {
     setup_mound || skip "no writable Windows drive path"
@@ -298,7 +300,8 @@ setup_mound() {
     store=$(dr_mem_store_dir "$REPO")
     printf 'extra\n' > "$store/memory/b.md"
 
-    # dr-rm destroys the mound, not the store, so the extra file is irrelevant.
+    # dr-rm destroys the mound, not the store, so the extra file is not
+    # important.
     run dr-mem check
     [ "$status" -eq 0 ]
 }
@@ -321,7 +324,7 @@ setup_mound() {
 
     run dr-rm --yes
     [ "$status" -ne 0 ]
-    [[ "$output" == *"not exported"* ]]
+    [[ "$output" == *"did not export"* ]]
     [[ "$output" == *"dr-mem export"* ]]
 }
 
@@ -335,7 +338,7 @@ setup_mound() {
     [ "$status" -eq 0 ]
 }
 
-# --- what the three DRAUGR_MEM_SYNC values actually do -------------------------
+# --- what the three DRAUGR_MEM_SYNC values really do -------------------------
 
 @test "mem sync manual: no automatic transfer, but dr-rm still refuses" {
     setup_mound || skip "no writable Windows drive path"
@@ -344,7 +347,7 @@ setup_mound() {
 
     DRAUGR_MEM_SYNC=manual run dr-rm --yes
     [ "$status" -ne 0 ]
-    [[ "$output" == *"not exported"* ]]
+    [[ "$output" == *"did not export"* ]]
 }
 
 @test "mem sync off: dr-rm does not refuse over memory you said you do not keep" {
@@ -392,7 +395,7 @@ setup_mound() {
     [ ! -f "$MEMDIR/note.md" ]
 }
 
-# --- listings are only ever sha256sum's own shape -------------------------------
+# --- listings always have the own shape of sha256sum --------------------------
 
 @test "dr-mem: a stray line from the mound is not mistaken for a file" {
     setup_mound || skip "no writable Windows drive path"
@@ -401,26 +404,26 @@ setup_mound() {
     dr-mem export >/dev/null 2>&1
 
     # Whatever else appears on stdout, only 64-hex-plus-name lines are files.
-    # Without the filter this reports memory that does not exist, and dr-rm then
-    # refuses to destroy a mound over it - forever.
+    # Without the filter, this reports memory that does not exist. Then dr-rm
+    # refuses forever to destroy the mound because of it.
     run dr-mem check
     [ "$status" -eq 0 ]
 }
 
-# --- Codex: a different shape entirely ------------------------------------------
+# --- Codex: a very different shape ---------------------------------------------
 #
-# Two halves that travel together and compare together: markdown under memories/,
-# and the SQLite the session history lives in. The packed tree is what the store
-# holds, so these assert on it directly - if pack, unpack and list ever disagree
+# Two halves that travel together, and are compared together: markdown under
+# memories/, and the SQLite of the session history. The store holds the packed
+# tree, so these assert on it directly. If pack, unpack, and list ever disagree
 # about a name, one of these fails.
 
 setup_codex() {
     REPO=$(dr_make_win_repo) || return 1
     cd "$REPO" || return 1
     export DRAUGR_AGENT=codex
-    # The dr-* commands reload the module at the end of dr_load_config; a test
-    # shell that changed the agent by hand has to do the same, or it keeps
-    # asking Claude Code's module where Codex put things.
+    # The dr-* commands load the module again at the end of dr_load_config. A
+    # test shell that changed the agent by hand must do the same. If not, it
+    # continues to ask the module of Claude Code where Codex put things.
     dr_agent_load
     dr_mound_codex_dir
     CODEXDIR=$DR_CODEXDIR
@@ -429,7 +432,7 @@ setup_codex() {
     return 0
 }
 
-# Everything a real CODEX_HOME holds, including the parts that must NOT travel.
+# All that a real CODEX_HOME holds, also the parts that must NOT travel.
 seed_codex() {
     mkdir -p "$CODEXDIR/memories/rollout_summaries"
     printf 'the build is cmake\n'        > "$CODEXDIR/memories/MEMORY.md"
@@ -447,7 +450,7 @@ seed_codex() {
 @test "codex: memory is not filed under the project key" {
     setup_codex || skip "no writable Windows drive path"
     run dr_agent_mem_dir "$REPO"
-    # No key anywhere in it - that whole mechanism is Claude Code's alone.
+    # No key in it. That full mechanism belongs only to Claude Code.
     [ "$output" = "/home/agent/.codex/memories" ]
 }
 
@@ -474,20 +477,20 @@ seed_codex() {
     [ "$status" -eq 0 ]
 
     store=$(dr_mem_store_dir "$REPO")
-    # config.toml is sbx's yolo-mode settings. Carrying it would mean an import
-    # could overwrite them and quietly re-arm the approval prompts.
+    # config.toml is the yolo-mode configuration of sbx. If it travels, an
+    # import can overwrite it, and silently turn the approval prompts on again.
     [ ! -e "$store/memory/config.toml" ]
     [ ! -e "$store/memory/installation_id" ]
-    # Diagnostics, and 7 MB of them on a real machine.
+    # Diagnostics, 7 MB of them on a real machine.
     [ ! -e "$store/memory/logs_2.sqlite" ]
-    # SQLite rebuilds -shm; a stale one is worse than none.
+    # SQLite builds -shm again. An old one is worse than none.
     [ ! -e "$store/memory/state_5.sqlite-shm" ]
 }
 
 @test "codex export: session history alone is worth exporting" {
     setup_codex || skip "no writable Windows drive path"
-    # No memories/ at all - the feature was never turned on - but Codex has run,
-    # so there are threads to lose.
+    # No memories/, because the feature was never on. But Codex ran, so there
+    # are threads to lose.
     printf 'threads\n' > "$CODEXDIR/state_5.sqlite"
 
     run dr-mem export
@@ -503,7 +506,7 @@ seed_codex() {
 
     run dr-mem export
     [ "$status" -eq 0 ]
-    [[ "$output" == *"nothing to export"* ]]
+    [[ "$output" == *"Nothing to export"* ]]
 }
 
 @test "codex import: everything lands back where Codex reads it" {
@@ -523,8 +526,8 @@ seed_codex() {
     setup_codex || skip "no writable Windows drive path"
     printf 'yolo\n' > "$CODEXDIR/config.toml"
 
-    # --source pointed at somebody's whole CODEX_HOME, which is exactly what
-    # `dr-mem import --from-host` hands it.
+    # --source points to the full CODEX_HOME of somebody. `dr-mem import
+    # --from-host` gives it exactly that.
     src="$DR_TMP/someone-elses-codex"
     mkdir -p "$src/memories"
     printf 'theirs\n'          > "$src/memories/MEMORY.md"
@@ -533,8 +536,8 @@ seed_codex() {
     run dr-mem import --yes --source "$src"
     [ "$status" -eq 0 ]
     [ -f "$CODEXDIR/memories/MEMORY.md" ]
-    # The mound's own settings survive: unpack copies what it knows, not what it
-    # was given.
+    # The own configuration of the mound stays. unpack copies what it knows, not
+    # what it got.
     grep -q yolo "$CODEXDIR/config.toml"
 }
 
@@ -555,7 +558,7 @@ seed_codex() {
     seed_codex
     dr-mem export >/dev/null 2>&1
 
-    # Claude's corner of the same repo is untouched by any of that.
+    # None of that touches the part of Claude in the same repo.
     codex_store=$(dr_mem_store_dir "$REPO")
     claude_store=$(DRAUGR_AGENT=claude dr_mem_store_dir "$REPO")
     [ "$codex_store" != "$claude_store" ]
@@ -563,13 +566,13 @@ seed_codex() {
     [ ! -e "$claude_store/memory" ]
 }
 
-# --- the first dr-up of a project that has never had a session -----------------
+# --- the first dr-up of a project that never had a session ------------------
 
 @test "dr-mem import --if-empty: an empty store is not a failure" {
     setup_mound || skip "no writable Windows drive path"
-    # No store at all: DRAUGR_MEM_SYNC=auto runs this on every dr-up, and the
-    # very first one used to print "auto memory import failed" at somebody who
-    # had done nothing wrong.
+    # No store. DRAUGR_MEM_SYNC=auto runs this at each dr-up. Before, the very
+    # first one printed "auto memory import failed" to a person who did nothing
+    # wrong.
     run dr-mem import --if-empty --yes
     [ "$status" -eq 0 ]
     [[ "$output" != *"failed"* ]]

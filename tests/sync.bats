@@ -1,9 +1,10 @@
 #!/usr/bin/env bats
-# The daily loop: dr-sync, dr-log, dr-diff, dr-merge, and dr-rm's safety check.
+# The daily loop: dr-sync, dr-log, dr-diff, dr-merge, and the safety test of
+# dr-rm.
 #
-# There is no sandbox here. `dr_fake_mound` uses git's url.<base>.insteadOf to
-# point ssh://<name>.sbx/<path> at a local clone, so the fetch, the ref names and
-# the commit counting are all genuine - only the transport is substituted.
+# There is no sandbox here. `dr_fake_mound` uses url.<base>.insteadOf of git to
+# point ssh://<name>.sbx/<path> at a local clone. Thus the fetch, the ref names
+# and the commit count are all real. Only the transport is different.
 
 load helper
 
@@ -23,8 +24,8 @@ teardown() { dr_test_teardown; }
 @test "dr-sync: creates the draugr remote pointing at ssh://" {
     run dr-sync
     [ "$status" -eq 0 ]
-    # `git remote get-url` applies insteadOf rewriting and would show the local
-    # stand-in; the raw config value is what Draugr actually wrote.
+    # `git remote get-url` applies the insteadOf rewrite, and shows the local
+    # stand-in. The raw configuration value is what Draugr wrote.
     run git config remote.draugr.url
     [[ "$output" == "ssh://$SANDBOX.sbx/"* ]]
 }
@@ -65,7 +66,7 @@ teardown() { dr_test_teardown; }
     dr_mound_commit "$MOUND" "later, unfetched"
     run dr-sync --no-fetch
     [ "$status" -eq 0 ]
-    # Still reports the first commit, but cannot know about the second.
+    # Still reports the first commit, but cannot know the second.
     [[ "$output" != *"later, unfetched"* ]]
 }
 
@@ -95,8 +96,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr-sync: --check-only is 2 when the mound cannot be reached" {
-    # Break the URL rewrite so the fetch has nowhere to go. Unreachable must not
-    # be reported as "nothing to lose".
+    # Break the URL rewrite, so that the fetch has no target. Unreachable must
+    # not be reported as "nothing to lose".
     git config --unset-all "url.$MOUND.insteadOf"
     git config "url.$DR_TMP/does-not-exist.insteadOf" "ssh://$SANDBOX.sbx${REPO#/mnt}"
     run dr-sync --check-only
@@ -129,7 +130,8 @@ teardown() { dr_test_teardown; }
     git add -A && git commit -qm "host commit"
     dr-sync >/dev/null 2>&1
     run dr-diff
-    # The agent's file appears; the host-only file must NOT appear as a deletion.
+    # The file of the agent shows. The file only on the host must NOT show as a
+    # deletion.
     [[ "$output" == *"agent.txt"* ]]
     [[ "$output" != *"host-only.txt"* ]]
 }
@@ -169,8 +171,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr-merge: --pick takes one commit" {
-    # Distinct words, not "wanted"/"unwanted" - --grep is a substring match and
-    # the second would match both.
+    # Different words, not "wanted"/"unwanted". --grep is a substring match, and
+    # the second matches both.
     dr_mound_commit "$MOUND" "keepthis"
     dr_mound_commit "$MOUND" "discardthis"
     dr-sync >/dev/null 2>&1
@@ -189,7 +191,7 @@ teardown() { dr_test_teardown; }
     dr_mound_commit "$MOUND"
     run dr-rm --yes
     [ "$status" -ne 0 ]
-    [[ "$output" == *"not fetched"* ]]
+    [[ "$output" == *"did not fetch"* ]]
     [[ "$output" == *"dr-sync"* ]]
 }
 
@@ -209,8 +211,9 @@ teardown() { dr_test_teardown; }
 # --- the whole loop ----------------------------------------------------------
 
 @test "the README's daily loop, end to end" {
-    # dr-go is the only step that needs a terminal, so the agent's commit is
-    # made directly in the stand-in mound; everything after it is verbatim.
+    # dr-go is the only step that needs a terminal. Thus the test makes the
+    # commit of the agent directly in the stand-in mound. All later steps are
+    # real.
     dr_mound_commit "$MOUND" "the agent's contribution"
 
     dr-sync  >/dev/null 2>&1
@@ -219,31 +222,32 @@ teardown() { dr_test_teardown; }
     run dr-merge
     [ "$status" -eq 0 ]
 
-    # The agent's commit is now on the host branch, by hash, with its authorship.
+    # The commit of the agent is now on the host branch, by hash, with its
+    # author.
     run git log -1 --format='%an %s'
     [[ "$output" == "Agent the agent's contribution" ]]
 }
 
 # --- branches the agent invented ----------------------------------------------
 #
-# The remote refspec is +refs/heads/*, so dr-sync always fetched EVERY branch.
-# Only the report was narrow - it looked at draugr/$DRAUGR_BRANCH and nothing
-# else. An agent that works on a branch of its own is ordinary behaviour, and it
-# made a whole session's work appear to vanish: the commits were on the host's
-# disk while dr-sync, dr-log and dr-status all said there was nothing there.
+# The remote refspec is +refs/heads/*, so dr-sync always fetched ALL branches.
+# Only the report was narrow. It looked at draugr/$DRAUGR_BRANCH and nothing
+# else. Agents often work on a branch of their own. Then the work of a full
+# session seemed to disappear. The commits were on the disk of the host, but
+# dr-sync, dr-log and dr-status all said that nothing was there.
 #
-# Worse, --check-only asked about that one branch too, and dr-rm believes it
-# before destroying a mound.
+# Worse, --check-only also asked only about that branch, and dr-rm believes it
+# before it destroys a mound.
 
-# The agent inventing a branch name, which is what agents habitually do.
+# The agent makes up a branch name, as agents usually do.
 mound_branch_commit() {
     git -C "$MOUND" checkout -q -b "$1" 2>/dev/null || git -C "$MOUND" checkout -q "$1"
     dr_mound_commit "$MOUND" "${2:-work on $1}"
 }
 
 @test "dr-sync: does not double-report the branch it already tracks" {
-    # The tracked branch is reported as "ahead". Listing it a second time under
-    # "not tracking" would make the ordinary case look like the alarming one.
+    # The tracked branch is reported as "ahead". A second listing under "not
+    # tracking" makes the normal case look like the alarming one.
     dr_mound_commit "$MOUND" "on the tracked branch"
     run dr-sync
     [[ "$output" == *"1 new commit(s)"* ]]
@@ -252,8 +256,8 @@ mound_branch_commit() {
 }
 
 @test "dr-sync: silent about other branches when the agent stayed on one" {
-    # A report that fires on every session is one people stop reading, and this
-    # one has to be believed on the day it matters.
+    # People stop reading a report that shows on each session. This report must
+    # be believed on the day that it is important.
     dr_mound_commit "$MOUND" "ordinary work"
     run dr-sync
     [[ "$output" != *"tracking"* ]]
@@ -264,7 +268,7 @@ mound_branch_commit() {
     run dr-sync
     [ "$status" -eq 0 ]
     [[ "$output" == *"sbx-kit-lua-deps"* ]]
-    [[ "$output" == *"NOT tracking"* ]]
+    [[ "$output" == *"do NOT track"* ]]
 }
 
 @test "dr-sync: tells you how to review it, and the hint works" {
@@ -272,16 +276,16 @@ mound_branch_commit() {
     run dr-sync
     [[ "$output" == *"DRAUGR_BRANCH=feature-x dr-diff"* ]]
 
-    # The suggestion has to be paste-able: DRAUGR_BRANCH is an ordinary config
-    # key, so the environment overrides it for one command and no new flag is
-    # needed. If this breaks, the report is pointing at nothing.
+    # You must be able to paste the suggestion. DRAUGR_BRANCH is a normal
+    # configuration key, so the environment overrides it for one command, with
+    # no new flag. If this breaks, the report points at nothing.
     DRAUGR_BRANCH=feature-x run dr-log
     [ "$status" -eq 0 ]
     [[ "$output" == *"work on feature-x"* ]]
 }
 
 @test "dr-sync: says the commits are already on your disk" {
-    # The sentence that would have saved a day: they are fetched, not stranded.
+    # This sentence can save a day: they are fetched, not lost.
     mound_branch_commit feature-x
     run dr-sync
     [[ "$output" == *"already fetched"* ]]
@@ -289,16 +293,15 @@ mound_branch_commit() {
 
 # --- the remote's own HEAD -----------------------------------------------------
 #
-# git 2.49 made `git fetch` create refs/remotes/<remote>/HEAD by default
+# Since git 2.49, `git fetch` creates refs/remotes/<remote>/HEAD by default
 # (remote.<name>.followRemoteHEAD=create). That ref shortens to "draugr", not
-# "draugr/HEAD", so the guard that skips it missed it entirely and every sync on
-# a new-enough git reported the branch you are already on as one you are not
-# tracking. It is created here by hand rather than by fetching, so these say the
-# same thing on git 2.43 and on 2.49 - otherwise the test only fails on the
-# machines that already have the bug.
+# "draugr/HEAD". The guard that skips it missed it. Thus each sync on a new git
+# reported your current branch as a branch that you do not track. The test makes
+# the ref by hand, not by a fetch. Thus the tests give the same result on git
+# 2.43 and on 2.49. If not, the test fails only on the machines with the bug.
 
-# git points the ref at whatever the mound has checked out, which is the branch
-# the agent has just been working on - so the argument matters.
+# git points the ref at the checkout of the mound. That is the branch where the
+# agent worked last. Thus the argument is important.
 mound_head_ref() {
     git symbolic-ref refs/remotes/draugr/HEAD "refs/remotes/draugr/${1:-main}"
 }
@@ -313,8 +316,8 @@ mound_head_ref() {
 }
 
 @test "dr-sync: the remote's HEAD does not take the review hint" {
-    # The refs sort by full name, so refs/remotes/draugr/HEAD came FIRST and the
-    # hint named it instead of the branch there is actually something to review.
+    # The refs sort by full name. Thus refs/remotes/draugr/HEAD came FIRST, and
+    # the hint named it, not the branch with work to review.
     mound_branch_commit feature-x
     dr-sync >/dev/null 2>&1
     mound_head_ref feature-x
@@ -323,8 +326,8 @@ mound_head_ref() {
 }
 
 @test "dr-status: the remote's own HEAD is not listed there either" {
-    # The same helper, the second caller: dr-status reported the phantom branch
-    # in its own table, with a DRAUGR_BRANCH=draugr hint that goes nowhere.
+    # The same helper, the second caller. dr-status reported the false branch in
+    # its own table, with a DRAUGR_BRANCH=draugr hint that goes nowhere.
     dr_mound_commit "$MOUND" "on the tracked branch"
     dr-sync >/dev/null 2>&1
     mound_head_ref
@@ -333,20 +336,20 @@ mound_head_ref() {
 }
 
 @test "dr-sync: an invented branch is a warning when the tracked one is empty" {
-    # "nothing new in the mound" immediately followed by a quiet note would read
-    # as reassurance. When the tracked branch has nothing, this IS the news.
+    # "nothing new in the mound" with a quiet note after it reads as "all good".
+    # When the tracked branch has nothing, this IS the news.
     mound_branch_commit feature-x
     run dr-sync
     [[ "$output" == *"nothing new in the mound"* ]]
-    [[ "$output" == *"NOT tracking"* ]]
+    [[ "$output" == *"do NOT track"* ]]
 }
 
 # --- the hole dr-rm trusted ---------------------------------------------------
 
 @test "dr-sync --check-only: 1 when work exists only on another branch" {
-    # The guard had a hole exactly where agents actually behave: it asked the
-    # mound about refs/heads/$DRAUGR_BRANCH and nothing else, so this answered
-    # "nothing to lose" while two commits sat on a branch of the agent's own.
+    # The guard had a hole exactly where agents really work. It asked the mound
+    # only about refs/heads/$DRAUGR_BRANCH. Thus it answered "nothing to lose",
+    # while two commits were on a branch of the agent.
     mound_branch_commit feature-x
     run dr-sync --check-only
     [ "$status" -eq 1 ]
@@ -375,8 +378,8 @@ mound_head_ref() {
 # --- reporting without a mound ------------------------------------------------
 
 @test "dr-sync --no-fetch: works after the mound is gone" {
-    # The moment you most want this report - after dr-rm, asking "what did I
-    # keep?" - was the one moment it refused to answer.
+    # You most need this report after dr-rm, when you ask "what did I keep?".
+    # At that time, it refused to answer.
     mound_branch_commit feature-x
     dr-sync >/dev/null 2>&1
     DR_MOCK_STATE=absent run dr-sync --no-fetch
@@ -385,7 +388,7 @@ mound_head_ref() {
 }
 
 @test "dr-sync: still refuses to FETCH from a mound that is gone" {
-    # Only the reporting was loosened; fetching genuinely needs a sandbox.
+    # Only the report needs no mound now. A fetch really needs a sandbox.
     DR_MOCK_STATE=absent run dr-sync
     [ "$status" -ne 0 ]
     [[ "$output" == *"--no-fetch"* ]]
@@ -401,7 +404,7 @@ mound_head_ref() {
 
 @test "dr-status: the command it suggests has no stray count in it" {
     # "DRAUGR_BRANCH=feature-x 2 dr-diff" is not a command. The line is
-    # "<ref> <count>", so both halves have to be split off before use.
+    # "<ref> <count>", so the code must split the two halves before use.
     mound_branch_commit feature-x
     dr-sync >/dev/null 2>&1
     run dr-status
@@ -410,18 +413,18 @@ mound_head_ref() {
 
 # --- delivered, but not merged -----------------------------------------------
 #
-# dr-send leaves your commits at refs/remotes/host/<branch> INSIDE the mound and
-# deliberately does not move the agent's branch. draugr/<branch> therefore stays
-# behind afterwards, which used to make dr-sync answer "send them with dr-send"
-# for ever: you sent, it still said send, re-sending was a no-op, and there was
-# no way out of the loop from the messages alone.
+# dr-send puts your commits at refs/remotes/host/<branch> INSIDE the mound. On
+# purpose, it does not move the branch of the agent. Thus draugr/<branch> stays
+# behind. Before, dr-sync then always said "send them with dr-send". You sent,
+# it still said send, and a second send did nothing. The messages gave no way
+# out of the loop.
 #
-# The mound's own host/* refs are mirrored into refs/draugr/sent/* so the host can
-# tell the two states apart. These assert on what the commands SAY, because that
-# is the thing that was wrong - the internals are reached through them.
+# The host/* refs of the mound are copied into refs/draugr/sent/*, so that the
+# host can tell the two states apart. These tests assert on what the commands
+# SAY, because that was wrong. The tests reach the internals through them.
 
-# What dr-send does, minus the sbx: put the host branch on the mound's
-# refs/remotes/host/. The mound's own main is deliberately left where it was.
+# What dr-send does, without the sbx: put the host branch on refs/remotes/host/
+# of the mound. On purpose, the own main of the mound does not move.
 deliver() { git -C "$MOUND" fetch -q "$REPO" "main:refs/remotes/host/main"; }
 
 host_commit() {
@@ -432,7 +435,7 @@ host_commit() {
 @test "dr-sync: says send when the mound has never seen them" {
     host_commit
     run dr-sync
-    [[ "$output" == *"send them with"* ]]
+    [[ "$output" == *"Send them with"* ]]
     [[ "$output" != *"not merged"* ]]
 }
 
@@ -453,13 +456,13 @@ host_commit() {
 }
 
 @test "dr-sync: a commit made AFTER the send is unsent again" {
-    # Ancestry, not equality. Delivering once must not make everything committed
-    # afterwards look delivered too.
+    # Ancestry, not equality. After one delivery, later commits must not also
+    # look delivered.
     host_commit first
     deliver
     host_commit second
     run dr-sync
-    [[ "$output" == *"send them with"* ]]
+    [[ "$output" == *"Send them with"* ]]
     [[ "$output" != *"not merged"* ]]
 }
 
@@ -476,14 +479,14 @@ host_commit() {
     host_commit
     dr-sync >/dev/null 2>&1
     run dr-status
-    [[ "$output" == *"not in draugr/main - dr-send"* ]]
+    [[ "$output" == *"not in draugr/main. Use dr-send."* ]]
     [[ "$output" != *"delivered"* ]]
 }
 
 @test "the mirrored ref is not mistaken for a branch to review" {
-    # refs/draugr/sent/* is deliberately outside refs/remotes/: everything there
-    # means "a branch in the mound", and this is the mound's copy of OUR branch.
-    # Under refs/remotes it would be reported as unreviewed agent work.
+    # refs/draugr/sent/* is outside refs/remotes/, on purpose. All refs there
+    # mean "a branch in the mound", and this is the copy of OUR branch in the
+    # mound. Under refs/remotes, it shows as agent work with no review.
     host_commit
     deliver
     dr-sync >/dev/null 2>&1
@@ -501,11 +504,11 @@ host_commit() {
     [ "$(git -C "$REPO" config --get-all remote.draugr.fetch | grep -c 'draugr/sent')" -eq 1 ]
 }
 
-# The mound can be removed while commits sit ahead of the tracking ref, and the
-# ref survives on purpose - it is the only copy of anything the agent committed.
-# But it then describes a mound that is gone, and the advice attached to it was
-# `dr-send`, which refuses without one. The screen was identical before and
-# after, so the only way to learn it was pointless was to try it twice.
+# You can remove the mound while commits are ahead of the tracking ref. The ref
+# stays, on purpose, because it is the only copy of the commits of the agent.
+# But it then describes a mound that is gone. Its advice was `dr-send`, which
+# refuses without a mound. The screen was the same before and after. Thus you
+# learned that it was useless only after two tries.
 @test "dr-status: with no mound, does not tell you to dr-send" {
     host_commit
     dr-sync >/dev/null 2>&1
@@ -522,20 +525,20 @@ host_commit() {
     [[ "$output" == *"dr-up clones them into the new mound"* ]]
 }
 
-# The absent case must not swallow the ordinary one: with a mound there, the
-# advice is still dr-send.
+# The absent case must not hide the normal one. With a mound, the advice is
+# still dr-send.
 @test "dr-status: with a mound, dr-send is still the answer" {
     host_commit
     dr-sync >/dev/null 2>&1
     host_commit second
     run dr-status
-    [[ "$output" == *"not in draugr/main - dr-send"* ]]
+    [[ "$output" == *"not in draugr/main. Use dr-send."* ]]
 }
 
-# A staged mode change reads as "M  file" in git's own output, exactly like a
-# rewrite. On a /mnt/c checkout with core.fileMode=false it cannot have come from
-# `git add` at all, so the natural reading - "I edited that" - is wrong, and the
-# file it names looks untouched when you open it.
+# In the output of git, a staged mode change reads as "M  file", exactly as a
+# rewrite does. On a /mnt/c checkout with core.fileMode=false, `git add` cannot
+# make it. Thus the usual reading, "I edited that", is wrong. When you open the
+# named file, it looks unchanged.
 @test "dr-merge: a mode-only change is named as one, not as an edit" {
     dr_mound_commit "$MOUND"
     dr-sync >/dev/null 2>&1
@@ -555,7 +558,7 @@ host_commit() {
     [[ "$output" == *"git restore --staged"* ]]
 }
 
-# The note must not appear on an ordinary edit, or it would be worse than none.
+# The note must not show on a normal edit. If it does, it is worse than no note.
 @test "dr-merge: a real edit gets no mode note" {
     dr_mound_commit "$MOUND"
     dr-sync >/dev/null 2>&1

@@ -1,7 +1,7 @@
 # Setup
 
-From a machine with nothing installed to a working session. Follow this in order; `dr-doctor`
-checks each step and names the fix for anything missing.
+From a machine with nothing installed to a working session. Do these steps in order. `dr-doctor`
+tests each step, and names the fix for each missing part.
 
 ## What you need
 
@@ -9,10 +9,10 @@ checks each step and names the fix for anything missing.
 |---|---|
 | Windows 11 Pro, x86_64 | with the Hypervisor Platform feature enabled |
 | WSL2 | Draugr runs here. Ubuntu tested. |
-| `sbx` ≥ 0.37 | Docker Desktop is **not** required |
+| `sbx` ≥ 0.37 | Docker Desktop is **not** necessary |
 | git ≥ 2.40 | on both sides |
-| `jq` | (WSL) `sudo apt install jq` — Draugr parses `sbx ls --json` with it rather than by hand |
-| A repo on a Windows drive | see [the constraint](#why-your-repo-must-live-under-mntdrive) below |
+| `jq` | (WSL) `sudo apt install jq`. Draugr parses `sbx ls --json` with it, not by hand |
+| A repo on a Windows drive | refer to [the constraint](#why-your-repo-must-live-under-mntdrive) below |
 
 ## 1. Enable the hypervisor
 
@@ -23,7 +23,8 @@ dism.exe /online /enable-feature /featurename:HypervisorPlatform /all /norestart
 dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
 ```
 
-Reboot. Skipping the reboot is the commonest reason `sbx` later reports that it cannot start a VM.
+Reboot. If you skip the reboot, `sbx` later reports that it cannot start a VM. That is the most
+common cause of that error.
 
 ## 2. Install sbx
 
@@ -40,8 +41,8 @@ sbx version          # expect 0.37.1 or newer
 sbx login            # sign in to Docker
 ```
 
-The daemon starts on demand; you do not need to run it yourself. `sbx diagnose` is worth knowing
-about if anything looks wrong at this stage — it checks the host configuration Draugr cannot.
+The daemon starts on demand. You do not need to start it yourself. If something looks wrong at this
+stage, use `sbx diagnose`. It tests the host configuration, which Draugr cannot do.
 
 ## 3. Install Draugr
 
@@ -53,8 +54,8 @@ echo 'export PATH="$HOME/draugr/bin:$PATH"' >> ~/.bashrc
 exec bash
 ```
 
-There is no build step and no dependencies beyond `git`, `jq` and `rsync`. Every command is a bash
-script you can read in full — which, for a tool whose premise is containment, is the point.
+There is no build step, and no dependencies except `git`, `jq` and `rsync`. Each command is a bash
+script that you can read fully. For a tool that is about containment, that is the purpose.
 
 ## 4. Teach WSL how to reach sandboxes
 
@@ -62,17 +63,17 @@ script you can read in full — which, for a tool whose premise is containment, 
 dr-setup
 ```
 
-**This is the step people miss.** `sbx setup ssh` configures the *Windows* SSH client only. WSL has
-its own `~/.ssh/config`, and without the matching block neither `ssh <name>.sbx` nor the `ssh://`
-git transport works from WSL — which is how `dr-sync` moves the agent's commits to you.
+**People often forget this step.** `sbx setup ssh` sets up only the *Windows* SSH client. WSL has
+its own `~/.ssh/config`. Without the matching block, neither `ssh <name>.sbx` nor the `ssh://` git
+transport works from WSL. `dr-sync` uses that transport to move the commits of the agent to you.
 
-`dr-setup` writes the block with your Windows username filled in. It is idempotent, and
-`dr-setup --print` shows what it would write without writing it.
+`dr-setup` writes the block, with your Windows username in it. It is idempotent.
+`dr-setup --print` shows what it writes, and does not write it.
 
-It also creates [`DRAUGR_KIT_STORE`](CONFIG.md#draugr_kit_store) — `~/.config/draugr/kits` by
-default — your library of named kits. These are the two machine-level things Draugr needs;
-everything after this is per-repository. The library starts empty, and `dr-kit save <name>` from any
-project puts a reusable kit in it.
+It also creates [`DRAUGR_KIT_STORE`](CONFIG.md#draugr_kit_store) (by default
+`~/.config/draugr/kits`), your library of named kits. These are the two things that Draugr needs for
+the machine. All steps after this are for each repository. The library starts empty.
+`dr-kit save <name>` in any project puts a reusable kit in it.
 
 ## 5. Check everything
 
@@ -80,11 +81,11 @@ project puts a reusable kit in it.
 dr-doctor
 ```
 
-It verifies each precondition and prints the exact command to fix whatever is missing: the
-hypervisor, `sbx` and its version, the daemon, `jq`, `rsync`, the SSH config on both sides, and
-whether your current directory is usable.
+It tests each condition, and prints the exact command to fix each missing part: the hypervisor,
+`sbx` and its version, the daemon, `jq`, `rsync`, the SSH configuration on both sides, and whether
+your current directory is usable.
 
-Do not continue past a red line here. Every one of them turns into a confusing failure later.
+Do not continue past a red line here. Each one causes a confusing failure later.
 
 ---
 
@@ -95,16 +96,17 @@ cd /mnt/c/src/myproject
 dr-init
 ```
 
-This writes three things and touches nothing else:
+This writes three things, and touches nothing else:
 
-- **`.draugr.conf`** — the project's settings. Commit it; it is how a teammate gets the same
-  sandbox you have.
-- **`.draugr/kit/spec.yaml`** — a starter [kit](https://docs.docker.com/ai/sandboxes/customize/kits/)
-  declaring the network rules and setup commands for the *inside* of the mound. Commit it too.
-- **`.gitignore` entries** — for the per-user config and Draugr's own per-checkout bookkeeping.
+- **`.draugr.conf`**: the configuration of the project. Commit it. That is how a teammate gets the
+  same sandbox as you.
+- **`.draugr/kit/spec.yaml`**: a starter [kit](https://docs.docker.com/ai/sandboxes/customize/kits/).
+  It declares the network rules and setup commands for the *inside* of the mound. Commit it too.
+- **`.gitignore` entries**: for the configuration of the user, and the own records of Draugr for
+  each checkout.
 
-Then edit the kit. This is where `npm ci`, `uv sync` and `apt-get install -y libfoo-dev` go, along
-with the domains your build needs:
+Then edit the kit. Put `npm ci`, `uv sync` and `apt-get install -y libfoo-dev` there, with the
+domains that your build needs:
 
 ```yaml
 caps:
@@ -117,51 +119,51 @@ commands:
       user: "1000"
 ```
 
-> **Your kit is not the whole allowlist.** `sbx` ships ~190 machine-wide allow rules covering package
+> **Your kit is not the full allowlist.** `sbx` has ~190 machine allow rules. They cover package
 > managers, OS packages, the common code hosts and the AI endpoints. `npm`, `pip` and `github.com`
-> already work without appearing in any kit; what you write is *added* to that set. `dr-policy`
-> shows everything in force with its source. See [SECURITY.md](SECURITY.md#the-network-policy).
+> already work with no kit. What you write is *added* to that set. `dr-policy` shows all rules in
+> force, with their source. Refer to [SECURITY.md](SECURITY.md#the-network-policy).
 
-Finally:
+Last:
 
 ```bash
 dr-go
 ```
 
-First run creates the mound, applies the kit, runs your install commands, imports memory, and drops
-you into the agent. Later runs just attach.
+The first run creates the mound, applies the kit, runs your install commands, imports memory, and
+starts the agent. Later runs only attach.
 
 ---
 
 ## Working in a directory that is not a repository
 
-Clone mode requires a git repository, so Draugr refuses a plain directory by default rather than
-silently falling back to something less safe. If what you have is a folder of documents or data:
+Clone mode needs a git repository. Thus by default, Draugr refuses a plain directory, and does not
+silently use a less safe mode. For a folder of documents or data:
 
 ```bash
 DRAUGR_ON_MISSING_REPO=create-data-only dr-init
 ```
 
-That creates a repository that tracks nothing — its `.gitignore` is a single `*` — and sets
-`DRAUGR_DATA="*"` so every file travels by `dr-data` instead. `git status` stays empty forever, so
-the dirty-tree check can never fire. See [`DRAUGR_ON_MISSING_REPO`](CONFIG.md#draugr_on_missing_repo).
+That creates a repository that tracks nothing, because its `.gitignore` is a single `*`. It also
+sets `DRAUGR_DATA="*"`, so that each file travels by `dr-data`. `git status` stays empty forever, so
+the dirty-tree test never fires. Refer to
+[`DRAUGR_ON_MISSING_REPO`](CONFIG.md#draugr_on_missing_repo).
 
 ---
 
 ## Why your repo must live under `/mnt/<drive>/`
 
-`sbx.exe` is a Windows binary and its workspaces are Windows paths. A repository on WSL's own ext4
-filesystem (`~/code/myproject`) has no path `sbx` can mount, so Draugr refuses it with a clear error
-rather than failing mysteriously later.
+`sbx.exe` is a Windows binary, and its workspaces are Windows paths. A repository on the ext4
+filesystem of WSL (`~/code/myproject`) has no path that `sbx` can mount. Thus Draugr refuses it with
+a clear error, and does not fail in a strange way later.
 
-The cost is that WSL reaches `/mnt/c` through a translation layer, so the git operations Draugr runs
-from WSL — `status`, `diff`, `fetch` — are slower on a large repo than they would be on ext4.
-Reaching the same files from Windows is native NTFS access and costs nothing, so a Windows-side
-editor is unaffected. The agent's clone lives on ext4 *inside* the microVM, so the side doing the
-compiling is unaffected either way.
+The cost: WSL reaches `/mnt/c` through a translation layer. Thus the git operations that Draugr runs
+from WSL (`status`, `diff`, `fetch`) are slower on a large repo than on ext4. From Windows, the same
+files are native NTFS, with no extra cost. Thus a Windows editor is not affected. The clone of the
+agent is on ext4 *inside* the microVM, so the compile side is not affected either.
 
-Mapping a drive letter to a WSL path with `subst` does not work around this; it was tested and the
-full sequence is in [DESIGN.md](DESIGN.md#repos-on-ext4-via-a-subst-drive).
+A drive letter mapped to a WSL path with `subst` does not solve this. We tested it, and the full
+sequence is in [DESIGN.md](DESIGN.md#repos-on-ext4-via-a-subst-drive).
 
 ---
 
@@ -171,13 +173,13 @@ full sequence is in [DESIGN.md](DESIGN.md#repos-on-ext4-via-a-subst-drive).
 dr-code
 ```
 
-Opens VS Code with a Remote-SSH connection into the sandbox, on the agent's clone. You get a normal
-editor over the code the agent is actually working on, while `dr-go` runs the agent itself in your
+Opens VS Code with a Remote-SSH connection into the sandbox, on the clone of the agent. You get a
+normal editor on the code that the agent works on, while `dr-go` runs the agent itself in your
 terminal.
 
-The two-window model is worth adopting deliberately: **the mound window edits the clone, your host
-window edits your tree.** They are different repositories, and saving in the wrong one is the
-mistake to watch for. `dr-status` always tells you which commits are where.
+Use the two-window model on purpose: **the mound window edits the clone, and your host window edits
+your tree.** They are different repositories. Watch for a save in the wrong one. `dr-status` always
+tells you which commits are where.
 
-Requires the Remote-SSH extension and a working `dr-setup`, since it uses the same `*.sbx` host
+It needs the Remote-SSH extension and a working `dr-setup`, because it uses the same `*.sbx` host
 block.

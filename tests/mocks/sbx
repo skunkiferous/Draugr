@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# A stand-in for sbx.exe. Records its argv so tests can assert on the command
-# line Draugr built, and replays canned output. Never touches a hypervisor.
+# A stand-in for sbx.exe. Records its argv, so that tests can assert on the
+# command line that Draugr built. Replays fixed output. Never uses a hypervisor.
 #
 #   DR_MOCK_LOG    file to append the argv to (one invocation per line)
-#   DR_MOCK_STATE  what 'ls --json' should report: absent|stopped|running
-#   DR_MOCK_STATES per-name overrides for it: "gw=running app=stopped"
-#   DR_MOCK_FAIL   exit non-zero for any subcommand named here
-#   DR_MOCK_MOUND  a directory standing in for the mound's filesystem. When set,
-#                  'exec' and 'cp' stop pretending and really run, against that
-#                  tree - so dr-mem's project keys, listings and cp arguments are
-#                  exercised for real rather than asserted about. Same reasoning
-#                  as dr_fake_mound doing an honest git fetch.
+#   DR_MOCK_STATE  what 'ls --json' reports: absent|stopped|running
+#   DR_MOCK_STATES overrides for it by name: "gw=running app=stopped"
+#   DR_MOCK_FAIL   exit non-zero for each subcommand named here
+#   DR_MOCK_MOUND  a directory that acts as the filesystem of the mound. When
+#                  set, 'exec' and 'cp' really run, against that tree. Thus the
+#                  project keys, listings and cp arguments of dr-mem really run.
+#                  The reason is the same as for the real git fetch of
+#                  dr_fake_mound.
 set -euo pipefail
 
 if [ -n "${DR_MOCK_LOG:-}" ]; then
@@ -19,10 +19,10 @@ fi
 
 sub=${1:-}
 
-# When DR_MOCK_DAEMON_ERR is set, a create writes it into a daemon.log at exactly
-# the path dr_sbx_daemon_log computes from this binary's own location. That is
-# how the real sandboxd records the cause of a failure sbx itself reports as a
-# bare 500, so the reading of it can be exercised end to end.
+# When DR_MOCK_DAEMON_ERR is set, a create writes it into a daemon.log, at the
+# path that dr_sbx_daemon_log gets from the location of this binary. The real
+# sandboxd records there the cause of a failure that sbx reports as a bare 500.
+# Thus a test can exercise the full read of it.
 if [ -n "${DR_MOCK_DAEMON_ERR:-}" ] && [ "$sub" = create ]; then
     _root=$(dirname "$(dirname "$0")")
     mkdir -p "$_root/sandboxes/state/sandboxd"
@@ -36,17 +36,16 @@ case " ${DR_MOCK_FAIL:-} " in
 esac
 
 case "$sub" in
-# A version string new enough to satisfy dr-doctor's >= 0.37 check.
+# A version string that passes the >= 0.37 test of dr-doctor.
 version)
     printf 'Docker Sandboxes version 0.37.1\n'
     ;;
 
-# The only output any test actually parses. DR_MOCK_STATE=absent yields an empty
-# list; anything else yields one sandbox per name in that state.
+# The only output that a test parses. DR_MOCK_STATE=absent gives an empty list.
+# Other values give one sandbox for each name, in that state.
 #
-# DR_MOCK_NAMES (space separated) stands in for a machine running several at
-# once, which is what dr-stop --all is about and what a single-sandbox mock
-# could not express.
+# DR_MOCK_NAMES (space separated) acts as a machine that runs several at once.
+# dr-stop --all is about that case, and a mock with one sandbox cannot show it.
 ls)
     state=${DR_MOCK_STATE:-stopped}
     if [ "$state" = absent ]; then
@@ -56,15 +55,15 @@ ls)
         printf '{\n  "sandboxes": [\n'
         _sep=
         for _n in "${_names[@]}"; do
-            # DR_MOCK_STATES overrides DR_MOCK_STATE per name, as
-            # "name=running other=stopped". One machine-wide state cannot
-            # express a dependency that is up while its consumer is not, which
-            # is the whole subject of dr-dep.
-            # Padded in the expansion as well as in the test: without the
-            # leading space, "${DR_MOCK_STATES##*" name="}" does not match the
-            # FIRST entry and hands back the whole string, which then reads as a
-            # status. Measured the hard way - it made a test pass for the wrong
-            # reason before it made one fail.
+            # DR_MOCK_STATES overrides DR_MOCK_STATE by name, as
+            # "name=running other=stopped". One state for the full machine
+            # cannot show a dependency that runs while its consumer does not.
+            # That is the full subject of dr-dep.
+            # Padded in the expansion and in the test. Without the leading
+            # space, "${DR_MOCK_STATES##*" name="}" does not match the FIRST
+            # entry, and gives back the full string. That string then reads as
+            # a status. A real failure showed this. It made a test pass for the
+            # wrong reason, and later made one fail.
             _s=$state
             _pad=" ${DR_MOCK_STATES:-} "
             case "$_pad" in
@@ -88,19 +87,18 @@ EOF
     fi
     ;;
 # With DR_MOCK_MOUND set, run the command for real against that tree. Absolute
-# arguments are rewritten into it, which is how "/home/agent/.claude/..." becomes
-# a directory this process may actually create. The script itself is passed
-# through untouched: it is meant for the mound's shell, and rewriting inside it
-# would be guessing at its syntax.
+# arguments move into it. Thus "/home/agent/.claude/..." becomes a directory
+# that this process can create. The script itself goes through unchanged. It is
+# for the shell of the mound, and a rewrite inside it guesses at its syntax.
 exec)
     if [ -z "${DR_MOCK_MOUND:-}" ]; then
         printf 'mock sbx: %s\n' "$*"
         exit 0
     fi
     shift                              # "exec"
-    # Flags come before the sandbox name, exactly as they do for real sbx. -u
-    # root is the one Draugr passes; the rest are listed so that where this mock
-    # thinks the sandbox name starts cannot drift from where sbx thinks it does.
+    # Flags come before the sandbox name, as for the real sbx. Draugr passes -u
+    # root. The others are listed, so that this mock and sbx always agree on
+    # where the sandbox name starts.
     while [ $# -gt 0 ]; do
         case "$1" in
             -u|--user|-e|--env|--env-file|-w|--workdir|--detach-keys) shift 2 ;;
@@ -111,9 +109,9 @@ exec)
     shift                              # the sandbox name
     if [ "${1:-}" = -- ]; then shift; fi   # the optional separator
 
-    # Only absolute arguments are rewritten. A script body, a flag or a relative
-    # word is passed through as typed - the mound's paths are the things that
-    # have to land inside the stand-in tree, and nothing else is ours to touch.
+    # Only absolute arguments change. A script body, a flag or a relative word
+    # goes through as typed. Only the paths of the mound must go into the
+    # stand-in tree. Nothing else is ours to change.
     argv=()
     for a in "$@"; do
         case "$a" in
@@ -124,8 +122,8 @@ exec)
     "${argv[@]}"
     ;;
 
-# sbx cp semantics, both directions. "cp SRC DEST" with DEST an existing
-# directory places SRC *inside* it, which is plain cp -a's behaviour too.
+# The behavior of sbx cp, in both directions. If DEST is an existing directory,
+# "cp SRC DEST" puts SRC *inside* it. Plain cp -a does the same.
 cp)
     if [ -z "${DR_MOCK_MOUND:-}" ]; then
         printf 'mock sbx: %s\n' "$*"
@@ -134,17 +132,17 @@ cp)
     shift
 
     # Three kinds of argument, and the first two both contain a colon:
-    #   C:\Code\x        a Windows path - exactly one letter before the colon
+    #   C:\Code\x        a Windows path, with exactly one letter before the colon
     #   name:/some/path  inside the sandbox
     #   /some/path       an ordinary host path
     #
-    # The Windows case is un-translated here rather than by sourcing common.sh:
-    # the mock reversing it independently is the point, because then a wrong
-    # dr_path_win produces a path this cannot find, instead of two matching bugs.
+    # The Windows case is translated back here, not by sourcing common.sh. The
+    # mock reverses it on its own, on purpose. Then a wrong dr_path_win gives a
+    # path that this cannot find, and not two matching bugs.
     translate() {
-        # In single quotes '\\' below is two characters, which tr reads as one
-        # escaped backslash - not bash escaping, hence the disable, which has to
-        # sit in front of the whole case rather than one of its branches.
+        # In single quotes, '\\' below is two characters. tr reads them as one
+        # escaped backslash. That is not bash escaping, thus the disable. It
+        # must come before the full case, not one of its branches.
         # shellcheck disable=SC1003
         case "$1" in
             [A-Za-z]:*)
@@ -163,16 +161,16 @@ cp)
     cp -a "$src" "$dst"
     ;;
 
-# The two policy reads Draugr parses rather than just prints. Everything else
-# about `policy` still falls through to the recorder below.
+# The two policy reads that Draugr parses, and does not only print. All other
+# `policy` calls go to the recorder below.
 #
 #   DR_MOCK_DENIED   space-separated hosts to report as blocked
 #   DR_MOCK_ADHOC    space-separated hosts allowed for this sandbox by hand
-#   DR_MOCK_MULTI    one editable rule holding SEVERAL resources, which nothing
-#                    that prunes by resource may touch
-#   DR_MOCK_KITHOST  one host allowed by the sandbox's KIT, which must never be
-#                    mistaken for an ad-hoc rule - editable:false is what tells
-#                    them apart, and that distinction is the whole of dr-kit adopt
+#   DR_MOCK_MULTI    one editable rule with SEVERAL resources. A prune by
+#                    resource must never touch it
+#   DR_MOCK_KITHOST  one host allowed by the KIT of the sandbox. It is never an
+#                    ad-hoc rule. editable:false tells them apart, and that
+#                    difference is all of dr-kit adopt
 policy)
     case "${2:-}" in
     log)
@@ -221,26 +219,25 @@ policy)
 ' "$*"
     ;;
 
-# create makes the stand-in filesystem exist, when there is one. dr-plugin builds
-# in the mound's own rootfs and copies the result back onto the workspace, so a
-# create that left DR_MOCK_MOUND absent would fail at the first exec rather than
-# at anything a test meant to check.
+# create makes the stand-in filesystem, when there is one. dr-plugin builds in
+# the rootfs of the mound, and copies the result back to the workspace. Without
+# DR_MOCK_MOUND after create, the first exec fails, not the step under test.
 create)
     printf 'mock sbx: %s\n' "$*"
-    # An `if`, not `[ ] &&`: under set -e a false test as the last command in
-    # this branch would exit 1 and fail every test that creates a sandbox.
+    # An `if`, not `[ ] &&`. Under set -e, a false test as the last command in
+    # this branch exits 1, and fails each test that creates a sandbox.
     if [ -n "${DR_MOCK_MOUND:-}" ]; then
         mkdir -p "$DR_MOCK_MOUND/home/agent"
     fi
     ;;
 
-# Everything else only ever needs to have its argv recorded: the tests assert on
-# the command line Draugr built, which is the part worth checking.
+# For all other commands, the mock only records the argv. The tests assert on
+# the command line that Draugr built, and that is the important part.
 run|stop|rm|ports|kit|skills)
     printf 'mock sbx: %s\n' "$*"
     ;;
-# Loudly, and with sbx's own exit code for an unknown command - a mock that
-# silently succeeds on a subcommand it does not model is worse than no mock.
+# Loudly, and with the exit code of sbx for an unknown command. A mock that
+# silently passes a subcommand that it does not model is worse than no mock.
 *)
     printf 'mock sbx: unhandled subcommand: %s\n' "$sub" >&2
     exit 127

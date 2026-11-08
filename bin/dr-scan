@@ -1,33 +1,34 @@
 #!/usr/bin/env bash
-# dr-scan - find what the agent could read that you did not mean to give it.
+# dr-scan: find what the agent can read, but you did not want to give it.
 #
-# Two blind spots, both measured rather than assumed (see docs/SECURITY.md):
+# Two blind spots. Tests showed both, so they are not assumptions (see
+# docs/SECURITY.md):
 #
-#   1. .gitignore hides files from git, not from the filesystem. An untracked
-#      .env is absent from the agent's clone but fully readable through the
-#      read-only mount at /run/sandbox/source. Verified: a gitignored
-#      secrets.env was read in the clear from inside a mound.
-#   2. The shared skills store is mounted READ-WRITE into every mound, is shared
-#      between them, and survives sbx rm. Its contents are loaded into agent
-#      context as instructions, so something left there by one sandbox is read
-#      by the next. A scan of what the agent can read, but not of what it can
-#      leave behind, is only half a scan.
+#   1. .gitignore hides files from git, not from the file system. An untracked
+#      .env is not in the clone of the agent, but the agent can read all of it
+#      through the read-only mount at /run/sandbox/source. A test showed this:
+#      the agent read a gitignored secrets.env as plain text inside a mound.
+#   2. Each mound mounts the shared skills store READ-WRITE. The mounds share it,
+#      and it stays after sbx rm. The agent loads its contents into context as
+#      instructions. Thus the next sandbox reads what one sandbox left there. A
+#      scan of what the agent can read, but not of what it can leave, is only
+#      half a scan.
 #
-#   dr-scan            check this repo and the skills store
+#   dr-scan            test this repo and the skills store
 #   dr-scan --skills   only the skills store
-#   dr-scan --quiet    say nothing unless something is found
+#   dr-scan --quiet    say something only if it finds something
 set -euo pipefail
 
 DR_PROG=dr-scan
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# Exit status is the interesting output here: dr-go calls this and aborts on a
-# non-zero when DRAUGR_SCAN_FAIL=block.
+# The exit status is the important output here. dr-go calls this. With
+# DRAUGR_SCAN_FAIL=block, it stops on a non-zero status.
 skills_only=
 quiet=
 while [ $# -gt 0 ]; do
@@ -44,23 +45,23 @@ dr_context
 
 found=0
 
-# --- credential-shaped files the clone will not contain ---------------------
+# --- files that look like credentials, and are not in the clone ------------
 if [ -z "$skills_only" ]; then
-    # Only untracked files matter. A committed .env is already in the clone and in
-    # your history - a different problem, and not this one.
+    # Only untracked files matter. A committed .env is already in the clone and
+    # in your history. That is a different problem.
     #
-    # `--others` alone is deliberate and easy to get wrong. Adding
-    # `--exclude-standard` would filter the gitignored files back OUT, and
-    # `--ignored --exclude-standard` lists ONLY the ignored ones - either way half
-    # the danger goes unreported. Bare `--others` is everything git is not
-    # tracking, ignored or not, which is exactly the set readable through
-    # /run/sandbox/source but absent from the clone.
+    # `--others` alone, on purpose, and that is easy to get wrong.
+    # `--exclude-standard` removes the gitignored files again, and `--ignored
+    # --exclude-standard` lists ONLY the ignored ones. In both cases, the scan
+    # does not report half of the danger. `--others` alone is all that git does
+    # not track, ignored or not. That is the set that the agent can read through
+    # /run/sandbox/source, and that is not in the clone.
     mapfile -t candidates < <(
         git -C "$DR_REPO" ls-files --others 2>/dev/null || true
     )
 
-    # Match each candidate's basename against the configured globs. `case` takes
-    # one pattern at a time, so the patterns are looped rather than joined.
+    # Compare the basename of each candidate with the configured globs. `case`
+    # takes one pattern at a time, so the code loops over the patterns.
     hits=()
     for f in "${candidates[@]+"${candidates[@]}"}"; do
         base=${f##*/}
@@ -72,61 +73,61 @@ if [ -z "$skills_only" ]; then
         done
     done
 
-    # The message spells out the mechanism, because "a secret was found" invites
-    # "but it is gitignored" - and being gitignored is exactly the problem.
+    # The message tells the mechanism. "A secret was found" invites "but it is
+    # gitignored", and gitignored is the problem.
     if [ ${#hits[@]} -gt 0 ]; then
         found=1
-        dr_warn "${#hits[@]} credential-shaped file(s) the agent could read:"
+        dr_warn "${#hits[@]} file(s) that look like credentials, and that the agent can read:"
         for f in "${hits[@]}"; do
             printf '    %s\n' "$f" >&2
         done
-        printf '  %sThese are NOT in the agent'"'"'s clone - but they ARE readable at%s\n' \
+        printf '  %sThese are NOT in the clone of the agent. But the agent CAN read them at%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %s/run/sandbox/source, and can be sent anywhere the network policy allows.%s\n' \
+        printf '  %s/run/sandbox/source, and send them to each place that the network policy allows.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
     elif [ -z "$quiet" ]; then
-        dr_ok "no credential-shaped files outside git"
+        dr_ok "no files that look like credentials outside git"
     fi
 
-    # --- stashes, which this scan cannot see into ---------------------------
+    # --- stashes, which this scan cannot see into ----------------------------
     #
-    # The read-only mount is the whole working tree, `.git` included - verified:
-    # /run/sandbox/source/.git exists in the mound, refs and objects and all. A
-    # stash is an ordinary commit in there, so `git stash show -p` recovers its
-    # contents from inside the sandbox.
+    # The read-only mount is the whole working tree, with `.git` (a test showed
+    # this). /run/sandbox/source/.git exists in the mound, with all refs and
+    # objects. A stash is an ordinary commit there, so `git stash show -p` gets
+    # its contents back from inside the sandbox.
     #
-    # That matters here because stashing a file REMOVES it from the working tree
-    # and therefore from `git ls-files --others`, which is the list scanned
-    # above. So the one action people take to get past the dirty-tree check is
-    # also the one that makes a secret invisible to this scan while leaving it
-    # perfectly readable to the agent. Counted, not read: what is in your stashes
-    # is your business, and the point is to say that the scan stopped at the door.
+    # That is important here. A stash REMOVES a file from the working tree, and
+    # thus from `git ls-files --others`, the list that the scan above reads. The
+    # usual way past the dirty-tree test also hides a secret from this scan, but
+    # the agent can still read it. The code counts stashes, and does not read
+    # them. Your stashes are your business. The purpose is to say that the scan
+    # stopped at the door.
     stashes=$(git -C "$DR_REPO" stash list 2>/dev/null | grep -c . || true)
     if [ "$stashes" -gt 0 ]; then
-        dr_warn "$stashes stash(es) - their contents are readable and NOT scanned"
-        printf '  %sThe read-only mount includes .git, so a stash is recoverable from%s\n' \
+        dr_warn "$stashes stash(es). The agent can read their contents, and they are NOT scanned"
+        printf '  %sThe read-only mount includes .git, so you can get a stash back from%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %sinside the mound with git stash show -p. Stashing a secret hides it%s\n' \
+        printf '  %sinside the mound with git stash show -p. A stash hides a secret from%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %sfrom this scan without hiding it from the agent.%s\n' \
+        printf '  %sthis scan, but not from the agent.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
     fi
 fi
 
 # --- the skills store, which is the way OUT ---------------------------------
 #
-# Located by lib/common.sh, so dr-skills and this agree on where it is.
+# lib/common.sh finds it, so that dr-skills and this code agree on its place.
 skills_dir=$(dr_skills_dir) || skills_dir=
 
 if [ -z "$skills_dir" ] || [ ! -d "$skills_dir" ]; then
     [ -n "$quiet" ] || dr_ok "no shared skills store on this machine yet"
 else
-    # Anything at all here is worth showing. This is not a heuristic about
-    # dangerous content - it is "did you put these here?", which only you know.
+    # Show all that is here. This is not a guess about dangerous content. It is
+    # "did you put these here?", and only you know that.
     mapfile -t skills < <(find "$skills_dir" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | sort)
 
-    # Listed, never judged: whether a skill belongs there is a question only you
-    # can answer, so the job is to make the contents visible at all.
+    # Listed, never judged. Only you know whether a skill belongs there, so the
+    # job is only to show the contents.
     if [ ${#skills[@]} -eq 0 ]; then
         [ -n "$quiet" ] || dr_ok "the shared skills store is empty"
     else
@@ -134,22 +135,22 @@ else
         for s in "${skills[@]}"; do
             printf '    %s\n' "$s" >&2
         done
-        printf '  %sThis directory is mounted read-write into EVERY mound and survives sbx rm.%s\n' \
+        printf '  %sEACH mound mounts this directory read-write, and it stays after sbx rm.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %sIts contents become agent instructions. Anything here you did not put%s\n' \
+        printf '  %sIts contents become agent instructions. A sandbox left each item that%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %sthere was left by a sandbox:  %s%s\n' "$_DR_DIM" "$skills_dir" "$_DR_OFF" >&2
+        printf '  %syou did not put here:  %s%s\n' "$_DR_DIM" "$skills_dir" "$_DR_OFF" >&2
     fi
 fi
 
-# block turns a finding into a refusal; warn reports and carries on. Only the
-# credential hits gate this - the skills listing is informational, because a
-# skill you installed on purpose is not a failure.
+# block makes a finding into a refusal. warn reports and continues. Only the
+# credential hits decide here. The skills list is only information, because a
+# skill that you installed on purpose is not a failure.
 if [ "$found" -ne 0 ] && [ "$DRAUGR_SCAN_FAIL" = block ]; then
     dr_die \
-        "refusing to continue with credentials in reach" \
-        "Move them out of the repo, or set DRAUGR_SCAN_FAIL=warn to proceed anyway." \
-        "Real credentials do not belong in a directory you hand to an agent."
+        "refusing to continue while the agent can read credentials" \
+        "Move them out of the repo, or set DRAUGR_SCAN_FAIL=warn to continue anyway." \
+        "Real credentials do not belong in a directory that you give to an agent."
 fi
 
 exit 0

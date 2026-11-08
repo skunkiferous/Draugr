@@ -1,75 +1,79 @@
 #!/usr/bin/env bash
-# dr-layer - the forge VM's disk layers, from this side of the boundary.
+# dr-layer: the disk layers of the forge VM, from this side of the boundary.
 #
-# A layer is a differencing VHDX whose parent is the layer below it. Only the TOP disk is
-# ever registered as a VM, so everything underneath sits outside AppSandbox's reach - which
-# matters, because deleting a VM removes its folder recursively.
+# A layer is a differencing VHDX. Its parent is the layer below it. Only the TOP
+# disk is ever registered as a VM, so AppSandbox cannot reach the disks below.
+# That is important, because a VM delete removes its folder recursively.
 #
 #   layer-0    Windows and the base tools        frozen
 #   layer-1    accounts, Visual Studio           frozen
 #   layer-2    one engine version                frozen
 #   layer-3    the work                          the VM points here
 #
-#   dr-layer                       list: the registered VMs, their chains, and every layer
+#   dr-layer                       list: the registered VMs, their chains, and each layer
 #   dr-layer list
-#   dr-layer adopt <name>          a finished VM's disk becomes a frozen layer
+#   dr-layer adopt <name>          the disk of a finished VM becomes a frozen layer
 #   dr-layer new <name> --parent <layer>        a differencing child on a frozen parent
-#   dr-layer new <name> --parent <layer> --disk-gb 768     ... grown. It can never shrink
+#   dr-layer new <name> --parent <layer> --disk-gb 768     ... larger. It can never shrink
 #   dr-layer freeze <name>         read-only on
-#   dr-layer freeze <name> --unregister         ... and drop its VM block
-#   dr-layer thaw <name>           the undo: writable again, and re-registered
-#   dr-layer drop <name>           the layer directory and its VM block go
-#   any verb --dry-run             say what would happen, touch nothing
+#   dr-layer freeze <name> --unregister         ... and remove its VM block
+#   dr-layer thaw <name>           the undo: writable again, and registered again
+#   dr-layer drop <name>           remove the layer directory and its VM block
+#   any verb --dry-run             tell what happens, and touch nothing
 #
 #   dr-layer provision <name>      make a layer-0: set up an existing guest, idempotently
-#   dr-layer provision <name> --iso <path>   ... creating the VM and installing Windows first
-#   dr-layer provision <name> --verify-only  ... change nothing, just report where it stands
-#   dr-layer provision <name> --skip-vscode  ... leave one phase out; --help lists the names
+#   dr-layer provision <name> --iso <path>   ... create the VM and install Windows first
+#   dr-layer provision <name> --verify-only  ... change nothing, only report the state
+#   dr-layer provision <name> --skip-vscode  ... skip one phase. --help lists the names
 #   dr-layer provision <name> --only cleanup,manifest   ... run ONLY these phases
-#   dr-layer provision <name> --netfx <path> ... and .NET 3.5, from a cab you took off the ISO
+#   dr-layer provision <name> --netfx <path> ... and .NET 3.5, from a cab from the ISO
 #
-# PROVISION IS THE ONE VERB THAT NEEDS THE DAEMON UP, and the gateway with it: the guest has
-# no network adapter, so everything it installs arrives through the gateway mound's proxy over
-# the ssh tunnel. So this brings the gateway up first, the way dr-forge up does - through
-# DRAUGR_REQUIRES and dr-dep - which means running it from the project that names the forge.
-# The other verbs all need the daemon DOWN, which is why they say so when it is not.
+# PROVISION IS THE ONE VERB THAT NEEDS THE DAEMON UP, and the gateway too. The
+# guest has no network adapter, so all that it installs comes through the proxy
+# of the gateway mound, over the ssh tunnel. Thus this verb starts the gateway
+# first, as dr-forge up does, through DRAUGR_REQUIRES and dr-dep. You must run
+# it from the project that names the forge. All the other verbs need the daemon
+# DOWN. If it runs, they say so.
 #
-# THIS IS NOT A dr-forge VERB, and the reason is structural rather than tidiness:
+# THIS IS NOT A dr-forge VERB. The reason is the structure, not tidiness:
 #
-#   - The preconditions are OPPOSITE. Everything dr-forge does needs the AppSandbox daemon
-#     UP. Every verb here needs it DOWN, because the daemon rewrites vms.cfg whenever
-#     anything changes and an edit made underneath it is simply lost.
-#   - The gate is opposite too. dr-forge is inert unless DRAUGR_FORGE names a VM - that is
-#     the whole optionality claim. But these verbs CREATE the thing that key would name, so
-#     they cannot be gated on it, or you could never build a first forge.
+#   - The preconditions are OPPOSITE. All of dr-forge needs the AppSandbox daemon UP. Each
+#     verb here needs it DOWN, because the daemon rewrites vms.cfg at each change, and an
+#     edit below it is lost.
+#   - The gate is also opposite. dr-forge does nothing until DRAUGR_FORGE names a VM. That
+#     makes the forge optional. But these verbs CREATE what that key names. With the key as a
+#     condition, nobody can build a first forge.
 #
-# So this command exists for the few people who want a Windows VM at all, and it says so
-# rather than explaining layers to whoever found it by accident. docs/FORGE.md.
+# Thus this command is for the few people who want a Windows VM. It says so, and
+# does not explain layers to a person who found it by accident. See
+# docs/FORGE.md.
 #
-# DO NOT RUN THIS FROM AN ELEVATED SHELL. Integrity runs one way: an elevated client can use
-# a sandboxd an ordinary shell started, but not the reverse - so a dr-* command run elevated
-# with no sandboxd up starts an ELEVATED one, and every later command from an ordinary
-# terminal then fails in the worst available way (dr-up reporting "Status: stopped" about a
-# daemon that is serving perfectly). MEASURED, and it cost an evening. The VHD
-# cmdlets do need elevation, and lib/forge/layer.ps1 asks for it for those steps only,
-# handing their output back through a transcript.
+# DO NOT RUN THIS FROM AN ELEVATED SHELL. Integrity works in one direction. An
+# elevated client can use a sandboxd that an ordinary shell started, but not the
+# reverse. Thus an elevated dr-* command with no sandboxd starts an ELEVATED
+# one. Then each later command from an ordinary terminal fails in the worst way:
+# dr-up reports "Status: stopped" about a daemon that works. A TEST SHOWED THIS,
+# and it cost an evening. The VHD cmdlets need elevation. lib/forge/layer.ps1
+# asks for it only for those steps, and returns their output through a
+# transcript.
 set -euo pipefail
 
 DR_PROG=dr-layer
-# readlink -f first: install.sh links this into ~/.local/bin by default, and through a link
-# BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
-# source-path repeated: the directive attaches to the NEXT command only. bin/dr-forge's
-# header explains what goes wrong without it.
+# source-path again. The directive applies only to the NEXT command. The header
+# of bin/dr-forge tells what goes wrong without it.
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/forge/common.sh
 . "$_dr_bin/../lib/forge/common.sh"
 
-# list is the default because it is the only verb that writes nothing, and "what is there"
-# is the question you actually have first. Same choice dr-forge and dr-mem make.
+# list is the default, because it is the only verb that writes nothing, and
+# "what is there?" is your first question. dr-forge and dr-mem make the same
+# choice.
 action=${1:-list}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
@@ -78,8 +82,8 @@ case "$action" in
         "One of: list, adopt, new, freeze, thaw, drop" ;;
 esac
 
-# The layer's name is positional, because every verb but list takes exactly one and it is
-# what the command is about. Flags are parsed after it in any order.
+# The name of the layer is positional, because each verb except list takes one,
+# and the command is about it. The flags follow it, in any order.
 name=
 root=
 parent=
@@ -92,8 +96,8 @@ force=
 keep_registered=
 keep_vm_folder=
 dry_run=
-# provision's own, kept apart because they are a different verb's vocabulary: an ISO, the
-# sizing of a machine, and which phases to leave out.
+# The flags of provision, separate because they are for a different verb: an
+# ISO, the size of a machine, and the phases to skip.
 iso=
 ram=
 cores=
@@ -116,42 +120,47 @@ while [ $# -gt 0 ]; do
         --iso)         shift; iso=${1:-};         [ -n "$iso" ]         || dr_die "--iso needs the path to a Windows ISO." ;;
         --ram)         shift; ram=${1:-};         [ -n "$ram" ]         || dr_die "--ram needs a number of megabytes." ;;
         --cores)       shift; cores=${1:-};       [ -n "$cores" ]       || dr_die "--cores needs a number." ;;
-        --gpu-mode)    shift; gpu_mode=${1:-};    [ -n "$gpu_mode" ]    || dr_die "--gpu-mode needs 0, 1 or 2." ;;
+        --gpu-mode)    shift; gpu_mode=${1:-};    [ -n "$gpu_mode" ]    || dr_die "--gpu-mode needs 0, 1, or 2." ;;
         --disk-dir)    shift; disk_dir=${1:-};    [ -n "$disk_dir" ]    || dr_die "--disk-dir needs a path." ;;
-        # AN EMPTY VALUE IS MEANINGFUL HERE, unlike every other flag: '' means "leave the
-        # guest's clock alone". So it is recorded as GIVEN rather than judged by its value,
-        # which is also why the loop cannot refuse an empty one.
+        # AN EMPTY VALUE HAS A MEANING HERE, different from all other flags: ''
+        # means "do not touch the clock of the guest". Thus the code records it
+        # as GIVEN, and does not judge its value. That is also why the loop
+        # cannot refuse an empty value.
         --timezone)    shift; timezone=${1:-}; timezone_given=1 ;;
         --admin-user)  shift; admin_user=${1:-};  [ -n "$admin_user" ]  || dr_die "--admin-user needs an account name." ;;
         --timeout-min) shift; timeout_min=${1:-}; [ -n "$timeout_min" ] || dr_die "--timeout-min needs a number of minutes." ;;
         --verify-only) verify_only=1 ;;
         --harden-sshd) harden_sshd=1 ;;
-        # Your own MSI instead of the pinned TightVNC build, which is the supported road to
-        # UltraVNC: its download is session-gated HTML and cannot be fetched by a script at
-        # all. lib/forge/screen-access.ps1's header has the comparison.
+        # Your own MSI, not the pinned TightVNC build. That is the supported way
+        # to UltraVNC. Its download is HTML behind a session, and a script
+        # cannot fetch it. The header of lib/forge/screen-access.ps1 has the
+        # comparison.
         --vnc-msi)     shift; vnc_msi=${1:-};  [ -n "$vnc_msi" ] || dr_die "--vnc-msi needs the path to an MSI." ;;
-        # OFF by default, and the default is the interesting half: installing the host's
-        # viewer elevates, and a provisioning run must not stop for a UAC prompt an hour in.
+        # OFF by default, and the default is the important half. The install of
+        # the viewer of the host elevates, and a provisioning run must not stop
+        # for a UAC prompt after an hour.
         --install-viewer) install_viewer=1 ;;
-        # THE SWITCH AND THE PRECONDITION IN ONE. .NET 3.5 is a Feature on Demand: its
-        # payload is not on the installed system, Windows fetches it from Windows Update,
-        # and this guest has that off and no adapter besides. So the payload is a cab only a
-        # person can produce - out of \sources\sxs on the ISO the guest was installed from -
-        # and naming it is how the phase is turned on. There is no separate --netfx-on that
-        # could disagree with it. docs/FORGE.md, "2c, the optional component".
+        # THE SWITCH AND THE PRECONDITION IN ONE. .NET 3.5 is a Feature on
+        # Demand. Its payload is not on the installed system. Windows fetches it
+        # from Windows Update, but this guest has that off, and has no adapter.
+        # Thus the payload is a cab that only a person can get, from
+        # \sources\sxs on the ISO of the guest. Its name turns on the phase. No
+        # separate --netfx-on exists that can disagree with it. See
+        # docs/FORGE.md, "2c, the optional component".
         --netfx)       shift; netfx=${1:-}; [ -n "$netfx" ] || dr_die \
-            "--netfx needs a path: the NetFx3 cab, or the folder holding it." \
+            "--netfx needs a path: the NetFx3 cab, or the folder that holds it." \
             "  It is a path on the Windows host, not in the guest." \
             "  <iso>:\\sources\\sxs\\microsoft-windows-netfx3-ondemand-package~*~amd64~~.cab" ;;
         -y|--yes)      assume_yes=1 ;;
-        # One spelling per phase, matched against the list below rather than enumerated as
-        # flags: a typo then names what it could have meant instead of being ignored.
+        # One name for each phase, compared with the list below, not a separate
+        # flag for each. Then a typo gets a message with the correct name, and
+        # is not ignored.
         --skip-*)      skips+=("${1#--skip-}") ;;
-        # The other way round, and short: --only names what to RUN. Turned into skips below,
-        # computed from the phase list, so it cannot drift from it.
+        # The opposite, and short: --only names what to RUN. The code changes it
+        # into skips below, from the phase list, so the two cannot differ.
         --only)        shift; only=${1:-}; [ -n "$only" ] || dr_die \
             "--only needs at least one phase name." \
-            "  Comma separated, no spaces:  --only cleanup,manifest" ;;
+            "  With commas, and no spaces:  --only cleanup,manifest" ;;
         --root)      shift; root=${1:-};      [ -n "$root" ]     || dr_die "--root needs a path." ;;
         --parent)    shift; parent=${1:-};    [ -n "$parent" ]   || dr_die "--parent needs a layer name or a .vhdx path." ;;
         --from)      shift; from=${1:-};      [ -n "$from" ]     || dr_die "--from needs the name of a VM in vms.cfg." ;;
@@ -165,31 +174,32 @@ while [ $# -gt 0 ]; do
         --dry-run)         dry_run=1 ;;
         -h|--help)         dr_help "$0"; exit 0 ;;
         -*)                dr_die "unexpected argument: $1" ;;
-        *)  [ -z "$name" ] || dr_die "dr-layer $action takes one layer name, and got two:" \
+        *)  [ -z "$name" ] || dr_die "dr-layer $action takes one layer name, but got two:" \
                 "  $name" "  $1"
             name=$1 ;;
     esac
     shift
 done
 
-# A number that is not one would arrive at PowerShell as 0 and be read as "inherit the
-# parent's capacity" - a silent wrong answer where a refusal belongs.
+# A value that is not a number arrives at PowerShell as 0, and means "use the
+# capacity of the parent". That is a silent wrong answer, where a refusal is
+# correct.
 case "$disk_gb" in ''|*[!0-9]*) [ -z "$disk_gb" ] || dr_die "--disk-gb takes a number of gigabytes: $disk_gb" ;; esac
 case "$ssh_port" in ''|*[!0-9]*) [ -z "$ssh_port" ] || dr_die "--ssh-port takes a port number: $ssh_port" ;; esac
 
 [ "$action" = list ] || [ -n "$name" ] || dr_die \
     "dr-layer $action needs the name of a layer." \
-    "  dr-layer $action <name>        and dr-layer list shows what is there"
+    "  dr-layer $action <name>        and dr-layer list shows the layers"
 
-# A FLAG THAT BELONGS TO ANOTHER VERB IS A REFUSAL, not something to ignore. layer.ps1 takes
-# them all and uses each where it means something, so a misaimed one would be accepted in
-# silence - and `drop x --force` would read as "I forced it" while forcing nothing at all.
-# Checked here rather than there because this is the only place that knows what was TYPED.
+# A FLAG OF ANOTHER VERB GETS A REFUSAL, and is not ignored. layer.ps1 takes all
+# of them, and uses each one where it has a meaning. Thus it accepts a wrong
+# flag silently. `drop x --force` looks like "I forced it", but forces nothing.
+# The test is here and not there, because only this code knows what you TYPED.
 flag_belongs() {  # <flag> <verb>...
     local flag=$1; shift
     local v
     for v in "$@"; do [ "$action" = "$v" ] && return 0; done
-    dr_die "$flag belongs to dr-layer $(printf '%s' "$*" | sed 's/ / or /g'), not to $action."
+    dr_die "$flag is an option of dr-layer $(printf '%s' "$*" | sed 's/ / or /g'), not of $action."
 }
 [ -z "$iso" ]             || flag_belongs --iso provision
 [ -z "$ram" ]             || flag_belongs --ram provision
@@ -218,61 +228,66 @@ flag_belongs() {  # <flag> <verb>...
 [ -z "$ssh_port" ]        || flag_belongs --ssh-port new thaw
 [ -z "$dry_run" ]         || flag_belongs --dry-run adopt new freeze thaw drop
 
-# --parent is what `new` is about, and it has no default: caught here so the answer arrives
-# without crossing to Windows, and before the daemon check can answer something else first.
+# `new` is about --parent, and it has no default. The test is here, so that the
+# answer comes without a crossing to Windows, and before the daemon test gives a
+# different answer.
 [ "$action" != new ] || [ -n "$parent" ] || dr_die \
     "dr-layer new needs --parent: the layer this one differences from." \
     "  dr-layer new $name --parent layer-0" \
-    "The parent must be frozen first - writing to a parent a child differences from" \
-    "corrupts the child, and nothing in the stack will say so."
+    "Freeze the parent first. A write to the parent of a differencing child damages" \
+    "the child, and nothing in the stack tells you."
 
-# EVERY --skip-X IS CHECKED AGAINST THE PHASES THAT EXIST. `.NET Framework 3.5` is still to
-# be adopted, so --skip-netfx would otherwise be accepted and silently do nothing - which
-# reads as "I turned that off" about a phase that was never going to run.
+# THE CODE COMPARES EACH --skip-X WITH THE PHASES THAT EXIST. `.NET Framework
+# 3.5` is not adopted yet. Without this test, the code accepts --skip-netfx and
+# does nothing, with no message. That looks like "I turned that off" for a phase
+# that never runs.
 #
-# IN RUN ORDER, not alphabetical, because this list is also the answer to "what does a
-# provisioning run do": the guest's own settings, its way out, then the components, then the
-# tidying. docs/FORGE.md, "Stage two: dr-layer provision".
+# IN RUN ORDER, not alphabetical, because this list also answers "what does a
+# provisioning run do?": the configuration of the guest, its way out, then the
+# components, then the clean-up. See docs/FORGE.md, "Stage two: dr-layer
+# provision".
 _DR_LAYER_PHASES='guest-base online tunnel-key gateway tunnel
                   msys2 tools automation shot screen vault vscode
                   cleanup manifest'
-# netfx is not in the list above because it does not run by default: --netfx turns it on,
-# and omitting --netfx is how it is turned off. So --skip-netfx is a second switch for a
-# decision one flag already makes, which is a switch that can disagree with the other.
+# netfx is not in the list above, because it does not run by default. --netfx
+# turns it on, and without --netfx it is off. Thus --skip-netfx is a second
+# switch for a decision that one flag already makes, and the two can disagree.
 _DR_LAYER_PHASES_OFF='netfx'
-# ON ONE LINE, once. The list above is wrapped for reading, and a wrapped list would reach a
-# refusal message as three broken lines. The membership test below would match either way -
-# measured: a word at the start of an indented continuation line still has a space before it,
-# which is the indentation's last character - but relying on that makes the list's INDENTATION
-# load-bearing, and nothing about this file says so.
+# ON ONE LINE, once. The list above has line breaks for the reader, and such a
+# list goes into a refusal message as three broken lines. The membership test
+# below matches in both cases (a test showed this). A word at the start of an
+# indented line still has a space before it, the last character of the indent.
+# But then the INDENT of the list becomes necessary, and nothing in this file
+# says so.
 _dr_phases=$(printf '%s' "$_DR_LAYER_PHASES" | tr -s '[:space:]' ' ')
 
-# --only NAMES WHAT YOU WANT, and becomes skips right here rather than travelling to
-# PowerShell as an argument of its own. The inversion is computed from the list above, so a
-# phase added to it tomorrow is skipped by every existing --only without anyone editing a
-# second table - which is the whole reason this flag exists rather than a transcription of
-# twelve --skip- flags in somebody else's repository. docs/FORGE.md, "Naming the phases you
-# want". provision.ps1 learns nothing and therefore cannot disagree.
+# --only NAMES WHAT YOU WANT. It becomes skips here, and does not go to
+# PowerShell as its own argument. The code calculates the inversion from the
+# list above. Thus each existing --only skips a phase that somebody adds
+# tomorrow, and nobody must edit a second table. That is the reason for this
+# flag, and not a copy of twelve --skip- flags in another repository. See
+# docs/FORGE.md, "Naming the phases you want". provision.ps1 learns nothing, so
+# it cannot disagree.
 if [ -n "$only" ]; then
-    # TWO SWITCHES FOR ONE DECISION CAN DISAGREE, and a run honouring both would be obeying
-    # neither - the same ground --skip-netfx is refused on.
-    [ ${#skips[@]} -eq 0 ] || dr_die "--only and --skip- cannot both be given." \
-        "--only names the phases to RUN, --skip- names ones to leave out, and a run told" \
-        "both would be obeying neither. Pick one." \
+    # TWO SWITCHES FOR ONE DECISION CAN DISAGREE. A run that obeys both obeys
+    # neither. That is also the reason for the refusal of --skip-netfx.
+    [ ${#skips[@]} -eq 0 ] || dr_die "you cannot give --only and --skip- together." \
+        "--only names the phases to RUN, and --skip- names the phases to skip. A run" \
+        "that obeys both obeys neither. Select one." \
         "  --only $only"
     declare -a _dr_only=()
     IFS=',' read -r -a _dr_only <<< "$only"
     _dr_want=' '
     for _o in "${_dr_only[@]+"${_dr_only[@]}"}"; do
-        [ -n "$_o" ] || dr_die "--only has an empty name in it: $only" \
-            "Separate the phases with single commas:  --only cleanup,manifest"
+        [ -n "$_o" ] || dr_die "--only has an empty name: $only" \
+            "Put one comma between the phases:  --only cleanup,manifest"
         case " $_dr_phases " in
             *" $_o "*) _dr_want="$_dr_want$_o "; continue ;;
         esac
         case " $_DR_LAYER_PHASES_OFF " in
-            *" $_o "*) dr_die "--only $_o is not needed: that phase is off unless asked for." \
-                ".NET Framework 3.5 runs only when --netfx names its payload, so naming it" \
-                "here is a second switch for a decision that flag already makes." ;;
+            *" $_o "*) dr_die "--only $_o is not necessary. That phase is off until you ask for it." \
+                ".NET Framework 3.5 runs only when --netfx names its payload. Its name here" \
+                "is a second switch for a decision that the flag already makes." ;;
         esac
         dr_die "--only $_o is not a phase." "One of: $_dr_phases"
     done
@@ -284,66 +299,73 @@ if [ -n "$only" ]; then
     done
 fi
 
-# EVERY SKIP NAME IS MATCHED AGAINST THE LIST, which is what makes a typo name what it could
-# have meant instead of being silently ignored. It sees both kinds: the ones typed as
-# --skip-<phase>, and the ones --only just derived - those are valid by construction, so they
-# cost a pass through here and prove nothing, which is cheaper than a second code path.
+# THE CODE COMPARES EACH SKIP NAME WITH THE LIST. Thus a typo gets a message
+# with the correct names, and is not ignored silently. It sees both kinds: the
+# typed --skip-<phase>, and the skips from --only. Those are always valid, so
+# this pass proves nothing for them. But a pass costs less than a second code
+# path.
 for _s in "${skips[@]+"${skips[@]}"}"; do
     case " $_dr_phases " in
         *" $_s "*) continue ;;
     esac
     case " $_DR_LAYER_PHASES_OFF " in
-        *" $_s "*) dr_die "--skip-$_s is not needed: that phase is already off." \
-            ".NET Framework 3.5 runs only when --netfx names its payload, so leaving" \
-            "that flag out is how you leave the phase out." ;;
+        *" $_s "*) dr_die "--skip-$_s is not necessary. That phase is already off." \
+            ".NET Framework 3.5 runs only when --netfx names its payload. Without that" \
+            "flag, the phase does not run." ;;
     esac
     dr_die "--skip-$_s is not a phase." "One of: $_dr_phases"
 done
 
-# THE REPO ROOT IS AN ARGUMENT, not something dr_load_config works out - the same measured
-# reason bin/dr-forge passes it. Being outside a repository is fine here: DRAUGR_FORGE_LAYERS
-# is the only key this command reads, and the machine-level config can set it.
+# THE REPO ROOT IS AN ARGUMENT. dr_load_config does not find it. The reason is
+# the same as in bin/dr-forge, from a test. It also works outside a repository.
+# DRAUGR_FORGE_LAYERS is the only key that this command reads, and the
+# configuration of the machine can set it.
 repo=$(git rev-parse --show-toplevel 2>/dev/null || true)
 dr_load_config "$repo"
 dr_forge_require_windows
 
-# --root wins over the key, the key over layer.ps1's own default. Passed ONLY when one of the
-# two is set, because the script reports a default differently from a choice - and a default
-# forwarded as an explicit argument would be reported as something you asked for.
+# --root wins over the key, and the key wins over the default of layer.ps1. If
+# one of the two is set, the code passes it. If not, it does NOT. The script
+# reports a default differently from a choice. A default that the code passes as
+# an argument looks like your choice.
 [ -n "$root" ] || root=${DRAUGR_FORGE_LAYERS:-}
 
-# THE GATEWAY COMES UP FIRST, AND ONLY FOR provision. The guest has no network adapter, so
-# everything it installs arrives through the gateway mound's proxy over the ssh tunnel - and
-# a run that discovers that at the egress gate has already spent an hour installing Windows.
+# THE GATEWAY STARTS FIRST, AND ONLY FOR provision. The guest has no network
+# adapter, so all that it installs comes through the proxy of the gateway mound,
+# over the ssh tunnel. If a run finds a problem at the egress gate, it already
+# used an hour for the Windows install.
 #
-# Through dr-dep, which is Draugr's own answer to "that mound has to be up": it inherits the
-# whole protocol rather than a copy - trust before anything is sourced, the claim written
-# before anything starts, a clean environment so each dependency's own config decides what it
-# is, the cycle guard, and the warden that stops sbx auto-stopping an idle mound after 30 s.
-# The same road dr-forge up takes, and the reason provision.ps1 only VERIFIES the mound.
+# Through dr-dep, the answer of Draugr to "that mound must run". It has the full
+# protocol, not a copy. It has trust before a source, and the claim before a
+# start. It cleans the environment, so that the configuration of each dependency
+# decides. It has the cycle guard. Its warden keeps sbx from a stop of an idle
+# mound after 30 s.
+# dr-forge up uses the same way. Thus provision.ps1 only TESTS the mound.
 if [ "$action" = provision ] && [ -z "$verify_only" ]; then
     if dr_forge_publishes_proxy; then
-        # This repository IS the gateway, so the mound to start is its own: dr-dep would be
-        # wrong, since a repository does not require itself and its cycle check says so.
-        dr_info "this project is the gateway; bringing its own mound up"
-        "$_dr_bin/dr-up" || dr_die "the gateway mound did not come up." \
-            "Its own dr-up said why, above."
+        # This repository IS the gateway, so its own mound starts. dr-dep is
+        # wrong here, because a repository does not require itself, and the
+        # cycle test of dr-dep says so.
+        dr_info "this project is the gateway. Starting its own mound."
+        "$_dr_bin/dr-up" || dr_die "the gateway mound did not start." \
+            "Its dr-up told the reason, above."
     elif [ -n "${DRAUGR_REQUIRES:-}" ]; then
-        dr_info "bringing up what this project requires, the gateway among it"
-        "$_dr_bin/dr-dep" up || dr_die "what this repo requires did not come up." \
-            "dr-dep said why, above."
+        dr_info "starting the requirements of this project, with the gateway"
+        "$_dr_bin/dr-dep" up || dr_die "the requirements of this repo did not start." \
+            "dr-dep told the reason, above."
     else
-        dr_warn "nothing here says where the gateway comes from, so the guest may have no way out."
-        printf '  %sThe gateway is the mound publishing 127.0.0.1:18888. Name it in\n' "$_DR_DIM" >&2
-        printf '  DRAUGR_REQUIRES, or run this from the project that does - and see\n' >&2
-        printf '  dr-forge gateway <dir> to generate one.%s\n' "$_DR_OFF" >&2
+        dr_warn "nothing here tells where the gateway comes from. The guest can have no way out."
+        printf '  %sThe gateway is the mound that publishes 127.0.0.1:18888. Name it in\n' "$_DR_DIM" >&2
+        printf '  DRAUGR_REQUIRES, or run this from the project that names it. To make\n' >&2
+        printf '  one, see dr-forge gateway <dir>.%s\n' "$_DR_OFF" >&2
     fi
 fi
 
-# One flag, one parameter, and every one of them omitted when it was not given. Both scripts
-# distinguish "not passed" from "passed as the default" - layer.ps1's elevation relaunch
-# forwards only what it was actually given, and provision reports a default as a default - so
-# adding a value here that nobody asked for would be reported as a deliberate choice.
+# One flag, one parameter, and the code omits each one that you did not give.
+# Both scripts know the difference between "not passed" and "passed as the
+# default". The elevated restart of layer.ps1 passes on only what it got, and
+# provision reports a default as a default. Thus a value here that nobody asked
+# for looks like a deliberate choice.
 if [ "$action" = provision ]; then
     ps=$(dr_forge_win_path "$_dr_bin/../lib/forge/provision.ps1")
     args=()
@@ -362,9 +384,9 @@ if [ "$action" = provision ]; then
     [ -z "$vnc_msi" ]        || args+=(-VncMsi "$(dr_forge_win_path "$vnc_msi")")
     [ -z "$install_viewer" ] || args+=(-InstallViewer)
     [ -z "$netfx" ]          || args+=(-NetFxSource "$(dr_forge_win_path "$netfx")")
-    # An EMPTY --timezone is meaningful - it means "leave the guest's zone alone" - so this
-    # one is forwarded whenever the flag appeared at all, which the flag loop guarantees by
-    # refusing an empty value only for the others.
+    # An EMPTY --timezone has a meaning: "do not touch the zone of the guest".
+    # Thus the code passes it each time the flag is present. The flag loop
+    # refuses an empty value only for the other flags.
     [ -z "$timezone_given" ] || args+=(-TimeZone "$timezone")
     for _s in "${skips[@]+"${skips[@]}"}"; do
         case "$_s" in
@@ -401,13 +423,15 @@ args=(-Mode "$action")
 [ -z "$dry_run" ]         || args+=(-WhatIfOnly)
 fi
 
-# NOT A PIPE AT THE END. `powershell | tr` returns TR's status, so every exit code the script
-# documents would read as success - the trap that cost four silent failures in the forge's
-# API tests. The output is captured, then the saved status is what this command exits with.
+# NOT A PIPE AT THE END. `powershell | tr` returns the status of TR. Then each
+# exit code of the script looks like a success. That trap caused four silent
+# failures in the API tests of the forge. The code captures the output, and then
+# exits with the saved status.
 #
-# PROVISION IS THE EXCEPTION, and it has to be: a Windows install takes 20 to 60 minutes and
-# asks two questions before it starts, so its output goes STRAIGHT to the terminal rather than
-# into a variable nobody sees until the end. Read-Host cannot be answered through a capture.
+# PROVISION IS THE EXCEPTION, and it must be. A Windows install takes 20 to 60
+# minutes, and asks two questions before it starts. Thus its output goes
+# DIRECTLY to the terminal, not into a variable that nobody sees until the end.
+# You cannot answer Read-Host through a capture.
 if [ "$action" = provision ]; then
     rc=0
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps" "${args[@]}" || rc=$?
@@ -417,36 +441,39 @@ else
     printf '%s\n' "$out" | tr -d '\r'
 fi
 
-# The codes layer.ps1 documents, named here so a refusal reads as one. 3 and 20 are not
-# failures of this command: they are the daemon being up, and a guard doing its job.
+# The codes that layer.ps1 documents, named here, so that a refusal looks like
+# one. 3 and 20 are not failures of this command. 3 means that the daemon runs,
+# and 20 means that a guard did its job.
 case "$rc" in
     0) ;;
-    3)  dr_warn "AppSandbox is up, so nothing was touched." ;;
-    20) dr_warn "refused by a guard - nothing was changed." ;;
-    21) dr_warn "something named above does not exist." ;;
-    24) dr_warn "elevation was declined, so nothing was done." ;;
+    3)  dr_warn "AppSandbox runs, so nothing changed." ;;
+    20) dr_warn "a guard refused. Nothing changed." ;;
+    21) dr_warn "a name above does not exist." ;;
+    24) dr_warn "elevation was refused, so nothing happened." ;;
 esac
 
-# THE VM THAT WAS DE-REGISTERED CAN BE THE ONE DRAUGR_FORGE NAMES, and this is the command
-# that de-registered it - so this is where it is said. Left unsaid, the first hint is the next
-# dr-forge command, which can report the name as unregistered but cannot know what removed it.
-# MEASURED on the first real adopt: forge-0 became a layer and the gateway's config
-# went on naming it.
+# THE VM WITHOUT A REGISTRATION CAN BE THE ONE THAT DRAUGR_FORGE NAMES. This
+# command removed the registration, so it says so here. Otherwise the first sign
+# is the next dr-forge command. It can report the name as unregistered, but it
+# cannot know the cause. A TEST SHOWED THIS at the first real adopt: forge-0
+# became a layer, and the configuration of the gateway still named it.
 #
-# Only when the config was actually read: an untrusted .draugr.conf leaves DRAUGR_FORGE empty,
-# and silence is the honest answer there rather than a guess about a file nothing sourced.
+# This needs a configuration that the loader read. A .draugr.conf that is not
+# trusted leaves DRAUGR_FORGE empty. Then no message is the correct answer, not
+# a guess about a file that nothing sourced.
 if [ "$rc" -eq 0 ] && [ -z "$dry_run" ] && [ -n "${DRAUGR_FORGE:-}" ] && [ "${DRAUGR_FORGE}" = "$name" ]; then
     dereg=
     case "$action" in
         adopt|drop) dereg=yes ;;
-        # freeze keeps the VM block unless asked to drop it, so the flag is the condition.
+        # freeze keeps the VM block until you ask to remove it, so the flag is
+        # the condition.
         freeze)     [ -z "$unregister" ] || dereg=yes ;;
     esac
     if [ -n "$dereg" ]; then
         printf '\n' >&2
         dr_warn "DRAUGR_FORGE still names '$name', which is no longer a registered VM."
-        dr_info "  Point the key at another VM, or leave it empty until you build one."
-        dr_info "  Editing that file is what revokes its trust, so dr-trust it afterwards."
+        dr_info "  Set the key to another VM, or leave it empty until you build one."
+        dr_info "  An edit of that file removes its trust, so run dr-trust after it."
     fi
 fi
 exit "$rc"

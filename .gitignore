@@ -1,5 +1,5 @@
 tmp
 .claude/settings.local.json
 
-# Draugr can sandbox its own repo; this is the per-user layer that never ships.
+# Draugr can sandbox its own repo. This is the layer for each user. It never ships.
 .draugr.local.conf

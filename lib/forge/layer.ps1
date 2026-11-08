@@ -1,101 +1,110 @@
-# lib/forge/layer.ps1 - build and manage the forge's disk layers.
+# lib/forge/layer.ps1: build and manage the disk layers of the forge.
 #
-# ==> NOT MEANT TO BE TYPED. bin/dr-layer is the front end; it passes -Mode and the flags. <==
+# ==> YOU DO NOT TYPE THIS. bin/dr-layer is the front end, and gives -Mode and the flags. <==
 #
-# Adopted from a hand-written predecessor, which is where every
-# measurement in these comments was made. docs/FORGE.md, "The layer mechanism as a command".
+# Adopted from a manually written earlier script. All tests in these comments
+# were made with it. See docs/FORGE.md, "The layer mechanism as a command".
 #
-# WHAT A LAYER IS. A differencing VHDX whose parent is the layer below it. Only the TOP disk is
-# ever registered as a VM, so everything underneath sits outside AppSandbox's reach - which
-# matters, because deleting a VM removes its folder recursively.
+# WHAT A LAYER IS. A differencing VHDX whose parent is the layer below it. Only
+# the TOP disk is ever registered as a VM, so AppSandbox cannot reach the disks
+# below. That is important, because a VM delete removes its folder recursively.
 #
 #   layer-0\disk.vhdx              Windows + the default base
 #     \__ layer-1\disk.vhdx        accounts, Visual Studio       frozen
 #           \__ layer-2-ue427\disk.vhdx   one engine version     frozen
 #                 \__ layer-3-tabulua\disk.vhdx   the work       the VM points here
 #
-# Layers are NUMBERED, not named for their contents: the number is the depth, which is
-# structural, while what belongs in each layer is a judgement that differs per person.
+# Layers have NUMBERS, not names for their contents. The number is the depth,
+# which is part of the structure. What belongs in each layer is a judgment that
+# differs for each person.
 #
-# HOW A FINISHED BASE BECOMES layer-0. This is the part no one can guess, because the last step
-# of building a base is DELETING the VM - and a VM's folder goes with it, recursively. So the
-# base is built where that is harmless and the disk is moved out before the delete. Never build
-# it in the layer store: a VM pointed there is a delete away from taking the lot.
+# HOW A FINISHED BASE BECOMES layer-0. Nobody can guess this part. The last
+# step of the build of a base is the DELETE of the VM. The folder of the VM goes
+# with it, recursively. Thus build the base where that does no
+# damage, and move the disk out before the delete. Never build it in the layer
+# store. A VM that points there is one delete from losing all.
 #
 #   1. build the VM (stage two: `provision`), leaving its disk in a disposable folder
 #   2. stop the VM, close AppSandbox
 #   3. dr-layer adopt layer-0
 #
-# `adopt` is one verb because the order is the whole difficulty, and it is not guessable:
-# capture the settings while the VM block still exists, move the disk, prove it still reads,
-# freeze it, THEN de-register, and only then remove the emptied VM folder. Done by hand in the
-# wrong order it either loses the settings a child needs, or leaves a VM pointing into the layer
-# store, which is a single delete away from taking every layer with it.
+# `adopt` is one verb, because the order is the whole difficulty, and nobody can
+# guess it. First capture the configuration, while the VM block still exists.
+# Then move the disk, prove that it still reads, and freeze it. THEN remove the
+# registration. Only after that, remove the empty VM folder. A manual run in the
+# wrong order loses the configuration that a child needs, or leaves a VM that
+# points into the layer store. That is one delete from losing each layer.
 #
-# De-registering is not deleting. The VM block goes and every file stays; AppSandbox simply
-# stops knowing the disk is there, which is what ends the exposure for good.
+# The removal of a registration is not a delete. The VM block goes, and each
+# file stays. AppSandbox only stops knowing that the disk is there. That ends
+# the exposure for good.
 #
-# WHY NOT APPSANDBOX SNAPSHOTS. Only the FIRST snapshot captures a VM's current state; every
-# later one is built as a differencing child of the first snapshot's baseline, so a three-deep
-# chain of snapshots would silently be three children of one baseline. Reported as issue #152,
-# with a fix offered as PR #199. Until one ships, layers are made by hand, here.
+# WHY NOT APPSANDBOX SNAPSHOTS. Only the FIRST snapshot captures the current
+# state of a VM. Each later one is a differencing child of the baseline of the
+# first snapshot. Thus a chain of three snapshots is silently three children of
+# one baseline. Reported as issue #152, with a fix in PR #199. Until a fix
+# ships, layers are made by hand, here.
 #
-# SIZE, BECAUSE IT IS THE ONE THING YOU CANNOT UNDO. A child inherits its parent's capacity and
-# can be GROWN but never SHRUNK, so a parent's size is a FLOOR for every layer above it. -DiskGb
-# on `new` grows the child; anything smaller than the parent is refused.
+# SIZE, BECAUSE YOU CANNOT UNDO IT. A child inherits the capacity of its parent.
+# It can GROW, but never SHRINK. Thus the size of a parent is a FLOOR for each
+# layer above it. -DiskGb on `new` makes the child larger. The code refuses each
+# size smaller than the parent.
 #
-# MEASURED: three New-VHD -Differencing over a 512 MB dynamic base, then Resize-VHD
-# on the TOP disk to 1 GB - it reports Differencing, Size 1073741824, parent L2.vhdx, and all
-# four files sit at 4 MB on disk. So four levels build, thin provisioning holds at every level,
-# and a layer grows without its parent changing. What is still unproven is whether HCS BOOTS a
-# guest four levels deep, and what reads cost down there.
+# A TEST: three New-VHD -Differencing over a dynamic base of 512 MB, then
+# Resize-VHD on the TOP disk to 1 GB. It reports Differencing, Size 1073741824,
+# parent L2.vhdx, and all four files are 4 MB on the disk. Thus four levels
+# build, thin provisioning holds at each level, and a layer grows without a
+# change of its parent. Still not proved: whether HCS BOOTS a guest four levels
+# deep, and the cost of reads there.
 #
-# EXIT CODES, because a front end has to tell a refusal from a failure:
+# EXIT CODES, because a front end must know a refusal from a failure:
 #   0   done
 #   2   the arguments are wrong
-#   3   AppSandbox is up, so nothing was touched
-#   20  a guard bit: a writable parent, a layer with children, a name or port taken, a size
-#       below the parent's
-#   21  something named does not exist
-#   24  elevation was declined
+#   3   AppSandbox runs, so nothing changed
+#   20  a guard stopped it: a writable parent, a layer with children, a name or port in use, a
+#       size below the size of the parent
+#   21  something that you named does not exist
+#   24  elevation was refused
 
 param(
-    # -Mode rather than a positional verb, for the reason every lib/forge/*.ps1 takes one: the
-    # caller is bin/dr-layer, and a named parameter cannot be silently reordered.
+    # -Mode, not a positional verb, for the same reason as each lib/forge/*.ps1.
+    # The caller is bin/dr-layer, and a named parameter cannot change position
+    # silently.
     [ValidateSet('list', 'adopt', 'new', 'freeze', 'thaw', 'drop')]
     [string]$Mode = 'list',
 
     [string]$Name,                          # the layer, e.g. layer-1. Also the VM name.
     [string]$Parent,                        # a layer name under -Root, or a full .vhdx path
-    # WHERE LAYERS LIVE, and it must be your FASTEST disk, not your biggest. Reads walk the
-    # chain: anything the top layer does not hold is fetched from its parent, and so on down.
-    # The frozen parents are therefore the HOT read path - they hold Windows, Visual Studio
-    # and the engine - so putting them on a spinning disk to save space on an SSD punishes
-    # every read the project makes. Archives are the opposite case and belong on the big
-    # slow disk, since nothing reads them until a restore.
-    # It must also be outside AppSandbox's own tree - but NOT because that is what stops a
-    # layer being deleted. Deleting a VM removes <its disk's folder> recursively, so the
-    # risk follows the VM REGISTRATION, not the path: a base under C:\ForgeLayers with a VM
-    # still pointing at it is exactly as deletable as one under ProgramData. `freeze
-    # -Unregister` is what ends that, by dropping the VM block and leaving the file.
-    # Being outside AppSandbox's tree buys something different and worth having: nothing
-    # AppSandbox does to its OWN directory - uninstall, reset, a future tidy-up - can reach
-    # a layer that was never in it.
-    # DRAUGR_FORGE_LAYERS is where this normally comes from; bin/dr-layer passes it as
-    # -Root only when it is set, so an unset key is reported as the default it is.
+    # WHERE LAYERS LIVE. It must be your FASTEST disk, not your largest. Reads
+    # walk the chain. What the top layer does not hold comes from its parent,
+    # and so on. Thus the frozen parents are the HOT read path. They hold
+    # Windows, Visual Studio, and the engine. On a spinning disk, to save space
+    # on an SSD, they slow each read of the project. Archives are the opposite
+    # case, and belong on the large slow disk, because nothing reads them until
+    # a restore. It must also be outside the own tree of AppSandbox. But NOT
+    # because that keeps a layer from a delete. A VM delete removes <the folder
+    # of its disk> recursively. Thus the risk follows the VM REGISTRATION, not
+    # the path. A base under C:\ForgeLayers with a VM that still points to it is
+    # as deletable as one under ProgramData. `freeze -Unregister` ends that. It
+    # removes the VM block, and keeps the file. Outside the tree of AppSandbox
+    # gives something different and useful. Nothing that AppSandbox does to its
+    # OWN directory (uninstall, reset, a future clean-up) can reach a layer that
+    # was never in it. This usually comes from DRAUGR_FORGE_LAYERS. bin/dr-layer
+    # gives it as -Root only for a set key. Thus the code reports an unset key
+    # as the default.
     [string]$Root = 'C:\ForgeLayers',
-    [string]$From,                          # VM block to copy RAM/cores/GPU/network from
-    [int]$DiskGb = 0,                       # 0 = inherit the parent's capacity
-    [int]$SshPort = 0,                      # 0 = one above the highest already in vms.cfg
+    [string]$From,                          # the VM block for RAM/cores/GPU/network
+    [int]$DiskGb = 0,                       # 0 = the capacity of the parent
+    [int]$SshPort = 0,                      # 0 = one above the highest in vms.cfg
     [switch]$Unregister,                    # freeze: also remove the VM block
     [switch]$NoRegister,                    # thaw: clear read-only but add no VM block
     [switch]$Force,                         # thaw: proceed even though a child exists
-    [switch]$KeepRegistered,                # new: create the disk but do not add a VM block
-    [switch]$KeepVmFolder,                  # adopt: leave the emptied VM folder behind
+    [switch]$KeepRegistered,                # new: create the disk, but add no VM block
+    [switch]$KeepVmFolder,                  # adopt: keep the empty VM folder
     [switch]$NoElevate,
-    # Set ONLY by this script's own elevation relaunch, never by a person. The elevated
-    # child writes everything it prints here so the parent can show it; see the elevation
-    # block for why that is not optional.
+    # ONLY the elevated restart of this script sets it, never a person. The
+    # elevated child writes all its output here, so that the parent can show it.
+    # See the elevation block for why that is necessary.
     [string]$TranscriptTo = '',
     [switch]$WhatIfOnly
 )
@@ -103,10 +112,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-# Everything that knows the vms.cfg format, including $cfgPath and $script:carried.
+# All the code that knows the vms.cfg format, also $cfgPath and $script:carried.
 . (Join-Path $PSScriptRoot 'vmscfg.ps1')
-# The host key a de-registered VM leaves behind, shared with rm.ps1: adopt, drop and rm all
-# strand the same `draugr-<name>` entry, and a layer name is exactly the kind that gets reused.
+# The host key that a VM without a registration leaves, shared with rm.ps1.
+# adopt, drop, and rm all leave the same `draugr-<name>` entry, and people use
+# layer names again.
 . (Join-Path $PSScriptRoot 'hostkey.ps1')
 
 function Say($m)  { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
@@ -115,45 +125,46 @@ function Warn($m) { Write-Host "  $m" -ForegroundColor Yellow }
 function Fail($m) { Write-Host "  $m" -ForegroundColor Red }
 
 
-# WAS -Root ACTUALLY GIVEN? Captured here, at script scope, because $PSBoundParameters inside
-# a function is that FUNCTION's own - asking there would answer "no" every time, however the
-# script was called. This is the only place the truth is available.
+# WAS -Root REALLY GIVEN? Captured here, at script scope, because
+# $PSBoundParameters inside a function belongs to that FUNCTION. There, the
+# answer is always "no", for each call of the script. Only here is the truth
+# available.
 $script:rootGiven = $PSBoundParameters.ContainsKey('Root')
 
-# The elevated child's console is a SEPARATE WINDOW that closes the instant the script
-# ends, so anything it printed - a refusal most of all - dies with it. Transcribing is the
-# only way back to the parent, because Start-Process will not accept
-# -RedirectStandardOutput alongside -Verb RunAs.
+# The console of the elevated child is a SEPARATE WINDOW that closes when the
+# script ends. Thus its output, a refusal most of all, dies with it. A
+# transcript is the only way back to the parent, because Start-Process does not
+# accept -RedirectStandardOutput with -Verb RunAs.
 #
-# Deliberately NOT stopped anywhere: PowerShell flushes and closes an open transcript when
-# the process exits, and this script leaves through `exit` in a dozen places. A matching
-# Stop-Transcript on each would be a dozen chances to forget one.
+# NOT stopped anywhere, on purpose. At the exit of the process, PowerShell
+# flushes and closes an open transcript, and this script exits through `exit` in
+# a dozen places. A Stop-Transcript at each is a dozen chances to forget one.
 if ($TranscriptTo) { try { Start-Transcript -Path $TranscriptTo -Force | Out-Null } catch { } }
 
 # ------------------------------------------------------------------- AppSandbox must be off
-# It rewrites vms.cfg whenever anything changes, so an edit made while it runs is lost the
-# next time it saves. Closing it also guarantees every VM is stopped, since the daemon owns
-# them - which is exactly the precondition a freeze needs anyway.
+# It rewrites vms.cfg at each change. Thus an edit while it runs is lost at its
+# next save. When it is closed, each VM is also stopped, because the daemon owns
+# them. A freeze needs exactly that anyway.
 function Assert-AppSandboxClosed {
     $p = @(Get-Process -Name 'appsandbox' -ErrorAction SilentlyContinue)
     if (-not $p.Count) { return }
 
-    Fail "AppSandbox is running (pid $($p[0].Id)) and would overwrite this edit."
-    Fail '  Close it and run this again. The GUI has a window; THE HEADLESS DAEMON DOES NOT,'
-    Fail '  which is the whole difficulty - it is shut down over its own API.'
+    Fail "AppSandbox runs (pid $($p[0].Id)), and overwrites this edit."
+    Fail '  Close it, and run this again. The GUI has a window. THE HEADLESS DAEMON HAS NONE.'
+    Fail '  That is the difficulty. Its own API shuts it down.'
     Write-Host ''
 
-    # THE DAEMON HAS NO WINDOW, so "close it" is not an instruction anyone can follow. The
-    # commands are printed rather than run: stopping a guest is the user's call, and this
-    # script's job is to refuse to edit vms.cfg underneath a running daemon, not to decide
-    # when a VM should go down. Asked for by a user who had closed the only thing there was
-    # to close and still could not proceed.
+    # THE DAEMON HAS NO WINDOW, so nobody can follow "close it". The code prints
+    # the commands, and does not run them. The stop of a guest is the decision
+    # of the user. This script must refuse an edit of vms.cfg below a running
+    # daemon. It does not decide the time of a VM stop. A user asked for this,
+    # after the close of the only window, with no way to continue.
     #
-    # ORDER MATTERS, and the API enforces it rather than trusting us: POST /v1/shutdown is
-    # REFUSED WITH 409 while any VM is running, unless {"force":true} - which TERMINATES the
-    # guests instead of shutting them down. For a disk that is about to be frozen as a base,
-    # a terminated guest is a dirty one, so the VMs go down gracefully first and the daemon
-    # follows. See headless-api\asb.py, shutdown_daemon().
+    # THE ORDER MATTERS, and the API enforces it. POST /v1/shutdown is REFUSED
+    # WITH 409 while a VM runs, unless {"force":true}, and that TERMINATES the
+    # guests, and does not shut them down. For a disk that becomes a frozen
+    # base, a terminated guest is a dirty one. Thus the VMs shut down gracefully
+    # first, and then the daemon. See headless-api\asb.py, shutdown_daemon().
     $hostJson = Join-Path $env:ProgramData 'AppSandbox\host.json'
     $running = @()
     $endpoint = 'http://127.0.0.1:8787'
@@ -167,41 +178,43 @@ function Assert-AppSandboxClosed {
         } catch { }
     }
 
-    # ONE COMMAND, not a recipe. This printed six lines to paste into an elevated PowerShell
-    # and a seventh to undo it, which was both tedious and WRONG about the elevation: the
-    # headless API gates running the daemon, not calling it, so every shutdown step here
-    # needs no elevation at all. Only the --headless relaunch does. See
-    # lib/forge/daemon.ps1, and docs/FORGE.md, "Taking the daemon down is a command".
+    # ONE COMMAND, not a recipe. Before, this printed six lines to paste into an
+    # elevated PowerShell, and a seventh to undo it. That was tedious, and WRONG
+    # about the elevation. The headless API puts the gate on the run of the
+    # daemon, not on a call to it. Thus each shutdown step here needs no
+    # elevation. Only the --headless restart does. See lib/forge/daemon.ps1, and
+    # docs/FORGE.md, "Taking the daemon down is a command".
     Note 'Take it down with:'
     Write-Host ''
     Note '  dr-forge daemon stop'
     Write-Host ''
     if ($running.Count) {
-        Note ("{0} running, and a daemon shutdown is refused while any VM is - so that" -f ($running -join ', '))
+        Note ("{0} runs, and the API refuses a daemon shutdown while a VM runs. Thus that" -f ($running -join ', '))
         Note 'command shuts them down gracefully first, and waits for each one.'
     } else {
-        Note 'no VM is running, so the daemon will go straight down.'
+        Note 'no VM runs, so the daemon stops directly.'
     }
     Write-Host ''
 
-    # ASKED OF THE PROCESS, not guessed from a list of likely directories. The daemon is
-    # running right now - $p[0] above is it - so its own image path is the answer, and it is
-    # right on a machine whose AppSandbox lives somewhere nobody here thought of. .Path can
-    # come back empty for a process this account cannot open, so the default install is the
-    # fallback; a list of local paths would be neither.
+    # ASKED OF THE PROCESS, not guessed from a list of probable directories. The
+    # daemon runs now ($p[0] above is it), so its own image path is the answer.
+    # That is also correct on a machine where AppSandbox is in an unexpected
+    # place. For a process that this account cannot open, .Path can be empty, so
+    # the default install is the fallback. A list of local paths is neither.
     $exe = $p[0].Path
     if (-not $exe -or -not (Test-Path $exe)) {
         $exe = @('C:\AppSandbox\AppSandbox.exe') |
                Where-Object { Test-Path $_ } | Select-Object -First 1
     }
-    # The exe is still looked up here, but only to say whether the way back exists: a host
-    # whose AppSandbox cannot be found is worth knowing about BEFORE the daemon goes down.
+    # The code still finds the exe here, but only to say whether the way back
+    # exists. You must know about a host without a findable AppSandbox BEFORE
+    # the daemon stops.
     if ($exe) {
-        Note 'and to bring it back when you are done here:'
+        Note 'and to start it again after you finish here:'
         Note '  dr-forge daemon start'
-        Note "  ($exe --headless, which is the one step that raises a UAC prompt)"
+        Note "  ($exe --headless, the one step that shows a UAC question)"
     } else {
-        Warn 'AppSandbox.exe cannot be found from here, so starting it again will need a path.'
+        Warn 'this code cannot find AppSandbox.exe, so its next start needs a path.'
     }
     exit 3
 }
@@ -212,24 +225,26 @@ function Test-Elevated {
     (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
-# THE DAEMON IS CHECKED BEFORE ELEVATION IS ASKED FOR, which is a change from the script this
-# was adopted from. Get-Process needs no elevation, while the relaunch below raises a UAC
-# prompt - so the original order made you accept a prompt and then told you AppSandbox was
-# running and nothing had been done. A refusal that costs a prompt first teaches people to
-# click through prompts. --dry-run writes nothing, so it does not need the daemon down: being
-# able to rehearse a layer while the forge is still running is most of its value.
+# THE CODE TESTS THE DAEMON BEFORE IT ASKS FOR ELEVATION. That is a change from
+# the original script. Get-Process needs no elevation, but the restart below
+# shows a UAC question. In the original order, you accepted a question, and then
+# heard that AppSandbox ran and nothing happened. A refusal after a question
+# teaches people to click through questions. --dry-run writes nothing, so it
+# does not need a stopped daemon. Its main value is a rehearsal of a layer while
+# the forge still runs.
 if ($Mode -ne 'list' -and -not $WhatIfOnly) { Assert-AppSandboxClosed }
 
-# New-VHD, Get-VHD and Resize-VHD all answer "You do not have the required permission"
-# unelevated - MEASURED, and the message names the computer rather than the
-# cmdlet, so it reads like a policy problem rather than a missing UAC prompt.
+# Without elevation, New-VHD, Get-VHD, and Resize-VHD all answer "You do not
+# have the required permission" (a test showed this). The message names the
+# computer, not the cmdlet. Thus it looks like a policy problem, not like a
+# missing UAC question.
 if ($Mode -ne 'list' -and -not (Test-Elevated) -and -not $NoElevate) {
-    Note 'the VHD cmdlets need elevation - asking for it once (accept the UAC prompt).'
-    # -Root goes through the GENERIC loop below rather than being forced in here. Passing it
-    # unconditionally would make the elevated child believe it was given explicitly, and the
-    # child is the process that prints what the user reads - so it would report a default as a
-    # deliberate choice. The child's own default is the same literal in this same file, so
-    # leaving it out when it was not given is exact, not approximate.
+    Note 'the VHD cmdlets need elevation. Asking for it once (accept the UAC question).'
+    # -Root goes through the GENERAL loop below. It is not forced in here. If
+    # the code always gives it, the elevated child thinks that the user gave it.
+    # The child prints what the user reads, so it reports a default as a choice.
+    # The own default of the child is the same literal in this file. Thus,
+    # without a value from the user, its omission is exact.
     $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"",
            '-Mode', $Mode, '-NoElevate')
     foreach ($p in @('Root', 'Name', 'Parent', 'From')) {
@@ -241,39 +256,40 @@ if ($Mode -ne 'list' -and -not (Test-Elevated) -and -not $NoElevate) {
     foreach ($p in @('Unregister', 'KeepRegistered', 'KeepVmFolder', 'WhatIfOnly')) {
         if ($PSBoundParameters.ContainsKey($p)) { $a += "-$p" }
     }
-    # MEASURED: without the three steps below, a refusal from the elevated child
-    # is invisible here and the caller goes on to run the next command as though this one
-    # had worked. See the transcript note near the top of the file.
+    # A TEST SHOWED THIS. Without the three steps below, a refusal of the
+    # elevated child is not visible here, and the caller runs the next command
+    # as if this one worked. See the transcript note near the top of the file.
     $log = Join-Path $env:TEMP "dr-layer-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff').log"
     $a += @('-TranscriptTo', "`"$log`"")
     try {
         $proc = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList ($a -join ' ')
     } catch {
-        # Declining the UAC prompt throws rather than returning a code, and the bare
-        # exception reads like a scripting fault instead of a decision someone made.
-        Fail 'elevation was declined, so nothing was done.'
+        # A refusal of the UAC question throws, and returns no code. The plain
+        # exception looks like a script fault, not like the decision of a
+        # person.
+        Fail 'elevation was refused, so nothing happened.'
         exit 24
     }
 
     if (Test-Path $log) {
-        # The transcript's own header, footer and prompt echoes are noise; everything between
-        # is what the child actually said. Filtered by pattern rather than by line number,
-        # because a header that gains a field should not swallow the first line of real
-        # output.
+        # The header, footer, and prompt echoes of the transcript are noise. The
+        # lines between are what the child said. Filtered by pattern, not by
+        # line number, because a header with a new field must not hide the first
+        # line of real output.
         #
-        # THE PROMPT ECHOES NEED STATE, which is why this is a foreach and not one more
-        # clause in a Where-Object. A transcript records each command as a "PS>" line, and
-        # the host writes `PS>$global:?` plus its result while recording the pipeline's
-        # success state - so a clean run printed this into the caller's console
-        # (MEASURED):
+        # THE PROMPT ECHOES NEED STATE. That is why this is a foreach, and not
+        # one more clause in a Where-Object. A transcript records each command
+        # as a "PS>" line. At the record of the success state of the pipeline,
+        # the host writes `PS>$global:?` and its result. Thus a clean run
+        # printed this into the console of the caller (a test showed this):
         #
         #     start AppSandbox and 'layer-2-ue41' will be in the list.
         #   PS>$global:?
         #   True
         #
-        # The True/False is dropped ONLY when it directly follows that line. A bare "True" is
-        # a perfectly plausible thing for a script to print, and a filter that swallowed
-        # every one would hide real output in order to tidy up an artefact.
+        # The code removes the True/False ONLY directly after that line. A
+        # script can print a bare "True". A filter that removes each one hides
+        # real output, only to clean an artifact.
         $skipNextBool = $false
         foreach ($line in (Get-Content $log)) {
             if ($line -match '^\*{5,}$' -or
@@ -281,8 +297,8 @@ if ($Mode -ne 'list' -and -not (Test-Elevated) -and -not $NoElevate) {
                 continue
             }
             if ($line -match '^PS>') {
-                # `PS>$global:?` is followed by the boolean it evaluated to; any other PS>
-                # line is just the command being echoed.
+                # The boolean result follows `PS>$global:?`. Each other PS> line
+                # is only the echo of a command.
                 $skipNextBool = ($line -match '^PS>\$global:\?\s*$')
                 continue
             }
@@ -294,11 +310,11 @@ if ($Mode -ne 'list' -and -not (Test-Elevated) -and -not $NoElevate) {
         }
         Remove-Item $log -Force -ErrorAction SilentlyContinue
     } else {
-        Warn "the elevated run left no transcript at $log - its output is lost."
+        Warn "the elevated run left no transcript at $log. Its output is lost."
     }
 
-    # Propagated, not swallowed. `return` here would have reported success for a child that
-    # refused, which is the other half of how one unnoticed failure became four.
+    # Passed on, not hidden. `return` here reports success for a child that
+    # refused. That is the other half of how one unseen failure became four.
     if ($proc.ExitCode -ne 0) { Fail "the elevated run exited $($proc.ExitCode)." }
     exit $proc.ExitCode
 }
@@ -309,16 +325,17 @@ function Resolve-LayerDisk([string]$nameOrPath) {
 }
 
 # ------------------------------------------------------------------ what a layer remembers
-# WHY A SIDECAR AT ALL. `new` copies RamMB, CpuCores, GpuMode, GpuName and NetworkMode from a
-# VM BLOCK - and a frozen layer's whole point is that no VM block points at it any more. So
-# the settings a child has to inherit disappear at exactly the moment the base becomes a base.
-# -From exists to paper over that, and it fails SILENTLY when forgotten: the fallback is "the
-# first VM block in vms.cfg", some unrelated VM whose GPU and network settings are then copied
-# into the layer without a word. Recording them beside the disk makes the chain
-# self-describing instead, and -From becomes an override rather than a thing to remember.
+# WHY A SIDECAR FILE. `new` copies RamMB, CpuCores, GpuMode, GpuName, and
+# NetworkMode from a VM BLOCK. But the purpose of a frozen layer is that no VM
+# block points to it. Thus the configuration that a child must inherit
+# disappears at exactly the time that the base becomes a base. -From exists to
+# hide that. If you forget it, it fails SILENTLY. The fallback is "the first
+# VM block in vms.cfg", an unrelated VM, and its GPU and network values go into
+# the layer without a message. A record next to the disk makes the chain
+# describe itself, and -From becomes an override, not a thing to remember.
 #
-# A layer that differs from its parent in GpuMode or NetworkMode behaves differently from the
-# thing it was built on, which is the kind of difference that surfaces three steps away.
+# A layer that differs from its parent in GpuMode or NetworkMode behaves
+# differently from its base. That kind of difference shows three steps away.
 function Get-LayerInfoPath([string]$diskPath) {
     Join-Path (Split-Path $diskPath -Parent) 'layer.json'
 }
@@ -329,9 +346,9 @@ function Save-LayerInfo([string]$diskPath, $src, [string]$why) {
     $o['when']   = (Get-Date).ToString('s')
     $o['why']    = $why
     $f = Get-LayerInfoPath $diskPath
-    if ($WhatIfOnly) { Note "would record the inherited settings in $f"; return }
+    if ($WhatIfOnly) { Note "would record the inherited configuration in $f"; return }
     [IO.File]::WriteAllText($f, ($o | ConvertTo-Json))
-    Note "settings recorded in $(Split-Path $f -Leaf)"
+    Note "configuration recorded in $(Split-Path $f -Leaf)"
 }
 function Read-LayerInfo([string]$diskPath) {
     $f = Get-LayerInfoPath $diskPath
@@ -339,55 +356,57 @@ function Read-LayerInfo([string]$diskPath) {
     try { return (Get-Content $f -Raw | ConvertFrom-Json) } catch { return $null }
 }
 # ------------------------------------------------------ is -Root the place you meant?
-# WHERE A LAYER LANDS IS DECIDED BY A DEFAULT, not by anything in the command: -Root is
-# C:\ForgeLayers unless given, so `adopt -Name layer-0` names no destination at all. That is
-# fine until it is wrong, and New-Item -Force builds an entire missing chain without a word -
-# so a mistyped -Root is created exactly as willingly as the right one, and `adopt` then moves
-# the ONLY copy of a base into it.
+# A DEFAULT DECIDES WHERE A LAYER GOES, not the command. Without a value, -Root
+# is C:\ForgeLayers. Thus `adopt -Name layer-0` names no destination. That is
+# good until it is wrong. New-Item -Force builds a whole missing chain without a
+# message. Thus a -Root with a typo is created as easily as the correct one.
+# `adopt` then moves the ONLY copy of a base into it.
 #
-# Depth is the signal. A layer store that does not exist yet is ordinary on first use; one
-# whose PARENT is also missing is probably not the path that was typed. Same reasoning as
-# -DiskDir in forge-provision.ps1, and asked about there first: a user who read the command
-# wanted to know how it knew where to put things, which is the right question.
+# The depth is the signal. A missing layer store is normal at the first use. If
+# its PARENT is also missing, it is probably not the path that you meant. The
+# same reason as -DiskDir in forge-provision.ps1, where a user asked first. The
+# user read the command, and wanted to know how it found the place. That is the
+# correct question.
 function Show-Root([switch]$Creating) {
     if ($script:rootGiven) {
         Note "root    $Root  (as given)"
     } else {
         Note "root    $Root  (the default: nothing set DRAUGR_FORGE_LAYERS)"
-        Note '        --root <path> puts layers elsewhere for one command, and'
-        Note '        DRAUGR_FORGE_LAYERS sets it for good. It must be outside'
-        Note '        AppSandbox''s own tree, and on your fastest volume rather'
-        Note '        than your biggest.'
+        Note '        --root <path> puts layers in another place for one command,'
+        Note '        and DRAUGR_FORGE_LAYERS sets it permanently. It must be outside'
+        Note '        the own tree of AppSandbox, and on your fastest volume, not'
+        Note '        your largest.'
     }
     if (Test-Path $Root) { return }
-    Note ("        it does not exist yet{0}" -f $(if ($Creating) { '; it will be created' } else { '' }))
+    Note ("        it does not exist yet{0}" -f $(if ($Creating) { '. The code creates it' } else { '' }))
     $up = Split-Path $Root -Parent
     if ($up -and -not (Test-Path $up)) {
-        Warn "        and so does its parent, $up - check the spelling."
-        Warn '        A mistyped -Root is created just as willingly as a correct one, and'
-        Warn '        the layer would then live somewhere you did not mean it to.'
+        Warn "        and its parent, $up, does not exist either. Look at the spelling."
+        Warn '        The code creates a -Root with a typo as easily as a correct one, and'
+        Warn '        the layer then lives in a place that you did not want.'
     }
 }
 
 # ----------------------------------------------------------------- who differences from this
-# EVERY disk anywhere that has $disk as its parent. This is the guard `thaw` and `drop` both
-# live on, and it has to look WIDER THAN -Root.
+# EACH disk, in any place, that has $disk as its parent. `thaw` and `drop` both
+# need this guard, and it must look WIDER THAN -Root.
 #
-# MEASURED, on this host: C:\ForgeLayers\layer-1 is the parent of
-# D:\ForgeLayers\layer-2-ue411. The previous version of this check (inline in `drop`) scanned
-# only -Root, so `drop -Name layer-1` - with -Root at its C:\ForgeLayers default - found no
-# children and would have removed the parent of every engine layer on D:. The guard existed
-# and was looking in one place. A layer store per drive is the normal shape here, not an
-# exotic one: the engine layers are the big ones, so they go on the big disk.
+# A TEST on this host: C:\ForgeLayers\layer-1 is the parent of
+# D:\ForgeLayers\layer-2-ue411. The previous version of this test (inside
+# `drop`) scanned only -Root. Thus `drop -Name layer-1`, with the default -Root
+# C:\ForgeLayers, found no children, and removed the parent of each engine layer
+# on D:. The guard existed, but looked in one place. One layer store for each
+# drive is the normal layout here. The engine layers are the large ones, so they
+# go on the large disk.
 #
-# Three places are searched, because a disk can be in any of them:
-#   - -Root, whatever it is this run;
-#   - <drive>\ForgeLayers on every FIXED drive, the convention this script creates, so a
-#     store on a drive nobody mentioned is still found;
-#   - every VhdxPath in vms.cfg, because a registered disk need not be in a layer store at
-#     all - forge-provision.ps1 builds layer-0 in AppSandbox's own directory on purpose.
-# Removable drives are skipped deliberately: spinning up an absent USB disk to ask about a
-# parent nobody put there is a slow way to learn nothing.
+# The code searches three places, because a disk can be in each of them:
+#   - -Root, whatever it is in this run.
+#   - <drive>\ForgeLayers on each FIXED drive, the convention of this script. Thus it
+#     also finds a store on a drive that nobody named.
+#   - each VhdxPath in vms.cfg, because a registered disk does not have to be in a layer
+#     store. forge-provision.ps1 builds layer-0 in the own directory of AppSandbox, on purpose.
+# The code skips removable drives, on purpose. A spin-up of an absent USB disk
+# to ask about a parent that nobody put there is a slow way to learn nothing.
 function Get-FullPath([string]$p) {
     try { return [IO.Path]::GetFullPath($p) } catch { return $p }
 }
@@ -408,20 +427,20 @@ function Get-LayerChildren([string]$disk) {
 
     $found = @()
     foreach ($other in ($disks | ForEach-Object { Get-FullPath $_ } | Select-Object -Unique)) {
-        # -ieq, not -eq: these paths arrive from three sources - a parameter, a directory walk
-        # and a config file - and Windows does not care about case while PowerShell's -eq
-        # does. Same reason the repo already carries "Compare Windows path case-insensitive"
-        # as its own commit.
+        # -ieq, not -eq. These paths come from three sources: a parameter, a
+        # directory walk, and a configuration file. Windows ignores case, but
+        # the -eq of PowerShell does not. The same reason as the commit "Compare
+        # Windows path case-insensitive" in this repo.
         if ($other -ieq $disk -or -not (Test-Path $other)) { continue }
-        # A disk being read by a running VM answers with an exception rather than a parent,
-        # and a child that cannot be interrogated must NOT be reported as absent - so it is
-        # listed as unreadable and the caller decides. Silence here is the one outcome this
-        # whole function exists to prevent.
+        # A disk that a running VM reads answers with an exception, not a
+        # parent. A child that the code cannot ask must NOT be reported as
+        # missing. Thus it is listed as unreadable, and the caller decides. This
+        # whole function exists to prevent silence here.
         try { $pp = (Get-VHD -Path $other -ErrorAction Stop).ParentPath }
         catch { $found += "$other  (unreadable: $($_.Exception.Message.Split([char]10)[0]))"; continue }
         if ($pp -and (Get-FullPath $pp) -ieq $disk) { $found += $other }
     }
-    # @() at the call site is load-bearing: one child returned from here arrives as a bare
+    # The @() at the call is necessary. One child from here arrives as a bare
     # string, and .Count on a string is $null.
     $found
 }
@@ -465,37 +484,40 @@ if ($Mode -eq 'list') {
         Note ("{0,-20} {1,7} GB on disk{2}" -f $d.Name, [math]::Round($i.Length / 1GB, 2),
               $(if ($i.IsReadOnly) { '  frozen' } else { '  WRITABLE' }))
     }
-    # ONE ROOT IS NOT EVERY ROOT, and nothing above says so. Once layers are split across two
-    # volumes - which is the ordinary case, a base on the fast disk and the engine layers on
-    # the big one - no single run of this command shows the whole picture, and the listing
-    # looks complete either way. Said after the layers rather than beside the root, because it
-    # is about what is MISSING from the list that precedes it.
-    Note 'this is one root. Layers under another are not listed here:'
+    # ONE ROOT IS NOT EACH ROOT, and nothing above says so. When layers are on
+    # two volumes (the usual case: a base on the fast disk, and the engine
+    # layers on the large one), no single run of this command shows all. The
+    # list looks complete in both cases. Said after the layers, not next to the
+    # root, because it is about what is MISSING from the list above.
+    Note 'this is one root. This list does not show layers under another root:'
     Note '        dr-layer list --root <path>'
-    if (-not (Test-Elevated)) { Warn 'run elevated to see each chain and its parents.' }
+    if (-not (Test-Elevated)) { Warn 'run elevated, to see each chain and its parents.' }
     return
 }
 
 if (-not $Name) { Fail "-Name is required for '$Mode'."; exit 2 }
-# Checked again, and not redundantly: the first check happened before the UAC prompt, and a
-# daemon can be started while that prompt sits on screen. This is the one the edit depends on.
+# Tested again, and not without a reason. The first test was before the UAC
+# question, and somebody can start a daemon while that question is on the
+# screen. The edit depends on this test.
 if (-not $WhatIfOnly) { Assert-AppSandboxClosed }
-# @() IS LOAD-BEARING. PowerShell unrolls a one-element array when a function returns
-# it, so `$cfg = Read-Cfg` yields a bare PSCustomObject whenever vms.cfg holds a single
-# block - which is exactly what `adopt` leaves behind when it de-registers the last VM.
-# `$cfg += <block>` in `new` then failed with "does not contain a method named
-# 'op_Addition'", after the child disk and its layer.json had already been written.
-# MEASURED, building layer-1 on a freshly adopted layer-0.
+# @() IS NECESSARY. When a function returns an array with one element,
+# PowerShell unrolls it. Thus, for a vms.cfg with one block, `$cfg = Read-Cfg`
+# gives a bare PSCustomObject. `adopt` leaves exactly that after it removes the
+# registration of the last VM. `$cfg += <block>` in `new` then failed with "does
+# not contain a method named 'op_Addition'", after the code already wrote the
+# child disk and its layer.json. A TEST SHOWED THIS, at the build of layer-1 on
+# a newly adopted layer-0.
 $cfg = @(Read-Cfg)
 $vmBlocks = @($cfg | Where-Object { $_.Header -eq 'VM' })
 
 # ========================================================================= adopt
-# Turn a finished VM's disk into a frozen layer, in the order that keeps it safe throughout.
-# This is the step that cannot be assembled by hand without knowing things no one should have
-# to: that the settings have to be captured BEFORE vms.cfg is rewritten, that the move has to
-# precede the freeze, and that de-registering is not the same as deleting.
+# Make the disk of a finished VM into a frozen layer, in the order that keeps it
+# safe all the time. A manual version of this step needs facts that
+# nobody must have to know. The configuration must be captured BEFORE the
+# rewrite of vms.cfg. The move must come before the freeze. A removal of the
+# registration is not the same as a delete.
 if ($Mode -eq 'adopt') {
-    if (-not $Name) { Fail '-Name is required: the VM to adopt, which becomes the layer.'; exit 2 }
+    if (-not $Name) { Fail '-Name is required: the VM to adopt. It becomes the layer.'; exit 2 }
     $owner = @($vmBlocks | Where-Object { (Get-Val $_ 'Name') -eq $Name })
     if (-not $owner) {
         Fail "no VM called '$Name' in vms.cfg."
@@ -505,13 +527,13 @@ if ($Mode -eq 'adopt') {
     $src  = $owner[0]
     $from = Get-Val $src 'VhdxPath'
     if (-not $from)             { Fail "'$Name' has no VhdxPath in vms.cfg."; exit 21 }
-    if (-not (Test-Path $from)) { Fail "'$Name' points at $from, which is not there."; exit 21 }
+    if (-not (Test-Path $from)) { Fail "'$Name' points to $from, which is not there."; exit 21 }
 
     $dir   = Join-Path $Root $Name
     $disk  = Join-Path $dir 'disk.vhdx'
     $inPlace = ($disk -eq $from)
     if (-not $inPlace -and (Test-Path $disk)) {
-        Fail "$disk already exists - refusing to overwrite it."; exit 20
+        Fail "$disk already exists. Refusing to overwrite it."; exit 20
     }
 
     Say "adopt '$Name' as a layer"
@@ -519,25 +541,27 @@ if ($Mode -eq 'adopt') {
     $gb = [math]::Round((Get-Item $from -Force).Length / 1GB, 1)
     Note "disk    $from  ($gb GB on disk)"
     if ($inPlace) {
-        # A base built with -DiskDir aimed at the layer store. The docs now advise against
-        # that, but disks are already in that shape, and for them there is simply nothing to
-        # move - the freeze and the de-register are the whole job.
+        # A base built with -DiskDir in the layer store. The docs now advise
+        # against that, but some disks already have that layout. For them,
+        # there is nothing to move. The freeze and the removal of the
+        # registration are the whole job.
         Note 'already under -Root, so there is nothing to move'
     } else {
         $sameVol = (Split-Path $from -Qualifier) -eq (Split-Path $disk -Qualifier)
         Note "move to $disk"
         if ($sameVol) {
-            Note '        same volume, so this is a rename: no bytes are copied'
+            Note '        same volume, so this is a rename. No bytes are copied'
         } else {
-            Warn '        ACROSS VOLUMES, so every byte is copied. Allowed, just not quick.'
+            Warn '        ACROSS VOLUMES, so each byte is copied. Allowed, but not fast.'
         }
     }
 
     if (-not $inPlace -and -not $WhatIfOnly) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
-    # The settings go down FIRST, while the VM block is still there to read them from. Doing
-    # it after the rewrite would mean reading them back out of a file that no longer has them.
+    # The configuration is recorded FIRST, while the VM block is still there to
+    # read. After the rewrite, the code must read it from a file that no longer
+    # has it.
     Save-LayerInfo $disk $src "adopted from VM '$Name'"
 
     if ($inPlace) {
@@ -547,19 +571,21 @@ if ($Mode -eq 'adopt') {
     } else {
         Move-Item -LiteralPath $from -Destination $disk
         Note 'disk moved'
-        # Proof it survived, before anything irreversible happens to vms.cfg. A move that
-        # produced an unreadable file and a de-registered VM would leave nothing to go back to.
-        try { [void](Get-VHD -Path $disk -ErrorAction Stop); Note 'Get-VHD reads it: the move is sound' }
+        # Proof that it survived, before a permanent change of vms.cfg. A move
+        # that gives an unreadable file, and a VM without its registration,
+        # leaves nothing to go back to.
+        try { [void](Get-VHD -Path $disk -ErrorAction Stop); Note 'Get-VHD reads it. The move is good' }
         catch {
-            Fail "the moved disk does not read back: $($_.Exception.Message)"
-            Fail "  It is at $disk and vms.cfg has NOT been touched - '$Name' still points at"
-            Fail '  the old path. Move it back there before doing anything else.'
+            Fail "the code cannot read the moved disk: $($_.Exception.Message)"
+            Fail "  It is at $disk, and vms.cfg did NOT change. '$Name' still points to"
+            Fail '  the old path. Move it back there before you do anything else.'
             exit 20
         }
     }
 
-    # Frozen before de-registering, not after: while a VM block still names it, the read-only
-    # attribute is the only thing standing between a careless start and a ruined chain.
+    # Frozen before the removal of the registration, not after. While a VM block
+    # still names it, only the read-only attribute protects the chain from a
+    # careless start.
     if ($WhatIfOnly) {
         Note "would set read-only on $disk"
     } else {
@@ -568,64 +594,69 @@ if ($Mode -eq 'adopt') {
         else { Set-ItemProperty -Path $disk -Name IsReadOnly -Value $true; Note 'read-only set' }
     }
 
-    # De-register: the VM block goes, every file stays. This is what ends the exposure, and
-    # it is not the same act as deleting the VM - which would take the folder with it.
+    # Remove the registration: the VM block goes, and each file stays. This ends
+    # the exposure. It is not the same as a delete of the VM, which removes the
+    # folder too.
     $cfg = @($cfg | Where-Object { $_ -notin $owner })
     Write-Cfg $cfg
-    # IN THE SAME MOOD AS ITS NEIGHBOURS. Write-Cfg honours -WhatIfOnly and says "would back
-    # up ... and rewrite", so a dry run that then announced the de-registration in the past
-    # tense was reporting an act it had not performed - between two lines that both said
-    # "would". Caught, on the first real dry run of adopt.
+    # IN THE SAME MOOD AS THE LINES AROUND IT. Write-Cfg obeys -WhatIfOnly, and
+    # says "would back up ... and rewrite". Before, a dry run then told the
+    # removal of the registration in the past tense. It reported an act that it
+    # did not do, between two lines that both said "would". The first real dry
+    # run of adopt found it.
     if ($WhatIfOnly) {
-        Note "would de-register '$Name': AppSandbox would stop knowing this disk exists"
+        Note "would remove the registration of '$Name': AppSandbox would no longer know that this disk exists"
     } else {
-        Note "'$Name' de-registered: AppSandbox no longer knows this disk exists"
-        # The VM is gone, so its host key is owed nothing. The disk lives on as a layer, but
-        # a child boots under its OWN name and dials its own alias, so nothing here needs it.
+        Note "'$Name' has no registration now: AppSandbox no longer knows that this disk exists"
+        # The VM is gone, so its host key has no use. The disk lives on as a
+        # layer, but a child boots with its OWN name, and connects to its own
+        # alias. Thus nothing here needs it.
         $hk = Clear-ForgeHostKey $Name
         if ($hk) { Note $hk }
     }
 
-    # What is left behind is the VM's folder with no disk in it. Removing it is the point of
-    # the exercise, so it is done here rather than left as a seventh step - but never while a
-    # .vhdx is still in there, whatever the reason for that might be.
+    # The folder of the VM stays, with no disk in it. Its removal is part of the
+    # purpose, so the code does it here, and does not leave it as a seventh
+    # step. But never while a .vhdx is still in it, for each reason.
     if (-not $inPlace) {
         $old = Split-Path $from -Parent
-        # Under -WhatIfOnly the disk is still sitting in there, because nothing moved - so it
-        # would be counted as a stray and the dry run would report a refusal the real run
-        # will not make. Discount exactly that one file, and nothing else.
+        # Under -WhatIfOnly, the disk is still in there, because nothing moved.
+        # Thus the code counts it as extra, and the dry run reports a refusal
+        # that the real run does not make. Do not count exactly that one file,
+        # and nothing else.
         $stray = @(Get-ChildItem $old -Filter *.vhdx -Recurse -ErrorAction SilentlyContinue |
                    Where-Object { -not ($WhatIfOnly -and $_.FullName -eq $from) })
         if ($KeepVmFolder) {
-            Note "kept     $old (-KeepVmFolder); it holds no disk now"
+            Note "kept     $old (-KeepVmFolder). It holds no disk now"
         } elseif ($stray.Count) {
-            Warn "NOT removing $old - it still holds $($stray.Count) .vhdx file(s):"
+            Warn "NOT removing $old. It still holds $($stray.Count) .vhdx file(s):"
             foreach ($f in $stray) { Warn "  $($f.FullName)" }
-            Warn '  Something else lives there. Look before you delete it by hand.'
+            Warn '  Something else is there. Look before you delete it yourself.'
         } elseif ($WhatIfOnly) {
-            Note "would remove $old (now diskless)"
+            Note "would remove $old (now with no disk)"
         } else {
             Remove-Item $old -Recurse -Force
-            Note "removed  $old (the VM's leftovers; the disk is elsewhere now)"
+            Note "removed  $old (what the VM left. The disk is in another place now)"
         }
     }
 
     Write-Host ''
     Note "'$Name' is now a frozen layer at $disk"
     Note "next:  dr-layer new layer-1 --parent $Name"
-    Note '       --from is no longer needed: the settings are in layer.json beside the disk.'
+    Note '       --from is no longer necessary. The configuration is in layer.json next to the disk.'
     return
 }
 
 # =========================================================================== new
 if ($Mode -eq 'new') {
     if (-not $Parent) { Fail '-Parent is required: a layer name, or a path to a .vhdx.'; exit 2 }
-    # A Windows guest name is capped at 15 (NetBIOS) and takes letters, digits and hyphens.
-    # The DISK path has no such limit - only the VM's name does.
+    # A Windows guest name has 15 characters at most (NetBIOS), with letters,
+    # digits, and hyphens. The DISK path has no such limit. Only the name of the
+    # VM has it.
     if ($Name.Length -gt 15 -or $Name -notmatch '^[A-Za-z0-9-]+$' -or
         $Name -match '^-' -or $Name -match '-$' -or $Name -match '^[0-9]+$') {
-        Fail "'$Name' is not a valid Windows guest name (<=15 chars, letters/digits/hyphens,"
-        Fail '  not all digits, no leading or trailing hyphen).'
+        Fail "'$Name' is not a valid Windows guest name (<=15 characters, letters/digits/hyphens,"
+        Fail '  not all digits, no hyphen at the start or the end).'
         exit 2
     }
     if ($vmBlocks | Where-Object { (Get-Val $_ 'Name') -eq $Name }) {
@@ -640,8 +671,8 @@ if ($Mode -eq 'new') {
     $pv = Get-VHD -Path $parentDisk
     $parentGb = [math]::Round($pv.Size / 1GB)
     if ($DiskGb -and $DiskGb -lt $parentGb) {
-        Fail "-DiskGb $DiskGb is smaller than the parent's $parentGb GB."
-        Fail '  A differencing child can be grown but never shrunk. Nothing was created.'
+        Fail "-DiskGb $DiskGb is smaller than the $parentGb GB of the parent."
+        Fail '  A differencing child can grow, but never shrink. Nothing was created.'
         exit 20
     }
 
@@ -651,12 +682,12 @@ if ($Mode -eq 'new') {
     Note "child   $disk"
     Note "size    $(if ($DiskGb -and $DiskGb -gt $parentGb) { "$DiskGb GB (grown)" } else { "$parentGb GB (inherited)" })"
 
-    # The parent must be frozen BEFORE it gains a child: writing to a parent that a child
-    # already differences from corrupts the child, silently, and there is no warning
-    # anywhere in the stack that this is happening.
+    # Freeze the parent BEFORE it gets a child. A write to the parent of a
+    # differencing child damages the child, silently, and nothing in the stack
+    # warns about it.
     if (-not (Get-Item $parentDisk -Force).IsReadOnly) {
         Warn "the parent is still WRITABLE. Freeze it first:  dr-layer freeze $Parent"
-        Warn '  Writing to a parent after a child exists corrupts the child, without a word.'
+        Warn '  A write to a parent after a child exists damages the child, without a message.'
         if (-not $WhatIfOnly) { Fail 'refusing to build on a writable parent.'; exit 20 }
     }
 
@@ -667,21 +698,23 @@ if ($Mode -eq 'new') {
     Note 'differencing disk created'
     if ($DiskGb -and $DiskGb -gt $parentGb) {
         Resize-VHD -Path $disk -SizeBytes ([int64]$DiskGb * 1GB)
-        Note "grown to $DiskGb GB (the parent is untouched: still $parentGb GB)"
+        Note "grown to $DiskGb GB (the parent did not change: still $parentGb GB)"
     }
-    # InstallComplete lives beside the disk, and without it AppSandbox offers to install
-    # Windows over the top of a disk that already has it.
+    # InstallComplete is next to the disk. Without it, AppSandbox offers to
+    # install Windows on top of a disk that already has it.
     [IO.File]::WriteAllText((Join-Path $dir 'vm_state.json'), '{"installComplete":1}')
 
     if ($KeepRegistered) { Note 'no VM block added (-KeepRegistered)'; return }
 
-    # Copy the settings that have to match, from the VM the parent came from if it is still
-    # registered, otherwise from -From, otherwise from the only VM there is. GpuMode,
-    # GpuName and NetworkMode especially: a layer that differs from its parent in those
-    # behaves differently from the thing it was built on.
+    # Copy the values that must match. If the VM of the parent is still
+    # registered, take them from it. Otherwise take them from -From, or from the
+    # only VM that exists. Most of all GpuMode, GpuName, and NetworkMode: a
+    # layer that differs from its parent in those behaves differently from its
+    # base.
     if ($From) {
-        # Named explicitly, so a miss is an error. Falling back to "some other VM" here
-        # would copy the wrong GpuMode or NetworkMode into a layer and say nothing.
+        # Named explicitly, so a miss is an error. A fallback to "some other VM"
+        # here copies the wrong GpuMode or NetworkMode into a layer, and says
+        # nothing.
         $src = @($vmBlocks | Where-Object { (Get-Val $_ 'Name') -eq $From })
         if (-not $src) { Fail "no VM called '$From' in vms.cfg."; exit 21 }
         $src = $src[0]
@@ -689,37 +722,40 @@ if ($Mode -eq 'new') {
         $src = @($vmBlocks | Where-Object { (Get-Val $_ 'VhdxPath') -eq $parentDisk }) |
                Select-Object -First 1
         if (-not $src) {
-            # The parent's own record, written by `adopt` or by a previous `new`. Preferred
-            # over any VM block that merely happens to exist, because it describes THIS chain.
+            # The own record of the parent, written by `adopt` or by a previous
+            # `new`. It is better than a VM block that only happens to exist,
+            # because it describes THIS chain.
             $info = Read-LayerInfo $parentDisk
             if ($info) { $src = ConvertTo-CfgBlock $info "$Parent/layer.json" }
         }
         if (-not $src) {
-            # Last resort, and loudly so. This is the path that used to copy an unrelated VM's
-            # GpuMode and NetworkMode into a layer without saying anything at all.
+            # The last choice, with a clear warning. Before, this path copied
+            # the GpuMode and NetworkMode of an unrelated VM into a layer, and
+            # said nothing.
             $src = $vmBlocks | Select-Object -First 1
             if ($src) {
-                Warn "nothing points at the parent and it has no layer.json, so the settings"
-                Warn "  are being taken from '$(Get-Val $src 'Name')', which may have nothing to"
-                Warn '  do with this chain. Pass -From to choose deliberately.'
+                Warn "nothing points to the parent, and it has no layer.json. Thus the values"
+                Warn "  come from '$(Get-Val $src 'Name')', which possibly has nothing to do"
+                Warn '  with this chain. Give -From to select on purpose.'
             }
         }
-        if (-not $src) { Fail 'no existing VM block to copy settings from; pass -From.'; exit 20 }
+        if (-not $src) { Fail 'no existing VM block to copy values from. Give -From.'; exit 20 }
     }
-    Note "settings copied from '$(Get-Val $src 'Name')'"
+    Note "values copied from '$(Get-Val $src 'Name')'"
 
     $SshPort = Resolve-SshPort $SshPort $vmBlocks
-    if ($SshPort -lt 0) { Fail 'that ssh port is already taken; pass --ssh-port.'; exit 20 }
+    if ($SshPort -lt 0) { Fail 'that ssh port is already in use. Give --ssh-port.'; exit 20 }
     Note "ssh port $SshPort"
 
     $hdd = if ($DiskGb) { $DiskGb } else { $parentGb }
-    # The child records what it inherited too, so the chain keeps working after this layer is
-    # itself frozen and de-registered. Without it, every freeze would re-open the same hole.
+    # The child also records what it inherited. Thus the chain still works after
+    # the freeze of this layer and the removal of its registration. Without it,
+    # each freeze opens the same hole again.
     Save-LayerInfo $disk $src "inherited from '$Parent' when '$Name' was created"
 
     $cfg += New-VmBlock $Name $src $disk $hdd $SshPort
     Write-Cfg $cfg
-    Note "start AppSandbox and '$Name' will be in the list."
+    Note "start AppSandbox, and '$Name' is in the list."
     return
 }
 
@@ -734,51 +770,55 @@ if ($Mode -eq 'freeze') {
     } elseif ($WhatIfOnly) {
         Note "would set read-only on $disk"
     } else {
-        # The read-only ATTRIBUTE is the guard that actually holds: AppSandbox will happily
-        # boot a VM pointed at a parent, and that write is what silently ruins every child
-        # below it. A failed open is a far better outcome than a corrupted chain.
+        # The read-only ATTRIBUTE is the guard that really works. AppSandbox
+        # boots a VM that points to a parent, and that write silently breaks
+        # each child below it. A failed open is much better than a damaged
+        # chain.
         Set-ItemProperty -Path $disk -Name IsReadOnly -Value $true
         Note "read-only set on $disk"
     }
     $owner = @($vmBlocks | Where-Object { (Get-Val $_ 'VhdxPath') -eq $disk })
     if ($owner -and $Unregister) {
-        # Recorded before the block is dropped, for the same reason adopt does it first: after
-        # the rewrite there is nowhere left to read these from.
-        Save-LayerInfo $disk $owner[0] "recorded when '$(Get-Val $owner[0] 'Name')' was de-registered"
+        # Recorded before the removal of the block, for the same reason as in
+        # adopt. After the rewrite, there is no place to read these from.
+        Save-LayerInfo $disk $owner[0] "recorded when '$(Get-Val $owner[0] 'Name')' lost its registration"
         $cfg = @($cfg | Where-Object { $_ -notin $owner })
         Write-Cfg $cfg
         Note "removed the VM block(s): $(($owner | ForEach-Object { Get-Val $_ 'Name' }) -join ', ')"
     } elseif ($owner) {
-        Warn "'$(Get-Val $owner[0] 'Name')' still points at this disk."
-        Warn '  Read-only stops a write, but -Unregister removes the temptation entirely.'
+        Warn "'$(Get-Val $owner[0] 'Name')' still points to this disk."
+        Warn '  Read-only stops a write, but -Unregister removes the risk completely.'
     }
     return
 }
 
 # =========================================================================== thaw
-# The counterpart to `freeze`, and the reason `freeze` is safe to automate: an irreversible
-# step that runs without being asked needs a one-command undo, or the first wrong guess costs
-# an afternoon of `attrib -r` and a vms.cfg block rebuilt from memory.
+# The opposite of `freeze`, and the reason why `freeze` is safe to automate. A
+# permanent step that runs without a request needs an undo with one command.
+# Otherwise the first wrong guess costs an afternoon of `attrib -r`, and a
+# vms.cfg block built again from memory.
 #
-# WHAT IT UNDOES. `freeze -Unregister` does two things, so this undoes both: the read-only
-# attribute is cleared, and the VM block is rebuilt from the layer.json that freeze recorded
-# on its way out. -NoRegister clears the attribute only.
+# WHAT IT UNDOES. `freeze -Unregister` does two things, so this undoes both. It
+# clears the read-only attribute, and builds the VM block again from the
+# layer.json that freeze recorded. -NoRegister clears only the attribute.
 #
-# WHAT IT CANNOT UNDO, which is the part to understand before relying on it: bytes that have
-# already left. A layer that was copied, archived or shipped is out there, and thawing this
-# file changes none of those copies. Thaw is for a layer whose mistake you caught before
-# anything was built on it - not a way to edit history.
+# WHAT IT CANNOT UNDO. Know this before you depend on it: bytes that already
+# left. A layer that was copied, archived, or shipped exists somewhere else, and
+# a thaw of this file changes none of those copies. Thaw is for a layer with a
+# mistake that you found before something was built on it. It is not a way to
+# edit history.
 #
-# WHY IT REFUSES WHEN THE LAYER HAS CHILDREN. Writing to a parent that a child differences
-# from corrupts the child, silently, with nothing anywhere in the stack reporting it. That is
-# precisely the arrangement `new` refuses to create, seen from the other end, and it is the
-# only thing the read-only attribute is for. -Force is there because it is your disk; the
-# warning it prints is not decoration.
+# WHY IT REFUSES FOR A LAYER WITH CHILDREN. A write to the parent of a
+# differencing child damages the child, silently, and nothing in the stack
+# reports it. `new` refuses to create exactly that layout, from the other side,
+# and it is the only purpose of the read-only attribute. -Force exists because
+# it is your disk. Its warning is not decoration.
 if ($Mode -eq 'thaw') {
     $disk = Get-FullPath (Resolve-LayerDisk $Name)
     if (-not (Test-Path $disk)) { Fail "no disk at $disk"; exit 21 }
-    # -Name may be a path, in which case the VM name is the layer DIRECTORY's name - the one
-    # `new` would have used. Deriving it from the file would name every VM 'disk'.
+    # -Name can be a path. Then the VM name is the name of the layer DIRECTORY,
+    # the name that `new` uses. A name from the file gives each VM the name
+    # 'disk'.
     $vmName = if ($Name -match '\.vhdx$') { Split-Path (Split-Path $Name -Parent) -Leaf } else { $Name }
     Say "thaw '$vmName'"
     Show-Root
@@ -787,13 +827,13 @@ if ($Mode -eq 'thaw') {
     if ($kids.Count) {
         Fail "$($kids.Count) layer(s) difference from this one:"
         foreach ($k in $kids) { Fail "    $k" }
-        Fail '  Writing to a parent a child differences from corrupts the child, and nothing'
-        Fail '  in the stack will say so. Drop them first.'
+        Fail '  A write to the parent of a differencing child damages the child, and nothing'
+        Fail '  in the stack says so. Drop them first.'
         if (-not $Force) { exit 20 }
-        Warn '-Force given: thawing anyway. Every layer listed above is now suspect, and the'
-        Warn '  corruption will not announce itself - it surfaces as a guest that boots wrong.'
+        Warn '-Force given: thaw anyway. Each layer in the list above is now suspect. The'
+        Warn '  damage gives no message. It shows as a guest that boots wrong.'
     } else {
-        Note 'children none - nothing differences from this disk'
+        Note 'children none. Nothing differences from this disk'
     }
 
     $i = Get-Item $disk -Force
@@ -806,10 +846,10 @@ if ($Mode -eq 'thaw') {
         Note "read-only cleared on $disk"
     }
 
-    # WITHOUT THIS, APPSANDBOX OFFERS TO INSTALL WINDOWS over a disk that already has it -
-    # which on a layer carrying a provisioned guest and an engine is an expensive
-    # misunderstanding. `new` writes it (see the comment there); a layer that was moved by
-    # hand can easily have lost it, and this is the moment it starts mattering again.
+    # WITHOUT THIS, APPSANDBOX OFFERS TO INSTALL WINDOWS on a disk that already
+    # has it. On a layer with a provisioned guest and an engine, that is an
+    # expensive error. `new` writes it (see the comment there). A layer that
+    # somebody moved by hand can easily lose it, and now it matters again.
     $stateFile = Join-Path (Split-Path $disk -Parent) 'vm_state.json'
     if (Test-Path $stateFile) {
         Note 'vm_state.json present'
@@ -817,54 +857,55 @@ if ($Mode -eq 'thaw') {
         Note "would write $stateFile"
     } else {
         [IO.File]::WriteAllText($stateFile, '{"installComplete":1}')
-        Note 'vm_state.json written (without it AppSandbox offers to reinstall Windows)'
+        Note 'vm_state.json written (without it, AppSandbox offers to install Windows again)'
     }
 
     if ($NoRegister) {
-        Note 'no VM block added (-NoRegister): the disk is writable but nothing can boot it'
+        Note 'no VM block added (-NoRegister). The disk is writable, but nothing can boot it'
         return
     }
 
     if ($vmBlocks | Where-Object { (Get-Val $_ 'Name') -eq $vmName }) {
-        Note "'$vmName' is already in vms.cfg - left exactly as it is"
+        Note "'$vmName' is already in vms.cfg. Not changed"
         return
     }
     $other = @($vmBlocks | Where-Object { (Get-Val $_ 'VhdxPath') -ieq $disk })
     if ($other) {
-        Fail "'$(Get-Val $other[0] 'Name')' already points at this disk under a different name."
-        Fail '  Two VM blocks on one disk is how a layer gets written by two machines at once.'
-        Fail '  Nothing was added; use that VM, or remove its block first.'
+        Fail "'$(Get-Val $other[0] 'Name')' already points to this disk, with a different name."
+        Fail '  With two VM blocks on one disk, two machines write a layer at the same time.'
+        Fail '  Nothing was added. Use that VM, or remove its block first.'
         exit 20
     }
 
-    # The settings freeze recorded on its way out. This is the whole reason layer.json exists:
-    # at the moment a layer becomes a base, the VM block that knew its RAM, cores, GPU mode
-    # and network mode is exactly what gets deleted.
+    # The values that freeze recorded at its end. That is the reason for
+    # layer.json. When a layer becomes a base, the code deletes exactly the VM
+    # block that knew its RAM, cores, GPU mode, and network mode.
     $info = Read-LayerInfo $disk
     if (-not $info) {
-        Fail 'no layer.json beside the disk, so there is nothing to rebuild a VM block from.'
-        Fail '  The disk IS thawed - only the registration is missing. Either add the block by'
-        Fail '  hand, or copy one from a sibling layer and change Name, VhdxPath and SshPort.'
+        Fail 'no layer.json next to the disk, so nothing can build a VM block again.'
+        Fail '  The disk IS thawed. Only the registration is missing. Add the block by hand,'
+        Fail '  or copy one from a sibling layer, and change Name, VhdxPath, and SshPort.'
         exit 20
     }
     $src = ConvertTo-CfgBlock $info "$vmName/layer.json"
 
     $SshPort = Resolve-SshPort $SshPort $vmBlocks
-    if ($SshPort -lt 0) { Fail 'that ssh port is already taken; pass --ssh-port.'; exit 20 }
-    # HddGB from the DISK, not from layer.json: the capacity is whatever this file actually
-    # is, and a layer that was grown with -DiskGb no longer matches what its parent recorded.
+    if ($SshPort -lt 0) { Fail 'that ssh port is already in use. Give --ssh-port.'; exit 20 }
+    # HddGB from the DISK, not from layer.json. The capacity is the real size of
+    # this file. A layer that grew with -DiskGb no longer matches the record of
+    # its parent.
     $gb = [math]::Round((Get-VHD -Path $disk).Size / 1GB)
 
-    Note "settings restored from layer.json (recorded $($info.when))"
+    Note "values restored from layer.json (recorded $($info.when))"
     Note "ssh port $SshPort"
     if ($WhatIfOnly) { Note "would add the VM block '$vmName'"; return }
 
     $cfg += New-VmBlock $vmName $src $disk $gb $SshPort
     Write-Cfg $cfg
-    Note "'$vmName' re-registered - start AppSandbox and it will be in the list"
+    Note "'$vmName' registered again. Start AppSandbox, and it is in the list"
     Write-Host ''
-    Warn 'This layer is WRITABLE and REGISTERED again. Nothing new may be built on it until'
-    Warn '  it is frozen once more:'
+    Warn 'This layer is WRITABLE and REGISTERED again. Do not build something new on it until'
+    Warn '  it is frozen again:'
     Warn "  dr-layer freeze $vmName$(if ($script:rootGiven) { " --root $Root" }) --unregister"
     return
 }
@@ -876,19 +917,19 @@ if ($Mode -eq 'drop') {
     if (-not (Test-Path $dir)) { Fail "no layer directory at $dir"; exit 21 }
     Say "drop '$Name'"
 
-    # Refuse to remove anything another layer is differencing from. Cheap to check, and the
-    # failure it prevents is every descendant becoming unbootable at once. See
-    # Get-LayerChildren for why this no longer scans -Root alone.
+    # Refuse to remove a layer that another layer differences from. The test is
+    # cheap, and it prevents a failure where no descendant can boot. See
+    # Get-LayerChildren for why this no longer scans only -Root.
     $kids = @(Get-LayerChildren $disk)
     if ($kids.Count) {
         Fail "$($kids.Count) layer(s) difference from this one:"
         foreach ($k in $kids) { Fail "    $k" }
-        Fail '  Dropping it would make every one of them unbootable. Drop them first.'
+        Fail '  After a drop of it, none of them can boot. Drop them first.'
         exit 20
     }
     if ((Get-Item $disk -Force -ErrorAction SilentlyContinue).IsReadOnly) {
-        Warn 'this layer is frozen, which usually means something was built on it.'
-        Warn '  Nothing under -Root claims it as a parent, but a disk elsewhere still might.'
+        Warn 'this layer is frozen. That usually means that something was built on it.'
+        Warn '  Nothing under -Root claims it as a parent, but a disk in another place can.'
     }
     $owner = @($vmBlocks | Where-Object { (Get-Val $_ 'VhdxPath') -eq $disk })
     if ($WhatIfOnly) {
@@ -904,10 +945,10 @@ if ($Mode -eq 'drop') {
     Set-ItemProperty -Path $disk -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
     Remove-Item $dir -Recurse -Force
     Note "removed $dir"
-    # ALWAYS, not only when a VM block was found. A layer reaches `drop` long after its VM
-    # block went - `adopt` removes that - so keying this off $owner would miss the common
-    # case, which is precisely the one measured: draugr-forge-0 was stranded by
-    # the adopt, not by any delete.
+    # ALWAYS, not only after the code found a VM block. A layer comes to `drop`
+    # long after its VM block went (`adopt` removes that). With $owner as the
+    # condition, the code misses the usual case, exactly the one in the test:
+    # the adopt left draugr-forge-0, not a delete.
     $hk = Clear-ForgeHostKey $Name
     if ($hk) { Note $hk }
     return

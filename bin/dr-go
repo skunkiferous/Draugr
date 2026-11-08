@@ -1,34 +1,35 @@
 #!/usr/bin/env bash
-# dr-go - the one you type. Create-or-start the mound, then attach to the agent.
+# dr-go: the command that you type. Create or start the mound, then attach to
+# the agent.
 #
-# Everything after "--" is handed to the agent, so `dr-go -- --continue` resumes
-# a Claude session. If you nearly always want the same flags, put them in
-# DRAUGR_AGENT_ARGS and they are passed for you; --bare then means "not today".
-# Leaving the agent returns you here; the mound keeps running until you dr-stop it.
+# All arguments after "--" go to the agent. Thus `dr-go -- --continue` continues
+# a Claude session. If you almost always want the same flags, put them in
+# DRAUGR_AGENT_ARGS. --bare then means "not today". When you leave the agent,
+# you come back here. The mound continues to run until you run dr-stop.
 #
-# Ctrl-Z suspends the agent and drops you into a shell INSIDE the mound; fg puts
-# you back, with the session as you left it. Ctrl-D leaves as usual.
+# Ctrl-Z suspends the agent, and gives you a shell INSIDE the mound. fg brings
+# you back to the session as it was. Ctrl-D leaves, as usual.
 #
-#   dr-go                  go, with DRAUGR_AGENT_ARGS if you have set any
-#   dr-go -- --continue    go, resuming the agent's last session
-#   dr-go --bare           go with NO agent arguments, ignoring DRAUGR_AGENT_ARGS
-#   dr-go --dirty          skip the clean-tree check, just this once
+#   dr-go                  go, with DRAUGR_AGENT_ARGS if you set any
+#   dr-go -- --continue    go, and continue the last session of the agent
+#   dr-go --bare           go with NO agent arguments, and ignore DRAUGR_AGENT_ARGS
+#   dr-go --dirty          skip the clean-tree test, only this time
 set -euo pipefail
 
 DR_PROG=dr-go
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# Options are ours until "--", after which everything belongs to the agent.
+# The options before "--" are ours. All after it goes to the agent.
 #
-# $args_given records whether the command line said anything about agent
-# arguments at all. It has to be separate from the array, because "you asked for
-# none" and "you did not ask" are different answers and an empty array cannot
-# tell them apart - the first must beat DRAUGR_AGENT_ARGS, the second must not.
+# $args_given records whether the command line said something about agent
+# arguments. It must be separate from the array. "You asked for none" and "you
+# did not ask" are different answers, and an empty array cannot show which. The
+# first wins over DRAUGR_AGENT_ARGS, and the second does not.
 dirty=
 args_given=
 agent_args=()
@@ -39,7 +40,7 @@ while [ $# -gt 0 ]; do
         --bare)    args_given=1; agent_args=() ;;
         -h|--help) dr_help "$0"; exit 0 ;;
         --) shift; args_given=1; agent_args=("$@"); break ;;
-        *) dr_die "unknown option: $1" "Agent arguments go after --, e.g. dr-go -- --continue" ;;
+        *) dr_die "unknown option: $1" "Agent arguments go after --, for example dr-go -- --continue" ;;
     esac
     shift
 done
@@ -47,104 +48,105 @@ done
 dr_context
 dr_attach_check
 
-# Config that cannot work, refused before anything is created. Both cases are in
-# dr_model_check, and both would otherwise surface inside the agent as a timeout
-# or as a session quietly running on the cloud you meant to leave.
+# Refuse a configuration that cannot work, before something is created. Both
+# cases are in dr_model_check. Otherwise they show inside the agent as a
+# timeout, or as a session that silently uses the cloud that you wanted to
+# leave.
 dr_model_check
 
-# Same reasoning for DRAUGR_ENV. Finding a malformed entry at attach time means
-# a mound was built for a session that cannot start; the output is discarded
-# because this call is for the refusal, not for the pairs.
+# The same reason for DRAUGR_ENV. If attach finds a bad entry, a mound was built
+# for a session that cannot start. The output is discarded, because this call is
+# for the refusal, not for the pairs.
 dr_env_pairs >/dev/null
 
-# Fall back to the configured arguments only when the command line said nothing.
-# The command line REPLACES them rather than adding to them, which is the same
-# rule the whole config cascade follows: an explicit flag beats a config file.
-# It is also the only way to *remove* a configured argument for one run.
+# If the command line said nothing, use the configured arguments. The
+# command line REPLACES them, and does not add to them. All the configuration
+# layers follow the same rule: a flag wins over a configuration file. It is also
+# the only way to *remove* a configured argument for one run.
 if [ -z "$args_given" ] && [ -n "$DRAUGR_AGENT_ARGS" ]; then
     read -ra agent_args <<< "$DRAUGR_AGENT_ARGS"
     dr_debug "agent args from ${DR_ORIGIN[DRAUGR_AGENT_ARGS]}: $DRAUGR_AGENT_ARGS"
 fi
 
-# --- the two things worth refusing over -------------------------------------
+# --- the two reasons to refuse ----------------------------------------------
 #
-# A clone-mode sandbox is built from committed history, so uncommitted work is
-# simply not in it. Without this check the agent quietly builds on stale code and
-# you find out an hour later. --dirty is the escape hatch when that is fine.
+# A sandbox in clone mode comes from the committed history, so uncommitted work
+# is not in it. Without this test, the agent builds on old code with no message,
+# and you find out an hour later. If that is acceptable, use --dirty.
 if dr_is_true "$DRAUGR_REQUIRE_CLEAN" && [ -z "$dirty" ] && dr_is_true "$DRAUGR_CLONE"; then
-    # DRAUGR_DATA files are exempt: they travel by rsync rather than through git,
-    # so churning a parquet file is not the mistake this check exists to catch.
-    # A single dirty *source* file still blocks, which is the point.
+    # DRAUGR_DATA files are exempt. They go through rsync, not through git, so a
+    # changed parquet file is not the error that this test must find. One dirty
+    # *source* file still blocks, and that is the purpose.
     if ! dr_repo_is_clean "$DR_REPO" && ! dr_data_dirty_only "$DR_REPO"; then
         dr_error "your working tree has uncommitted changes"
 
-        # Only the files that actually block. Printing `git status --short` here
-        # listed the exempt data files too, so a repo with fifteen churning .tsv
-        # files and one stray script showed sixteen lines and read as "DRAUGR_DATA
-        # is being ignored" - which is the opposite of what had happened.
+        # Only the files that block. Before, `git status --short` here also
+        # listed the exempt data files. A repo with fifteen changed .tsv files
+        # and one script showed sixteen lines. That looked like "Draugr ignores
+        # DRAUGR_DATA", and the truth was the opposite.
         dr_data_dirty_blockers "$DR_REPO" >&2
 
-        # Say how many were let through, or the exemption is invisible when it
-        # works and only ever noticed when something else goes wrong.
+        # Tell how many passed. Otherwise you cannot see a working exemption,
+        # and you see it only after something else goes wrong.
         if [ -n "$DRAUGR_DATA" ]; then
             all=$(git -C "$DR_REPO" status --porcelain | wc -l)
             blocking=$(dr_data_dirty_blockers "$DR_REPO" | wc -l)
             if [ "$((all - blocking))" -gt 0 ]; then
-                dr_info "$((all - blocking)) more match DRAUGR_DATA and are exempt - these are not"
+                dr_info "$((all - blocking)) more match DRAUGR_DATA and are exempt. These are not."
             fi
         fi
 
-        # .GITIGNORE IS THE CIRCULAR ONE, and the reason this block says more than
-        # "commit it". Adding a pattern to .gitignore is how you stop other files
-        # blocking - and that edit then blocks by itself, so the obvious conclusion is
-        # that .gitignore should be exempt. It must not be: the clone ignores what the
-        # COMMITTED .gitignore ignores, so an uncommitted rule changes nothing for the
-        # agent, and DRAUGR_DATA files rsync'd in under one look untracked to it. The
-        # status prefix is three characters wide; a rename prints "old -> new".
+        # .GITIGNORE IS A CIRCLE, and that is why this block says more than
+        # "commit it". You add a pattern to .gitignore, so that other files stop
+        # to block. Then that change blocks. Thus .gitignore looks like a file
+        # to exempt, but it must not be. The clone ignores what the COMMITTED
+        # .gitignore ignores. An uncommitted rule changes nothing for the agent.
+        # DRAUGR_DATA files that rsync copied in under such a rule look
+        # untracked to the agent. The status prefix is three characters wide. A
+        # rename prints "old -> new".
         if dr_data_dirty_blockers "$DR_REPO" |
                sed 's/^...//; s/.* -> //' | grep -qxF .gitignore; then
-            dr_info ".gitignore is one of them. Commit it: the clone ignores what the"
+            dr_info ".gitignore is one of them. Commit it. The clone ignores what the"
             dr_info "COMMITTED .gitignore ignores, so an uncommitted rule changes nothing"
-            dr_info "for the agent. For a rule only THIS checkout should have, use"
-            dr_info ".git/info/exclude - it is untracked, so it never reaches this check."
+            dr_info "for the agent. For a rule only for THIS checkout, use .git/info/exclude."
+            dr_info "It is untracked, so this test never sees it."
         fi
 
-        # Not "stash them": a stash is still in .git, and .git is inside the
-        # read-only mount, so stashing hides the change from the agent's clone
-        # AND from dr-scan while leaving it readable. Committing or reverting
-        # are the two that mean what people think stashing means here.
-        dr_die "the agent would not see them" \
-            "The sandbox gets a CLONE of this repo, and a clone only contains commits." \
-            "Commit them, put them aside outside the repo, or run:  dr-go --dirty" \
-            "Data files that are not ready to commit can go in DRAUGR_DATA instead." \
-            "(Stashing works too, but the stash stays readable at /run/sandbox/source.)"
+        # Not "stash them". A stash is still in .git, and .git is inside the
+        # read-only mount. A stash hides the change from the clone of the agent
+        # AND from dr-scan, but the agent can still read it. A commit or a
+        # revert does what people think that a stash does here.
+        dr_die "the agent does not see them" \
+            "The sandbox gets a CLONE of this repo, and a clone holds only commits." \
+            "Commit them, move them out of the repo, or run:  dr-go --dirty" \
+            "Put data files that are not ready to commit in DRAUGR_DATA." \
+            "(A stash also works, but the agent can read it at /run/sandbox/source.)"
     fi
 fi
 
-# Exempting a dirty data file from the clean check only makes sense if something
-# is then going to carry it. With DRAUGR_DATA_PUSH set to anything but auto, the
-# exemption lets the session start and nothing puts the file in the mound - so
-# the agent works from whatever the clone was built with, which is the exact
-# failure DRAUGR_REQUIRE_CLEAN exists to prevent, arrived at through the setting
-# that is supposed to make it safe.
+# An exemption of a dirty data file needs something that then moves the file.
+# If DRAUGR_DATA_PUSH is not auto, the session starts, and nothing puts the file
+# in the mound. The agent then uses the old copy from the clone. That is the
+# failure that DRAUGR_REQUIRE_CLEAN must prevent, caused by the key that must
+# make it safe.
 #
-# A warning rather than a refusal: "push is manual" is a choice, and someone who
-# made it may be about to run dr-data push themselves.
+# A warning, not a refusal. "push is manual" is a choice, and the person who
+# made it can run dr-data push next.
 if [ -n "$DRAUGR_DATA" ] && [ "$DRAUGR_DATA_PUSH" != auto ]; then
     stale=$(( $(git -C "$DR_REPO" status --porcelain | wc -l) \
               - $(dr_data_dirty_blockers "$DR_REPO" | wc -l) ))
     if [ "$stale" -gt 0 ]; then
-        dr_warn "$stale changed data file(s) will not reach the mound"
-        printf '  %sDRAUGR_DATA_PUSH is %s, so nothing carries them and the agent works%s\n' \
+        dr_warn "$stale changed data file(s) do not go to the mound"
+        printf '  %sDRAUGR_DATA_PUSH is %s, so nothing moves them, and the agent uses%s\n' \
             "$_DR_DIM" "$DRAUGR_DATA_PUSH" "$_DR_OFF" >&2
-        printf '  %sfrom the copy already in there. Send them first with:  dr-data push%s\n' \
+        printf '  %sthe copy that is already there. Send them first with:  dr-data push%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
     fi
 fi
 
-# The other direction: DRAUGR_CLONE=false bind-mounts your real working tree
-# read-write, which is precisely the thing Draugr exists to prevent. It prompts
-# every single time, and no config key silences it - that is the point.
+# The other direction. DRAUGR_CLONE=false bind-mounts your real working tree
+# read-write, and Draugr exists to prevent that. It asks each time, and no
+# configuration key stops the question. That is the purpose.
 if ! dr_is_true "$DRAUGR_CLONE"; then
     dr_warn "DRAUGR_CLONE is false"
     printf '  %sThe agent gets your real working tree, read-write. It can change and%s\n' "$_DR_DIM" "$_DR_OFF" >&2
@@ -152,69 +154,67 @@ if ! dr_is_true "$DRAUGR_CLONE"; then
     dr_confirm "Continue without the mound?" || dr_die "cancelled"
 fi
 
-# Scan BEFORE the mound exists, not after: the point is to catch a credential
-# before anything can read it, and dr-up is what makes the read-only mount. With
-# DRAUGR_SCAN_FAIL=block a finding aborts here, which is the whole reason the
-# check is worth having.
+# Scan BEFORE the mound exists, not after. The purpose is to find a credential
+# before something can read it, and dr-up makes the read-only mount. With
+# DRAUGR_SCAN_FAIL=block, a finding stops here. That is the reason for the test.
 if dr_is_true "$DRAUGR_SCAN" && [ -x "$_dr_bin/dr-scan" ]; then
     "$_dr_bin/dr-scan" --quiet
 fi
 
-# dr-up is a separate process on purpose: one implementation of the state
-# machine, and `dr-up --print` stays a truthful preview of what dr-go will do.
+# dr-up is a separate process, on purpose. There is one implementation of the
+# state machine, and `dr-up --print` shows correctly what dr-go does.
 "$_dr_bin/dr-up" ${DR_ASSUME_YES:+--yes}
 
-# The model has to be answering before the agent starts. Without this the
-# session comes up looking perfectly normal and every prompt fails with a dial
-# error naming an address and nothing else - which is the failure this whole
-# feature is meant to replace, arrived at from the other side.
+# The model must answer before the agent starts. Without this, the session
+# looks normal, and each prompt fails with a dial error that names only an
+# address. This feature exists to replace that failure.
 #
-# After dr-up on purpose: post-up runs in there, and that is the hook the proxy
-# documents for starting itself, so anything earlier would refuse a setup that
-# was about to work. Before the tty check, so a scripted dr-go fails on the
-# real problem rather than on not having a terminal.
+# After dr-up, on purpose. dr-up runs post-up, and the proxy documents that
+# hook for its start. An earlier test refuses a setup that was about to work.
+# Before the tty test, so that a dr-go from a script fails on the real problem,
+# not on the missing terminal.
 if [ -n "$DRAUGR_MODEL" ]; then
     model_url=$(dr_model_url) || dr_die \
-        "DRAUGR_MODEL is set, but this machine's address could not be resolved" \
-        "The mound needs it to reach port $DRAUGR_MODEL_URL."
+        "DRAUGR_MODEL is set, but Draugr could not resolve the address of this machine" \
+        "The mound needs it to connect to port $DRAUGR_MODEL_URL."
 
     case $(dr_model_probe "$model_url") in
-        # Refusals, both of them: there is no partial session to be had. The way
-        # past is to start the service, or to say so and use the cloud once.
+        # Both are refusals, because a partial session is not possible. Start
+        # the service, or say that you want to use the cloud once.
         dead)
-            dr_die "nothing is answering at $model_url" \
-                "DRAUGR_MODEL is \"$DRAUGR_MODEL\", so every prompt would fail with a" \
-                "dial error naming that address and nothing else." \
+            dr_die "nothing answers at $model_url" \
+                "DRAUGR_MODEL is \"$DRAUGR_MODEL\", so each prompt fails with a" \
+                "dial error that names only that address." \
                 "Start it:  $DRAUGR_SHARE/ollama-proxy/ollama-proxy start" \
                 "Or run this one session on the cloud:  DRAUGR_MODEL= dr-go" ;;
         stalled)
-            dr_die "the proxy at $model_url answers, but nothing is behind it" \
-                "Its /healthz is up and /api/version is not, so the proxy is" \
-                "running and the model server is not." \
+            dr_die "the proxy at $model_url answers, but no server is behind it" \
+                "Its /healthz answers and /api/version does not. Thus the proxy" \
+                "runs, and the model server does not." \
                 "Start it:  ollama serve" ;;
 
-        # Not a refusal: it works. It is just more exposed than the default
-        # arrangement, and that is worth saying once rather than never.
+        # Not a refusal, because it works. But it is less protected than the
+        # default setup, so the code says so once.
         bare)
             dr_warn "$model_url has no query-only proxy in front of it"
-            printf '  %sThe agent can administer it as well as use it - POST /api/pull%s\n' \
+            printf '  %sThe agent can control it, not only use it. POST /api/pull%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
-            printf '  %sand DELETE /api/delete are on the same port. A front door:%s\n' \
+            printf '  %sand DELETE /api/delete are on the same port. A proxy in front:%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
             printf '  %s%s/ollama-proxy/%s\n' \
                 "$_DR_DIM" "$DRAUGR_SHARE" "$_DR_OFF" >&2 ;;
     esac
 fi
 
-# Checked after dr-up so that `dr-go` from a script still creates the mound
-# before complaining that it cannot attach to it.
+# The test comes after dr-up. Thus `dr-go` from a script still creates the mound
+# before it reports that it cannot attach.
 dr_require_tty dr-go
 
 dr_hook pre-attach "$DR_REPO"
 
 
-# Name the arguments in the attach line. If DRAUGR_AGENT_ARGS is doing something
-# on your behalf you should see it, rather than wondering why the agent resumed.
+# Name the arguments in the attach line. If DRAUGR_AGENT_ARGS does something
+# for you, you must see it. Then you know why the agent continued a session.
 if [ ${#agent_args[@]} -gt 0 ]; then
     dr_info "attaching to $DRAUGR_SANDBOX ($DRAUGR_AGENT ${agent_args[*]})"
 else
@@ -222,82 +222,83 @@ else
 fi
 
 if [ "$DRAUGR_ATTACH" = ssh ]; then
-    # The agent runs as a job of an interactive shell in the mound, so Ctrl-Z
-    # gets you that shell instead of killing the session. See dr_attach_rc.
+    # The agent runs as a job of an interactive shell in the mound. Thus Ctrl-Z
+    # gives you that shell, and does not kill the session. See dr_attach_rc.
     mound=$(dr_path_mound "$DR_REPO") || dr_die \
         "$DR_REPO is not on a Windows drive, so it has no path inside the mound"
     dr_info "Ctrl-Z for a shell in the mound, fg to come back"
 
-    # DRAUGR_AGENT=shell means "no agent, just put me in there", so there is no
-    # command to start and the rcfile would have nothing to do.
+    # DRAUGR_AGENT=shell means "no agent, only put me in there". Thus there is
+    # no command to start, and the rcfile has nothing to do.
     if [ "$DRAUGR_AGENT" = shell ]; then
         dr_ssh_attach "$mound" || rc=$?
     else
-        # ${arr[0]+"${arr[@]}"} expands to nothing when the array is empty rather
-        # than to one empty string, which would reach the agent as a blank
-        # argument. Needed because `set -u` rejects an empty array expansion on
-        # bash 4.3.
+        # For an empty array, ${arr[0]+"${arr[@]}"} expands to nothing, not to
+        # one empty string. An empty string goes to the agent as a blank
+        # argument. It is necessary, because on bash 4.3 `set -u` refuses the
+        # expansion of an empty array.
         dr_ssh_attach "$mound" "$DRAUGR_AGENT" ${agent_args[0]+"${agent_args[@]}"} || rc=$?
     fi
 else
-    # ${arr[0]+-- "${arr[@]}"} expands to nothing at all when the array is empty,
-    # rather than to one empty string - so no stray "--" reaches the agent.
+    # For an empty array, ${arr[0]+-- "${arr[@]}"} expands to nothing, not to
+    # one empty string. Thus no extra "--" goes to the agent.
     dr_sbx run --name "$DRAUGR_SANDBOX" \
         ${agent_args[0]+-- "${agent_args[@]}"} || rc=$?
 fi
 
-# The agent exiting is normal, and so is a non-zero code from it, so neither is
-# reported as a Draugr failure. What matters is that we are back on the host.
+# An exit of the agent is normal, and a non-zero code from it is normal too.
+# Draugr reports neither as a failure. What matters is that we are back on the
+# host.
 rc=${rc:-0}
 dr_info "left $DRAUGR_SANDBOX"
 dr_hook post-attach "$DR_REPO"
 
-# Fetch what the agent committed, while you are still thinking about it. It only
-# fetches - nothing is merged and your branch does not move - so the worst case
-# is a few seconds and a remote-tracking branch you ignore.
+# Fetch the commits of the agent, while you still think about them. It only
+# fetches. Nothing merges, and your branch does not move. The worst case is a
+# few seconds, and a remote-tracking branch that you ignore.
 if dr_is_true "$DRAUGR_AUTO_SYNC" && [ -x "$_dr_bin/dr-sync" ]; then
-    "$_dr_bin/dr-sync" || dr_warn "auto-sync failed; fetch by hand with:  dr-sync"
+    "$_dr_bin/dr-sync" || dr_warn "auto-sync failed. Fetch yourself with:  dr-sync"
 fi
 
-# Memory out, while the mound is certainly still alive. This is the half of
-# DRAUGR_MEM_SYNC that matters: the import can always be repeated, but anything
-# the agent learned this session exists only inside the mound until now, and
-# dr-rm would take it with no way to get it back.
+# Memory out, while the mound is surely still alive. This is the important half
+# of DRAUGR_MEM_SYNC. You can always do the import again. But what the agent
+# learned in this session is only inside the mound until now. dr-rm deletes it,
+# and you cannot get it back.
 if [ "$DRAUGR_MEM_SYNC" = auto ] && [ -x "$_dr_bin/dr-mem" ]; then
-    "$_dr_bin/dr-mem" export --yes || dr_warn "auto memory export failed; retry with:  dr-mem export"
+    "$_dr_bin/dr-mem" export --yes || dr_warn "auto memory export failed. Try again with:  dr-mem export"
 fi
 
-# A pull overwrites host files with the sandbox's, so it is opt-in per the
-# config and never the default. --yes because you are being handed back a
-# terminal, not asked a question you were expecting.
+# A pull overwrites host files with the files of the sandbox. Thus the
+# configuration must ask for it, and it is never the default. --yes, because you
+# get back a terminal, not a question that you expect.
 if [ "$DRAUGR_DATA_PULL" = auto ] && [ -n "$DRAUGR_DATA" ] && [ -x "$_dr_bin/dr-data" ]; then
-    "$_dr_bin/dr-data" pull --yes || dr_warn "auto data pull failed; retry with:  dr-data pull"
+    "$_dr_bin/dr-data" pull --yes || dr_warn "auto data pull failed. Try again with:  dr-data pull"
 fi
 
-# Last of all, because everything above needs the mound alive: the sync, the
-# memory export and the data pull all talk to it. Stopping first would turn each
-# of them into a four-second restart, or a failure.
+# Last, because all the steps above need a live mound. The sync, the memory
+# export, and the data pull all talk to it. A stop first makes each of them a
+# restart of four seconds, or a failure.
 #
-# Off by default. Stopping is hygiene rather than durability - what protects the
-# agent's work is the sync that has just run - and it silently kills anything the
-# kit starts through publishedPorts or startup commands. Worth opting into for a
-# project that serves nothing; the mound holds around 1.4 GB while it idles.
+# Off by default. A stop keeps things clean, but does not protect work. The sync
+# that just ran protects the work of the agent. A stop also kills, with no
+# message, what the kit starts through publishedPorts or startup commands. Use
+# it for a project that serves nothing. An idle mound holds about 1.4 GB.
 if dr_is_true "$DRAUGR_STOP_ON_EXIT"; then
-    # Not fatal. The session is over and the work is already fetched, so a mound
-    # that will not stop is untidy rather than dangerous.
+    # Not fatal. The session is over, and the work is already fetched. Thus a
+    # mound that does not stop is untidy, not dangerous.
     if dr_sbx stop "$DRAUGR_SANDBOX" >/dev/null 2>&1; then
         dr_ok "stopped $DRAUGR_SANDBOX (DRAUGR_STOP_ON_EXIT)"
-        # Whatever this repo required is no longer being used by it. The claim
-        # would go stale on its own at the next warden tick, but letting go here
-        # starts the linger when you actually left.
+        # This repo no longer uses what it required. At the next warden tick,
+        # the claim becomes old by itself. A release here starts the linger at
+        # the time that you left.
         if [ -x "$_dr_bin/dr-dep" ]; then
             "$_dr_bin/dr-dep" release >/dev/null 2>&1 || true
         fi
     else
-        dr_warn "could not stop $DRAUGR_SANDBOX - it is still running"
+        dr_warn "could not stop $DRAUGR_SANDBOX. It still runs."
     fi
 else
-    dr_info "$DRAUGR_SANDBOX is still running - dr-stop to shut it down"
+    dr_info "$DRAUGR_SANDBOX still runs. To stop it: dr-stop"
 fi
 
 exit "$rc"

@@ -1,22 +1,21 @@
 # Hacking on Draugr
 
-Draugr's premise is that you can read a file before you trust it. That only holds
-if the code is actually readable, so this page explains the bash constructs the
-project leans on and the house rules every script follows.
+Draugr rests on one idea: you can read a file before you trust it. That is true only if the code is
+readable. Thus this page explains the bash constructs that the project uses, and the house rules
+that each script follows.
 
-If you write shell occasionally, this is the page that makes the rest make sense.
-Nothing here is exotic — but several of these are things you can write shell for
-years without needing.
+If you write shell only sometimes, this page makes the rest clear. Nothing here is exotic. But you
+can write shell for years without some of these.
 
 ---
 
 ## The shape of every command
 
-Each `bin/dr-*` script opens the same way:
+Each `bin/dr-*` script starts in the same way:
 
 ```bash
 #!/usr/bin/env bash
-# dr-thing - one line saying what it does.
+# dr-thing: one line that says what it does.
 #
 #   dr-thing            usage examples, which --help reprints
 set -euo pipefail
@@ -32,58 +31,57 @@ Line by line:
 
 | | |
 |---|---|
-| `#!/usr/bin/env bash` | find bash on `PATH` rather than assuming `/bin/bash` |
-| `set -e` | stop at the first failing command instead of blundering on |
-| `set -u` | an unset variable is an error, so a typo'd `$nmae` is caught |
-| `set -o pipefail` | a pipeline fails if **any** stage failed, not just the last |
-| `DR_PROG` | what error messages call themselves; `common.sh` reads it |
-| `${BASH_SOURCE[0]}` | this file's path — unlike `$0` it stays right when sourced |
-| `$(cd … && pwd)` | collapses a relative or symlinked path to one absolute form |
-| `.` | short for `source`: run that file **in this shell**, so its functions and variables stick around |
-| `# shellcheck source=…` | tells the linter where the library is; it cannot work that out from a runtime variable |
+| `#!/usr/bin/env bash` | find bash on `PATH`, and do not assume `/bin/bash` |
+| `set -e` | stop at the first command that fails, and do not continue blindly |
+| `set -u` | an unset variable is an error, so a typo such as `$nmae` is caught |
+| `set -o pipefail` | a pipeline fails if **any** stage failed, not only the last |
+| `DR_PROG` | the name in error messages. `common.sh` reads it |
+| `${BASH_SOURCE[0]}` | the path of this file. Unlike `$0`, it stays correct when sourced |
+| `$(cd … && pwd)` | makes a relative or symlinked path into one absolute form |
+| `.` | short for `source`: run that file **in this shell**, so that its functions and variables stay |
+| `# shellcheck source=…` | tells the linter where the library is. It cannot find that from a runtime variable |
 
-The comment block after the description **is** the help text: `dr_help "$0"` prints from line 2 to
-the first line that is not a comment, so usage lives in exactly one place and cannot drift from it.
+The comment block after the description **is** the help text. `dr_help "$0"` prints from line 2 to
+the first line that is not a comment. Thus the usage is in exactly one place, and cannot drift.
 
-Write the header as one contiguous block of `#` lines, using a bare `#` for blank lines rather than a
-truly empty one — an empty line ends the block. A `# shellcheck` directive also ends it, so a
-file-wide `disable=` can sit in the header (where it has to be, to apply at all) without appearing in
-`--help`.
+Write the header as one block of `#` lines, with a bare `#` for blank lines, not a truly empty
+line. An empty line ends the block. A `# shellcheck` directive also ends it. Thus a file-wide
+`disable=` can be in the header (where it must be to apply) without appearing in `--help`.
 
-> This used to be `sed -n '2,Np' "$0"` with `N` counted by hand, and `N` had gone stale in **17 of 27
-> commands** — every one of them ending its `--help` with a stray `set -euo pipefail`, while
-> `dr-status` had the opposite problem and truncated mid-sentence. A test now fails if any command's
-> help contains a line of code. Prefer deleting this class of upkeep over getting it right.
+> This was `sed -n '2,Np' "$0"`, with `N` counted by hand, and `N` was wrong in **17 of 27
+> commands**. Each of them ended its `--help` with a stray `set -euo pipefail`. `dr-status` had the
+> opposite problem, and stopped in the middle of a sentence. A test now fails if the help of a
+> command contains a line of code. It is better to delete this kind of upkeep than to do it right.
 
 ---
 
 ## Parameter expansion
 
-Bash's `${…}` syntax does far more than substitute a value. These six carry most
-of the weight in this codebase:
+The `${…}` syntax of bash does much more than put in a value. These six do most of the work in
+this code base:
 
 | Written | Means |
 |---|---|
 | `${VAR:-default}` | `$VAR`, or `default` if it is unset **or empty** |
-| `${VAR:+value}` | `value` if `$VAR` is non-empty, otherwise nothing |
-| `${VAR+set}` | `set` if `$VAR` exists **even when empty** — the distinction matters in `dr_load_config`, where `DRAUGR_PORTS=` is a deliberate "no ports" rather than silence |
-| `${path##*/}` | delete the longest prefix matching `*/` → `basename` |
-| `${path%/*}` | delete the shortest suffix matching `/*` → `dirname` |
-| `${p:5:1}` | substring: one character starting at offset 5 |
+| `${VAR:+value}` | `value` if `$VAR` is not empty, otherwise nothing |
+| `${VAR+set}` | `set` if `$VAR` exists, **also when empty**. The difference is important in `dr_load_config`, where `DRAUGR_PORTS=` means "no ports" on purpose, not silence |
+| `${path##*/}` | delete the longest prefix that matches `*/` → `basename` |
+| `${path%/*}` | delete the shortest suffix that matches `/*` → `dirname` |
+| `${p:5:1}` | substring: one character from offset 5 |
 
-Rule of thumb: `#` trims from the front, `%` from the back; doubling it
-(`##`, `%%`) makes the match greedy.
+A simple rule: `#` cuts from the front, `%` from the back. Two of them (`##`, `%%`) make the match
+greedy.
 
 ---
 
 ## Indirect expansion, and `printf -v`
 
-This is the one genuinely unusual technique in the project, and it is confined to
-the config loader.
+This is the one really unusual technique in the project, and only the configuration loader uses
+it.
 
-Draugr has 23 settings. Handling them one by one would mean a 23-branch `case` in
-every function that touches configuration. Instead `DR_KEYS` lists the names, and
-we read and write variables *by name*:
+Draugr has 23 configuration keys. One by one, each function that touches the configuration needs a
+`case` with 23 branches. In place of that, `DR_KEYS` lists the names, and we read and write
+variables *by name*:
 
 ```bash
 k=DRAUGR_AGENT
@@ -92,13 +90,12 @@ echo "${!k}"              # prints $DRAUGR_AGENT's value  - indirect READ
 printf -v "$k" '%s' claude  # sets DRAUGR_AGENT=claude    - indirect WRITE
 ```
 
-`${!k}` means "the value of the variable **named by** `$k`". `printf -v NAME`
-writes its output into the variable `NAME` instead of printing it.
+`${!k}` means "the value of the variable **named by** `$k`". `printf -v NAME` writes its output
+into the variable `NAME`, and does not print it.
 
-Together they let `_dr_snapshot_into` copy all 23 settings into a parallel set of
-`_DR_PREV_*` variables, source a config file, and then let `_dr_attribute`
-compare the two sets to work out which keys that file changed. That comparison is
-the whole mechanism behind `dr-config`'s "FROM" column.
+With both, `_dr_snapshot_into` copies all 23 keys into a parallel set of `_DR_PREV_*` variables,
+then sources a configuration file. `_dr_attribute` then compares the two sets, to find which keys
+that file changed. That comparison is the full mechanism behind the "FROM" column of `dr-config`.
 
 ---
 
@@ -108,42 +105,40 @@ the whole mechanism behind `dr-config`'s "FROM" column.
 declare -gA DR_ORIGIN=()
 ```
 
-`-A` makes an associative array (string keys). **`-g` makes it global** — and it
-is not optional here.
+`-A` makes an associative array (string keys). **`-g` makes it global**, and it is necessary here.
 
-`declare` inside a function creates a *function-local* variable, and "inside a
-function" includes being sourced by one. Every bats test calls a helper that
-sources `common.sh`, so without `-g` the array vanished when that helper
-returned. The later `DR_ORIGIN[DRAUGR_KIT]=…` then hit an ordinary *indexed*
-array, whose subscripts are arithmetic, and bash tried to evaluate the string
-`.draugr/kit` as a number:
+`declare` inside a function creates a *local* variable, and "inside a function" also means sourced
+by one. Each bats test calls a helper that sources `common.sh`. Thus without `-g`, the array
+disappeared when that helper returned. The later `DR_ORIGIN[DRAUGR_KIT]=…` then hit a normal
+*indexed* array, whose subscripts are arithmetic. Bash tried to evaluate the string `.draugr/kit`
+as a number:
 
 ```
 line 314: .draugr/kit: syntax error: operand expected
 ```
 
-The test suite found this; nothing in normal use would have, until the first time
+The test suite found this. Normal use did not find it, and does not, until the first time
 something sourced the library from inside a function.
 
 ---
 
 ## `[` versus `[[`
 
-This project uses `[` throughout, except where `[[` is genuinely needed (pattern
-matching in tests). `[` is a command, so it needs its arguments quoted and
-separated by spaces; `[ -z $x ]` with an empty unquoted `$x` becomes `[ -z ]`,
-which is not what you meant. **Quote every variable inside `[ ]`.**
+This project uses `[` in all places, except where `[[` is really necessary (pattern matching in
+tests). `[` is a command, so its arguments need quotes and spaces between them. `[ -z $x ]` with an
+empty unquoted `$x` becomes `[ -z ]`, which is not what you meant. **Quote each variable inside
+`[ ]`.**
 
 Common tests:
 
 | | |
 |---|---|
-| `-f` `-d` `-e` | is a regular file / a directory / exists at all |
-| `-L` | is a symlink (`-e` follows links; `-L` does not) |
-| `-s` | exists and is non-empty |
+| `-f` `-d` `-e` | is a regular file / a directory / exists |
+| `-L` | is a symlink (`-e` follows links. `-L` does not) |
+| `-s` | exists and is not empty |
 | `-x` | is executable |
-| `-z` `-n` | string is empty / non-empty |
-| `-gt` `-eq` | numeric comparison; `=` and `!=` are for strings |
+| `-z` `-n` | string is empty / not empty |
+| `-gt` `-eq` | numeric comparison. `=` and `!=` are for strings |
 
 ---
 
@@ -156,18 +151,17 @@ case "$p" in
 esac
 ```
 
-`[A-Za-z]` is one character from that set and `*` is any run of characters — the
-same language as filename globbing, not regular expressions. `|` separates
-alternative patterns. Matching stops at the first branch that fits.
+`[A-Za-z]` is one character from that set, and `*` is any run of characters. That is the language
+of filename globbing, not regular expressions. `|` separates alternative patterns. The match stops
+at the first branch that fits.
 
-Note the asymmetry: the word after `case` is an ordinary **string**, the words
-after `in` are **patterns**. `case "$path" in` is quoted because `$path` is data.
+Note the difference: the word after `case` is a normal **string**, and the words after `in` are
+**patterns**. `case "$path" in` has quotes, because `$path` is data.
 
 ### Quoting is what makes something a wildcard
 
-This is the part that catches people, and `dr_data_matches` depends on it
-entirely. Inside a pattern, quoted text is **literal** and unquoted text is a
-**pattern** — and one pattern can mix both:
+This part catches people, and `dr_data_matches` fully depends on it. Inside a pattern, quoted text
+is **literal**, and unquoted text is a **pattern**. One pattern can mix both:
 
 ```bash
 entry='*.parquet'
@@ -175,64 +169,60 @@ case "$p" in  $entry ) …    # unquoted: matches a.parquet, lib/b.parquet, …
 case "$p" in "$entry") …    # quoted:   matches ONLY a file called *.parquet
 ```
 
-So a variable holding a pattern must be left unquoted to work as one — which is
-exactly what ShellCheck's SC2254 asks about, and why the two places that want it
-carry a targeted `disable` rather than being "fixed".
+Thus a variable that holds a pattern must stay unquoted to work as one. ShellCheck asks about
+exactly that with SC2254. That is why the two places that want it have a targeted `disable`, and
+are not "fixed".
 
-Mixing the two is how `dr_data_matches` handles a directory entry:
+`dr_data_matches` mixes the two to handle a directory entry:
 
 ```bash
 case "$path" in "${entry%/}"/*) return 0 ;; esac
 ```
 
-Three fragments: `"${entry%/}"` is quoted so it is literal (with `%` trimming the
-trailing slash, `scratch/raw/` → `scratch/raw`), then a literal `/`, then an
-unquoted `*`. The mandatory slash is what makes `scratch/raw/r1` match while
-`scratch/rawdata/r1` does not, and the quoting means a directory called
-`odd[name]` is taken as the characters the user typed.
-
+Three fragments. `"${entry%/}"` has quotes, so it is literal (and `%` removes the trailing slash,
+`scratch/raw/` → `scratch/raw`). Then a literal `/`, then an unquoted `*`. The necessary slash makes
+`scratch/raw/r1` match, but not `scratch/rawdata/r1`. The quotes mean that a directory called
+`odd[name]` is read as the characters that the user typed.
 ### `*` crosses `/` here, but not when globbing filenames
 
-Same character, two different engines, and the difference is genuinely
-surprising:
+The same character, two different engines, and the difference is a real surprise:
 
 ```bash
 ls tmp/*                          # tmp/deep  tmp/x.bin   — stopped at the slash
 case tmp/deep/y.bin in tmp/*)     # MATCHES               — crossed it
 ```
 
-Pathname expansion walks the filesystem one directory at a time, so `*` cannot
-span a separator. `case` is pure string matching with no disk involved, so it
-can. One consequence worth stating out loud: in a `case` pattern `**` is
-**identical** to `*`. Draugr writes `tmp/**` anyway because the same string is
-handed to rsync, where the two really do differ.
+Pathname expansion walks the filesystem one directory at a time, so `*` cannot cross a separator.
+`case` is pure string matching, with no disk, so it can. One result to say clearly: in a `case`
+pattern, `**` is **the same** as `*`. Draugr still writes `tmp/**`, because rsync gets the same
+string, and there the two really are different.
 
-The colon-wrapping idiom in `install.sh` is worth knowing:
+Know the colon idiom in `install.sh`:
 
 ```bash
 case ":$PATH:" in *":$bindir:"*) ;; esac
 ```
 
-Wrapping both sides in `:` stops `/opt/bin` from matching inside
-`/opt/bin-other`, because the search is for `:/opt/bin:`.
+With `:` around both sides, `/opt/bin` does not match inside `/opt/bin-other`, because the search
+is for `:/opt/bin:`.
 
 ---
 
 ## `set -e` and `&&` chains
 
-`set -e` has an exemption that surprises people: a failing command **inside** an
-`&&` or `||` chain does not exit the script, only a failure of the chain's final
-command does. That makes this fragile:
+`set -e` has an exemption that surprises people. A failed command **inside** an `&&` or `||` chain
+does not exit the script. Only a failure of the final command of the chain does. Thus this is
+fragile:
 
 ```bash
 [ -f "$f" ] && [ -n "$(tail -c1 "$f")" ] && printf '\n'   # don't
 ```
 
-It works, but for a reason you have to reconstruct each time you read it. Prefer
-an explicit `if`. `A && B || C` is likewise not if-then-else — `C` also runs when
-`A` succeeds and `B` fails — so this project spells those out.
+It works, but for a reason that you must work out again each time that you read it. Use an
+explicit `if`. `A && B || C` is also not if-then-else. `C` also runs when `A` succeeds and `B`
+fails. Thus this project writes those out.
 
-The two forms that *are* idiomatic and used freely:
+The two forms that *are* idiomatic, and used freely:
 
 ```bash
 command || return 1          # bail out on failure
@@ -241,29 +231,27 @@ command || return 1          # bail out on failure
 
 ### The same exemption kills bats assertions, silently
 
-`set -e` is **also** ignored for a command preceded by `!`, and in a `.bats` test that
-turns an inverted assertion into a no-op. Measured:
+`set -e` is **also** ignored for a command after `!`. In a `.bats` test, that makes an inverted
+assertion a no-op. Measured:
 
 | the test | what bats reports |
 |---|---|
-| `@test "x" { ! true; }` | `not ok` — it fails, correctly |
-| `@test "x" { ! true; true; }` | **`ok`** — it passes |
-| `@test "x" { false; true; }` | `not ok` — it fails, correctly |
+| `@test "x" { ! true; }` | `not ok`: it fails, correctly |
+| `@test "x" { ! true; true; }` | **`ok`**: it passes |
+| `@test "x" { false; true; }` | `not ok`: it fails, correctly |
 
-A mid-test `! cmd` therefore finds whatever it finds and the test carries on. It only
-appears to work in the **last** position, where the test's own exit status carries the
-failure — which is why the pattern survived so long: the first one anybody writes usually
-is last.
+Thus a `! cmd` in the middle of a test finds what it finds, and the test continues. It only seems
+to work in the **last** position, where the own exit status of the test carries the failure. That
+is why the pattern stayed for so long. The first one that people write is usually the last line.
 
-When this was found, the suite held 59 inverted assertions and **sixteen** were dead. Two
-of them had been written that same day and had already passed a mutation test that
-reintroduced the exact bug they existed to catch. One of the sixteen was also simply
-**wrong** — it grepped a whole config file for `18445` where the file's own comment
-explains when `18445` is published — and that was found the first time it was able to fail.
-An assertion that cannot fail is worse than an absent one, because the suite reports it as
-checked.
+When we found this, the suite had 59 inverted assertions, and **sixteen** were dead. Two of them
+were written on that same day, and had already passed a mutation test that put back the exact bug
+that they existed to catch. One of the sixteen was also **wrong**. It searched a full configuration
+file for `18445`, but the own comment of the file explains when `18445` is published. We found that
+the first time that it was able to fail. An assertion that cannot fail is worse than no assertion,
+because the suite reports it as tested.
 
-So: an inverted assertion carries its own failure.
+Thus: an inverted assertion carries its own failure.
 
 ```bash
 ! grep -q nope "$f" || return 1              # do this
@@ -271,42 +259,40 @@ So: an inverted assertion carries its own failure.
 run grep -q nope "$f"; [ "$status" -ne 0 ]   # also fine - but it overwrites $output
 ```
 
-`tests/lint-inverted.sh` enforces it, and accepts any `! cmd || return …` or
-`! cmd || fail …`. Grep for the whole file only when you mean the whole file: a positive
-assertion beside the negative one (`grep -q 'DRAUGR_PORTS="…"'`) is what actually pinned
-the behaviour in the case above.
+`tests/lint-inverted.sh` enforces it, and accepts each `! cmd || return …` or `! cmd || fail …`.
+Search the full file only when you mean the full file. A positive assertion beside the negative one
+(`grep -q 'DRAUGR_PORTS="…"'`) is what really fixed the behavior in the case above.
 
 ---
 
 ## Native stderr under `Stop`
 
-> While `$ErrorActionPreference` is `'Stop'`, a native command's stderr must not be
-> redirected — not with `2>$null`, not with `2>&1` — unless the preference is dropped
-> for the length of the call.
+> While `$ErrorActionPreference` is `'Stop'`, do not redirect the stderr of a native command, not
+> with `2>$null`, and not with `2>&1`, unless you drop the preference for the call.
 
-PowerShell 5.1 wraps each line a native command writes to a **redirected** stderr as a
-`NativeCommandError`, and `Stop` makes that terminating. Unredirected stderr passes
-through harmlessly, so the redirection is the whole defect.
+PowerShell 5.1 wraps each line that a native command writes to a **redirected** stderr as a
+`NativeCommandError`, and `Stop` makes that terminating. Stderr with no redirect passes through with
+no harm. Thus the redirect is the full defect.
 
-Measured in the guest, `Stop` in force, the task absent:
+Measured in the guest, with `Stop` in force and the task absent:
 
 | form | result |
 |---|---|
-| `schtasks /query /tn draugr-shot /fo list 2>$null` | **threw** — `NativeCommandError` |
+| `schtasks /query /tn draugr-shot /fo list 2>$null` | **threw**: `NativeCommandError` |
 | `Get-ScheduledTask -TaskName draugr-shot -ErrorAction SilentlyContinue` | `$null`, no error |
 
-What it cost: `install-shot.ps1` asked `schtasks` whether its task already existed, so as
-to register it **only when absent** — and `schtasks` writes `ERROR: The system cannot find
-the file specified.` to stderr for a task that is not there. The guard whose only job was
-to notice absence therefore threw whenever it was absent, which is **every first install**.
-The phase reported `FAILED (1)` with its two files written and no task registered.
+The cost: `install-shot.ps1` asked `schtasks` whether its task already existed, to register it
+**only when absent**. `schtasks` writes `ERROR: The system cannot find the file specified.` to
+stderr for a task that is not there. Thus the guard whose only job was to find an absence threw
+each time that the task was absent, which is **each first install**. The phase reported
+`FAILED (1)`, with its two files written and no task registered.
 
-Three files had each met this separately and fixed it in place — `mount-vault.ps1`,
-`install-netfx3.ps1` and `install-vscode.ps1` all carry their own save/restore, one of them
-with a comment explaining the whole mechanism — and a fourth then wrote the bug again. **A
-lesson learned three times in three files is a rule that does not exist.**
+Three files each met this separately, and fixed it in place. `mount-vault.ps1`,
+`install-netfx3.ps1` and `install-vscode.ps1` all have their own save and restore, and one has a
+comment that explains the full mechanism. Then a fourth file wrote the bug again. **A lesson learned
+three times in three files is a rule that does not exist.**
 
-The two fixes, in order of preference:
+The two fixes, the preferred one first:
 
 ```powershell
 # 1. Do not ask a native command a question a cmdlet answers.
@@ -320,30 +306,30 @@ $ErrorActionPreference = 'Continue'
 try { $out = & thing.exe -args 2>&1 } finally { $ErrorActionPreference = $eapWas }
 ```
 
-`lib/forge/provision.ps1` wraps the second form in `Invoke-Native { … }`, which the linter
-recognises and accepts.
+`lib/forge/provision.ps1` wraps the second form in `Invoke-Native { … }`. The linter knows it, and
+accepts it.
 
 ---
 
 ## Quoting
 
-Single quotes are literal — nothing expands inside them. Double quotes expand
-`$var` and `$(cmd)`. To get a literal single quote inside a single-quoted string
-you have to close, escape, and reopen:
+Single quotes are literal: nothing expands inside them. Double quotes expand `$var` and `$(cmd)`.
+For a literal single quote inside a single-quoted string, close it, escape the quote, and open it
+again:
 
 ```bash
 printf 'echo '\''hello'\''\n'      # outputs: echo 'hello'
 ```
 
-Prefer `printf` to `echo`: `echo`'s handling of `-n`, backslashes and leading
-dashes varies between shells and platforms. Use `printf '%s\n' "$x"`, never
-`printf "$x"` — a `%` in the data would be read as a format specifier.
+Use `printf`, not `echo`. The way that `echo` handles `-n`, backslashes and leading dashes is
+different between shells and platforms. Use `printf '%s\n' "$x"`, never `printf "$x"`. A `%` in
+the data reads as a format specifier.
 
 ---
 
 ## Pattern: the config cascade
 
-Six layers, each able to override the one below it:
+Six layers, and each one can override the layer below it:
 
 ```
 built-in defaults
@@ -354,26 +340,23 @@ built-in defaults
           → command-line flags
 ```
 
-All of it lives in `dr_load_config`, and the implementation is four labelled
-steps. Two are not obvious:
+All of it is in `dr_load_config`, and the code has four labeled steps. Two of them are not clear:
 
-**Environment variables are stashed and re-applied.** They have to outrank config
-files, but the files are *sourced into this same shell*, so sourcing one would
-overwrite them. Step 1 copies anything already in the environment into
-`_DR_ENV_*`; step 4 puts it back. The check is `${!k+set}`, not `${!k:+set}`,
-because `DRAUGR_PORTS=` in the environment is a deliberate "no ports" and must
-not be mistaken for absence.
+**Draugr keeps environment variables aside, and applies them again.** They must win over the
+configuration files. But the files are *sourced into this same shell*, so a source of one
+overwrites them. Step 1 copies the values from the environment into `_DR_ENV_*`. Step 4 puts them
+back. The test is `${!k+set}`, not `${!k:+set}`, because `DRAUGR_PORTS=` in the environment means
+"no ports" on purpose, and must not read as absent.
 
-**Provenance is a diff, not bookkeeping.** Before sourcing each layer,
-`_dr_snapshot_into _DR_PREV_` copies all 23 settings aside; afterwards
-`_dr_attribute` compares and credits whatever changed to that file. So a config
-that sets three keys gets the blame for exactly three. That is where
-`dr-config`'s "FROM" column comes from, and it costs nothing in the config files
-themselves — they stay plain `KEY=value`.
+**The origin of a value is a diff, not bookkeeping.** Before the source of each layer,
+`_dr_snapshot_into _DR_PREV_` copies all 23 keys aside. After it, `_dr_attribute` compares them, and
+credits the file with each change. Thus a configuration that sets three keys gets the blame for
+exactly three. That is the source of the "FROM" column of `dr-config`. It costs nothing in the
+configuration files, which stay plain `KEY=value`.
 
-**"You asked for none" is not "you did not ask".** The same distinction turns up
-again wherever a command-line flag overrides a list-valued setting. `dr-go` keeps
-a separate `args_given` marker rather than inferring intent from an empty array:
+**"You asked for none" is not "you did not ask".** The same difference comes back where a
+command-line flag overrides a list value. `dr-go` keeps a separate `args_given` marker, and does
+not guess the intent from an empty array:
 
 ```bash
 --bare) args_given=1; agent_args=() ;;          # explicitly nothing
@@ -382,50 +365,47 @@ a separate `args_given` marker rather than inferring intent from an empty array:
 if [ -z "$args_given" ] && [ -n "$DRAUGR_AGENT_ARGS" ]; then …   # only then fall back
 ```
 
-Without the marker there is no way to say "ignore what the config wants, just
-this once", because the empty array is also what you start with. Note too that
-the command line **replaces** the configured value rather than appending to it —
-same rule as everywhere else, and the only way to *drop* a configured argument.
+Without the marker, you cannot say "ignore the configuration, only this once", because the array is
+also empty at the start. Also, the command line **replaces** the configured value, and does not add
+to it. That is the same rule as in all other places, and the only way to *drop* a configured
+argument.
 
-Adding a setting means touching two places: `DR_KEYS` (the list of names) and
-`_dr_defaults` (the default value). Everything else — merging, provenance,
-`dr-config`, the "no such setting" error — follows from the list.
+A new key needs changes in two places: `DR_KEYS` (the list of names) and `_dr_defaults` (the
+default value). All else follows from the list: the merge, the origin, `dr-config`, the "no such
+setting" error.
 
-The trust check sits inside this loop. An untrusted project config `continue`s
-rather than aborting: it is skipped and the run carries on with the layers below.
+The trust test is inside this loop. A project configuration that is not trusted makes the loop
+`continue`, and does not stop it. Draugr skips the file, and the run continues with the layers below.
 
 ---
 
 ## Pattern: the dispatcher
 
-`bin/dr` turns `dr go` into `exec dr-go`. It is a convenience, not an
-architecture — the `dr-*` scripts are the real commands and work standalone. That
-ordering is deliberate, and worth preserving:
+`bin/dr` makes `dr go` into `exec dr-go`. It is a convenience, not an architecture. The `dr-*`
+scripts are the real commands, and work alone. That order is on purpose. Keep it:
 
-- **`exec` replaces the process** rather than spawning a child, so exit status,
-  signals and the terminal all behave as if you had typed `dr-go` yourself. That
-  matters for a command that hands your terminal to an interactive agent.
-- **The verb list is derived by globbing `bin/dr-*`**, never hard-coded. A new
-  command appears in `dr`'s help the moment its file exists.
-- **You can override any single command** by putting your own `dr-sync` earlier
-  on `PATH`, and the dispatcher will find yours. Nothing is registered anywhere.
+- **`exec` replaces the process**, and does not start a child. Thus the exit status, the signals and
+  the terminal all act as if you typed `dr-go` yourself. That is important for a command that gives
+  your terminal to an interactive agent.
+- **The list of verbs comes from a glob of `bin/dr-*`**, and is never hard-coded. A new command shows
+  in the help of `dr` as soon as its file exists.
+- **You can override any one command** with your own `dr-sync` earlier on `PATH`, and the
+  dispatcher finds yours. Nothing is registered in any place.
 
-An unknown verb suggests near matches by substring rather than just refusing.
+An unknown verb gives near matches by substring, and does not only refuse.
 
 ---
 
 ## Pattern: agent modules
 
-`sbx` runs ten agents. Almost everything Draugr does is the same for all of them
-— attaching, the clone, kits, `dr-sync`, `dr-send`, `dr-data`, the path
-translation. What differs is where an agent keeps its **memory**, which
-credential service it signs in through, and whether it reads the skills store
-where `sbx` mounts it — and that is exactly the knowledge most likely to be
-wrong: it is undocumented by the agents themselves, arrived at by measurement,
-and changes without notice.
+`sbx` runs ten agents. Almost all that Draugr does is the same for each of them: the attach, the
+clone, kits, `dr-sync`, `dr-send`, `dr-data`, the path translation. Three things are different:
+where an agent keeps its **memory**, which credential service it signs in through, and whether it
+reads the skills store where `sbx` mounts it. That is exactly the knowledge that is most likely to
+be wrong. The agents do not document it. It comes from measurement, and it changes with no notice.
 
-So it lives in `lib/agents/<agent>.sh`, one file per agent, rather than in a
-`case` statement in each command that needs it:
+Thus it is in `lib/agents/<agent>.sh`, one file for each agent, and not in a `case` statement in
+each command that needs it:
 
 ```bash
 dr_agent_load() {
@@ -436,252 +416,225 @@ dr_agent_load() {
 }
 ```
 
-Four things about it are load-bearing:
+Four facts about it are important:
 
-- **`lib/agents/default.sh` is the interface.** It is not a stub — it is what an
-  agent nobody has measured actually gets, and its answer to "where is the
-  memory" is an honest failure rather than a guess. `tests/agents.bats` reads the
-  function names out of it and fails if any other module omits one.
-- **Every module must define every function.** Sourcing a second module redefines
-  only what that module happens to define, so a partial one leaves the *previous*
-  agent's answers standing. That is the bug the interface test exists to catch:
-  it would put Claude's memory path into a Codex session with nothing on screen.
-- **It loads twice.** Once at the bottom of `lib/common.sh`, so a command that
-  never reads a config (`dr-skills`, `dr-setup`) still has the functions; and
-  again at the end of `dr_load_config`, which is the load that decides — the
-  module is chosen by a setting the cascade produces, so anything earlier would
-  read the agent from the wrong layer.
-- **Modules take paths as arguments, never `$HOME`.** A module that looks inside
-  the mound does it through `dr_mound_sh`, whose scripts are single-quoted and
-  run over there. A `$HOME` written into the script text expands on the *host*.
+- **`lib/agents/default.sh` is the interface.** It is not a stub. An agent that nobody measured
+  gets it, and its answer to "where is the memory" is an honest failure, not a guess.
+  `tests/agents.bats` reads the function names from it, and fails if a different module omits one.
+- **Each module must define each function.** A source of a second module redefines only the
+  functions that it defines. Thus a partial module leaves the answers of the *previous* agent in
+  place. The interface test exists to catch that bug. It puts the memory path of Claude into a
+  Codex session, with nothing on screen.
+- **It loads two times.** Once at the bottom of `lib/common.sh`, so that a command that never reads
+  a configuration (`dr-skills`, `dr-setup`) still has the functions. Again at the end of
+  `dr_load_config`, and that load decides. A value from the cascade selects the module. Thus an
+  earlier load reads the agent from the wrong layer.
+- **Modules take paths as arguments, never `$HOME`.** A module that looks inside the mound does it
+  through `dr_mound_sh`, whose scripts are single-quoted and run there. A `$HOME` in the script text
+  expands on the *host*.
 
-To add an agent: copy `default.sh`, fill in the layout, add a case to
-`tests/agents.bats`. `dr_agent_known` picks it up from the directory listing, so
-there is no list to update.
+To add an agent: copy `default.sh`, fill in the layout, and add a case to `tests/agents.bats`.
+`dr_agent_known` finds it in the directory list, so there is no list to update.
 
 ---
 
 ## Pattern: mocking `sbx` and `ssh`
 
-Almost everything Draugr does is *building a command line* for a Windows binary
-that needs a hypervisor. `tests/mocks/sbx` stands in for it: it appends its argv
-to `$DR_MOCK_LOG` and replays canned `ls --json` output shaped by `$DR_MOCK_STATE`.
-Tests then assert on the recorded argv.
+Almost all that Draugr does is to *build a command line* for a Windows binary that needs a
+hypervisor. `tests/mocks/sbx` stands in for it. It adds its argv to `$DR_MOCK_LOG`, and replays a
+fixed `ls --json` output, shaped by `$DR_MOCK_STATE`. Tests then assert on the recorded argv.
 
-`tests/mocks/ssh` does the same for attaching, logging with an `ssh` prefix so
-the same `calls` helper picks it out of the one log. Two things to know when writing tests
-against it. The agent's command line arrives base64-encoded inside the rcfile, so
-tests decode it rather than asserting on the wrapper — the decoded string is what
-the mound's bash will actually run. And `git` fetches over `ssh://` too, so a test
-that cares about *which* connections happened wants `DRAUGR_AUTO_SYNC=false`, or
-`head -1`: the attach is always the first connection of a session.
+`tests/mocks/ssh` does the same for the attach. It logs with an `ssh` prefix, so that the same
+`calls` helper finds it in the one log. Know two things when you write tests against it. The
+command line of the agent arrives in base64 inside the rcfile. Thus tests decode it, and do not
+assert on the wrapper. The decoded string is what the bash of the mound really runs. And `git` also
+fetches over `ssh://`. Thus a test that cares *which* connections happened needs
+`DRAUGR_AUTO_SYNC=false`, or `head -1`, because the attach is always the first connection of a
+session.
 
-So the rule is: **keep the decisions separate from the invocation.** Work out
-flags into a variable or array, then call `dr_sbx` once with them. A function
-that computes and invokes in the same breath cannot be tested without a microVM.
+Thus the rule is: **keep the decisions separate from the call.** Put the flags into a variable or
+array, then call `dr_sbx` once with them. A function that computes and calls in one step cannot be
+tested without a microVM.
 
-There is a second requirement that is easy to miss: every mound command refuses
-a repo that is not under `/mnt/<drive>/`, so a test needs a repo on such a path.
-`dr_make_win_repo` provides one. In WSL that is the real `C:` drive; in CI it is
-a plain directory the workflow creates, because the check is pure string matching
-and no hypervisor is involved. Where neither is possible the tests `skip`.
+There is a second requirement that people easily miss. Each mound command refuses a repo that is not
+under `/mnt/<drive>/`, so a test needs a repo on such a path. `dr_make_win_repo` gives one. In WSL,
+that is the real `C:` drive. In CI, it is a plain directory that the workflow creates, because the
+test is pure string matching, with no hypervisor. Where neither is possible, the tests `skip`.
 
-**A skip is invisible in a green tick**, so CI checks the run for skips and fails
-the job if it finds any. Otherwise a `/mnt/c` that quietly stopped being writable
-would turn the mound tests into no-ops and nothing would say so.
+**A green result hides a skip.** Thus CI looks for skips in the run, and fails the job if it finds
+any. If not, a `/mnt/c` that silently became read-only makes the mound tests into no-ops, and
+nothing says so.
 
 ### Standing in for the mound's git repository
 
-The commands in `tests/sync.bats` talk to `ssh://<name>.sbx/<path>`, and there is
-no sandbox in a test. Rather than adding a test-only override to the production
-code, the tests use **git's own URL rewriting**:
+The commands in `tests/sync.bats` talk to `ssh://<name>.sbx/<path>`, and a test has no sandbox. The
+tests do not add a test-only override to the production code. They use **the own URL rewrite of
+git**:
 
 ```bash
 git config "url.$fake.insteadOf" "ssh://$name.sbx$mound"
 ```
 
-git then transparently redirects that exact URL to a local clone. Everything else
-is genuine — a real `git fetch`, real ref names, real commit counting — and
-`bin/dr-sync` contains no branch that exists only for tests. `dr_fake_mound` in
-`tests/helper.bash` sets this up; `dr_mound_commit` then commits there the way
-the agent would.
+git then silently sends that exact URL to a local clone. All else is real: a real `git fetch`, real
+ref names, a real commit count. `bin/dr-sync` has no branch that exists only for tests.
+`dr_fake_mound` in `tests/helper.bash` sets this up. `dr_mound_commit` then commits there, as the
+agent does.
 
-Two things this caught that a mock would not have: `git remote get-url` applies
-the rewriting (so assertions on the configured URL must read
-`git config remote.draugr.url` instead), and the exit-status bug in
-`--check-only` where an unreachable mound reported success.
+This caught two things that a mock did not. `git remote get-url` applies the rewrite. Thus
+assertions on the configured URL must read `git config remote.draugr.url`. It also caught the
+exit-status bug in `--check-only`, where an unreachable mound reported success.
 
 ### Standing in for the mound's filesystem
 
-`dr-mem` moves *files* rather than commits, so it needed the same treatment one
-layer down. Setting `DR_MOCK_MOUND` makes the mock stop pretending: `exec` and
-`cp` really run, against a directory stationed on the host.
+`dr-mem` moves *files*, not commits. Thus it needed the same treatment one layer down. With
+`DR_MOCK_MOUND` set, `exec` and `cp` in the mock really run, against a directory on the host.
 
-- `exec` rewrites every **absolute argument** into that tree and runs the rest
-  verbatim. The script itself is passed through untouched — it is meant for the
-  mound's shell, and rewriting inside it would mean parsing it.
-- `cp` implements sbx's own semantics, including that a host path must be a
-  *Windows* path. The mock converts `C:\…` back to `/mnt/c/…` **independently**
-  of `dr_path_win` rather than by calling it. That is the point: if the
-  translation under test is wrong, the mock cannot find the file, instead of two
-  matching bugs agreeing with each other.
+- `exec` moves each **absolute argument** into that tree, and runs the rest as written. The script
+  itself goes through unchanged. It is for the shell of the mound, and a rewrite inside it needs a
+  parse of it.
+- `cp` has the own behavior of sbx, also the rule that a host path must be a *Windows* path. The
+  mock converts `C:\…` back to `/mnt/c/…` **on its own**, and does not call `dr_path_win`. That is
+  the purpose. If the translation under test is wrong, the mock cannot find the file. Two matching
+  bugs do not agree with each other.
 
-`dr_mound_memory_dir` sets it up. Like `dr_fake_sbx_root` it *sets* variables
-rather than printing them — `$(…)` is a subshell and would throw the `export`
-away, which is a mistake worth making only once.
+`dr_mound_memory_dir` sets it up. As `dr_fake_sbx_root` does, it *sets* variables, and does not
+print them. `$(…)` is a subshell, and throws the `export` away. That mistake is worth making only
+once.
 
-The payoff is that the project-key translation is exercised for real: the file
-has to land under `-c-Code-…` for the test to find it, and a wrong key produces a
-missing file rather than a passing assertion about a string.
+The benefit: the project-key translation really runs. The file must go under `-c-Code-…` for the
+test to find it. A wrong key gives a missing file, not a passing assertion about a string.
 
 ---
 
 ## Pattern: the mound commands
 
-`dr-up`, `dr-go`, `dr-shell`, `dr-stop`, `dr-rm` and `dr-status` all begin with
-`dr_context`, which resolves the repo, refuses it if it is not on a Windows
-drive, and loads the config cascade:
+`dr-up`, `dr-go`, `dr-shell`, `dr-stop`, `dr-rm` and `dr-status` all start with `dr_context`. It
+resolves the repo, refuses it if it is not on a Windows drive, and loads the configuration cascade:
 
 ```bash
 dr_context      # sets DR_REPO, DR_REPO_WIN; fills in DRAUGR_* and DR_ORIGIN
 ```
 
-Two things follow from that, and both have bitten already:
+Two results follow from that, and both already caused bugs:
 
-- **`dr-up` owns the state machine, and nobody else implements it.** `absent` →
-  `sbx create`, `stopped` → `sbx exec <name> true`, `running` → nothing. `dr-go`
-  runs `dr-up` as a *separate process* rather than duplicating the logic, which
-  is also what keeps `dr-up --print` a truthful preview of what `dr-go` will do.
-- **Creation flags are frozen at creation.** `sbx` bakes ports, memory, template
-  and kit into the sandbox spec; changing one in your config and re-running
-  `dr-up` does nothing until the sandbox is recreated. That is why `--recreate`
-  exists, and why the header comment of `dr-up` says so out loud.
+- **`dr-up` owns the state machine, and no other command has it.** `absent` → `sbx create`,
+  `stopped` → `sbx exec <name> true`, `running` → nothing. `dr-go` runs `dr-up` as a *separate
+  process*, and does not copy the logic. That also keeps `dr-up --print` a true preview of what
+  `dr-go` does.
+- **Creation flags become fixed at creation.** `sbx` puts ports, memory, template and kit into the
+  sandbox spec. If you change one in your configuration and run `dr-up` again, nothing happens until
+  you recreate the sandbox. That is why `--recreate` exists, and why the header comment of `dr-up`
+  says so clearly.
 
-Starting a stopped sandbox is `sbx exec <name> true` — there is no `sbx start`,
-and `sbx run` would attach, which is a different command's job.
+To start a stopped sandbox, run `sbx exec <name> true`. There is no `sbx start`, and `sbx run`
+attaches, which is the job of a different command.
 
 ---
 
 ## Pattern: the git loop, and which direction is which
 
-Three repositories, and the transport is different in each direction. Getting
-this straight explains most of `bin/dr-sync`, `bin/dr-send` and `bin/dr-cp`.
+Three repositories, and the transport is different in each direction. This explains most of
+`bin/dr-sync`, `bin/dr-send` and `bin/dr-cp`.
 
-**Out of the mound — `ssh://`, never `git://`.** `sbx` adds its own remote
-pointing at a git daemon on `127.0.0.1`, and from WSL that is *the WSL VM's*
-loopback, not Windows'. Fetching it gives `Connection refused`. So Draugr adds
-its own remote, `$DRAUGR_REMOTE`, at `ssh://<name>.sbx/<mound path>`, which
-crosses no NAT, needs no port, and starts a stopped sandbox on connect. That is
-the whole reason `DRAUGR_REMOTE` exists; it is not duplication for its own sake.
+**Out of the mound: `ssh://`, never `git://`.** `sbx` adds its own remote, which points at a git
+daemon on `127.0.0.1`. From WSL, that is the loopback of *the WSL VM*, not of Windows. A fetch from
+it gives `Connection refused`. Thus Draugr adds its own remote, `$DRAUGR_REMOTE`, at
+`ssh://<name>.sbx/<mound path>`. That crosses no NAT, needs no port, and starts a stopped sandbox on
+connect. That is the full reason for `DRAUGR_REMOTE`. It is not a duplicate.
 
-**Into the mound — not a push at all.** The obvious `git push` fails: the clone
-has that branch checked out and git refuses to update it from outside. `dr-send`
-therefore runs the transfer from the *inside*, as a fetch from the read-only host
-mount:
+**Into the mound: not a push at all.** The clear `git push` fails. The clone has that branch checked
+out, and git refuses to update it from outside. Thus `dr-send` runs the transfer from the *inside*,
+as a fetch from the read-only host mount:
 
 ```bash
 sbx exec <name> git -C <clone> fetch /run/sandbox/source main:refs/remotes/host/main
 ```
 
-No network, no daemon, no ssh — the host repository is already mounted there. It
-lands as a remote-tracking ref rather than a branch, so nothing in the agent's
-working tree is disturbed.
+No network, no daemon, no ssh, because the host repository is already mounted there. It arrives as
+a remote-tracking ref, not a branch. Thus nothing in the working tree of the agent changes.
 
-**Neither, for uncommitted files.** `dr-cp` wraps `sbx cp`, which writes into the
-mound as `root:root` while the agent is uid 1000 — so anything copied *in* gets
-chowned afterwards, or the agent could read it and never modify it.
+**Neither, for uncommitted files.** `dr-cp` wraps `sbx cp`, which writes into the mound as
+`root:root`, while the agent is uid 1000. Thus Draugr changes the owner of each file that it copies
+*in*. If not, the agent can read it, but never change it.
 
-One rule falls out of all this: **`dr-status` must not fetch.** Reaching the
-mound starts a stopped one, and a status command with side effects is a trap. It
-reports from local refs and says "as of your last dr-sync" so the staleness is
-stated rather than implied.
+One rule follows from all this: **`dr-status` must not fetch.** A connection to the mound starts a
+stopped one, and a status command with side effects is a trap. It reports from local refs, and
+says "as of your last dr-sync". Thus it states that the data can be old.
 
 ---
 
 ## Pattern: reports go to stdout, diagnostics to stderr
 
-`dr_info`/`dr_ok`/`dr_warn`/`dr_error`/`dr_heading` all write to **stderr**, so
-that a command's real output stays pipeable. The corollary is easy to get wrong:
-**if a command's whole purpose is output, all of it belongs on stdout** — including
-its headings.
+`dr_info`/`dr_ok`/`dr_warn`/`dr_error`/`dr_heading` all write to **stderr**, so that the real
+output of a command stays usable in a pipe. The other side of this is easy to get wrong: **if the
+full purpose of a command is output, all of it belongs on stdout**, also its headings.
 
-`dr-status` got this wrong first time round. It printed headings with
-`dr_heading` (stderr) and rows with `printf` (stdout). On a terminal it looked
-fine; the moment it was piped, the two streams buffered independently and
-`repo` appeared *above* the `repository` heading it belonged under. `dr-status`
-now defines its own local `heading()` that writes to stdout, and there is a
-regression test that captures stdout alone and checks the ordering.
+`dr-status` got this wrong the first time. It printed headings with `dr_heading` (stderr), and rows
+with `printf` (stdout). On a terminal, it looked fine. In a pipe, the two streams had separate
+buffers, and `repo` showed *above* its `repository` heading. `dr-status` now defines its own local
+`heading()`, which writes to stdout. A regression test captures only stdout, and tests the order.
 
-So: `dr_heading` is for interactive prompts, like `dr-trust`'s file review.
-A report defines its own.
-
----
-
+Thus: `dr_heading` is for interactive prompts, such as the file review of `dr-trust`. A report
+defines its own.
 ## Pattern: one list, two syntaxes
 
-`DRAUGR_DATA` is read by two things that speak different languages — rsync filter
-rules (`dr-data`) and shell glob matching (the clean-tree exemption in `dr-go`).
-They must agree, or a file transfers correctly and *still* blocks `dr-go`, which
-is a genuinely confusing afternoon. So both interpretations live together in
-`lib/common.sh`, with the three entry shapes documented once:
+Two things read `DRAUGR_DATA`, and they speak different languages: rsync filter rules (`dr-data`)
+and shell glob matching (the clean-tree exemption in `dr-go`). They must agree. If not, a file
+transfers correctly and *still* blocks `dr-go`, which makes for a very confusing afternoon. Thus
+both readings are together in `lib/common.sh`, with the three entry shapes documented once:
 
 | Entry | Means | `case` form | rsync form |
 |---|---|---|---|
-| `scratch/raw/` | that directory and everything under it | `"${entry%/}"/*` | two rules: the dir and `/**` |
+| `scratch/raw/` | that directory and all under it | `"${entry%/}"/*` | two rules: the dir and `/**` |
 | `tmp/**` | a pattern, anchored at the repo root | `$entry` unquoted | `--include=/tmp/**` |
-| `*.parquet` | a bare name, matched at **any** depth | `$entry` vs the basename | unanchored `--include=*.parquet` |
+| `*.parquet` | a bare name, matched at **any** depth | `$entry` against the basename | unanchored `--include=*.parquet` |
 
-The `case` column is explained under *Quoting is what makes something a
-wildcard* above; the short version is that quoted fragments are literal and
-unquoted ones are patterns, and `dr_data_matches` mixes both on purpose.
+*Quoting is what makes something a wildcard*, above, explains the `case` column. In short, quoted
+fragments are literal, unquoted ones are patterns, and `dr_data_matches` mixes both on purpose.
 
-The rsync recipe is `--include='*/'` to descend, then the entries, then
-`--exclude='*'`, with `-m` to prune the empty directories the first rule leaves.
-Order matters: rsync takes the *first* matching rule.
+The rsync recipe is `--include='*/'` to go down, then the entries, then `--exclude='*'`, with `-m`
+to remove the empty directories that the first rule leaves. The order is important, because rsync
+takes the *first* matching rule.
 
-**Splitting the list will glob it if you let it.** This looks right and is not:
+**A split of the list globs it, if you let it.** This looks right, but is not:
 
 ```bash
 for entry in $DRAUGR_DATA; do …      # don't
 ```
 
-Unquoted expansion does word splitting **and pathname expansion**, so `tmp/**`
-is replaced by whatever `tmp/` contains in the current directory — a pattern
-silently becomes a snapshot of today's filenames, varying with `$PWD` and blind
-to anything created later. Use `read -ra`, which splits on `IFS` and does not
-glob:
+Unquoted expansion does word splitting **and pathname expansion**. Thus `tmp/**` becomes the
+contents of `tmp/` in the current directory. A pattern silently becomes a snapshot of the filenames
+of today. It changes with `$PWD`, and does not see files that are created later. Use `read -ra`,
+which splits on `IFS`, and does not glob:
 
 ```bash
 read -ra entries <<< "$DRAUGR_DATA"  # do
 ```
 
-This shipped as far as the test suite before being caught, and only because the
-filter rules are tested against **real rsync** rather than against a
-reimplementation of what rsync is assumed to do. When the language is someone
-else's, test against their implementation.
+This got as far as the test suite before somebody caught it. That happened only because the filter
+rules are tested against **real rsync**, not against a copy of what we assume that rsync does. When
+the language belongs to somebody else, test against their implementation.
 
 ---
 
 ## Pattern: a process that outlives the command that started it
 
-`dr-dep up` leaves a **warden** running: one process per running dependency,
-holding the session that stops `sbx` auto-stopping an idle mound after 30 s, and
-counting claims so the last user out can turn the lights off. It is the first
-thing in Draugr that keeps running after the command returns, and detaching one
-properly takes three things rather than one.
+`dr-dep up` leaves a **warden** running. That is one process for each running dependency. It holds
+the session that stops `sbx` from stopping an idle mound after 30 s. It counts claims, so that the
+last user can turn off the lights. It is the first part of Draugr that continues to run after the
+command returns. A correct detach of it needs three things, not one.
 
 ```bash
 setsid "$_dr_bin/dr-dep" warden "$name" --sandbox "$name" --linger "$lingering" \
     </dev/null >>"$(dr_dep_dir "$name")/warden.log" 2>&1 &
 ```
 
-1. **`setsid`**, so it is not in the caller's process group and does not die
-   with the terminal that started it.
-2. **All three standard streams redirected**, stdin from `/dev/null` and both
-   outputs to a log beside its pid file. A daemon with nowhere to write is a
-   daemon that blocks on a full pipe.
-3. **Every inherited descriptor above stdio closed, by the child itself.** This
-   is the one that is easy to miss:
+1. **`setsid`**, so that it is not in the process group of the caller, and does not die with the
+   terminal that started it.
+2. **A redirect of all three standard streams**: stdin from `/dev/null`, and both outputs to a log
+   beside its pid file. A daemon with no place to write blocks on a full pipe.
+3. **The child itself closes each descriptor above stdio that it got from its parent.** People
+   easily miss this one:
 
    ```bash
    for _fd in /proc/self/fd/*; do
@@ -690,191 +643,177 @@ setsid "$_dr_bin/dr-dep" warden "$name" --sandbox "$name" --linger "$lingering" 
    done
    ```
 
-   Redirecting 0, 1 and 2 says nothing about fd 3. Under `bats` the warden
-   inherited a pipe the test runner was reading and a handle on its output file,
-   so a suite that had printed every result still hung until something killed
-   it — the tests had passed and the run had not finished. 255 is bash's own
-   copy of the script and closing it kills the shell.
+   A redirect of 0, 1 and 2 says nothing about fd 3. Under `bats`, the warden got a pipe that the
+   test runner read, and a handle on its output file. Thus a suite that printed each result still
+   hung until something killed it. The tests passed, but the run did not finish. 255 is the own
+   copy of the script of bash, and a close of it kills the shell.
 
-**The pid file is a claim, not a fact.** `warden.pid` is checked with `kill -0`
-before another is started, exactly as a claim is checked against live state
-rather than believed: a stale pid file means nothing is running, and that is a
-condition to recover from rather than an error.
+**The pid file is a claim, not a fact.** Draugr tests `warden.pid` with `kill -0` before it starts
+another, as it tests a claim against the live state, and does not believe it. An old pid file means
+that nothing runs. That is a state to recover from, not an error.
 
-**Decide which way it fails, and say so.** If the warden dies the mound stays
-up and the next `dr-up` starts another; nothing stops something that is in use.
-Any long-lived helper added later should choose the same direction.
+**Decide in which direction it fails, and say so.** If the warden dies, the mound stays up, and the
+next `dr-up` starts another warden. Nothing stops something that is in use. Each long-lived helper
+that you add later must select the same direction.
 
 ---
 
 ## Two traps that cost real time
 
-Neither is Draugr's doing, and both are silent.
+Draugr did not cause either one, and both are silent.
 
-**A comment that begins with the word "shellcheck" becomes a directive.** This
-is a parse error, not a warning:
+**A comment that starts with the word "shellcheck" becomes a directive.** This is a parse error, not
+a warning:
 
 ```bash
 # read -ra splits on whitespace, rather than leaving it to word splitting, which
 # shellcheck (rightly) complains about
 ```
 
-ShellCheck sees `# shellcheck (rightly)...` and tries to parse it as
-`# shellcheck disable=...`, then reports SC1073/SC1072 pointing at the comment.
-Reword so the line does not *start* with the tool's name.
+ShellCheck sees `# shellcheck (rightly)...`, tries to parse it as `# shellcheck disable=...`, and
+reports SC1073/SC1072 at the comment. Change the words, so that the line does not *start* with the
+name of the tool.
 
-**`jq`'s `@tsv` escapes backslashes.** Every workspace Draugr handles is a
-Windows path, and `@tsv` turns `C:\Code` into `C:\\Code`. `dr-ls` uses
-`join("\t")` instead, which is safe here because none of those fields can
-contain a tab. Reach for `@tsv` only when the data cannot contain a backslash.
+**The `@tsv` of `jq` escapes backslashes.** Each workspace that Draugr handles is a Windows path,
+and `@tsv` makes `C:\Code` into `C:\\Code`. `dr-ls` uses `join("\t")`, which is safe here, because
+none of those fields can contain a tab. Use `@tsv` only when the data cannot contain a backslash.
 
 ---
 
 ## When you add a pattern, document it here
 
-This file is load-bearing, not decoration: the README tells reviewers to read it
-before any script. If you introduce something structural — a new layer, a new
-lifecycle hook, a new way commands talk to each other — add a short section here
-in the same style: what it is, why, and the one non-obvious consequence.
+This file is necessary, not decoration. The README tells reviewers to read it before any script. If
+you add something structural (a new layer, a new lifecycle hook, a new way for commands to talk to
+each other), add a short section here, in the same style: what it is, why, and the one result that
+is not clear.
 
-The test for whether it belongs: *would someone reading a single script be
-confused because the answer lives in a different file?* If yes, it goes here.
+The test for whether it belongs here: *is a reader of a single script confused, because the answer
+is in a different file?* If yes, it goes here.
 
 ---
 
 ## House rules
 
-1. **One script per verb**, even one-liners. You should be able to read a single
-   behaviour without reading a framework.
-2. **Every fatal error names the fix.** `dr_die` takes a message followed by
-   remedy lines. "Not a git repository" is a search; "run `git init`, or cd into
-   your project" is not.
-3. **Diagnostics go to stderr** (`>&2`) so a command's real output stays
-   pipeable. `dr_info`/`dr_warn`/`dr_die` handle this for you.
-4. **Destructive actions refuse by default** and need either a clean
-   precondition or an explicit `--force`.
-5. **`sbx` stays visible.** Draugr does not hide it; error messages name the
-   `sbx` command that ran so you can reproduce the problem without Draugr.
-6. **Internal helpers are `_dr_`-prefixed.** A project's `.draugr.conf` is
-   sourced into our shell, so its variables could otherwise collide with ours.
-7. **Nothing is written outside** the repo, `~/.config/draugr`,
-   `$DRAUGR_MEM_STORE`, and `${XDG_STATE_HOME:-~/.local/state}/draugr` for
-   run-state. The last one is separate from the config directory on purpose:
-   claims and warden pids are deleted freely, are never worth backing up, and
-   are meaningless on another machine, so keeping them in `~/.config/draugr`
-   would make that directory unsafe to copy.
-8. **A new structural pattern gets a section in this file**, in the same turn
-   that introduces it. See *When you add a pattern* above.
-9. **No block of more than five lines of code without a comment.** Enforced by
-   `tests/lint-comments.sh`, and explained below.
-10. **An inverted bats assertion carries its own failure**: `! cmd || return 1`.
-    Anywhere but the last line of a test, a bare `! cmd` cannot fail. Enforced by
-    `tests/lint-inverted.sh`, and explained under *`set -e` and `&&` chains*.
-11. **In a PowerShell script with `$ErrorActionPreference = 'Stop'`, do not redirect a
-    native command's stderr.** Any line it writes becomes a terminating error. Enforced by
-    `tests/lint-native-stderr.sh`, and explained under *Native stderr under `Stop`*.
-12. **A test that greps a source file strips comments first, and anchors the pattern.**
-    A fix's own comment names the thing the fix removed - that is what comments are for - so
-    an unfiltered grep matches the explanation instead of the code and passes on a file whose
-    behaviour was reverted. An unanchored name matches a renamed one as a prefix. This has
-    happened **five** times here, every time caught by reverting the fix and re-running the
-    test, and never once by reading it. A new check is not finished until it has been seen to
-    fail.
+1. **One script for each verb**, also for single lines. A reader must be able to read one behavior
+   without a framework.
+2. **Each fatal error names the fix.** `dr_die` takes a message, then fix lines. "Not a git
+   repository" makes the user search. "run `git init`, or cd into your project" does not.
+3. **Diagnostics go to stderr** (`>&2`), so that the real output of a command stays usable in a pipe.
+   `dr_info`/`dr_warn`/`dr_die` do this for you.
+4. **Destructive actions refuse by default.** They need a clean condition or an explicit `--force`.
+5. **`sbx` stays visible.** Draugr does not hide it. Error messages name the `sbx` command that ran,
+   so that you can repeat the problem without Draugr.
+6. **Internal helpers have the `_dr_` prefix.** Draugr sources the `.draugr.conf` of a project into
+   our shell. Without the prefix, its variables can collide with ours.
+7. **Nothing is written outside** the repo, `~/.config/draugr`, `$DRAUGR_MEM_STORE`, and
+   `${XDG_STATE_HOME:-~/.local/state}/draugr` for run-state. The last one is separate from the
+   configuration directory on purpose. Claims and warden pids can be deleted freely, are never worth
+   a backup, and mean nothing on a different machine. In `~/.config/draugr`, they make that
+   directory unsafe to copy.
+8. **A new structural pattern gets a section in this file**, in the same change that adds it. Refer
+   to *When you add a pattern* above.
+9. **No block of more than five lines of code without a comment.** `tests/lint-comments.sh` enforces
+   it, and the section below explains it.
+10. **An inverted bats assertion carries its own failure**: `! cmd || return 1`. In any place except
+    the last line of a test, a bare `! cmd` cannot fail. `tests/lint-inverted.sh` enforces it, and
+    *`set -e` and `&&` chains* explains it.
+11. **In a PowerShell script with `$ErrorActionPreference = 'Stop'`, do not redirect the stderr of a
+    native command.** Each line that it writes becomes a terminating error.
+    `tests/lint-native-stderr.sh` enforces it, and *Native stderr under `Stop`* explains it.
+12. **A test that searches a source file removes the comments first, and anchors the pattern.** The
+    own comment of a fix names the thing that the fix removed, because that is the job of comments.
+    Thus a search with no filter matches the explanation, not the code, and passes on a file whose
+    behavior was reverted. A name with no anchor matches a renamed one as a prefix. This happened
+    **five** times here. Each time, a revert of the fix and a new run of the test caught it, and a
+    read of the test never did. A new test is not finished until somebody saw it fail.
 
 ---
 
 ## The comment-density rule
 
-> Any block of more than **five** lines of code must contain at least one comment
-> line.
+> Each block of more than **five** lines of code must contain at least one comment line.
 
-A "block" is a run of consecutive non-blank lines. So a doc comment sitting
-directly above a function counts as that function's comment — usually where it
-belongs. Put a blank line between them and they become two blocks, and the code
-half then needs its own comment. In practice the rule means: **every few lines,
-say what the next few lines are for.**
+A "block" is a run of consecutive lines that are not blank. Thus a doc comment directly above a
+function counts as the comment of that function, which is usually where it belongs. With a blank
+line between them, they become two blocks, and the code half then needs its own comment. In
+practice, the rule means: **every few lines, say what the next few lines are for.**
 
-This is stricter than most projects would want, and deliberately so. Draugr's
-whole argument is that you can read a file before you trust it. "The code is
-self-documenting" is a reasonable position in a codebase nobody is being asked to
-audit; it is not one here.
+This is stricter than most projects want, on purpose. The full argument of Draugr is that you can
+read a file before you trust it. "The code is self-documenting" is a reasonable position in a code
+base that nobody must audit. It is not reasonable here.
 
-Two things are not counted as code, because you cannot comment inside them and
-demanding it would be nonsense: **heredoc bodies**, which are data, and blank
-lines, which explain nothing and so do not reset the count either.
+Two things do not count as code, because you cannot comment inside them, and a demand for comments
+there makes no sense: **heredoc bodies**, which are data, and blank lines. Blank lines explain
+nothing, so they also do not reset the count.
 
-Only **full-line** comments count. A trailing `# like this` is fine to write and
-often the clearest option, but it does not satisfy the checker — the rule stays
-mechanical and unarguable that way.
+Only **full-line** comments count. A trailing `# like this` is fine to write, and often the
+clearest option, but it does not satisfy the checker. That way, the rule stays mechanical, with no
+room for argument.
 
 ```bash
 ./tests/lint-comments.sh              # everything CI checks - use this form
 MAX=8 ./tests/lint-comments.sh …      # relax it while refactoring
 ```
 
-Run it with **no arguments**. The file list lives in the script so that a local
-run checks exactly what CI checks; it used to be spelled out in the workflow,
-and the bare local invocation quietly checked nothing at all, which is a green
-tick that means less than no tick.
-
-CI runs it on every push. If it fires on a block where a comment genuinely adds
-nothing, that is usually a sign the block wants splitting with a blank line
-rather than padding with prose.
+Run it with **no arguments**. The file list is in the script, so that a local run tests exactly
+what CI tests. Before, the workflow listed the files. Then a bare local run silently tested nothing.
+That is a green result that means less than no result.
+CI runs it on each push. If it fires on a block where a comment really adds nothing, that usually
+means that a blank line must split the block. Do not pad it with prose.
 
 ---
 
 ## Working on Draugr
 
-Draugr sandboxes other people's projects, and it can sandbox its own. That is the recommended way
-to work on it: `dr-go` in your clone builds a mound whose agent edits a clone of your clone, while
-your checkout is mounted **read-only** and kernel-enforced. The only writes it ever receives are
-the merges you accept through `dr-sync` and `dr-diff`.
+Draugr puts the projects of other people in a sandbox, and it can do the same for itself. That is
+the recommended way to work on it. `dr-go` in your clone builds a mound, whose agent edits a clone
+of your clone. Your checkout is mounted **read-only**, and the kernel enforces that. The only writes
+that it ever gets are the merges that you accept through `dr-sync` and `dr-diff`.
 
-`dr-init` writes `.draugr.conf` and `.draugr/kit/spec.yaml` (commit both) and adds three entries to
-`.gitignore`: `.draugr/kit.applied`, `.draugr/create.applied` and `.draugr/tmp/`. Those are not
-tidiness. With `DRAUGR_REQUIRE_CLEAN=true` an untracked state file **blocks `dr-go`**, so a repo
-missing them stops working the first time a mound is built.
+`dr-init` writes `.draugr.conf` and `.draugr/kit/spec.yaml` (commit both), and adds three entries
+to `.gitignore`: `.draugr/kit.applied`, `.draugr/create.applied` and `.draugr/tmp/`. Those are not
+tidiness. With `DRAUGR_REQUIRE_CLEAN=true`, an untracked state file **blocks `dr-go`**. Thus a repo
+without them stops working the first time that Draugr builds a mound.
 
-**The whole suite runs in there**, because none of it needs a hypervisor: CI proves that by running
-all 983 tests on Ubuntu with no sbx, no Windows and no WSL. Two things the mound does not have by
-default and the suite needs:
+**The full suite runs in there**, because none of it needs a hypervisor. CI proves that, because it
+runs all 983 tests on Ubuntu, with no sbx, no Windows and no WSL. The suite needs two things that
+the mound does not have by default:
 
-- `bats`, `jq` and `shellcheck`, installed from the kit's `commands.install`. Mind the rule that
-  applies to every kit: install commands run **before** the repository is in the workspace, so they
+- `bats`, `jq` and `shellcheck`, installed from the `commands.install` of the kit. Remember the
+  rule for each kit: install commands run **before** the repository is in the workspace, so they
   cannot read a file from it.
-- a writable `/mnt/c`. `dr_win_root` looks for `/mnt/c/Temp` and then `/mnt/c`, and with neither
-  every mound test **skips** rather than failing. `sudo mkdir -p /mnt/c/Temp && sudo chmod 1777
-  /mnt/c/Temp` fixes it, and the agent user has passwordless sudo. CI does precisely this, for
-  precisely this reason.
+- a writable `/mnt/c`. `dr_win_root` looks for `/mnt/c/Temp`, then `/mnt/c`. With neither, each
+  mound test **skips**, and does not fail. `sudo mkdir -p /mnt/c/Temp && sudo chmod 1777
+  /mnt/c/Temp` fixes it, and the agent user has sudo with no password. CI does exactly this, for
+  exactly this reason.
 
 ### What cannot happen in a mound
 
-A mound has no `sbx`, no `powershell.exe` and no WSL interop, so three things need a host:
+A mound has no `sbx`, no `powershell.exe` and no WSL interop. Thus three things need a host:
 
-- **The ten `forge-api.bats` tests**, which need a real `powershell.exe` — but **not** a real
-  AppSandbox. The daemon they talk to is `tests/appsandbox_mock.py`, so any Windows machine will
-  do, with no VM anywhere.
-- **`dr-forge` and `dr-layer` live runs**, which need AppSandbox on a Windows 11 host with
-  `VirtualMachinePlatform` enabled. This one is irreducible: the code drives a hypervisor, and it
-  cannot be verified without one.
-- **The live tier** described under [Testing strategy](#testing-strategy), which needs a real mound
-  and therefore real sbx.
+- **The ten `forge-api.bats` tests**, which need a real `powershell.exe`, but **not** a real
+  AppSandbox. The daemon that they talk to is `tests/appsandbox_mock.py`. Thus any Windows machine
+  works, with no VM.
+- **Live runs of `dr-forge` and `dr-layer`**, which need AppSandbox on a Windows 11 host with
+  `VirtualMachinePlatform` enabled. This one cannot be avoided. The code controls a hypervisor, and
+  nobody can test it without one.
+- **The live tier** in [Testing strategy](#testing-strategy), which needs a real mound, and thus a
+  real sbx.
 
-Everything else — writing code, the 983 tests, the lints, shellcheck — runs anywhere.
+All else runs in any place: the code, the 983 tests, the lints, shellcheck.
 
 ### Keep a live run off your own configuration
 
-The live tier runs *unreviewed* Draugr code on a host, as you. That is inherent rather than a
-shortcoming: acting on the host is what Draugr is for, so testing it means running it there. Two
-habits make it cheap:
+The live tier runs Draugr code *with no review* on a host, as you. That is part of the design, not a
+fault. Draugr exists to act on the host, so a test of it must run there. Two habits make it cheap:
 
-- **`DRAUGR_CONFIG_HOME=$(mktemp -d)`** moves the user config, the trust store and the kit library
-  somewhere disposable, so a live run cannot corrupt the configuration you work with. Run state is
-  separate and follows `XDG_STATE_HOME`, so redirect both if a test claims dependencies. Neither is
-  in `DR_KEYS`: they are development hatches, not part of the config surface, which is why
-  `dr-config` does not list them and `CONFIG.md` does not document them.
-- **Point live verbs at a throwaway repository** under `/mnt/<drive>/Temp`, never at a real project.
-  The suite's own fixtures do exactly that, and `dr_win_root` is how they find somewhere to put one.
+- **`DRAUGR_CONFIG_HOME=$(mktemp -d)`** moves the user configuration, the trust store and the kit
+  library to a disposable place. Thus a live run cannot damage the configuration that you work with.
+  Run state is separate, and follows `XDG_STATE_HOME`. Thus redirect both if a test claims
+  dependencies. Neither is in `DR_KEYS`. They are development tools, not part of the configuration
+  surface. That is why `dr-config` does not list them, and `CONFIG.md` does not document them.
+- **Point live verbs at a test repository** under `/mnt/<drive>/Temp`, never at a real project. The
+  own fixtures of the suite do exactly that, and `dr_win_root` finds a place for one.
 
 ---
 
@@ -894,25 +833,23 @@ bats -j 8 tests/                        # -j 8 takes the suite from ~280s to ~70
 
 All five must be clean before a commit, and CI runs exactly these.
 
-The shellcheck list is spelled out here because `.github/workflows/ci.yml` spells it out, and it has
-drifted once already: the workflow gained `lib/agents/`, `.githooks/` and `share/ollama-proxy/` while
-this line still named four paths, so the obvious local invocation quietly checked less than CI did.
-It then drifted a second time when the forge landed: `lib/forge/*.sh` and two of the three lint
-scripts were in the workflow and not here. Same failure, same consequence — so when you change
-either one, diff this block against the other.
-The globs are what keep it honest in between - a new command, mock or hook is covered without anyone
-remembering. `./tests/lint-comments.sh` takes no arguments at all, for the reason its own header
-gives.
+The shellcheck list is written out here, because `.github/workflows/ci.yml` writes it out, and the
+two already drifted once. The workflow got `lib/agents/`, `.githooks/` and `share/ollama-proxy/`,
+while this line still named four paths. Thus the clear local command silently tested less than CI
+did. It drifted a second time when the forge arrived: `lib/forge/*.sh` and two of the three lint
+scripts were in the workflow, but not here. The same failure, the same result. Thus when you change
+either one, compare this block with the other. Between changes, the globs keep it honest. A new
+command, mock or hook is covered, and nobody needs to remember it. `./tests/lint-comments.sh` takes
+no arguments, for the reason in its own header.
 
-There are **no** shellcheck exclusions on the command line. What look like unused variables - the
-`DRAUGR_*` config surface, `DR_ORIGIN`, and the values a `dr-*` command reads back out of
-`common.sh` - carry a targeted `# shellcheck disable=SC2034` at the point of use instead, so the
-check stays live for real typos everywhere else.
+There are **no** shellcheck exclusions on the command line. What looks like unused variables (the
+`DRAUGR_*` configuration surface, `DR_ORIGIN`, and the values that a `dr-*` command reads back from
+`common.sh`) has a targeted `# shellcheck disable=SC2034` at the place of use. Thus the test stays
+live for real typos in all other places.
 
-`tests/mocks/sbx` and `tests/mocks/ssh` stand in for the real binaries: they
-record the argv they were called with, and the sbx one replays canned `ls --json`
-output, so tests can assert on the command line Draugr built without a hypervisor
-anywhere near them.
+`tests/mocks/sbx` and `tests/mocks/ssh` stand in for the real binaries. They record their argv, and
+the sbx mock replays a fixed `ls --json` output. Thus tests can assert on the command line that
+Draugr built, with no hypervisor near them.
 
 ### Enable the commit hook, once per clone
 
@@ -920,90 +857,82 @@ anywhere near them.
 git config core.hooksPath .githooks
 ```
 
-Without it, every new script you add is committed as mode `100644` and arrives on Linux as a file
-nothing can execute. This is not carelessness — it is unavoidable here. The project is developed on
-`/mnt/c`, where git sets `core.fileMode=false` and ignores the filesystem's executable bit
-completely, so `chmod +x` changes nothing git will record and `git add` cannot carry the bit either.
-The mode lives **only** in the index, and the only thing that writes it there is
-`git update-index --chmod=+x`.
+Without it, each new script that you add is committed as mode `100644`, and arrives on Linux as a
+file that nothing can run. That is not carelessness. Here, it cannot be avoided. The project is
+developed on `/mnt/c`, where git sets `core.fileMode=false`, and fully ignores the executable bit of
+the filesystem. Thus `chmod +x` changes nothing that git records, and `git add` cannot carry the bit
+either. The mode is **only** in the index, and only `git update-index --chmod=+x` writes it there.
 
-`.githooks/pre-commit` does that for you, for every path in `tests/executable-paths.sh`, and says
-which files it touched. It fixes rather than refuses, because there is no judgement to make: a file
-is on that list precisely because something executes it.
+`.githooks/pre-commit` does that for you, for each path in `tests/executable-paths.sh`, and says
+which files it touched. It fixes, and does not refuse, because there is nothing to judge. A file is
+on that list exactly because something runs it.
 
-`tests/repo.bats` still fails the build when a mode is wrong — the hook is the convenience, the test
-is the guarantee, and a fresh clone that never ran `git config` is still caught. But the test runs
-after the commit, and CI later still. Both are too late to be a reminder: this cost one red release,
-and ten commits of `tests/mocks/ssh` sitting at `100644` while the attach tests quietly resolved a
-**real** `ssh` on the runner — because PATH lookup skips a non-executable file and keeps searching
-rather than failing.
+`tests/repo.bats` still fails the build when a mode is wrong. The hook is the convenience, and the
+test is the guarantee. A new clone that never ran `git config` is still caught. But the test runs
+after the commit, and CI even later. Both are too late to be a reminder. This cost one red release,
+and ten commits of `tests/mocks/ssh` at `100644`. During that time, the attach tests silently found a
+**real** `ssh` on the runner, because the PATH look-up skips a file that is not executable, and
+continues to search. It does not fail.
 
 ### The runner is not this machine
 
-Three green-here-red-there bugs have now come from the same place: the tests run on Ubuntu with a
-recent toolchain, and they are written under WSL on `/mnt/c`, with whatever that distribution
-shipped.
+Three bugs that passed here and failed there came from the same place. The tests run on Ubuntu, with
+a recent toolchain. We write them under WSL on `/mnt/c`, with the toolchain of that distribution.
 
-- **File modes.** `core.fileMode=false` on `/mnt/c` hides a wrong mode completely until CI, which is
-  what the commit hook above exists for.
-- **git's version.** git 2.49 made `git fetch` create `refs/remotes/<remote>/HEAD` by default. On
-  git 2.43 that ref never appears, so `dr_other_branches` mis-skipping it was invisible here and
-  failed three tests on every push. `git --version` on the runner is worth knowing before spending
-  an afternoon on a test that passes locally.
+- **File modes.** `core.fileMode=false` on `/mnt/c` fully hides a wrong mode until CI. The commit
+  hook above exists for that.
+- **The version of git.** Since git 2.49, `git fetch` creates `refs/remotes/<remote>/HEAD` by
+  default. On git 2.43, that ref never shows. Thus the wrong skip of it in `dr_other_branches` was
+  invisible here, and failed three tests on each push. Know the `git --version` of the runner before
+  you spend an afternoon on a test that passes locally.
 
-- **The checkout's own path.** A repository on `/mnt/c` has a Windows spelling; one anywhere else
-  needs the UNC form, and that needs `WSL_DISTRO_NAME` — exported by WSL, unset on a runner.
-  `dr-forge gateway` probed the Windows side before dispatching, could not spell
-  `lib/forge/probe.ps1`, and failed 24 of `forge-gateway.bats`'s 25 tests on every CI run for four
-  days while all 983 passed here. Both conditions hold on a development machine and neither holds
-  on the runner, so no local run could see it.
+- **The own path of the checkout.** A repository on `/mnt/c` has a Windows spelling. In any other
+  place, it needs the UNC form, and that needs `WSL_DISTRO_NAME`, which WSL exports, and which is
+  unset on a runner. `dr-forge gateway` probed the Windows side before the dispatch, failed to spell
+  `lib/forge/probe.ps1`, and failed 24 of the 25 tests of `forge-gateway.bats` on each CI run for
+  four days, while all 983 passed here. Both conditions are true on a development machine, and
+  neither is true on the runner. Thus no local run was able to see it.
 
-When CI disagrees with a local run, **reproduce the runner rather than theorising**. A `git clone`
-into WSL's own filesystem, with `WSL_DISTRO_NAME` unset and Windows interop off `PATH`, differs from
-a working checkout in all three ways above, and takes a minute. Three guesses went by before that
-was tried for the bug named above.
+When CI does not agree with a local run, **copy the runner, and do not guess**. A `git clone` into
+the own filesystem of WSL, with `WSL_DISTRO_NAME` unset and Windows interop off `PATH`, is different
+from a working checkout in all three ways above, and takes a minute. For the bug above, three guesses
+came before that try.
 
-The lesson for tests rather than for code: when the thing under test is a state some *other*
-version produces, construct that state in the test instead of provoking it. The regression tests for
-that ref call `git symbolic-ref` directly, so they fail on the buggy code at both git versions. A
-test that only fails where the bug is already visible tells you nothing you did not know.
+The lesson for tests, not for code: when the thing under test is a state that some *other* version
+makes, build that state in the test, and do not provoke it. The regression tests for that ref call
+`git symbolic-ref` directly. Thus they fail on the buggy code with both git versions. A test that
+fails only where the bug is already visible tells you nothing new.
 
 ---
 
 ## Testing strategy
 
-Two tiers, because most of this cannot be exercised without a hypervisor and all
-of it has to be checkable in CI.
+Two tiers, because most of this cannot run without a hypervisor, and CI must be able to test all of
+it.
 
-**Unit (bats, runs anywhere, runs in CI).** Everything that is *argument
-construction* — and that is most of Draugr — is tested by asserting on the argv
-the mock recorded. Path translation, config merge order and provenance,
-glob→rsync-filter conversion, project-key encoding and trust hashing are pure
-functions with table tests. Where someone else's language is involved, the tests
-go against their implementation rather than our belief about it: the
-`DRAUGR_DATA` filters run through **real rsync**, and the repo-creation modes
-through **real git**. That is the only reason the `.git`-over-the-clone bug and
-the pattern-globbing bug were ever found.
+**Unit (bats, runs in any place, runs in CI).** The tests assert on the argv that the mock recorded
+for all *argument construction*, and that is most of Draugr. Path translation, the merge order and
+origin of the configuration, the glob→rsync-filter conversion, the project-key encoding and trust
+hashing are pure functions, with table tests. Where the language belongs to somebody else, the tests
+run against their implementation, not against what we believe about it. The `DRAUGR_DATA` filters
+run through **real rsync**, and the repo-creation modes through **real git**. That is the only reason
+why we found the `.git`-over-the-clone bug and the pattern-globbing bug.
 
-**Live (against a real sandbox, never in CI).** Each phase's acceptance check was
-performed by hand against a real mound — creating one, measuring `/proc/mounts`,
-round-tripping memory, timing an rsync delta — and the results recorded in
-[DESIGN.md](DESIGN.md) and [SECURITY.md](SECURITY.md) rather than left in
-someone's terminal history. When a claim in the docs says "measured", that is
-what it means.
+**Live (against a real sandbox, never in CI).** We did the acceptance test of each phase by hand,
+against a real mound: we created one, measured `/proc/mounts`, sent memory both ways, and timed an
+rsync delta. The results are in [DESIGN.md](DESIGN.md) and [SECURITY.md](SECURITY.md), not only in
+the terminal history of a person. When a claim in the docs says "measured", that is what it means.
 
-Three rules that came out of getting this wrong:
+Three rules that came from mistakes:
 
-1. **A test that passes for the wrong reason is worse than no test.** One scan
-   test passed because it tripped the clean-tree check first, testing nothing.
-   When a guard test goes green, confirm it goes red when you break the thing.
-2. **A check that examines nothing reports success.** The comment linter exited 0
-   on an empty file list; the exec-bit guard read `git ls-files`, which lists only
-   tracked files, and so never saw the untracked script that broke CI. Ask what
-   the check would have to see to fail.
-3. **A skip is invisible in a green tick.** CI greps the bats output for skips and
-   fails the job on any reason it does not recognise, because the mound tests skip
-   without a writable `/mnt/<drive>` and would otherwise turn into a silent no-op.
-   Two reasons are allowed, both saying the runner is not Windows, because
-   `forge-api.bats` cannot run real PowerShell there. The allowlist is of *reasons*,
-   not of files, so a new kind of skip in that same file still fails the build.
+1. **A test that passes for the wrong reason is worse than no test.** One scan test passed because
+   it hit the clean-tree test first, and thus tested nothing. When a guard test passes, make sure
+   that it fails when you break the thing.
+2. **A test that examines nothing reports success.** The comment linter exited 0 on an empty file
+   list. The exec-bit guard read `git ls-files`, which lists only tracked files. Thus it never saw
+   the untracked script that broke CI. Ask what the test must see to fail.
+3. **A green result hides a skip.** CI searches the bats output for skips, and fails the job on each
+   reason that it does not know. The mound tests skip without a writable `/mnt/<drive>`, and are
+   otherwise a silent no-op. Two reasons are allowed. Both say that the runner is not Windows,
+   because `forge-api.bats` cannot run real PowerShell there. The allowlist holds *reasons*, not
+   files. Thus a new kind of skip in that same file still fails the build.

@@ -1,115 +1,123 @@
 #!/usr/bin/env bash
-# dr-forge - the Windows VM, from this side of the boundary.
+# dr-forge: the Windows VM, from this side of the boundary.
 #
-# The forge is a Windows 11 VM where an agent builds Windows software. It is driven through
-# AppSandbox on the Windows host, so most of what it does happens on the far side of WSL;
-# this command is the front end, and lib/forge/probe.ps1 is what crosses over.
+# The forge is a Windows 11 VM where an agent builds Windows software.
+# AppSandbox on the Windows host controls it, so most of its work happens on the
+# far side of WSL. This command is the front end, and lib/forge/probe.ps1 goes
+# to the other side.
 #
-# It is OFF unless DRAUGR_FORGE names a VM. Nothing here acts while that is empty, which is
-# the right answer unless you are one of the few people who wants a Windows VM at all.
+# It is OFF until DRAUGR_FORGE names a VM. While that is empty, nothing here
+# acts. That is correct for most people, because few people want a Windows VM.
 #
-#   dr-forge                   status: the whole liveness chain, host side, in one screen
-#   dr-forge status            the same thing, spelled out
-#   dr-forge status --deep     also ask the GUEST whether it can reach the internet
-#   dr-forge doctor            every link, checked by effect, each naming its own fix
+#   dr-forge                   status: the whole liveness chain, host side, on one screen
+#   dr-forge status            the same
+#   dr-forge status --deep     also ask the GUEST if it can connect to the internet
+#   dr-forge doctor            each link, tested by its effect, each with its own fix
 #   dr-forge init              make a registered VM usable: name, sshd, keys. Idempotent
 #   dr-forge init --restart    the same, and reboot the guest if a change needs it
 #   dr-forge init --no-tune    skip the pagefile and hibernation phase
 #   dr-forge up                the gateway mound, the VM, the tunnel, then ask the guest
-#   dr-forge up --screen       the same, and put the guest's desktop on screen at the end
-#   dr-forge screen            just the desktop, on a forge that is already up
-#   dr-forge down              shutdown from inside, then stop the VM if it outlasts that
-#   dr-forge base              take the VM's one baseline. Stops it; refuses a second
-#   dr-forge rollback          discard everything since the baseline and fork it again
-#   dr-forge rm                delete the VM, after showing what goes with it. Asks first
-#   dr-forge gateway <dir>     write the gateway mound into <dir> from Draugr's template
+#   dr-forge up --screen       the same, and show the desktop of the guest at the end
+#   dr-forge screen            only the desktop, on a forge that already runs
+#   dr-forge down              shut down from inside, then stop the VM if it still runs
+#   dr-forge base              take the one baseline of the VM. Stops it. Refuses a second
+#   dr-forge rollback          discard all changes since the baseline, and fork it again
+#   dr-forge rm                delete the VM, after it shows what goes with it. Asks first
+#   dr-forge gateway <dir>     write the gateway mound into <dir> from the Draugr template
 #   dr-forge daemon <verb>     AppSandbox itself: status | stop | start | restart. The
 #                              dr-layer verbs that rewrite vms.cfg need it stopped first
-#   dr-forge gateway <dir> --vault <path> --scratch <path>   ... and the two it serves the VM
-#   dr-forge exec <command>    run it in the guest; returns the GUEST's exit code
+#   dr-forge gateway <dir> --vault <path> --scratch <path>   ... and the two that it serves the VM
+#   dr-forge exec <command>    run it in the guest. Returns the exit code of the GUEST
 #   dr-forge push <local> <guest path>   copy one path in
 #   dr-forge pull <guest path> <local>   copy one path out
 #
-# THE CODE AND THE DATA LIVE IN THE VM, not in a mound - the gateway mound is there to control
-# what the VM may reach, and holds no clone. So the git loop and the file loop are the ORDINARY
-# commands with the VM as their far end, not forge-specific ones, and dr-forge owns only what is
-# particular to the VM. push and pull here are the file-level primitive underneath that: one
-# path, one direction, over the same ssh relay. They are what dr-data will sit on once it can
-# address the VM, and they are useful meanwhile because nothing else can move a file at all.
+# THE CODE AND THE DATA ARE IN THE VM, not in a mound. The gateway mound
+# controls what the VM can reach, and holds no clone. Thus the git loop and the
+# file loop use the ORDINARY commands, with the VM as the far end. dr-forge does
+# only what is special to the VM. push and pull here are the file-level
+# primitive below that: one path, one direction, through the same ssh relay.
+# Later, dr-data will use them to reach the VM. Until then, nothing else can
+# move a file.
 #
-# WHY A LIVENESS CHAIN RATHER THAN A HEALTH FLAG. The chain is long - AppSandbox, the VM,
-# sshd, the tunnel supervisor, the keeper, tinyproxy, the gateway mound - and a break
-# anywhere surfaces far from the cause. Every link was healthy except the
-# tunnel supervisor, which a host reboot had quietly removed, and the symptom appeared three
-# links away as Unreal Engine reporting no internet connection. Nothing in the VM looked
-# wrong, because nothing in the VM was wrong.
+# WHY A LIVENESS CHAIN, AND NOT A HEALTH FLAG. The chain is long: AppSandbox,
+# the VM, sshd, the tunnel supervisor, the keeper, tinyproxy, and the gateway
+# mound. A break shows far from its cause. Once, all links were healthy except
+# the tunnel supervisor, which a host reboot removed without a message. The
+# symptom was three links away: Unreal Engine reported no internet connection.
+# Nothing in the VM looked wrong, because nothing in the VM was wrong.
 #
-# EVERY LINK IS CHECKED BY ITS EFFECT, NOT BY ITS EXISTENCE. A supervisor process running is
-# not a forward working, and a forward open on the host is not anything answering inside the
-# guest - forge-screen.ps1 made exactly that mistake on the same day, reporting a healthy
-# tunnel because `ssh -L` had opened the local port while the far end led nowhere. So the
-# proxy is tested by asking the guest to fetch a page, and nothing here trusts a process list.
+# EACH LINK IS TESTED BY ITS EFFECT, NOT BY ITS EXISTENCE. A running supervisor
+# process is not a working forward. A forward open on the host does not mean
+# that something answers inside the guest. On the same day, forge-screen.ps1
+# made that mistake. It reported a healthy tunnel, because `ssh -L` opened the
+# local port, but the far end went nowhere. Thus the guest fetches a page to
+# test the proxy, and nothing here trusts a process list.
 #
-# These two actions are READ-ONLY and start nothing, which is deliberate: the moment you most
-# want to look at the forge is while something else is using it.
+# These two actions are READ-ONLY and start nothing, on purpose. You most want
+# to look at the forge while something else uses it.
 #
-# UP AND DOWN FIND THE GATEWAY PROJECT THROUGH DRAUGR_REQUIRES, and add no key of their own:
-# the mound's dr-up and the tunnel supervisor both live in that repository, and DRAUGR_REQUIRES
-# is the key that already means "this repo needs that one's mound running" - bin/dr-dep's
-# header calls the forge's gateway the case it was written for. See dr_forge_gateway_repo.
+# UP AND DOWN FIND THE GATEWAY PROJECT THROUGH DRAUGR_REQUIRES, and add no key.
+# The dr-up of the mound and the tunnel supervisor are both in that repository.
+# DRAUGR_REQUIRES already means "this repo needs the mound of that repo
+# running". The header of bin/dr-dep names the gateway of the forge as its first
+# case. See dr_forge_gateway_repo.
 #
-# INIT IS SEPARATE FROM UP on purpose. `up` is per-session and runs often; `init` is
-# per-VM-lifetime and applies the three things that live in the VM's own writable disk rather
-# than in the frozen layer underneath it. Folding them together would make the common verb do
-# rare work, and would reapply guest configuration every time anyone started the forge.
+# INIT IS SEPARATE FROM UP, on purpose. `up` is for each session and runs often.
+# `init` is for the life of the VM. It applies the three things that are on the
+# writable disk of the VM, not in the frozen layer below it. If they were one
+# verb, the usual verb does rare work, and applies the guest configuration again
+# at each start of the forge.
 #
-# BASE AND ROLLBACK ARE ONE BASELINE, not a history, and that is the snapshot bug's doing
-# rather than a simplification: only the FIRST snapshot captures the VM's current state, so
-# `base` takes one and refuses a second. docs/FORGE.md, "Backup and rollback".
+# BASE AND ROLLBACK ARE ONE BASELINE, not a history. The snapshot bug is the
+# cause, not a wish for simplicity. Only the FIRST snapshot captures the current
+# state of the VM. Thus `base` takes one, and refuses a second. See
+# docs/FORGE.md, "Backup and rollback".
 set -euo pipefail
 
 DR_PROG=dr-forge
-# readlink -f first: install.sh links this into ~/.local/bin by default, and through a link
-# BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
-# source-path repeated: the directive attaches to the NEXT command only, so without it the
-# path is resolved against the CWD and a file that plainly exists is reported missing -
-# which then makes DR_FORGE look unused, because it is set in the file that got skipped.
-# (And no comment line here may BEGIN with the word shellcheck: that is itself read as a
-# directive, and an explanatory sentence then fails to parse as one.)
+# source-path again. The directive applies only to the NEXT command. Without it,
+# the path is relative to the CWD, and a file that exists is reported as
+# missing. Then DR_FORGE looks unused, because the skipped file sets it. (A
+# comment line here must not START with the name of the linter. The linter reads
+# that line as a directive, and cannot parse it.)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/forge/common.sh
 . "$_dr_bin/../lib/forge/common.sh"
 
-# status is the default because it is the only action that moves nothing, and "what state is
-# it in" is the question you actually have first. Same choice dr-mem makes.
+# status is the default, because it is the only action that moves nothing, and
+# "what is its state?" is your first question. dr-mem makes the same choice.
 action=${1:-status}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
     status|doctor) shift || : ;;
-    # These three carry their own arguments - a whole command line, or two paths - so they
-    # skip the flag loop below, which is there to reject a stray argument.
+    # These three have their own arguments: a full command line, or two paths.
+    # Thus they skip the flag loop below, which refuses an argument that does
+    # not belong.
     exec|push|pull) shift || : ;;
-    # These ACT on the VM rather than describing it, and they take one flag between them, so
-    # they are parsed in the loop below rather than here.
+    # These ACT on the VM, and do not only describe it. They share some flags,
+    # so the loop below parses them, not this case.
     up|down|screen|init|rm|base|rollback) shift || : ;;
-    # gateway carries a directory and two paths of its own, so it parses its own arguments
-    # below rather than in the flag loop, which exists to reject a stray one.
+    # gateway has a directory and two paths, so it parses its own arguments
+    # below. The flag loop refuses an argument that does not belong.
     gateway) shift || : ;;
     daemon)  shift || : ;;
     *) dr_die "unknown action: $action" "One of: status, doctor, init, up, down, screen, base, rollback, rm, exec, push, pull, gateway, daemon" ;;
 esac
 
-# THE DAEMON VERB IS HANDLED HERE, above everything, and the position is the point: it must
-# work when AppSandbox is DOWN, which is most of what it is for, while every action further
-# down this file has already given up by then on a Windows side that did not answer. It also
-# names no VM, so none of the VM resolution below applies to it.
+# THE DAEMON VERB IS HERE, above all other code, on purpose. Its main use is
+# when AppSandbox is DOWN, so it must work then. If the Windows side does not
+# answer, all the actions below stop. It also names no VM, so the VM resolution
+# below does not apply to it.
 #
-# docs/FORGE.md, "Taking the daemon down is a command": the dr-layer verbs that rewrite
-# vms.cfg refuse while the daemon is up, and this is how it goes down and comes back.
+# See docs/FORGE.md, "Taking the daemon down is a command". The dr-layer verbs
+# that rewrite vms.cfg refuse while the daemon runs. This verb stops the daemon
+# and starts it again.
 if [ "$action" = daemon ]; then
     sub=status
     if [ $# -gt 0 ]; then
@@ -122,14 +130,15 @@ if [ "$action" = daemon ]; then
     [ $# -eq 0 ] || dr_die "unexpected argument: $1"
     rc=0
     dr_forge_daemon "$sub" || rc=$?
-    # 3 is `status` saying the daemon is down, which is a fact and not a failure - but it is
-    # still returned, so a script can branch on it without parsing words.
+    # 3 means that `status` found the daemon down. That is a fact, not a
+    # failure. The code still returns it, so a script can use it and does not
+    # have to parse words.
     exit "$rc"
 fi
 
-# --deep is the only flag either action takes, and both accept it, so it is parsed once
-# here rather than per action. -h is accepted again because `dr-forge doctor --help` is a
-# reasonable thing to type and would otherwise land on "unexpected argument".
+# --deep is the only flag of the two actions, and both accept it. Thus it is
+# parsed once here. -h is here too, because people type `dr-forge doctor
+# --help`. Without it, that gives "unexpected argument".
 deep=
 if [ "$action" = status ] || [ "$action" = doctor ]; then
     while [ $# -gt 0 ]; do
@@ -141,10 +150,11 @@ if [ "$action" = status ] || [ "$action" = doctor ]; then
         shift
     done
 fi
-# up and down take no --deep: up ends by asking the guest whichever way, because that is the
-# only answer worth having, and down has nothing to ask a VM it just stopped. -y is down's,
-# rm's and rollback's, for the one question each of them asks. --screen is up's. --restart is
-# init's, for the one change in it that needs a reboot: the computer name.
+# up and down take no --deep. up always asks the guest at the end, because only
+# that answer is useful. down has no question for a VM that it stopped. -y is
+# for down, rm, and rollback, for the one question of each. --screen is for up.
+# --restart is for init, for the one change in it that needs a reboot: the
+# computer name.
 screen=
 restart=
 no_tune=
@@ -155,15 +165,15 @@ if [ "$action" = up ] || [ "$action" = down ] || [ "$action" = screen ] || \
         case "$1" in
             -y|--yes)  DR_ASSUME_YES=1 ;;
             --screen)
-                [ "$action" = up ] || dr_die "--screen belongs to dr-forge up." \
-                    "On a forge that is already up, the action is:  dr-forge screen"
+                [ "$action" = up ] || dr_die "--screen is an option of dr-forge up." \
+                    "On a forge that already runs, the action is:  dr-forge screen"
                 screen=1 ;;
             --restart)
-                [ "$action" = init ] || dr_die "--restart belongs to dr-forge init." \
-                    "To restart a forge otherwise:  dr-forge down, then dr-forge up"
+                [ "$action" = init ] || dr_die "--restart is an option of dr-forge init." \
+                    "To restart a forge in other cases:  dr-forge down, then dr-forge up"
                 restart=1 ;;
             --no-tune)
-                [ "$action" = init ] || dr_die "--no-tune belongs to dr-forge init."
+                [ "$action" = init ] || dr_die "--no-tune is an option of dr-forge init."
                 no_tune=1 ;;
             -h|--help) dr_help "$0"; exit 0 ;;
             *) dr_die "unexpected argument: $1" ;;
@@ -172,35 +182,37 @@ if [ "$action" = up ] || [ "$action" = down ] || [ "$action" = screen ] || \
     done
 fi
 
-# THE REPO ROOT IS AN ARGUMENT, not something dr_load_config works out. Without it the
-# project's own .draugr.conf is never even looked at - the layer list uses ${repo:+...}, which
-# expands to nothing - so DRAUGR_FORGE set in a project config would read as unset and the
-# file would not even be reported as skipped. Measured. `|| true` because being
-# outside a repository is fine: the machine-level config can still name a forge.
+# THE REPO ROOT IS AN ARGUMENT. dr_load_config does not find it. Without it, the
+# loader never reads the .draugr.conf of the project, because the layer list
+# uses ${repo:+...}, and that is empty. Then DRAUGR_FORGE in a project
+# configuration looks unset, and no message reports the skipped file. A test
+# showed this. `|| true`, because it also works outside a repository: the
+# configuration of the machine can name a forge.
 repo=$(git rev-parse --show-toplevel 2>/dev/null || true)
 dr_load_config "$repo"
 dr_forge_require_windows
-# Validated first, in THIS shell so a refusal can actually exit, then read plainly. See
-# dr_forge_require_vm for why these are two steps and not one.
+# Validate it first, in THIS shell, so that a refusal can exit. Then read it.
+# See dr_forge_require_vm for the reason for two steps.
 dr_forge_require_vm
 vm=$DRAUGR_FORGE
 
 # --- exec, push, pull ---------------------------------------------------------------------
-# NO PROBE FIRST, deliberately. guest.ps1 looks up the daemon, the VM and the ssh port itself
-# and reports what is wrong where the facts are - one crossing of the WSL boundary instead of
-# two, and one message instead of a pair that can disagree with each other. Its exit code is
-# passed straight out: for exec that is the GUEST's own code, which is the whole point.
+# NO PROBE FIRST, on purpose. guest.ps1 finds the daemon, the VM, and the ssh
+# port itself, and reports a problem where the facts are. That is one crossing
+# of the WSL boundary, not two, and one message, not two that can disagree. Its
+# exit code goes out without change. For exec, that is the code of the GUEST,
+# and that is the purpose.
 if [ "$action" = exec ] || [ "$action" = push ] || [ "$action" = pull ]; then
     case "${1:-}" in -h|--help) dr_help "$0"; exit 0 ;; esac
     rc=0
     if [ "$action" = exec ]; then
         [ $# -gt 0 ] || dr_die "dr-forge exec needs a command to run." \
-            "The arguments are joined with single spaces and run as ONE PowerShell command" \
-            "line in the guest - argv is not preserved across the crossing. For example:" \
+            "The arguments are joined with single spaces, and run as ONE PowerShell command" \
+            "line in the guest. argv does not stay the same across the boundary. For example:" \
             "  dr-forge exec Get-ChildItem C:\\ForgeAssets"
         dr_forge_exec "$vm" "$@" || rc=$?
     else
-        [ $# -eq 2 ] || dr_die "dr-forge $action takes exactly two paths, and got $#." \
+        [ $# -eq 2 ] || dr_die "dr-forge $action takes two paths, but got $#." \
             "  dr-forge push <local path> <guest path>" \
             "  dr-forge pull <guest path> <local path>"
         dr_forge_copy "$vm" "$action" "$1" "$2" || rc=$?
@@ -208,232 +220,243 @@ if [ "$action" = exec ] || [ "$action" = push ] || [ "$action" = pull ]; then
     exit "$rc"
 fi
 
-# Declared here rather than in the library so that `set -u` has something to find even if a
-# probe returns nothing at all, which is how "the Windows side did not answer" arrives.
+# Declared here and not in the library. Thus `set -u` finds it, also for a probe
+# that returns nothing. That is how "the Windows side did not answer" arrives.
 declare -A DR_FORGE=()
-# NOT FOR `gateway`. That verb writes a directory and touches the VM not at all - it reads
-# DRAUGR_FORGE to name the VM in the config it generates, and takes nothing else from over
-# there. Probing first made it refuse on any machine where the Windows side cannot be reached,
-# a checkout outside /mnt included: there is no Windows spelling for probe.ps1 unless
-# WSL_DISTRO_NAME is set, so the probe died before the generator it was gating ever ran. The
-# refusals this verb is meant to have are in docs/FORGE.md, and this was not one of them.
+# NOT FOR `gateway`. That verb writes a directory, and does not touch the VM. It
+# reads DRAUGR_FORGE only to name the VM in the configuration that it makes.
+# With a probe first, it refused on each machine where the Windows side was not
+# available, also for a checkout outside /mnt. Without WSL_DISTRO_NAME,
+# probe.ps1 has no Windows path. Thus the probe failed before the generator ran.
+# docs/FORGE.md lists the refusals of this verb, and this is not one.
 if [ "$action" != gateway ] && ! dr_forge_probe "$vm" "$deep"; then
     dr_die "the Windows side returned nothing." \
-        "lib/forge/probe.ps1 is what runs over there; try it directly to see the error:" \
+        "lib/forge/probe.ps1 runs there. To see the error, run it yourself:" \
         "  powershell.exe -NoProfile -ExecutionPolicy Bypass -File <repo>\\lib\\forge\\probe.ps1 $vm"
 fi
 
-# A fact, padded, so the two actions below line up without repeating the format string.
+# A padded fact, so that the two actions below line up, with one format string.
 row() { printf '  %-18s %s\n' "$1" "$2" >&2; }
 
-# The Windows side's own progress lines, indented under the step they belong to. They arrive
-# over minutes and they are the only account of what is being waited for, so they are shown
-# rather than swallowed - and the conclusion follows as a row(), the shape
-# draugr-gateway's forge-vm-setup.ps1 already uses.
+# The progress lines of the Windows side, indented below their step. They arrive
+# during minutes, and only they tell what the wait is for. Thus they show, and
+# are not discarded. The result follows as a row(), the same form as
+# forge-vm-setup.ps1 in draugr-gateway.
 detail() { sed 's/^/      /' >&2; }
 
 # --- up ----------------------------------------------------------------------------------
-# IN THIS ORDER, each step verified by its EFFECT (docs/FORGE.md, "Commands"): the gateway
-# mound, the VM, the tunnel, then a check from inside the guest. The order is not a
-# preference. The tunnel forwards INTO the mound's published port, so a tunnel brought up
-# first has nothing at its far end and the guest gets a proxy that refuses everything - which
-# looks exactly like a policy problem and is not one.
+# IN THIS ORDER, and each step is tested by its EFFECT (docs/FORGE.md,
+# "Commands"): the gateway mound, the VM, the tunnel, then a test from inside
+# the guest. The order is necessary. The tunnel forwards INTO the published port
+# of the mound. If the tunnel starts first, its far end has nothing, and the
+# guest gets a proxy that refuses everything. That looks like a policy problem,
+# but it is not.
 if [ "$action" = up ]; then
-    dr_heading "forge $vm - up"
+    dr_heading "forge $vm: up"
 
-    # 1. THE DAEMON, WHICH IS NOT STARTED FROM HERE. It needs elevation, and a UAC prompt
-    # raised by a command someone ran for another reason is not a thing to spring on anyone -
-    # least of all an agent's command. So it is reported, with the one thing that fixes it.
+    # 1. THE DAEMON. This code does not start it. It needs elevation. A command
+    # that somebody ran for a different reason must not show a UAC prompt, and
+    # the command of an agent least of all. Thus the code reports it, with the
+    # one fix.
     if [ "$(dr_forge_fact daemon)" != up ]; then
-        dr_die "the AppSandbox daemon is not running, and starting it needs elevation." \
-            "That is the ONE part of this Draugr cannot do: everything after it - the mound," \
-            "the VM, the tunnel - is below. Start it elevated, on the Windows side:" \
+        dr_die "the AppSandbox daemon does not run, and its start needs elevation." \
+            "That is the ONE part that Draugr cannot do. The steps after it (the mound," \
+            "the VM, the tunnel) are below. Start it elevated, on the Windows side:" \
             "  AppSandbox.exe --headless" \
-            "It is worth scheduling at logon, after which this never comes up again." \
+            "If you schedule it at logon, this message does not come again." \
             "Then:  dr-forge up"
     fi
     row daemon "$(dr_forge_fact daemon_version up)"
 
-    # 2. THE GATEWAY MOUND, because everything after it forwards into its published port.
+    # 2. THE GATEWAY MOUND, because all the steps after it forward into its
+    # published port.
     if [ "$(dr_forge_fact port_18888)" = up ]; then
         row 'gateway mound' 'already published on 18888'
     else
         if dr_forge_publishes_proxy; then
-            # THIS repository is the gateway - its own DRAUGR_PORTS publishes the proxy port -
-            # so the mound to start is its own, and that is plain dr-up. dr-dep would be wrong
-            # here: a repository does not require itself, and its cycle check says so.
-            "$_dr_bin/dr-up" || dr_die "the gateway mound did not come up." \
-                "Its own dr-up said why, above."
+            # THIS repository is the gateway, because its DRAUGR_PORTS publishes
+            # the proxy port. Thus its own mound starts, with dr-up. dr-dep is
+            # wrong here. A repository does not require itself, and the cycle
+            # test of dr-dep says so.
+            "$_dr_bin/dr-up" || dr_die "the gateway mound did not start." \
+                "Its dr-up told the reason, above."
         elif [ -n "${DRAUGR_REQUIRES:-}" ]; then
-            # Somewhere among what this repository requires is the gateway, and dr-dep brings
-            # up ALL of them - so nothing here has to work out which. That also hands over the
-            # whole protocol rather than a copy of it: trust before anything is sourced, the
-            # claim written before anything starts, a clean environment so each dependency's
-            # own config decides what it is, the cycle guard, and the warden that stops sbx
-            # auto-stopping an idle mound after 30 s.
-            "$_dr_bin/dr-dep" up || dr_die "what this repo requires did not come up." \
-                "dr-dep said why, above."
+            # The gateway is one of the requirements of this repository. dr-dep
+            # starts ALL of them, so this code does not have to know which one.
+            # dr-dep also has the full protocol, not a copy. It has trust before
+            # a source, and the claim before a start. It cleans the environment,
+            # so that the configuration of each dependency decides. It has the
+            # cycle guard. Its warden keeps sbx from a stop of an idle mound
+            # after 30 s.
+            "$_dr_bin/dr-dep" up || dr_die "the requirements of this repo did not start." \
+                "dr-dep told the reason, above."
         else
-            dr_die "the gateway mound is down, and nothing here says where it comes from." \
-                "The gateway is the mound publishing 127.0.0.1:$_DR_FORGE_PROXY_PORT - the VM's" \
-                "only way out. Name its repository where Draugr already records that a project" \
-                "needs another one's mound running:" \
+            dr_die "the gateway mound is down, and nothing here tells where it comes from." \
+                "The gateway is the mound that publishes 127.0.0.1:$_DR_FORGE_PROXY_PORT, the only" \
+                "way out of the VM. Name its repository in the key that records that a project" \
+                "needs the mound of another project:" \
                 "  DRAUGR_REQUIRES=/path/to/the/gateway" \
-                "Or run dr-forge up from inside the gateway project itself."
+                "Or run dr-forge up from inside the gateway project."
         fi
-        # BY EFFECT, not because dr-up returned 0: what matters is that the port is published,
-        # and a mound can be running with its ports unmapped.
-        dr_forge_probe "$vm" || dr_die "the Windows side stopped answering after the mound came up."
+        # BY EFFECT, not because dr-up returned 0. The published port is what
+        # matters, and a mound can run without its ports.
+        dr_forge_probe "$vm" || dr_die "the Windows side stopped answering after the mound started."
         [ "$(dr_forge_fact port_18888)" = up ] || dr_die \
-            "the mound came up, but nothing is published on 127.0.0.1:18888." \
-            "That port is the proxy the VM's only way out goes through." \
-            "Check DRAUGR_PORTS in the gateway project - sbx bakes ports in at CREATION," \
+            "the mound started, but nothing is published on 127.0.0.1:18888." \
+            "That port is the proxy, and the only way out of the VM goes through it." \
+            "Look at DRAUGR_PORTS in the gateway project. sbx fixes ports at CREATION," \
             "so a change there needs:  dr-up --recreate"
         row 'gateway mound' 'published on 18888'
     fi
 
-    # 3. THE VM. vm.ps1 waits for a command to RUN in the guest rather than for agentOnline,
-    # which goes true before sshd listens.
+    # 3. THE VM. vm.ps1 waits until a command RUNS in the guest, not for
+    # agentOnline. agentOnline becomes true before sshd listens.
     rc=0
     dr_forge_vm start "$vm" | detail || rc=$?
-    [ "$rc" -eq 0 ] || dr_die "the VM did not come up (lib/forge/vm.ps1 exited $rc)."
+    [ "$rc" -eq 0 ] || dr_die "the VM did not start (lib/forge/vm.ps1 exited $rc)."
     row VM 'up, and a command ran in the guest'
 
-    # 4. THE TUNNEL, which needs the supervisor script from the gateway project. A forge that
-    # is already carrying is left alone - vm.ps1 judges that by a command coming back through
-    # the forward, never by the port being bound.
-    # NOTHING IS PASSED IN. The supervisor is lib/forge/tunnel.ps1, which ships beside vm.ps1,
-    # so there is no path for the caller to find and no gateway file to go looking for. That
-    # lookup is what used to make this step refuse on a forge that was entirely healthy,
-    # whenever dr-forge was run from anywhere but the gateway project.
+    # 4. THE TUNNEL. If the forge already carries traffic, the code does not
+    # touch it. vm.ps1 knows that from a command that comes back through the
+    # forward, never from a bound port. NO ARGUMENT GOES IN. The supervisor is
+    # lib/forge/tunnel.ps1, next to vm.ps1. Thus the caller has no path to find,
+    # and no gateway file to look for. Before, outside the gateway project, that
+    # lookup made this step refuse on a healthy forge.
     rc=0
     dr_forge_vm tunnel "$vm" | detail || rc=$?
     if [ "$rc" -eq 14 ]; then
-        dr_die "Draugr's own tunnel supervisor is missing from lib/forge/." \
-            "That is a broken installation rather than anything to configure:" \
-            "lib/forge/tunnel.ps1 ships beside lib/forge/vm.ps1 in this checkout." \
-            "install.sh only symlinks bin/, so this is the checkout itself - check it with" \
-            "git status there, rather than by reinstalling."
+        dr_die "the tunnel supervisor of Draugr is missing from lib/forge/." \
+            "The installation is broken. A configuration change does not fix it." \
+            "lib/forge/tunnel.ps1 is next to lib/forge/vm.ps1 in this checkout." \
+            "install.sh only symlinks bin/, so the checkout has the problem. Look at it" \
+            "with git status there. Do not install again."
     fi
-    [ "$rc" -eq 0 ] || dr_die "the tunnel is not carrying (lib/forge/vm.ps1 exited $rc)."
+    [ "$rc" -eq 0 ] || dr_die "the tunnel carries no traffic (lib/forge/vm.ps1 exited $rc)."
     row tunnel 'carries'
 
-    # 5. THE GUEST'S OWN WAY OUT, which is the point of all four steps above. Everything else
-    # can be healthy while this fails - that is the failure this prevents, and the reason this
-    # command ends by asking the guest rather than by adding up what it just did.
+    # 5. THE WAY OUT OF THE GUEST. The four steps above are for this. All else
+    # can be healthy while this fails. That is the failure that this step finds.
+    # Thus this command ends with a question to the guest, not with a sum of
+    # what it did.
     dr_forge_probe "$vm" --deep || dr_die "the Windows side stopped answering."
     if [ "$(dr_forge_fact guest_egress no)" = yes ]; then
         row 'guest egress' "the proxy answered $(dr_forge_fact guest_proxy_code)"
     else
-        dr_warn "the guest still cannot reach out: the proxy returned $(dr_forge_fact guest_proxy_code none)"
-        dr_info "000 = nothing answered; 500 = tinyproxy refused it (policy or DNS). dr-forge doctor --deep"
+        dr_warn "the guest still cannot connect out: the proxy returned $(dr_forge_fact guest_proxy_code none)"
+        dr_info "000 = nothing answered. 500 = tinyproxy refused it (policy or DNS). dr-forge doctor --deep"
     fi
 
-    # LAST, after the guest has its way out, because a desktop is what a human wants once the
-    # thing works - and because it is the one step with nothing after it to hold up. It does not
-    # block: screen.ps1 is detached and owns the viewer's whole lifetime.
+    # LAST, after the guest has its way out. After the forge works, a person
+    # wants a desktop. No step comes after this one, so it cannot delay one. It
+    # does not block: screen.ps1 is detached, and controls the viewer for all
+    # its life.
     if [ -n "$screen" ]; then
         rc=0
         dr_forge_vm screen "$vm" | detail || rc=$?
-        # NOT FATAL. Everything `up` was asked for is already up by here, and failing the whole
-        # command because a viewer would not open would be a lie about the forge's state.
+        # NOT FATAL. All that `up` had to start already runs here. A failure of
+        # the whole command because a viewer did not open gives a false state.
         if [ "$rc" -eq 0 ]; then row screen 'open'; else
-            dr_warn "the screen did not open (lib/forge/vm.ps1 exited $rc) - the forge itself is up."
+            dr_warn "the screen did not open (lib/forge/vm.ps1 exited $rc). The forge runs."
         fi
     fi
 
-    # Claimed last, when it is actually usable. The forge VM is the resource bin/dr-dep's help
-    # names as "something that is not a mound", and a claim is what makes dr-forge down refuse
-    # to pull the VM out from under another project.
-    # Only from inside a repository: a claim records WHICH project needs the VM, and there is
-    # nothing to record on behalf of a shell standing outside one.
+    # The claim comes last, after the forge is usable. The help of bin/dr-dep
+    # calls the forge VM "something that is not a mound". Because of the claim,
+    # dr-forge down refuses to stop the VM while another project uses it. Only
+    # inside a repository: a claim records WHICH project needs the VM, and a
+    # shell outside a repository has nothing to record.
     if [ -n "$repo" ]; then
         dr_dep_claim "vm:$vm" "$repo" "${DRAUGR_SANDBOX:-}" false 2>/dev/null || true
     fi
 
     printf '\n' >&2
-    dr_ok "forge $vm is up. The whole chain, end to end:  dr-forge doctor --deep"
+    dr_ok "forge $vm runs. The whole chain, end to end:  dr-forge doctor --deep"
     exit 0
 fi
 
 # --- init --------------------------------------------------------------------------------
-# Three things live in a VM's OWN writable disk rather than in the frozen layer underneath it,
-# so every VM built on the same parent needs them applied again: its computer name, its sshd's
-# password setting, and its authorised keys. Each of the three was found by its symptom rather
-# than by being remembered (docs/FORGE.md, "Making a forge usable, and unmaking it").
+# Three things are on the OWN writable disk of a VM, not in the frozen layer
+# below it. Thus each VM on the same parent needs them again: its computer name,
+# the password configuration of its sshd, and its authorized keys. Each of the
+# three was found by its symptom (docs/FORGE.md, "Making a forge usable, and
+# unmaking it").
 if [ "$action" = init ]; then
-    dr_heading "forge $vm - init"
+    dr_heading "forge $vm: init"
 
-    # THE DAEMON IS NOT STARTED FROM HERE, the same as up: it needs elevation, and a UAC
-    # prompt raised by a command someone ran for another reason is not a thing to spring on
-    # anyone. init.ps1 refuses for itself too, with code 10; this is the earlier, cheaper no.
+    # THIS CODE DOES NOT START THE DAEMON, as in up. It needs elevation, and a
+    # command that somebody ran for a different reason must not show a UAC
+    # prompt. init.ps1 also refuses, with code 10. This is the earlier and
+    # cheaper refusal.
     if [ "$(dr_forge_fact daemon)" != up ]; then
-        dr_die "the AppSandbox daemon is not running, and starting it needs elevation." \
-            "Start it elevated on the Windows side, then re-run this:" \
+        dr_die "the AppSandbox daemon does not run, and its start needs elevation." \
+            "Start it elevated on the Windows side, then run this again:" \
             "  AppSandbox.exe --headless"
     fi
 
-    # The WSL key the ssh_config alias names, handed over as a PATH and never as its text: a
-    # public key contains spaces, and an unquoted argument carrying one has already cost this
-    # codebase a silent failure - lib/forge/vm.ps1's --screen, where the remainder bound
-    # positionally to the next parameter. dr_forge_win_path spells a file on WSL's own
-    # filesystem as \\wsl.localhost\<distro>\..., which the Windows side can read in place,
-    # so there is no copy to make and no key material on a shared path.
+    # The WSL key that the ssh_config alias names. It goes as a PATH, never as
+    # text. A public key has spaces, and an unquoted argument with a space
+    # already caused a silent failure here: the --screen of lib/forge/vm.ps1,
+    # where the rest went to the next parameter. dr_forge_win_path writes a file
+    # on the WSL file system as \\wsl.localhost\<distro>\.... The Windows side
+    # reads it there, so there is no copy, and no key on a shared path.
     init_args=()
     wslpub="$HOME/.ssh/draugr_forge_ed25519.pub"
     if [ -f "$wslpub" ]; then
         init_args+=(-WslPubKey "$(dr_forge_win_path "$wslpub")")
     else
-        # Not fatal: everything else init does is still worth doing, and the guest is still
-        # reachable over the admin key from the Windows side. Only the WSL route is missing.
+        # Not fatal. The other steps of init are still useful, and the Windows
+        # side still reaches the guest with the admin key. Only the WSL route is
+        # missing.
         dr_warn "no WSL public key at $wslpub, so dr-sync and dr-data cannot log in yet."
-        dr_info "  Mint one and write the alias:  dr-setup --forge"
+        dr_info "  Make one, and write the alias:  dr-setup --forge"
     fi
     if [ -n "$restart" ]; then init_args+=(-Restart); fi
-    # Hibernation and the pagefile are guest settings rather than anything Draugr needs to
-    # function, so they are skippable - but they are on by default, because a differencing
-    # child that grows by tens of GiB for files nobody reads is a cost of the layer mechanism
-    # itself. docs/FORGE.md, "Making a forge usable, and unmaking it".
+    # Hibernation and the pagefile are guest configuration. Draugr does not
+    # need them, so you can skip them. But they are on by default. A
+    # differencing child grows by tens of GiB for files that nobody reads, and
+    # that cost comes from the layer mechanism. See docs/FORGE.md, "Making a
+    # forge usable, and unmaking it".
     if [ -n "$no_tune" ]; then init_args+=(-NoTune); fi
 
-    # DEFENDER EXCLUSIONS TRAVEL AS A FILE, one path per line, and not as an argument. The
-    # value is semicolon-separated Windows paths, so it contains spaces by nature - and the
-    # route from here to the guest crosses bash, powershell.exe, ssh and the guest's own
-    # PowerShell, each of which eats a layer of quoting. That is precisely how --screen failed
-    # silently in vm.ps1. A file has no quoting.
+    # DEFENDER EXCLUSIONS GO AS A FILE, one path on each line, not as an
+    # argument. The value is Windows paths with semicolons between them, so it
+    # has spaces. The route to the guest goes through bash, powershell.exe, ssh,
+    # and the PowerShell of the guest, and each one removes a layer of quotes.
+    # That is how --screen failed silently in vm.ps1. A file has no quotes.
     noscan_file=
     if [ -n "${DRAUGR_FORGE_NOSCAN:-}" ]; then
         noscan_file=$(mktemp)
         printf '%s' "$DRAUGR_FORGE_NOSCAN" | tr ';' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
             | grep -v '^$' > "$noscan_file"
         init_args+=(-NoScanFile "$(dr_forge_win_path "$noscan_file")")
-        # A bare "*" means the whole guest, which is a different act from narrowing a scan, so
-        # it is announced before anything happens rather than reported after.
+        # A "*" alone means the whole guest. That is different from a smaller
+        # scan. Thus the code tells it before the change, not after.
         if grep -qx '\*' "$noscan_file"; then
             dr_warn "DRAUGR_FORGE_NOSCAN is '*': Defender will be DISABLED in the guest."
-            dr_info "  Not narrowed - off. This guest still downloads from the Launcher and Fab."
+            dr_info "  Not smaller: off. This guest still downloads from the Launcher and Fab."
             if [ "$(wc -l < "$noscan_file")" -gt 1 ]; then
-                dr_info "  The other entries have nothing left to exclude."
+                dr_info "  The other entries have nothing more to exclude."
             fi
         else
             dr_info "  Defender exclusions to apply: $(wc -l < "$noscan_file")"
         fi
     fi
 
-    # The Windows side's own phase lines, indented under the verb. They arrive over minutes -
-    # a guest reboot is inside this - and they are the only account of what is being waited for.
+    # The phase lines of the Windows side, indented below the verb. They arrive
+    # during minutes, because a guest reboot is part of this. Only they tell
+    # what the wait is for.
     rc=0
     dr_forge_init_vm "$vm" "${init_args[@]}" | detail || rc=$?
     [ -n "$noscan_file" ] && rm -f "$noscan_file"
     case "$rc" in
         0)  ;;
-        10) dr_die "the AppSandbox daemon stopped answering part way through." \
-                "Start it again, then re-run this:  AppSandbox.exe --headless" ;;
-        11) dr_die "the guest never answered on ssh, so nothing could be applied." \
-                "It may still be booting, or '$vm' may not be the VM you meant." \
+        10) dr_die "the AppSandbox daemon stopped answering during the run." \
+                "Start it again, then run this again:  AppSandbox.exe --headless" ;;
+        11) dr_die "the guest never answered on ssh, so nothing was applied." \
+                "It can still be in its boot, or '$vm' is not the VM that you meant." \
                 "Look at it with:  dr-forge screen" ;;
-        13) dr_die "a guest step failed, and the detail above says which." \
-                "Nothing here is destructive, so re-running is safe once it is fixed." ;;
+        13) dr_die "a guest step failed. The detail above tells which one." \
+                "Nothing here is destructive. After the fix, you can run it again safely." ;;
         *)  dr_die "lib/forge/init.ps1 exited $rc." ;;
     esac
 
@@ -443,18 +466,19 @@ if [ "$action" = init ]; then
 fi
 
 # --- screen ------------------------------------------------------------------------------
-# The same step `up --screen` ends with, on a forge that is already up: looking at the desktop
-# should not mean running the whole chain again. One implementation, two ways in.
+# The last step of `up --screen`, on a forge that already runs. To look at the
+# desktop, you must not have to run the whole chain again. One implementation,
+# two ways in.
 if [ "$action" = screen ]; then
-    dr_heading "forge $vm - screen"
+    dr_heading "forge $vm: screen"
     if [ "$(dr_forge_fact daemon)" != up ]; then
-        dr_die "the AppSandbox daemon is not running, so there is no VM to look at." \
+        dr_die "the AppSandbox daemon does not run, so there is no VM to look at." \
             "Start it elevated on the Windows side, then:  dr-forge up --screen" \
             "  AppSandbox.exe --headless"
     fi
     if [ "$(dr_forge_fact vm_running)" != yes ]; then
-        dr_die "the VM '$vm' is not running, so it has no desktop yet." \
-            "Bring it up and show it in one go:  dr-forge up --screen"
+        dr_die "the VM '$vm' does not run, so it has no desktop yet." \
+            "Start it and show it in one step:  dr-forge up --screen"
     fi
     rc=0
     dr_forge_vm screen "$vm" | detail || rc=$?
@@ -463,22 +487,22 @@ if [ "$action" = screen ]; then
 fi
 
 # --- down --------------------------------------------------------------------------------
-# `shutdown`, then `stop` after a timeout (docs/FORGE.md, "Commands"), and those are now
-# literally the two calls lib/forge/vm.ps1 makes. That order is the whole point of the verb:
-# `stop` is pulling the plug, which is fine for a guest that has crashed and not fine for one
-# with Unreal's caches open.
+# `shutdown`, then `stop` after a timeout (docs/FORGE.md, "Commands"). These are
+# the two calls that lib/forge/vm.ps1 makes. The order is the purpose of the
+# verb. `stop` pulls the plug. That is good for a guest that crashed, but not
+# for a guest with open Unreal caches.
 #
-# NO SSH STEP ANY MORE. This used to ask the guest to shut itself down first, because the API
-# was believed to offer only the plug; it offers a graceful ACPI power-off too, so vm.ps1 asks
-# for that itself. One mechanism, and one that works on a guest whose sshd is broken.
+# NO SSH STEP NOW. Before, this asked the guest to shut down first, because we
+# thought that the API had only the plug. It also has a graceful ACPI power-off,
+# so vm.ps1 asks for that. One mechanism, and it also works with a broken sshd.
 if [ "$action" = down ]; then
-    dr_heading "forge $vm - down"
+    dr_heading "forge $vm: down"
 
-    # BOTH OF THESE ARE SUCCESS, not failure: `down` is asked for to reach a state, and a
-    # forge that is already in it has nothing owed. Exiting non-zero here would make the verb
-    # unusable in anything that checks its code.
+    # BOTH OF THESE ARE A SUCCESS, not a failure. `down` must reach a state, and
+    # a forge in that state needs nothing. A non-zero exit here makes the verb
+    # useless for a script that reads its code.
     if [ "$(dr_forge_fact daemon)" != up ]; then
-        dr_ok "the AppSandbox daemon is not running, so neither is the VM."
+        dr_ok "the AppSandbox daemon does not run, so the VM does not run."
         exit 0
     fi
     if [ "$(dr_forge_fact vm_running)" != yes ]; then
@@ -486,72 +510,77 @@ if [ "$action" = down ]; then
         exit 0
     fi
 
-    # ANYONE ELSE USING IT GETS A SAY. A claim counts only while its claimant's mound is
-    # running or while it is younger than the grace period, so this cannot be blocked by a
-    # project that has gone away - a host that rebooted wakes with every claim stale.
+    # OTHER USERS GET A QUESTION. A claim counts only while the mound of its
+    # project runs, or while it is younger than the grace period. Thus a project
+    # that is gone cannot block this. After a reboot, all claims are old.
     others=$(dr_dep_claims "vm:$vm" | awk -F'\t' -v me="$repo" '$1 != me { print $1 }')
     if [ -n "$others" ]; then
-        dr_warn "another project is using this VM:"
+        dr_warn "another project uses this VM:"
         printf '%s\n' "$others" | sed 's/^/    /' >&2
-        dr_confirm "Shut $vm down anyway?" || dr_die "cancelled"
+        dr_confirm "Shut down $vm anyway?" || dr_die "cancelled"
     fi
 
-    # Graceful, then the plug, both inside vm.ps1 - see there for why this no longer reaches
-    # into the guest over ssh first.
+    # Graceful, then the plug, both inside vm.ps1. vm.ps1 tells why this does
+    # not go into the guest through ssh first now.
     rc=0
     dr_forge_vm stop "$vm" | detail || rc=$?
-    [ "$rc" -eq 0 ] || dr_die "the VM is still running (lib/forge/vm.ps1 exited $rc)."
+    [ "$rc" -eq 0 ] || dr_die "the VM still runs (lib/forge/vm.ps1 exited $rc)."
     row VM 'stopped'
 
     dr_dep_unclaim "vm:$vm" "$repo" 2>/dev/null || true
 
-    # LEFT RUNNING, both on purpose. The tunnel supervisor's loop is built to wait for a VM
-    # that is not there - it says so once and sleeps - and killing it would only fight the
-    # logon task that starts it. The gateway mound is dr-dep's warden's business: it stops an
-    # idle one after DRAUGR_LINGER, and stopping it by hand is dr-stop.
+    # BOTH CONTINUE TO RUN, on purpose. The loop of the tunnel supervisor waits
+    # for a missing VM. It says so once, and sleeps. A kill only fights the
+    # logon task that starts it. The warden of dr-dep controls the gateway
+    # mound. It stops an idle mound after DRAUGR_LINGER. To stop it yourself,
+    # use dr-stop.
     #
-    # THE DAEMON IS LEFT UP TOO, but NOT because stopping it is expensive. `daemon stop` is a
-    # POST to /v1/shutdown with a bearer header (lib/forge/daemon.ps1) and needs no elevation
-    # whatever; only STARTING it raises a UAC prompt, which is what every other note in this
-    # file and in init.ps1, tunnel.ps1 and vm.ps1 says. This line claimed the opposite until
-    #, when it talked a reader straight past the one step `dr-layer freeze` was
-    # about to refuse for - so it now names that step instead of inventing a cost for it.
+    # THE DAEMON ALSO CONTINUES TO RUN, but NOT because a stop is expensive.
+    # `daemon stop` is a POST to /v1/shutdown with a bearer header
+    # (lib/forge/daemon.ps1), and needs no elevation. Only a START shows a UAC
+    # prompt, as all the other notes here and in init.ps1, tunnel.ps1, and
+    # vm.ps1 say. Before, this line said the opposite. A reader then skipped the
+    # one step that `dr-layer freeze` needs. Thus it now names that step, and
+    # does not invent a cost.
     printf '\n' >&2
-    dr_info "the tunnel supervisor and the gateway mound are still up; both are idle-cheap."
-    dr_info "the daemon too, and it holds no VM now - but dr-layer freeze|adopt|new need it"
-    dr_info "down, and stopping it needs no elevation (only starting does): dr-forge daemon stop"
+    dr_info "the tunnel supervisor and the gateway mound still run. Both cost little when idle."
+    dr_info "the daemon also runs, and holds no VM now. But dr-layer freeze|adopt|new need it"
+    dr_info "stopped, and a stop needs no elevation (only a start does): dr-forge daemon stop"
     exit 0
 fi
 
 # --- rm ----------------------------------------------------------------------------------
-# WHAT A DELETE TAKES IS NOT GUESSABLE FROM THE VM'S NAME. `asb_vm_delete` removes the folder
-# derived from the disk PATH, recursively, guarded only against a drive root - so the question
-# is never "is this VM disposable" but "what else is in its folder". rm.ps1 works that out,
-# refuses the shapes that would take something else with it, and reports the rest so it can be
-# shown before anyone confirms. docs/FORGE-DISKS.md, "The VM's folder is derived from the disk
-# path, not from its name".
+# THE NAME OF THE VM DOES NOT TELL WHAT A DELETE REMOVES. `asb_vm_delete`
+# removes the folder of the disk PATH, recursively. Its only guard is against a
+# drive root. Thus the question is never "can this VM go?", but "what else is in
+# its folder?". rm.ps1 finds that. It refuses a layout where something else goes
+# too, and reports the rest, so that you see it before you confirm. See
+# docs/FORGE-DISKS.md, "The VM's folder is derived from the disk path, not from
+# its name".
 if [ "$action" = rm ]; then
-    dr_heading "forge $vm - rm"
+    dr_heading "forge $vm: rm"
     if [ "$(dr_forge_fact daemon)" != up ]; then
-        dr_die "the AppSandbox daemon is not running, so the VM cannot be deleted." \
-            "Start it elevated on the Windows side, then re-run this:" \
+        dr_die "the AppSandbox daemon does not run, so Draugr cannot delete the VM." \
+            "Start it elevated on the Windows side, then run this again:" \
             "  AppSandbox.exe --headless"
     fi
 
-    # INSPECT FIRST. Read-only, and the only way to describe the delete before doing it.
+    # LOOK FIRST. Read-only, and the only way to describe the delete before it
+    # happens.
     rc=0
     facts=$(dr_forge_rm_vm inspect "$vm") || rc=$?
     case "$rc" in
         0)  ;;
         10) dr_die "the AppSandbox daemon stopped answering." ;;
         11) dr_die "the daemon knows no VM called '$vm'." \
-                "Nothing to delete. Check the name with:  dr-forge status" ;;
+                "There is nothing to delete. Look at the name with:  dr-forge status" ;;
         *)  printf '%s\n' "$facts" | detail
-            dr_die "could not inspect '$vm' (lib/forge/rm.ps1 exited $rc)." ;;
+            dr_die "could not look at '$vm' (lib/forge/rm.ps1 exited $rc)." ;;
     esac
 
-    # One pass, because the keys repeat: entry= and unsafe= are lists, built up as newline
-    # separated strings rather than arrays - they are only ever printed.
+    # One pass, because the keys repeat. entry= and unsafe= are lists. They are
+    # strings with a newline between items, not arrays, because the code only
+    # prints them.
     folder=
     bytes=0
     safe=
@@ -569,90 +598,95 @@ if [ "$action" = rm ]; then
         esac
     done <<< "$facts"
 
-    # THE REFUSAL COMES BEFORE THE QUESTION. Being asked to confirm something unsafe invites
-    # saying yes to it, so a VM whose folder holds a frozen layer is not offered at all.
+    # THE REFUSAL COMES BEFORE THE QUESTION. A question about an unsafe delete
+    # invites a yes. Thus a VM whose folder holds a frozen layer gets no
+    # question.
     #
-    # THE VERDICT GATES, THE REASONS EXPLAIN. rm.ps1's own `safe=` is what decides, and the
-    # unsafe= lines say why - so a verdict that arrives without its reasons still refuses
-    # rather than falling through on an empty list.
+    # THE RESULT DECIDES, THE REASONS EXPLAIN. The `safe=` of rm.ps1 decides,
+    # and the unsafe= lines tell why. Thus a result without its reasons still
+    # refuses. An empty list does not let the delete through.
     if [ "$safe" != yes ] || [ -n "$rm_unsafe" ]; then
-        dr_warn "refusing to delete '$vm' - its folder holds more than the VM:"
+        dr_warn "refusing to delete '$vm'. Its folder holds more than the VM:"
         if [ -n "$rm_unsafe" ]; then
             printf '%s' "$rm_unsafe" | sed 's/^/    /' >&2
         else
-            printf '    (lib/forge/rm.ps1 did not say it was safe, and gave no reason)\n' >&2
+            printf '    (lib/forge/rm.ps1 did not say that it was safe, and gave no reason)\n' >&2
         fi
-        dr_info "  $folder would be removed RECURSIVELY, and a frozen layer in there is the"
-        dr_info "  parent every VM built on it depends on. Move the VM's disk out first."
+        dr_info "  The delete removes $folder RECURSIVELY. A frozen layer in it is the parent"
+        dr_info "  of each VM that is built on it. First, move the disk of the VM out."
         exit 1
     fi
 
-    # Size in GiB, because 33279705088 is not a number anyone can weigh a decision with.
+    # The size in GiB, because 33279705088 does not help anybody to decide.
     row folder "$folder"
     if [ "$bytes" -gt 0 ] 2>/dev/null; then
         row size "$(awk -v b="$bytes" 'BEGIN { printf "%.1f GiB", b / 1073741824 }')"
     fi
     if [ -n "$rm_entries" ]; then
-        dr_info "  this is removed, recursively:"
+        dr_info "  the delete removes this, recursively:"
         printf '%s' "$rm_entries" | sed 's/^/      /' >&2
     fi
-    [ "$vm_running" = yes ] && row VM 'running - it will be stopped first'
+    [ "$vm_running" = yes ] && row VM 'running. It stops first'
 
-    # ANYONE ELSE USING IT GETS A SAY, the same rule `down` follows - and the stakes here are
-    # higher, since this does not come back.
+    # OTHER USERS GET A QUESTION, the same rule as in `down`. The risk here is
+    # higher, because a delete is permanent.
     others=$(dr_dep_claims "vm:$vm" | awk -F'\t' -v me="$repo" '$1 != me { print $1 }')
     if [ -n "$others" ]; then
-        dr_warn "another project is using this VM:"
+        dr_warn "another project uses this VM:"
         printf '%s\n' "$others" | sed 's/^/    /' >&2
     fi
 
     printf '\n' >&2
-    dr_confirm "Delete $vm and everything above? This cannot be undone." || dr_die "cancelled"
+    dr_confirm "Delete $vm and everything above? You cannot undo this." || dr_die "cancelled"
 
-    # Code 12 means the second check disagreed with the first. That is not a contradiction to
-    # smooth over: inspect and delete are two crossings of the boundary, and the one that
-    # governs is the one taken with the delete in hand.
+    # Code 12 means that the second test disagreed with the first. Do not hide
+    # that. The look and the delete are two crossings of the boundary. The
+    # crossing that does the delete decides.
     rc=0
     dr_forge_rm_vm delete "$vm" | detail || rc=$?
     case "$rc" in
         0)  ;;
-        12) dr_die "'$vm' was not deleted: the folder stopped looking safe between the two checks." ;;
-        13) dr_die "the delete failed, and the detail above says where." \
-                "Nothing partial happens here: the VM is either registered or it is not." ;;
+        12) dr_die "'$vm' was not deleted. Between the two tests, the folder stopped looking safe." ;;
+        13) dr_die "the delete failed. The detail above tells where." \
+                "Nothing partial happens here. The VM is registered, or it is not." ;;
         *)  dr_die "lib/forge/rm.ps1 exited $rc." ;;
     esac
     row VM 'deleted'
 
-    # The host key, which is NOT per VM: every forge VM presents on the same pinned port, so
-    # they share one known_hosts entry and the next VM on that port would otherwise look like
-    # a man-in-the-middle rather than a new machine. The file is forge-only - dr-setup --forge
-    # gives it one of its own - so clearing the entry cannot touch a real server's key.
+    # The host key, which is NOT for each VM. Each forge VM uses the same pinned
+    # port, so they share one known_hosts entry. Without this step, the next VM
+    # on that port looks like a man-in-the-middle, not a new machine. The file
+    # is only for the forge (dr-setup --forge makes it), so this cannot touch
+    # the key of a real server.
     forge_kh="$HOME/.ssh/draugr_forge_known_hosts"
     if [ -f "$forge_kh" ] && command -v ssh-keygen >/dev/null 2>&1; then
         if ssh-keygen -R '[host.docker.internal]:18022' -f "$forge_kh" >/dev/null 2>&1; then
-            row 'host key' 'cleared, so the next VM on 18022 is accepted as new'
+            row 'host key' 'removed, so ssh accepts the next VM on 18022 as new'
         fi
     fi
 
     dr_dep_unclaim "vm:$vm" "$repo" 2>/dev/null || true
 
-    # DRAUGR_FORGE still names it, and nothing here rewrites a config file: which VM a project
-    # uses is a declared choice, and guessing the replacement would be inventing one.
+    # DRAUGR_FORGE still names it, and nothing here rewrites a configuration
+    # file. The VM of a project is a declared choice. A guess of the replacement
+    # invents a choice.
     printf '\n' >&2
     dr_warn "DRAUGR_FORGE still names '$vm', which no longer exists."
-    dr_info "  Point it at the replacement once that exists, or every forge command here"
-    dr_info "  will refuse with 'the daemon knows no VM called $vm'."
+    dr_info "  When the replacement exists, set the key to it. Until then, each forge command"
+    dr_info "  here refuses with 'the daemon knows no VM called $vm'."
     exit 0
 fi
 
 # --- gateway -----------------------------------------------------------------------------
-# GENERATE, AND START NOTHING. The gateway is nearly all mechanism, so it is written from
-# share/gateway.example/ rather than kept as a repository anybody maintains - and because
-# exactly one gateway can run (fixed ports, a pinned 18022, one mutex), generating one while
-# another is up has to be harmless. docs/FORGE.md, "The gateway, generated".
+# GENERATE, AND START NOTHING. The gateway is almost all mechanism. Thus Draugr
+# writes it from share/gateway.example/, and nobody keeps it as a repository.
+# Only one gateway can run (fixed ports, a pinned 18022, one mutex). Thus a new
+# one must do no damage while another runs. See docs/FORGE.md, "The gateway,
+# generated".
 #
-# Exit 3, not 1, when a file was kept: the tree is not what the template says, which a script
-# should be able to see, but nothing failed and the rest of the files are in place.
+# For a file that was kept, exit 3, not 1. The tree differs from the template,
+# and a script must see that. But nothing failed, and the other files are in
+# place.
 if [ "$action" = gateway ]; then
     gw_dir=
     gw_vault=
@@ -667,55 +701,58 @@ if [ "$action" = gateway ]; then
                         [ -n "$gw_scratch" ] || dr_die "--scratch needs a path." ;;
             -h|--help)  dr_help "$0"; exit 0 ;;
             -*)         dr_die "unexpected argument: $1" ;;
-            *)          [ -z "$gw_dir" ] || dr_die "dr-forge gateway takes one directory, and got two:" \
+            *)          [ -z "$gw_dir" ] || dr_die "dr-forge gateway takes one directory, but got two:" \
                             "  $gw_dir" "  $1"
                         gw_dir=$1 ;;
         esac
         shift
     done
-    [ -n "$gw_dir" ] || dr_die "dr-forge gateway needs a directory to generate into." \
-        "It is not a project you keep - nothing in it is tracked - so a sibling of the game" \
-        "project is the usual place:" \
+    [ -n "$gw_dir" ] || dr_die "dr-forge gateway needs a directory for its files." \
+        "It is not a project that you keep, because git tracks nothing in it. The usual" \
+        "place is next to the game project:" \
         "  dr-forge gateway ../draugr-gateway --vault D:\\VaultHolder --scratch D:\\ForgeScratch"
-    dr_heading "forge $vm - gateway"
+    dr_heading "forge $vm: gateway"
     rc=0
     dr_forge_gateway_new "$gw_dir" "$gw_vault" "$gw_scratch" "$gw_force" || rc=$?
     exit "$rc"
 fi
 
 # --- base --------------------------------------------------------------------------------
-# ONE BASELINE, TAKEN ONCE. Only the FIRST AppSandbox snapshot captures the VM's current
-# state - every later one is built as a child of the disk recorded at the first, so it
-# silently saves the old baseline and strands the work since then on a branch nobody is told
-# about. That is a bug, reported upstream, and until it is released `base` takes one snapshot
-# and refuses a second. docs/FORGE.md, "Backup and rollback".
+# ONE BASELINE, TAKEN ONCE. Only the FIRST AppSandbox snapshot captures the
+# current state of the VM. Each later one is a child of the disk of the first.
+# Thus it saves the old baseline again, without a message, and puts the newer
+# work on a branch that nobody knows about. That is a bug, reported upstream.
+# Until the fix is released, `base` takes one snapshot and refuses a second.
+# See docs/FORGE.md, "Backup and rollback".
 #
-# SO TAKE IT AT A MOMENT YOU WOULD BE HAPPY TO RETURN TO. A rollback is whole-machine and takes
-# the derived data cache with it, so whatever is in the baseline is what comes back. This comment
-# used to say "after a warm build", which was advice on no measurement: the saving depends on how
-# much of the cache the discarded work had already invalidated, and nobody has measured that. The
-# first baseline on this machine was taken cold and nothing was obviously worse for it.
+# THUS TAKE IT AT A TIME THAT YOU WANT TO RETURN TO. A rollback is for the whole
+# machine, and includes the derived data cache. What is in the baseline comes
+# back. Before, this comment said "after a warm build", but no test supported
+# that. The gain depends on how much of the cache the discarded work made
+# invalid, and nobody measured that. The first baseline on this machine was
+# cold, and nothing was clearly worse.
 #
-# IT STOPS THE VM AND LEAVES IT STOPPED. A snapshot needs the guest stopped, and `dr-forge up`
-# is how it comes back - said rather than done, because starting it again would hide which
-# state the baseline was actually taken from.
+# IT STOPS THE VM, AND THE VM STAYS STOPPED. A snapshot needs a stopped guest.
+# `dr-forge up` starts it again. The code tells you this and does not do it,
+# because a start hides the state of the baseline.
 if [ "$action" = base ]; then
-    dr_heading "forge $vm - base"
+    dr_heading "forge $vm: base"
     if [ "$(dr_forge_fact daemon)" != up ]; then
-        dr_die "the AppSandbox daemon is not running, so no snapshot can be taken." \
-            "Start it elevated on the Windows side, then re-run this:" \
+        dr_die "the AppSandbox daemon does not run, so Draugr cannot take a snapshot." \
+            "Start it elevated on the Windows side, then run this again:" \
             "  AppSandbox.exe --headless"
     fi
 
-    # DESCRIBE FIRST, the shape rm uses: the common refusal here is "there already is one",
-    # and discovering that after a shutdown would cost the guest for nothing.
+    # DESCRIBE FIRST, as rm does. The usual refusal here is "there is already
+    # one". If the code finds that after a shutdown, the shutdown was for
+    # nothing.
     rc=0
     facts=$(dr_forge_snap status "$vm") || rc=$?
     case "$rc" in
         0)  ;;
         11) dr_die "the daemon knows no VM called '$vm'." ;;
-        24) dr_die "this host does not do snapshots - AppSandbox answers 501." \
-                "Snapshots and branches are Windows-only; the layer stack is the alternative." ;;
+        24) dr_die "this host does not do snapshots. AppSandbox answers 501." \
+                "Snapshots and branches are only for Windows. The layer stack is the alternative." ;;
         *)  printf '%s\n' "$facts" | detail
             dr_die "could not read the snapshots of '$vm' (lib/forge/snap.ps1 exited $rc)." ;;
     esac
@@ -730,42 +767,42 @@ if [ "$action" = base ]; then
         esac
     done <<< "$facts"
 
-    # THE REFUSAL EXPLAINS ITSELF, because "one baseline per VM" sounds like a limitation
-    # someone chose. It is a bug being worked around, and the two ways forward are not
-    # obvious from the refusal alone, so both are named.
+    # THE REFUSAL TELLS ITS REASON, because "one baseline for each VM" sounds
+    # like a choice. It is a workaround for a bug. The refusal alone does not
+    # show the two ways forward, so it names both.
     if [ "$snap_has" = yes ]; then
         dr_warn "'$vm' already has a baseline: #$snap_index '$snap_name'"
-        dr_info "  A second snapshot would save that same baseline again and leave the work"
-        dr_info "  since then on a branch you are not told about - AppSandbox's bug, not a"
-        dr_info "  policy here. So there is one baseline per VM until it is fixed."
+        dr_info "  A second snapshot saves the same baseline again, and puts the newer work"
+        dr_info "  on a branch that nobody tells you about. That is a bug of AppSandbox, not"
+        dr_info "  a policy here. Until the fix, there is one baseline for each VM."
         dr_info "  To go back to it:        dr-forge rollback"
-        dr_info "  To start a new baseline: dr-forge rm, then rebuild the VM"
+        dr_info "  To start a new baseline: dr-forge rm, then build the VM again"
         exit 1
     fi
 
-    # ANYONE ELSE USING IT GETS A SAY, the rule down and rm both follow - this stops the VM.
+    # OTHER USERS GET A QUESTION, as in down and rm, because this stops the VM.
     others=$(dr_dep_claims "vm:$vm" | awk -F'\t' -v me="$repo" '$1 != me { print $1 }')
     if [ -n "$others" ]; then
-        dr_warn "another project is using this VM:"
+        dr_warn "another project uses this VM:"
         printf '%s\n' "$others" | sed 's/^/    /' >&2
         dr_confirm "Stop $vm and take its baseline anyway?" || dr_die "cancelled"
     fi
     if [ "$(dr_forge_fact vm_running)" = yes ]; then
-        dr_info "the VM is shut down first - a snapshot needs it stopped."
+        dr_info "the VM shuts down first, because a snapshot needs it stopped."
     fi
 
-    # Code 20 means the second check disagreed with the first, the same way rm's 12 does:
-    # describe and act are two crossings of the boundary, and the one that governs is the one
-    # taken with the snapshot in hand.
+    # Code 20 means that the second test disagreed with the first, as 12 in rm.
+    # The description and the action are two crossings of the boundary. The
+    # crossing that takes the snapshot decides.
     rc=0
     dr_forge_snap base "$vm" | detail || rc=$?
     case "$rc" in
         0)  ;;
-        20) dr_die "'$vm' already has a baseline - one appeared between the two checks." ;;
-        22) dr_die "the guest did not shut down, so no baseline was taken." \
-                "A baseline is not taken from a guest whose power was cut: that is a" \
-                "crash-consistent image of the one disk you least want to guess about." \
-                "Shut it down by hand, then re-run." ;;
+        20) dr_die "'$vm' already has a baseline. One appeared between the two tests." ;;
+        22) dr_die "the guest did not shut down, so Draugr took no baseline." \
+                "Draugr takes no baseline of a guest after a power cut. That is a" \
+                "crash-consistent image of the disk that you least want to guess about." \
+                "Shut it down yourself, then run this again." ;;
         *)  dr_die "no baseline was taken (lib/forge/snap.ps1 exited $rc)." ;;
     esac
     row baseline 'taken'
@@ -775,30 +812,32 @@ if [ "$action" = base ]; then
 fi
 
 # --- rollback ----------------------------------------------------------------------------
-# DISCARD THE WORKING DISK AND FORK THE BASELINE AGAIN. A branch is created by BOOTING from a
-# snapshot - the API has no other way, and nor does AppSandbox's own UI - so this ends with the
-# VM running, and the old branch has to go first because a branch is only deletable while the
-# VM is stopped. snap.ps1's header has the call sequence and where it was read from.
+# DISCARD THE WORKING DISK, AND FORK THE BASELINE AGAIN. A BOOT from a snapshot
+# makes a branch. The API has no other way, and the UI of AppSandbox has none.
+# Thus the VM runs at the end. The old branch must go first, because you can
+# delete a branch only while the VM is stopped. The header of snap.ps1 has the
+# call sequence and its source.
 #
-# WHAT IT TAKES WITH IT: everything written since the baseline, the derived data cache
-# included. It is whole-machine. Anything worth keeping should already have been pulled out -
-# `dr-forge pull` is the file-level way, and it is not implied here.
+# WHAT IT DISCARDS: all that was written since the baseline, and the derived
+# data cache too. It is for the whole machine. Before this, pull out what you
+# want to keep. `dr-forge pull` does that for files, and this command does not
+# do it for you.
 if [ "$action" = rollback ]; then
-    dr_heading "forge $vm - rollback"
+    dr_heading "forge $vm: rollback"
     if [ "$(dr_forge_fact daemon)" != up ]; then
-        dr_die "the AppSandbox daemon is not running, so there is nothing to roll back." \
-            "Start it elevated on the Windows side, then re-run this:" \
+        dr_die "the AppSandbox daemon does not run, so there is nothing to roll back." \
+            "Start it elevated on the Windows side, then run this again:" \
             "  AppSandbox.exe --headless"
     fi
 
-    # Read-only first, because the description is the point: what gets discarded is the thing
-    # worth seeing before saying yes, and it cannot be seen without asking the daemon.
+    # Read-only first, because the description is the purpose. You want to see
+    # what goes before you say yes. Only the daemon can tell that.
     rc=0
     facts=$(dr_forge_snap status "$vm") || rc=$?
     case "$rc" in
         0)  ;;
         11) dr_die "the daemon knows no VM called '$vm'." ;;
-        24) dr_die "this host does not do snapshots - AppSandbox answers 501." ;;
+        24) dr_die "this host does not do snapshots. AppSandbox answers 501." ;;
         *)  printf '%s\n' "$facts" | detail
             dr_die "could not read the snapshots of '$vm' (lib/forge/snap.ps1 exited $rc)." ;;
     esac
@@ -819,62 +858,64 @@ if [ "$action" = rollback ]; then
 
     if [ "$snap_has" != yes ]; then
         dr_die "'$vm' has no baseline, so there is nothing to roll back to." \
-            "Take one - once per VM, and at a moment you would be happy to return to:" \
+            "Take one, once for each VM, at a time that you want to return to:" \
             "  dr-forge base"
     fi
 
     row baseline "#$snap_index $snap_name"
     [ -n "$snap_branches" ] && row branches "$snap_branches"
-    # A SECOND SNAPSHOT IS WORTH SAYING OUT LOUD. dr-forge refuses to take one, so a tree
-    # holding two was made elsewhere - and the bug means the newer one is not what its name
-    # suggests. Rolling back goes to the FIRST, which is the only one that is trustworthy.
+    # SAY IT CLEARLY FOR A SECOND SNAPSHOT. dr-forge refuses to take one, so a
+    # tree with two came from somewhere else. Because of the bug, the newer one
+    # is not what its name says. The rollback goes to the FIRST, the only one
+    # that you can trust.
     if [ "$snap_extra" = yes ]; then
         dr_warn "this VM has more than one snapshot, which dr-forge never makes."
-        dr_info "  Only the first captures current state, so the rollback goes to that one."
+        dr_info "  Only the first captures the current state, so the rollback goes to it."
     fi
 
     others=$(dr_dep_claims "vm:$vm" | awk -F'\t' -v me="$repo" '$1 != me { print $1 }')
     if [ -n "$others" ]; then
-        dr_warn "another project is using this VM:"
+        dr_warn "another project uses this VM:"
         printf '%s\n' "$others" | sed 's/^/    /' >&2
     fi
 
     printf '\n' >&2
-    dr_warn "everything written since that baseline is discarded, cache and all."
-    dr_confirm "Roll $vm back? This cannot be undone." || dr_die "cancelled"
+    dr_warn "all that was written since that baseline goes, and the cache too."
+    dr_confirm "Roll back $vm? You cannot undo this." || dr_die "cancelled"
 
-    # The codes that mean "the second check disagreed with the first" are named rather than
-    # lumped in: 21 and 22 both say nothing was changed, which is the thing worth knowing
-    # after a command that was supposed to discard a disk.
+    # The codes for "the second test disagreed with the first" have their own
+    # names. 21 and 22 both say that nothing changed. After a command that must
+    # discard a disk, that is important to know.
     rc=0
     dr_forge_snap rollback "$vm" | detail || rc=$?
     case "$rc" in
         0)  ;;
-        21) dr_die "'$vm' has no baseline - it went away between the two checks." ;;
-        22) dr_die "'$vm' would not stop, so nothing was changed." ;;
+        21) dr_die "'$vm' has no baseline. It went away between the two tests." ;;
+        22) dr_die "'$vm' did not stop, so nothing changed." ;;
         *)  dr_die "the rollback did not finish (lib/forge/snap.ps1 exited $rc)." \
-                "The baseline itself is never touched by this, so re-running is safe." ;;
+                "This never touches the baseline, so you can run it again safely." ;;
     esac
-    row VM 'rolled back, and running on a fresh branch'
+    row VM 'rolled back, and running on a new branch'
     printf '\n' >&2
-    dr_info "the guest is a new machine as far as ssh is concerned - dr-forge up finishes the"
-    dr_info "job, bringing the tunnel up and proving a command comes back through it."
+    dr_info "for ssh, the guest is a new machine. dr-forge up does the rest: it starts the"
+    dr_info "tunnel, and proves that a command comes back through it."
     exit 0
 fi
 
 # --- status ------------------------------------------------------------------------------
-# A description, not a judgement: it prints what is, and leaves "is that wrong" to doctor.
-# The two are separate because the answer to "what is going on" is usually enough, and it
-# costs no ssh round trips.
+# A description, not a judgment. It prints the state, and doctor answers "is
+# that wrong?". The two are separate, because "what happens?" is usually enough,
+# and it costs no ssh round trips.
 if [ "$action" = status ]; then
     dr_heading "forge $vm"
     row 'daemon' "$(dr_forge_fact daemon)$([ -n "$(dr_forge_fact daemon_version)" ] && printf '  (%s)' "$(dr_forge_fact daemon_version)")"
-    # A VM THAT IS NOT REGISTERED GETS A SENTENCE, not three fields of '?'. `dr-layer adopt`
-    # ends by de-registering the VM it just turned into a layer, so the name in DRAUGR_FORGE
-    # stops existing - and "unknown running=? agent=?" describes that as an instrument
-    # failure. The known names go with it, because the next thing anyone does is pick one.
+    # A VM THAT IS NOT REGISTERED GETS A SENTENCE, not three fields of '?'. At
+    # its end, `dr-layer adopt` removes the registration of the VM that it made
+    # into a layer. Thus the name in DRAUGR_FORGE stops existing. "unknown
+    # running=? agent=?" makes that look like a failure of the tool. The known
+    # names come too, because the next step is to select one.
     if [ "$(dr_forge_fact vm_state unknown)" = unregistered ]; then
-        row 'vm' "not registered - the daemon knows no VM called '$vm'"
+        row 'vm' "not registered. The daemon knows no VM called '$vm'"
         row '' "known: $(dr_forge_fact vms_known '(none)')"
     else
         row 'vm' "$(dr_forge_fact vm_state unknown)  running=$(dr_forge_fact vm_running '?')  agent=$(dr_forge_fact vm_agent '?')"
@@ -887,48 +928,50 @@ if [ "$action" = status ]; then
     if [ -n "$deep" ]; then
         row 'guest ssh' "$(dr_forge_fact ssh_exec no)"
         row 'guest egress' "$(dr_forge_fact guest_egress no)  (proxy returned $(dr_forge_fact guest_proxy_code none))"
-        # Compared case-INSENSITIVELY: Windows reports COMPUTERNAME in upper case, so a guest
-        # renamed to ue-427-test answers UE-427-TEST and a literal comparison would report a
-        # mismatch for ever - advice that cannot be followed is worse than none.
+        # The comparison IGNORES CASE. Windows reports COMPUTERNAME in upper
+        # case. A guest named ue-427-test answers UE-427-TEST, and an exact
+        # comparison reports a difference forever. Advice that you cannot follow
+        # is worse than no advice.
         gname=$(dr_forge_fact guest_name)
         [ -n "$gname" ] && row 'guest name' "$gname$([ "${gname,,}" != "${vm,,}" ] && printf ' (the VM is %s)' "$vm")"
     fi
-    # THE TASK'S PIN AND THE LIVE SUPERVISOR ARE DIFFERENT FACTS, and this used to say "no way
-    # out" on the strength of the wrong one. MEASURED: the task was registered for a
-    # layer that no longer exists while the live supervisor served this VM and the guest's
-    # egress demonstrably worked. The only pin that decides whether traffic flows is the one on
-    # the process HOLDING the forwards; a stale registration is a next-logon problem, and is
-    # said as such rather than counted as a break.
+    # THE PIN OF THE TASK AND THE LIVE SUPERVISOR ARE DIFFERENT FACTS. Before,
+    # this said "no way out" because of the wrong one. A TEST SHOWED THIS: the
+    # task was registered for a layer that no longer existed. At the same time,
+    # the live supervisor served this VM, and the egress of the guest worked.
+    # Only the pin of the process that HOLDS the forwards decides about traffic.
+    # An old registration is a problem for the next logon. The code says that,
+    # and does not count it as a break.
     fvm=$(dr_forge_fact fwd_vm)
     tvm=$(dr_forge_fact tunnel_vm)
     svm=$(dr_forge_fact sup_vm)
     spid=$(dr_forge_fact sup_pid)
     if [ -z "$fvm" ] && [ "$svm" = "$vm" ]; then
-        # A WAIT IS NOT A BREAK. A supervisor between reconnects holds no port, and this used
-        # to report it as nothing at all - which reads as a dead forge and sends you looking
-        # at the guest. It retries about every ten seconds.
-        dr_info "a supervisor for '$vm' (pid $spid) claims the forwards but holds none yet - it is between reconnects."
+        # A WAIT IS NOT A BREAK. Between reconnects, a supervisor holds no port.
+        # Before, this reported nothing for it. That looks like a dead forge,
+        # and you then look at the guest. It tries again about each ten seconds.
+        dr_info "a supervisor for '$vm' (pid $spid) claims the forwards, but holds none yet. It is between reconnects."
     elif [ -z "$fvm" ]; then
-        dr_warn "nothing is holding the tunnel forwards - this forge has no way out."
+        dr_warn "nothing holds the tunnel forwards. This forge has no way out."
     elif [ "$fvm" = unreadable ]; then
-        dr_warn "the supervisor holding the forwards runs where this cannot read it; which VM it serves is unknown."
+        dr_warn "the supervisor that holds the forwards runs where this code cannot read it. Its VM is unknown."
     elif [ "$fvm" != "$vm" ]; then
-        dr_warn "the supervisor holding the forwards serves '$fvm', not '$vm' - this forge has no way out."
+        dr_warn "the supervisor that holds the forwards serves '$fvm', not '$vm'. This forge has no way out."
     fi
     if [ -n "$tvm" ] && [ "$tvm" != "$vm" ]; then
-        dr_info "the logon task is registered for '$tvm', and starts a supervisor for it at EVERY logon."
+        dr_info "the logon task is registered for '$tvm', and starts a supervisor for it at EACH logon."
     fi
     if [ "$(dr_forge_fact tunnel_mutex)" = other-session ]; then
-        dr_info "a second supervisor runs in another session - vm-tunnel.ps1's guard cannot see across sessions."
+        dr_info "a second supervisor runs in another session. The guard of vm-tunnel.ps1 cannot see across sessions."
     fi
-    [ -z "$deep" ] && dr_info "--deep also asks the guest whether it can reach the internet"
+    [ -z "$deep" ] && dr_info "--deep also asks the guest if it can connect to the internet"
     exit 0
 fi
 
 # --- doctor ------------------------------------------------------------------------------
-# Each link, in dependency order, with its own fix. Ordered so the FIRST failure is the one
-# to act on: everything below a broken link is expected to be broken too, and a report that
-# lists six failures when one thing is wrong is a report nobody reads twice.
+# Each link, in dependency order, with its own fix. The order makes the FIRST
+# failure the one to fix. All links below a broken link usually break too.
+# Nobody reads a report twice that lists six failures for one problem.
 fail=0
 link() {
     local n=$1 what=$2 ok=$3 fix=$4
@@ -941,56 +984,57 @@ link() {
     fi
 }
 
-dr_heading "forge $vm - doctor"
+dr_heading "forge $vm: doctor"
 
 link '1 AppSandbox daemon' "$(dr_forge_fact daemon)" \
     "$([ "$(dr_forge_fact daemon)" = up ] && echo yes || echo no)" \
-    "start it elevated: AppSandbox.exe --headless  (a 'stale' here means the last one died, not exited)"
+    "start it elevated: AppSandbox.exe --headless  ('stale' here means that the last one died, and did not exit)"
 
 link '2 VM running' "$(dr_forge_fact vm_state unknown)" \
     "$(dr_forge_fact vm_running no)" \
-    "$(printf 'start it, or check the name: known VMs are %s' "$(dr_forge_fact vms_known '(none reported)')")"
+    "$(printf 'start it, or look at the name. The known VMs are %s' "$(dr_forge_fact vms_known '(none reported)')")"
 
 link '3 guest agent' "agentOnline=$(dr_forge_fact vm_agent no)" \
     "$(dr_forge_fact vm_agent no)" \
-    'the VM is up but has not finished booting; a first boot off a fresh layer is the slow one'
+    'the VM runs, but its boot is not complete. The first boot from a new layer is slow'
 
-# The relay port is reported rather than judged on its number, because it MOVES. Measured
-# twice: vms.cfg said 57351 while the guest was on 54501, and the API itself
-# answered 57351 then 57589 minutes later, with sshState=2 throughout. No field says a port
-# is final, so a command coming back is the only proof - which is what link 5 is.
+# The code reports the relay port, and does not judge its number, because it
+# CHANGES. Two tests showed this. vms.cfg said 57351 while the guest used 54501.
+# The API answered 57351, and minutes later 57589, with sshState=2 all the time.
+# No field says that a port is final. Only a command that comes back is proof,
+# and that is link 5.
 link '4 ssh relay bound' "port $(dr_forge_fact ssh_port none)" \
     "$(dr_forge_fact ssh_listening no)" \
-    'AppSandbox reassigns this port as it pleases; nothing listening means the relay never bound it'
+    'AppSandbox changes this port when it wants. If nothing listens, the relay never bound it'
 
-# Links 5 and 8 are the two that cost an ssh round trip, so when they are skipped they are
-# reported as NOT CHECKED rather than passed over in silence. An unchecked link shown as
-# healthy is precisely how a chain like this lies to you.
+# Links 5 and 8 cost an ssh round trip. When the code skips them, it reports
+# them as NOT TESTED, and does not skip them silently. A chain like this lies to
+# you when it shows an untested link as healthy.
 if [ -n "$deep" ]; then
     link '5 sshd answers' "a command ran in the guest" \
         "$(dr_forge_fact ssh_exec no)" \
         "$(printf 'ssh refused: %s' "$(dr_forge_fact ssh_error 'no detail reported')")"
 else
-    printf '  %s %-28s %s\n' '....' '5 sshd answers' 'not checked - pass --deep' >&2
+    printf '  %s %-28s %s\n' '....' '5 sshd answers' 'not tested. Use --deep' >&2
 fi
 
 link '6 mound published' "18888=$(dr_forge_fact port_18888 '?')  18445=$(dr_forge_fact port_18445 '?')" \
     "$([ "$(dr_forge_fact port_18888)" = up ] && echo yes || echo no)" \
-    'the gateway mound is not up: run dr-up in the gateway project'
+    'the gateway mound does not run: run dr-up in the gateway project'
 
-# The supervisor is checked on two counts, because "running" and "running for THIS VM" are
-# different failures with the same symptom. Which VM it serves is the five-second diagnosis -
-# read off the PROCESS HOLDING THE FORWARDS, not off the scheduled task, because those two
-# disagree whenever a task outlives the layer it was registered for. Measured, when
-# this link failed against a forge whose egress was working.
+# The code tests the supervisor for two things, because "running" and "running
+# for THIS VM" are different failures with the same symptom. Its VM tells the
+# cause in five seconds. Read it from the PROCESS THAT HOLDS THE FORWARDS, not
+# from the scheduled task. If a task lives longer than its layer, the two
+# disagree. A test showed this: this link failed on a forge whose egress worked.
 tvm=$(dr_forge_fact tunnel_vm)
 fvm=$(dr_forge_fact fwd_vm)
-# "CANNOT TELL" IS NOT "WRONG VM". A supervisor started by the logon task runs in session 0,
-# where its command line reads back empty, and probe.ps1 then falls back to the claim file - but
-# if that is missing too, the answer is unknown. Failing the link on unknown reported a working
-# forge as broken (measured, with links 8, 9 and 10 passing at the same moment). An
-# unknown pin passes here and is said out loud below; links 8 and 10 are the effect checks that
-# would catch a tunnel genuinely serving the wrong VM.
+# "UNKNOWN" IS NOT "WRONG VM". The logon task starts a supervisor in session 0.
+# There, its command line reads as empty, so probe.ps1 uses the claim file. If
+# that is also missing, the answer is unknown. A failure on unknown reported a
+# working forge as broken (a test showed this, while links 8, 9, and 10 passed).
+# An unknown pin passes here, and the code says so below. Links 8 and 10 test
+# the effect, and find a tunnel that really serves the wrong VM.
 link7=no
 if [ "$(dr_forge_fact port_18765)" = up ]; then
     case "${fvm:-}" in
@@ -999,166 +1043,178 @@ if [ "$(dr_forge_fact port_18765)" = up ]; then
 fi
 link '7 tunnel supervisor' "18765=$(dr_forge_fact port_18765 '?')${fvm:+, serving $fvm}" \
     "$link7" \
-    'dr-forge up  (it starts one, or names the pid of a supervisor serving another VM)'
+    'dr-forge up  (it starts one, or names the pid of a supervisor for another VM)'
 
-# Link 8 is the only one that tests the tunnel for real. Everything above it can be healthy
-# while the guest still has no way out, which is precisely that failure.
+# Only link 8 really tests the tunnel. All links above it can be healthy while
+# the guest still has no way out. That is the failure that link 8 finds.
 if [ -n "$deep" ]; then
     link '8 guest can reach out' "proxy returned $(dr_forge_fact guest_proxy_code none)" \
         "$(dr_forge_fact guest_egress no)" \
-        '000 = nothing answered (no tunnel, or no tinyproxy); 500 = tinyproxy refused it (policy or DNS)'
+        '000 = nothing answered (no tunnel, or no tinyproxy). 500 = tinyproxy refused it (policy or DNS)'
 else
-    printf '  %s %-28s %s\n' '....' '8 guest can reach out' 'not checked - pass --deep, this is the one that matters' >&2
+    printf '  %s %-28s %s\n' '....' '8 guest can reach out' 'not tested. Use --deep. This is the important link' >&2
 fi
 
-# Links 9 and 10 are about the OTHER direction from everything above. Links 1-8 ask whether the
-# guest can reach out; these ask whether WSL can reach IN, which is what the ordinary git and
-# data commands need: the code and the data live in the VM, so dr-sync and dr-data address it
-# as their far end. Nothing in WSL can dial the VM directly - AppSandbox binds the Windows
-# loopback - so the route is an ssh_config alias that jumps through the gateway mound, and
-# without it dr-sync fails at "could not resolve hostname" three links from the cause.
+# Links 9 and 10 are about the OTHER direction. Links 1 to 8 ask whether the
+# guest can connect out. These ask whether WSL can connect IN. The usual git and
+# data commands need that. The code and the data are in the VM, so dr-sync and
+# dr-data use it as their far end. Nothing in WSL can connect to the VM
+# directly, because AppSandbox binds the Windows loopback. Thus the route is an
+# ssh_config alias that jumps through the gateway mound. Without it, dr-sync
+# fails with "could not resolve hostname", three links away from the cause.
 alias_cfg=$(dr_forge_ssh_alias "$vm" 2>/dev/null || true)
 a_host=$(printf '%s\n' "$alias_cfg" | sed -n 's/^hostname //p' | head -1)
 a_port=$(printf '%s\n' "$alias_cfg" | sed -n 's/^port //p' | head -1)
 a_proxy=$(printf '%s\n' "$alias_cfg" | sed -n 's/^proxycommand //p;s/^proxyjump //p' | head -1)
-# Defined means it resolves somewhere other than its own name AND has a way through the mound.
-# Either alone is a half-written block that will fail at connect time.
+# Defined means that it resolves to a name different from its own, AND has a
+# way through the mound. One of the two alone is a half-written block, and it
+# fails at connection time.
 a_alias=$(dr_forge_alias_host "$vm")
 a_ok=no
 if [ -n "$a_proxy" ] && [ -n "$a_host" ] && [ "$a_host" != "$a_alias" ]; then a_ok=yes; fi
 link '9 ssh alias for git/data' \
     "$(if [ "$a_ok" = yes ]; then printf '%s -> %s:%s via the mound' "$a_alias" "$a_host" "${a_port:-22}"; else printf 'nothing resolves %s' "$a_alias"; fi)" \
     "$a_ok" \
-    "dr-setup --forge    (one Host *.forge block serves every VM; see below)"
+    "dr-setup --forge    (one Host *.forge block serves each VM. See below)"
 
-# Checked by USING it, like links 5 and 8: an alias that resolves proves only that a block was
-# written, and three hops stand between it and the guest.
+# Tested by USE, as links 5 and 8. An alias that resolves proves only that a
+# block exists, and three hops are between it and the guest.
 #
-# THE ADVICE USED TO SEND PEOPLE THE WRONG WAY. It said "check links 6 and 7", and on
-# this link failed with 6 and 7 both green: the supervisor's forward was bound and
-# answering, but the guest refused every channel opened over it, because sshd had bound the
-# tunnel key's permitopen at authentication time and the list had been widened since. No
-# port-based check can see that - the proof is in the supervisor's own log. So when the links
-# above it pass, this one names the log instead of sending anyone back round them.
+# BEFORE, THE ADVICE SENT PEOPLE THE WRONG WAY. It said "check links 6 and 7",
+# but this link failed with 6 and 7 both green. The forward of the supervisor
+# was bound and answered, but the guest refused each channel through it. sshd
+# bound the permitopen of the tunnel key at authentication, and the list became
+# larger after that. No port test can see that. The proof is in the log of the
+# supervisor. Thus, after the links above pass, this one names the log, and does
+# not send you back to them.
 #
-# IT CANNOT PASS FOR A VM THAT IS NOT THE ONE ON 18022. That port is pinned on purpose - it is
-# what gives the mound one stable rule - which means every VM's alias resolves to it, and what
-# answers is whichever VM the SUPERVISOR serves. MEASURED: a doctor run for a
-# STOPPED 'ue-427-test' reported "ok 10 WSL reaches the VM - a command ran over the alias",
-# because the command ran in 'test'. A link that passes for a switched-off VM is worse than no
-# link: it is the only effect check on this direction, and it was certifying the wrong guest.
+# IT CANNOT PASS FOR A VM THAT IS NOT THE ONE ON 18022. That port is pinned on
+# purpose, so that the mound has one stable rule. Thus the alias of each VM
+# resolves to it, and the VM of the SUPERVISOR answers. A TEST SHOWED THIS: a
+# doctor run for a STOPPED 'ue-427-test' reported "ok 10 WSL reaches the VM - a
+# command ran over the alias", because the command ran in 'test'. A link that
+# passes for a VM that is off is worse than no link. It is the only effect test
+# in this direction, and it approved the wrong guest.
 if [ -z "$deep" ]; then
-    printf '  %s %-28s %s\n' '....' '10 WSL reaches the VM' 'not checked - pass --deep' >&2
+    printf '  %s %-28s %s\n' '....' '10 WSL reaches the VM' 'not tested. Use --deep' >&2
 elif [ "$(dr_forge_fact vm_running)" != yes ]; then
-    # Not a failure OF this link - link 2 already reported the VM is off - but it must not be
-    # measured, because anything answering on 18022 is some other VM by definition.
+    # Not a failure OF this link, because link 2 already reported that the VM is
+    # off. But do not test it, because what answers on 18022 is another VM.
     printf '  %s %-28s %s\n' '....' '10 WSL reaches the VM' \
-        "not checked - '$vm' is not running, so whatever answers on 18022 is another VM" >&2
+        "not tested. '$vm' does not run, so what answers on 18022 is another VM" >&2
 elif [ -n "${fvm:-}" ] && [ "$fvm" != unreadable ] && [ "$fvm" != "$vm" ]; then
     printf '  %s %-28s %s\n' '....' '10 WSL reaches the VM' \
-        "not checked - the 18022 forward serves '$fvm', so a command would run THERE" >&2
+        "not tested. The 18022 forward serves '$fvm', so a command runs THERE" >&2
 else
     if [ "$link7" = yes ] && [ "$(dr_forge_fact port_18888)" = up ]; then
-        link10_fix='links 6 and 7 pass, so the forward is bound but not carrying. Look for
-       "administratively prohibited" in %LOCALAPPDATA%\Draugr\forge-tunnel.log: sshd binds the
-       tunnel key'"'"'s permitopen when the supervisor authenticates, and widening it afterwards
-       does nothing until the supervisor reconnects.'
+        link10_fix='links 6 and 7 pass, so the forward is bound, but carries no traffic. Look for
+       "administratively prohibited" in %LOCALAPPDATA%\Draugr\forge-tunnel.log. sshd binds the
+       permitopen of the tunnel key when the supervisor authenticates. A larger list after that
+       does nothing until the supervisor connects again.'
     else
-        link10_fix='the alias resolves but the chain did not carry: check links 6 and 7, and that the mound is up'
+        link10_fix='the alias resolves, but the chain carried no traffic. Look at links 6 and 7, and make sure that the mound runs'
     fi
     link '10 WSL reaches the VM' 'a command ran over the alias' \
         "$(dr_forge_alias_works "$vm" && echo yes || echo no)" \
         "$link10_fix"
 fi
 
-# A COMMAND, not a block to copy by hand. This used to print the whole Host block with this
-# VM's name in it, which was the best available answer while the alias was written per VM by a
-# script in another project - and it had the flaw that a reader who ran it got an alias that
-# nothing afterwards maintained. One `Host *.forge` block serves every VM, so the fix is a
-# command, and it is Draugr's own.
+# A COMMAND, not a block to copy. Before, this printed the whole Host block
+# with the name of this VM. That was the best answer while a script in another
+# project wrote the alias for each VM. But a reader who used it got an alias
+# that nothing maintained after that. One `Host *.forge` block serves each VM,
+# so the fix is a command, and Draugr owns it.
 if [ "$a_ok" != yes ]; then
     printf '\n' >&2
-    dr_info "Nothing in WSL can dial the VM: AppSandbox binds the Windows loopback, so the"
+    dr_info "Nothing in WSL can connect to the VM. AppSandbox binds the Windows loopback, so the"
     dr_info "route is an ssh_config block that jumps through the gateway mound. Write it with:"
     printf '\n      dr-setup --forge\n\n' >&2
-    # The gateway mound is NOT necessarily $DRAUGR_SANDBOX: a game project names the VM itself,
-    # which is how dr_sandbox_url knows the far end is the forge. So the name is offered only
-    # when this repo is plainly not the forge, and otherwise left to dr-setup's own default.
+    # The gateway mound is NOT always $DRAUGR_SANDBOX. A game project names the
+    # VM, and from that dr_sandbox_url knows that the far end is the forge. Thus
+    # the code shows the name only for a repo that is clearly not the forge. In
+    # other cases, dr-setup uses its default.
     if [ -n "${DRAUGR_SANDBOX:-}" ] && [ "$DRAUGR_SANDBOX" != "$vm" ]; then
-        dr_info "  This repo's mound is '$DRAUGR_SANDBOX'. If that is the gateway, name it:"
+        dr_info "  The mound of this repo is '$DRAUGR_SANDBOX'. If that is the gateway, name it:"
         dr_info "    dr-setup --forge-gateway $DRAUGR_SANDBOX"
     fi
-    dr_info "  Then authorise the key it prints inside the guest. docs/FORGE.md, \"The channel\"."
+    dr_info "  Then authorize the key that it prints, inside the guest. docs/FORGE.md, \"The channel\"."
 fi
 
-# AFTER the links and NOT counted as failures, because neither stops traffic today: a stale
-# registration bites at the next logon, and a second supervisor only bites when two of them
-# want the same forwards. Counting them would bury the link that is actually broken, which is
-# the whole reason doctor orders its output the way it does.
+# AFTER the links, and NOT counted as failures, because neither stops traffic
+# now. An old registration causes a problem at the next logon. A second
+# supervisor is a problem only for two that want the same forwards. If doctor
+# counts them, they hide the link that is really broken. That is the reason for
+# the order of the output of doctor.
 if [ -n "$tvm" ] && [ "$tvm" != "$vm" ]; then
     dr_warn "the logon task is registered for '$tvm', not '$vm'."
-    # "At your next logon" was the old wording, and it was read as a one-off that a reboot
-    # would clear. It is the opposite: a registered task IS what a reboot re-runs, so this
-    # recurs at every logon until the task is re-registered. Nothing is broken meanwhile.
-    dr_info "  A REBOOT DOES NOT CLEAR THIS - it re-runs the task. It recurs at every logon,"
-    dr_info "  starting a supervisor for '$tvm' that can never serve '$vm': -Vm is baked in at"
-    dr_info "  launch and never re-read. That one takes the forwards, and dr-forge up then"
-    dr_info "  refuses for '$vm' and names its pid."
-    # Draugr does not own that task and will not name a command to re-register it: registering
-    # a scheduled task needs elevation, which puts it on the same side of the line as starting
-    # the daemon. What Draugr owns is the supervisor itself, and `up` starts the right one.
-    dr_info "  The task is host setup, registered elevated and outside Draugr. Re-point it at"
-    dr_info "  '$vm' or remove it; dr-forge up starts the right supervisor either way."
+    # The old text was "at your next logon". People read it as a single event
+    # that a reboot removes. It is the opposite. A reboot runs the registered
+    # task again, so this happens at each logon until you register the task
+    # again. Until then, nothing is broken.
+    dr_info "  A REBOOT DOES NOT REMOVE THIS. It runs the task again. At each logon, it starts"
+    dr_info "  a supervisor for '$tvm' that can never serve '$vm', because -Vm is fixed at"
+    dr_info "  the start. That supervisor takes the forwards. dr-forge up then refuses for"
+    dr_info "  '$vm', and names its pid."
+    # Draugr does not own that task, and does not name a command to register
+    # it again. A scheduled task needs elevation for its registration, as the
+    # start of the daemon does. Draugr owns the supervisor, and `up` starts the
+    # correct one.
+    dr_info "  The task is host setup, registered elevated, outside Draugr. Change it to '$vm',"
+    dr_info "  or remove it. In both cases, dr-forge up starts the correct supervisor."
 fi
-# THE ALIAS IS ONLY AS SPECIFIC AS THE SUPERVISOR, and that is worth saying loudly, because the
-# ordinary git and data commands go through it. 18022 is pinned so the mound needs one stable
-# rule; the price is that EVERY VM's alias resolves to it, and what answers is whichever VM the
-# supervisor serves. MEASURED: a doctor run for a stopped 'ue-427-test' reported
-# link 10 green, having run its command in 'test'. The same confusion would send a dr-data push
-# into the wrong guest, which is not something to find out afterwards.
+# THE ALIAS POINTS ONLY WHERE THE SUPERVISOR POINTS. Say that clearly, because
+# the usual git and data commands go through it. 18022 is pinned, so that the
+# mound needs one stable rule. The cost is that the alias of EACH VM resolves to
+# it, and the VM of the supervisor answers. A TEST SHOWED THIS: a doctor run for
+# a stopped 'ue-427-test' showed link 10 green, because its command ran in
+# 'test'. The same error sends a dr-data push into the wrong guest. You must
+# not find that out later.
 if [ -n "${fvm:-}" ] && [ "$fvm" != unreadable ] && [ "$fvm" != "$vm" ]; then
-    dr_warn "127.0.0.1:18022 currently serves '$fvm', not '$vm'."
-    dr_info "  That port is pinned, so '$vm'’s ssh alias resolves to it too - and a command sent"
-    dr_info "  over it would run in '$fvm'. Until the supervisor serves '$vm', treat dr-sync,"
-    dr_info "  dr-send, dr-merge and dr-data as pointing at the WRONG VM."
-    dr_info "  dr-forge up  brings the supervisor onto '$vm'."
+    dr_warn "127.0.0.1:18022 now serves '$fvm', not '$vm'."
+    dr_info "  That port is pinned, so the ssh alias of '$vm' also resolves to it. A command"
+    dr_info "  through it runs in '$fvm'. Until the supervisor serves '$vm', dr-sync,"
+    dr_info "  dr-send, dr-merge, and dr-data point at the WRONG VM."
+    dr_info "  dr-forge up  moves the supervisor to '$vm'."
 fi
-# The guest's own name, when it disagrees with the VM's. Not a failure - nothing breaks - but
-# with several VMs on one stack they all answer "layer-0", and the one place the truth lives is
-# vms.cfg, which is not visible from inside the guest.
+# A guest name that differs from the name of the VM. Not a failure,
+# because nothing breaks. But with several VMs on one stack, all answer
+# "layer-0". Only vms.cfg has the truth, and you cannot see it from the guest.
 gname=$(dr_forge_fact guest_name)
 if [ -n "$gname" ] && [ "${gname,,}" != "${vm,,}" ]; then
     dr_warn "the guest calls itself '$gname', but the VM is '$vm'."
-    dr_info '  Inherited from the layer every VM is built on. To give it its own name:'
-    # Done with exec and nothing else, so no file has to be pushed in: the old wording named a
-    # script in the gateway project, which Draugr does not ship. sshd hands an administrator a
-    # full token, so Rename-Computer has the rights it needs (docs/FORGE.md, "What crosses").
+    dr_info '  It comes from the layer below each VM. To give it its own name:'
+    # Only exec, so no file must go in. The old text named a script in the
+    # gateway project, and Draugr does not ship it. sshd gives an administrator
+    # a full token, so Rename-Computer has the rights that it needs
+    # (docs/FORGE.md, "What crosses").
     dr_info "    dr-forge exec Rename-Computer -NewName $vm -Force"
     dr_info '    dr-forge down && dr-forge up'
-    dr_info '  The rename only takes effect at the next boot, which is what the second line is'
-    dr_info '  for. A NetBIOS name is at most 15 characters and has no dots, so a longer VM'
-    dr_info '  name is refused rather than quietly truncated.'
+    dr_info '  The new name applies only at the next boot. The second line is for that.'
+    dr_info '  A NetBIOS name has 15 characters at most, and no dots. Windows refuses a'
+    dr_info '  longer VM name, and does not shorten it.'
 fi
 
-# Not a failure either: two supervisors are harmless while only one of them has a VM to serve,
-# and the measurement behind this state is worth printing because the guard cannot report it.
+# Also not a failure. Two supervisors do no damage while only one of them has a
+# VM to serve. The code prints the test result for this state, because the
+# guard cannot report it.
 if [ "$(dr_forge_fact tunnel_mutex)" = other-session ]; then
-    dr_warn 'a second supervisor is running in a session this cannot see.'
-    dr_info '  Its mutex cannot be opened from here, which is what that state means: the'
-    dr_info '  single-supervisor guard in lib/forge/tunnel.ps1 does not hold across sessions, so both'
-    dr_info '  ran. Harmless while only one of them has a VM to serve.'
+    dr_warn 'a second supervisor runs in a session that this code cannot see.'
+    dr_info '  This code cannot open its mutex, and that is the meaning of this state. The'
+    dr_info '  single-supervisor guard in lib/forge/tunnel.ps1 does not work across sessions,'
+    dr_info '  so both ran. No damage while only one of them has a VM to serve.'
 fi
 
 printf '\n' >&2
 if [ "$fail" -eq 0 ]; then
-    # if/else, not A && B || C: that form runs C when B fails, which here would print both
-    # messages. Harmless today only because dr_ok always succeeds.
+    # if/else, not A && B || C. If B fails, that form runs C, and here it then
+    # prints both messages. Only because dr_ok always works, it does no damage
+    # now.
     if [ -n "$deep" ]; then
-        dr_ok 'every link checked is healthy.'
+        dr_ok 'each tested link is healthy.'
     else
-        dr_ok 'every host-side link is healthy; --deep checks the guest.'
+        dr_ok 'each link on the host side is healthy. --deep tests the guest.'
     fi
 else
-    dr_error "$fail link(s) need attention - fix the FIRST one listed; the rest may follow from it."
+    dr_error "$fail link(s) need a fix. Fix the FIRST one in the list. The others can be its result."
 fi
 exit "$fail"

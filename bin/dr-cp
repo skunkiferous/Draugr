@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
-# dr-cp - copy files out of the mound (or into it) without going through git.
+# dr-cp: copy files out of the mound (or into it), without git.
 #
-# For the things git is the wrong channel for: a log the agent produced, a
-# screenshot, a half-finished file you want to look at. Committed work should
-# come out with dr-sync instead - it keeps the history and the authorship.
+# It is for things that do not go through git: a log of the agent, a screenshot,
+# or a file that is not complete, that you want to see. Use dr-sync for
+# committed work. dr-sync keeps the history and the authors.
 #
-# Paths inside the mound are given repo-relative and resolved against the agent's
-# clone, so `dr-cp out.log .` means "the out.log in the clone", not one in /.
-# Files and directory cannot start with a -
+# A path inside the mound is relative to the repo, in the clone of the agent.
+# Thus `dr-cp out.log .` means "the out.log in the clone", not one in /.
+# The name of a file or directory cannot start with a -
 #
 #   dr-cp out.log .              mound -> host
 #   dr-cp --to notes.md docs/    host  -> mound
-#   dr-cp --raw /tmp/x .         mound path taken literally, not repo-relative
-#   dr-cp -L dist/ .             copy what symlinks point at, not the links
+#   dr-cp --raw /tmp/x .         mound path as written, not relative to the repo
+#   dr-cp -L dist/ .             copy the targets of symlinks, not the links
 set -euo pipefail
 
 DR_PROG=dr-cp
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# Direction is a flag rather than being inferred from the paths: "does this look
-# like a sandbox path" would guess wrong the moment a host file shares a name.
+# The direction is a flag. Draugr does not guess it from the paths. If a host
+# file has the same name as a sandbox path, a guess is wrong.
 #
-# -L is passed straight through to sbx, and is not the same flag as cp(1)'s: sbx
-# follows links found ANYWHERE in the tree, not just one named as the source.
-# Measured against sbx 0.37.1 - a seed containing a plugin whose AGENTS.md is a
-# symlink to CLAUDE.md copied out whole, 2262 files, with no link left in it.
+# -L goes to sbx without change, and it is not the -L of cp(1). sbx follows
+# links ANYWHERE in the tree, not only the source. A test with sbx 0.37.1 showed
+# this. A seed had a plugin with AGENTS.md as a symlink to CLAUDE.md. All 2262
+# files came out, with no link in them.
 to_mound=
 raw=
 follow=()
@@ -47,7 +47,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ ${#args[@]} -eq 2 ] || dr_die \
-    "dr-cp takes exactly two paths" \
+    "dr-cp takes two paths, no more and no less" \
     "Out of the mound:  dr-cp <path-in-mound> <host-dest>" \
     "Into the mound:    dr-cp --to <host-path> <path-in-mound>"
 
@@ -58,8 +58,8 @@ dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
 
 clone=$(dr_path_mound "$DR_REPO")
 
-# Resolve a mound-side path against the agent's clone unless --raw was given.
-# Absolute paths are left alone either way: they were already unambiguous.
+# Without --raw, a path in the mound is relative to the clone of the agent.
+# An absolute path does not change, because it is already clear.
 mound_path() {
     case "$1" in
         /*) printf '%s' "$1" ;;
@@ -67,19 +67,18 @@ mound_path() {
     esac
 }
 
-# The HOST side of the copy, spelled the way sbx wants it.
+# The HOST side of the copy, in the form that sbx wants.
 #
-# sbx.exe is a Windows binary that WSL runs over interop, and it does not
-# translate paths: an absolute WSL path arrives as a Windows one, so
-# /mnt/c/Code/x is read as \mnt\c\Code\x and the error names a path nobody typed
+# sbx.exe is a Windows binary that WSL runs through interop, and it does not
+# translate paths. An absolute WSL path arrives as a Windows path. sbx reads
+# /mnt/c/Code/x as \mnt\c\Code\x, and the error names a path that nobody typed
 #
 #   ERROR: extract to /mnt/c/Code/x: GetFileAttributesEx \mnt\c\Code: The system
 #          cannot find the path specified.
 #
-# Relative paths are deliberately NOT touched. Interop already resolves those
-# against the Windows working directory, which is why `dr-cp out.log .` has
-# always worked - translating them would break the documented spelling to fix
-# one nobody could use.
+# Relative paths do NOT change, on purpose. Interop resolves them against the
+# Windows working directory. That is why `dr-cp out.log .` always worked. A
+# translation breaks the documented form, to fix a form that nobody can use.
 host_path() {
     case "$1" in
         /*) dr_path_win "$1" ;;
@@ -87,11 +86,11 @@ host_path() {
     esac
 }
 
-# sbx cp wants one side written as SANDBOX:PATH and the other as a plain local
-# path. Which side is which is the only difference between the two directions.
+# sbx cp wants one side as SANDBOX:PATH, and the other as a local path. The two
+# directions differ only in which side is which.
 if [ -n "$to_mound" ]; then
     src=${args[0]}
-    # Checked before translation, so the message names the path as it was typed.
+    # Test before the translation, so the message names the path as typed.
     [ -e "$src" ] || dr_die "no such file on the host: $src"
     src=$(host_path "$src") || dr_die \
         "not on a Windows drive: ${args[0]}" \
@@ -102,28 +101,28 @@ else
     dst=$(host_path "${args[1]}") || dr_die \
         "not on a Windows drive: ${args[1]}" \
         "sbx.exe cannot reach it. Copy to somewhere under /mnt/<drive>/, or use" \
-        "a relative path - interop resolves those against the Windows directory."
+        "a relative path. Interop resolves it against the Windows directory."
 fi
 
 dr_info "$src -> $dst"
-# The hint names the two failures by the words sbx prints, because both of them
-# used to arrive under "check the path exists on the source side" - advice that
-# was wrong in each case, since the path existed both times.
+# The hint names the two failures with the words that sbx prints. Before, both
+# came with "check the path exists on the source side". That was wrong both
+# times, because the path existed.
 dr_sbx cp ${follow[0]+"${follow[@]}"} "$src" "$dst" || dr_die \
     "copy failed" \
-    "\"a required privilege is not held\" means the tree contains a symlink, and" \
-    "Windows will not create one. Copy what it points at instead:  dr-cp -L ..." \
-    "\"not found in container\" means the mound-side path is wrong. Look with:" \
+    "\"a required privilege is not held\" means that the tree has a symlink, and" \
+    "Windows does not create it. Copy the target of the link:  dr-cp -L ..." \
+    "\"not found in container\" means that the path in the mound is wrong. Look with:" \
     "  dr-shell -- ls -la"
 
-# sbx cp writes to the host as whoever ran it, but *into* the mound as root:root,
-# and the agent is uid 1000 - so a file copied in would be readable and not
-# writable, which fails later in ways that look like a broken script.
+# On the host, sbx cp writes as the user that ran it. *Into* the mound, it
+# writes as root:root, but the agent is uid 1000. The agent can read a copied
+# file, but not write it. That fails later, and looks like a broken script.
 #
-# -u root is what makes the chown work. `sbx exec` runs as the agent by default,
-# and the agent cannot chown a root-owned tree, so without it this line failed
-# every time and degraded to the warning below - the exact outcome it exists to
-# prevent, announced as if it were rare. Measured against sbx 0.37.1.
+# The chown works because of -u root. By default, `sbx exec` runs as the agent,
+# and the agent cannot chown a tree that root owns. Without -u root, this line
+# failed each time, and gave the warning below. The line exists to prevent that
+# result, and showed it as a rare case. A test with sbx 0.37.1 showed this.
 if [ -n "$to_mound" ]; then
     target=$(mound_path "${args[1]}")
     dr_sbx exec -u root "$DRAUGR_SANDBOX" chown -R 1000:1000 "$target" 2>/dev/null \

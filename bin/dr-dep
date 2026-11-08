@@ -1,35 +1,34 @@
 #!/usr/bin/env bash
-# dr-dep - the mounds this repo needs running, and who else is using them.
+# dr-dep: the mounds that this repo needs, and who else uses them.
 #
-# DRAUGR_REQUIRES names other repositories whose mounds have to be up before
-# this one is any use - a gateway that gives the forge VM its only way out being
-# the case it was written for. dr-up calls `dr-dep up` for you; the rest of this
-# is for looking, for letting go early, and for resources that are not mounds.
+# DRAUGR_REQUIRES names other repositories. Their mounds must run before this
+# one is of use. The first case was a gateway, the only way out for the forge
+# VM. dr-up calls `dr-dep up` for you. The other actions show the state, release
+# claims early, and handle resources that are not mounds.
 #
 #   dr-dep                  what this repo requires, and who holds what
-#   dr-dep up               bring the chain up and claim it, without this mound
-#   dr-dep release          drop this repo's claims now, starting the linger
+#   dr-dep up               start the chain and claim it, without this mound
+#   dr-dep release          release the claims of this repo now (starts the linger)
 #   dr-dep claim KEY        claim something that is not a mound (the forge VM)
 #   dr-dep unclaim KEY      give it back
 #
-# A claim is a file saying which repository needs which resource. It is never
-# trusted because it exists: it counts only while the claimant's mound is
-# running, or while it is younger than the grace period, so a reboot, a crash or
-# a plain dr-stop all release claims without anyone cleaning up. See
-# docs/DEPENDENCIES.md.
+# A claim is a file that tells which repository needs which resource. A claim
+# counts only while the mound of its repo runs, or while it is younger than the
+# grace period. Thus a reboot, a crash, or a dr-stop releases claims, and nobody
+# must clean up. See docs/DEPENDENCIES.md.
 set -euo pipefail
 
 DR_PROG=dr-dep
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# status is the default because it moves nothing - the same reasoning as dr-mem.
-# "warden" is deliberately absent from --help: it is the loop `up` leaves behind
-# and takes its arguments from that call, not from a person.
+# status is the default, because it moves nothing, as in dr-mem. "warden" is not
+# in --help, on purpose. It is the loop that `up` starts, and it gets its
+# arguments from that call, not from a person.
 action=${1:-status}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
@@ -38,10 +37,11 @@ case "$action" in
               "One of: status, up, release, claim, unclaim" ;;
 esac
 
-# A bare word is a resource key. The rest belong to one action each: --exclusive
-# to `claim`, and --sandbox/--linger/--once to the warden, which is started by
-# `up` rather than typed. Parsed together, like dr-mem's, because rejecting them
-# per action would be more code than ignoring them is confusion.
+# A word without a dash is a resource key. Each other option is for one action.
+# --exclusive is for `claim`. --sandbox, --linger, and --once are for the
+# warden, which `up` starts. One parser reads all of them, as in dr-mem. A
+# refusal for each action is more code, and an ignored option causes little
+# confusion.
 exclusive_flag=
 key=
 sandbox=
@@ -61,24 +61,23 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# How often the warden looks, and how long it waits before it stops something
-# nobody is using. Both are overridable so that tests do not have to sleep.
+# How often the warden looks, and how long it waits before it stops a resource
+# that nobody uses. Tests can change both, so they do not have to sleep.
 DR_DEP_POLL=${DR_DEP_POLL:-60}
 
 # --- the warden -------------------------------------------------------------
 #
-# One process per running dependency. It does two jobs that belong together:
-# it holds the session that stops sbx auto-stopping an idle mound after 30 s
-# (measured), and it counts valid claims so that the last user to leave turns
-# the lights off. Doing them in one process means the thing that would keep a
-# mound alive forever is also the thing that knows nobody wants it.
+# One process for each running dependency. It does two related jobs. It holds a
+# session, so that sbx does not stop an idle mound after 30 s (a test showed
+# this). It also counts valid claims, so that the last user stops the mound.
+# Thus the process that keeps a mound alive also knows that nobody wants it.
 #
-# Its death is survivable in the safe direction: the mound stays up, and the
-# next dr-up starts another warden.
+# If the warden dies, the result is safe. The mound continues to run, and the
+# next dr-up starts a new warden.
 
-# The keeper is a session, not a process we need to talk to, so it is started
-# detached and remembered only by pid. setsid so that it outlives the warden's
-# process group if the warden is killed rather than exiting.
+# The keeper is a session, not a process that Draugr talks to. Thus it starts
+# detached, and Draugr keeps only its pid. If something kills the warden,
+# setsid lets the keeper live after the process group of the warden.
 _dep_keeper_alive() {
     local pidfile=$1 pid
     [ -f "$pidfile" ] || return 1
@@ -89,8 +88,8 @@ _dep_keeper_alive() {
 
 _dep_keeper_start() {
     local name=$1 pidfile=$2 sbx
-    # sbx.exe directly rather than dr_sbx, because this one is backgrounded and
-    # has to be the process whose pid we record.
+    # sbx.exe and not dr_sbx, because this one runs in the background, and its
+    # pid must be the pid that Draugr records.
     sbx=$(dr_find_sbx) || dr_die "cannot find sbx.exe"
     setsid "$sbx" exec "$name" sleep infinity </dev/null >/dev/null 2>&1 &
     printf '%s' "$!" > "$pidfile"
@@ -101,44 +100,46 @@ if [ "$action" = warden ]; then
     [ -n "$key" ] || dr_die "dr-dep warden needs a resource key"
     [ -n "$sandbox" ] || sandbox=$key
 
-    # Say so first, and in this order: the pid file and the start line are what
-    # make a warden that dies young visible at all. One did, silently, and
-    # "warden.log exists and is empty" was the only evidence there was.
+    # Do this first, in this order. Only the pid file and the start line show a
+    # warden that dies early. One did, with no message, and an empty warden.log
+    # was the only sign.
     dir=$(dr_dep_dir "$key")
     mkdir -p "$dir"
     printf '%s' "$$" > "$dir/warden.pid"
     printf '%s warden %s started for %s, linger %s\n' \
         "$(date '+%Y-%m-%d %H:%M:%S')" "$$" "$key" "${linger:-off}"
 
-    # Close everything inherited above stdio. A process that outlives the command
-    # which started it must not keep that command's descriptors open: holding one
-    # end of a pipe somebody else is reading keeps them waiting forever, and under
-    # bats that is the whole test run. 255 is bash's own copy of the script.
+    # Close each inherited descriptor above stdio. A process that lives longer
+    # than the command that started it must not keep the descriptors of that
+    # command open. If it holds one end of a pipe, the reader waits forever.
+    # Under bats, that is the whole test run. 255 is the copy of the script that
+    # bash keeps.
     for _fd in /proc/self/fd/*; do
         case "${_fd##*/}" in 0|1|2|255) continue ;; esac
         eval "exec ${_fd##*/}>&-" 2>/dev/null || true
     done
 
-    # Empty means "off": hold the mound up and never stop it. The keeper still
-    # matters in that case, which is why this is not an early exit.
+    # Empty means "off": keep the mound running, and never stop it. The keeper
+    # is still necessary then, so this is not an early exit.
     linger_s=$(dr_dep_seconds "${linger:-}")
     idle_since=
 
     while true; do
         _dep_keeper_alive "$dir/keeper.pid" || _dep_keeper_start "$sandbox" "$dir/keeper.pid"
 
-        # Pruning here rather than only counting keeps the directory honest for
-        # everything else that looks at it - dr-dep status, dr-status, dr-doctor.
+        # Remove old claims here, not only count them. Then the directory is
+        # correct for the other readers: dr-dep status, dr-status, and
+        # dr-doctor.
         dr_dep_prune "$key"
         if [ -n "$(dr_dep_claims "$key")" ]; then
             idle_since=
         else
-            # First tick with nobody using it starts the clock; it is only ever
-            # reset by a new claim, so a dr-up --recreate inside the window
-            # leaves the dependency alone.
+            # The first tick with no user starts the clock. Only a new claim
+            # resets it. Thus a dr-up --recreate in the window does not touch
+            # the dependency.
             idle_since=${idle_since:-$(date +%s)}
             if [ -n "$linger_s" ] && [ $(( $(date +%s) - idle_since )) -ge "$linger_s" ]; then
-                dr_info "nobody has used $key for ${linger}; stopping it"
+                dr_info "nobody used $key for ${linger}. Stopping it."
                 kill "$(cat "$dir/keeper.pid" 2>/dev/null)" 2>/dev/null || true
                 rm -f "$dir/keeper.pid" "$dir/warden.pid"
                 dr_sbx stop "$sandbox" >/dev/null 2>&1 || true
@@ -155,58 +156,58 @@ fi
 
 dr_context
 
-# _dep_start <repo> - bring one dependency up, claim it, and leave a warden.
+# _dep_start <repo>: start one dependency, claim it, and start a warden.
 #
-# The bring-up is that repository's own dr-up, which is the whole protocol:
-# idempotent, and it runs that repo's post-up hook, which is where a
-# dependency's readiness check already lives. "Ready" therefore means "its own
-# dr-up returned 0", and nothing else has to be defined.
+# The dr-up of that repository starts it, and that is the full protocol. It is
+# idempotent (safe to run twice). It runs the post-up hook of that repo, which
+# holds the readiness test of the dependency. Thus "ready" means "its dr-up
+# returned 0", and nothing more is necessary.
 _dep_start() {
     local repo=$1 name exclusive lingering
 
-    # Both checks before anything is claimed or started: a typo in a path is the
-    # likeliest failure here, and it should cost nothing.
+    # Do both tests before a claim or a start. A typo in a path is the most
+    # usual failure here, and it must cost nothing.
     [ -d "$repo" ] || dr_die "required repository does not exist: $repo" \
         "It is named in DRAUGR_REQUIRES (${DR_ORIGIN[DRAUGR_REQUIRES]:-built-in default})." \
-        "Fix the path, or drop it from that list."
+        "Fix the path, or remove it from that list."
     git -C "$repo" rev-parse --show-toplevel >/dev/null 2>&1 || dr_die \
         "required path is not a git repository: $repo" \
-        "Draugr brings up repositories, because dr-up is what brings a mound up."
+        "Draugr starts repositories, because dr-up starts a mound."
 
-    # Trust before anything reads or runs: requiring a repository means running
-    # its config and its hooks on this machine, as you.
+    # Trust comes before a read or a run. A required repository runs its
+    # configuration and its hooks on this machine, as you.
     dr_dep_trusted "$repo"
 
     name=$(dr_dep_config "$repo" DRAUGR_SANDBOX)
     [ -n "$name" ] || dr_die "could not read DRAUGR_SANDBOX from $repo" \
-        "Check it there with:  (cd $repo && dr-config DRAUGR_SANDBOX)"
+        "Look at it there with:  (cd $repo && dr-config DRAUGR_SANDBOX)"
     exclusive=$(dr_dep_config "$repo" DRAUGR_EXCLUSIVE)
     lingering=$(dr_dep_config "$repo" DRAUGR_LINGER)
 
-    # Claimed BEFORE it is started, so that an exclusive resource refuses the
-    # second project before it has spent a minute building anything, and so the
-    # claim exists during the window in which our own mound does not.
+    # The claim comes BEFORE the start. Thus an exclusive resource refuses the
+    # second project before it builds for a minute. The claim also exists while
+    # our own mound does not.
     dr_dep_claim "$name" "$DR_REPO" "$DRAUGR_SANDBOX" "$exclusive"
 
-    # A cycle would otherwise be an infinite chain of dr-ups. The chain travels
-    # in the environment because each step is a separate process.
+    # Without this test, a cycle is an infinite chain of dr-ups. The chain is in
+    # the environment, because each step is a different process.
     case ":${DR_DEP_CHAIN:-}:" in
         *":$repo:"*) dr_die "dependency cycle: ${DR_DEP_CHAIN#:} -> $repo" \
-                            "A repository cannot require itself, directly or not." ;;
+                            "A repository cannot require itself, directly or through others." ;;
     esac
     export DR_DEP_CHAIN="${DR_DEP_CHAIN:-}:$repo"
 
-    # Its own config decides what it is, so ours is taken out of the environment
-    # first - see _DR_DEP_CLEAN_ENV. DR_DEP_CHAIN survives, because the cycle
-    # check is the one thing the child does need from us.
-    dr_info "bringing up $name ($repo)"
+    # Its own configuration decides what it is. Thus our configuration leaves
+    # the environment first (see _DR_DEP_CLEAN_ENV). DR_DEP_CHAIN stays, because
+    # the child needs it for the cycle test.
+    dr_info "starting $name ($repo)"
     ( cd "$repo" && env "${_DR_DEP_CLEAN_ENV[@]}" "$_dr_bin/dr-up" ) || dr_die \
-        "could not bring up $name, which this repo requires" \
-        "Its own dr-up said why, above." \
+        "could not start $name, which this repo requires" \
+        "Its dr-up told the reason, above." \
         "To start this mound without it:  dr-up --skip-deps"
 
-    # One warden per resource. A live one is left alone: it is already holding
-    # the keeper, and two would fight over stopping the mound.
+    # One warden for each resource. Do not touch a live warden. It holds the
+    # keeper, and two wardens fight about the stop of the mound.
     local wpid
     wpid=$(cat "$(dr_dep_dir "$name")/warden.pid" 2>/dev/null) || wpid=
     if [ -z "$wpid" ] || ! kill -0 "$wpid" 2>/dev/null; then
@@ -216,14 +217,13 @@ _dep_start() {
             >>"$(dr_dep_dir "$name")/warden.log" 2>&1 &
         dr_debug "warden for $name is pid $!"
 
-        # Checked rather than assumed. Without the keeper a warden leaves behind,
-        # sbx stops an idle mound 30 s later - so a warden that did not start is
-        # a dependency that will disappear under you in half a minute, and that
-        # is worth a line now rather than a mystery then.
+        # Test it, do not assume it. Without the keeper of a warden, sbx stops
+        # an idle mound 30 s later. If the warden did not start, the dependency
+        # stops in half a minute. A line now is better than a mystery later.
         sleep 1
         wpid=$(cat "$(dr_dep_dir "$name")/warden.pid" 2>/dev/null) || wpid=
         if [ -z "$wpid" ] || ! kill -0 "$wpid" 2>/dev/null; then
-            dr_warn "the warden for $name did not start - sbx may stop it in 30 s. Log: $(dr_dep_dir "$name")/warden.log"
+            dr_warn "the warden for $name did not start. sbx can stop it in 30 s. Log: $(dr_dep_dir "$name")/warden.log"
         fi
     fi
 }
@@ -232,8 +232,8 @@ case "$action" in
 
 # --- status -----------------------------------------------------------------
 #
-# Reports and changes nothing, including the stale claims it walks past: a
-# command you run to find out what is going on must not change what is going on.
+# It reports and changes nothing, also not the old claims that it finds. A
+# command that shows the state must not change the state.
 status)
     mapfile -t deps < <(dr_dep_requires "$DR_REPO")
     if [ ${#deps[@]} -eq 0 ]; then
@@ -241,17 +241,17 @@ status)
         exit 0
     fi
 
-    # One line per requirement: the mound's name, what sbx says about it, and
-    # where it came from. A path that is simply not there is the one case worth
-    # saying loudly, because everything else about it would read as "stopped".
+    # One line for each requirement: the name of the mound, its state in sbx,
+    # and its source. A missing path gets a clear message, because otherwise it
+    # looks like "stopped".
     for repo in "${deps[@]}"; do
         if [ ! -d "$repo" ]; then
             printf '%-28s %s\n' "${repo##*/}" "MISSING  $repo"
             continue
         fi
-        # An untrusted config is not sourced, so every value read from it would
-        # be a built-in default - including the mound's name. Said here rather
-        # than shown as "stopped", which is what it would otherwise look like.
+        # Draugr does not source a configuration that is not trusted. Thus each
+        # value from it is a built-in default, also the name of the mound. Say
+        # it here. Otherwise it looks like "stopped".
         if [ -f "$repo/.draugr.conf" ] && ! dr_trust_is_trusted "$repo/.draugr.conf"; then
             printf '%-28s %s\n' "${repo##*/}" "UNTRUSTED  dr-trust $repo/.draugr.conf"
             continue
@@ -262,8 +262,8 @@ status)
         dr_is_true "$excl" && excl=" exclusive" || excl=
         printf '%-28s %-10s %s%s\n' "${name:-?}" "$state" "$repo" "$excl"
 
-        # Who is using it, ours marked, so that "it will not start" and "somebody
-        # else has it" are one question rather than two.
+        # Who uses it, with ours marked. Thus "it does not start" and "somebody
+        # else has it" are one question, not two.
         while IFS=$'\t' read -r claim_repo _ claim_since; do
             [ -n "$claim_repo" ] || continue
             mark="  used by"
@@ -277,12 +277,12 @@ status)
 up)
     mapfile -t deps < <(dr_dep_requires "$DR_REPO")
     if [ ${#deps[@]} -eq 0 ]; then
-        dr_ok "nothing to bring up"
+        dr_ok "nothing to start"
         exit 0
     fi
 
-    # In order, one at a time. Parallel would be faster and much harder to
-    # report on; nothing measured says the wait matters yet.
+    # In order, one at a time. Parallel is faster, but much harder to report.
+    # No test showed yet that the wait is a problem.
     for repo in "${deps[@]}"; do
         _dep_start "$repo"
     done
@@ -291,9 +291,9 @@ up)
 
 # --- release ----------------------------------------------------------------
 #
-# Every resource, not only the ones still in DRAUGR_REQUIRES: a claim outlives
-# the config line that made it, and the one moment this matters is after that
-# line was deleted.
+# Each resource, not only the ones in DRAUGR_REQUIRES. A claim lives longer than
+# the configuration line that made it. This is important only after somebody
+# deleted that line.
 release)
     hash=$(_dr_hash_text "$DR_REPO")
     n=0
@@ -307,9 +307,9 @@ release)
 
 # --- claim / unclaim --------------------------------------------------------
 #
-# For resources that are not mounds. dr-forge claims the forge VM this way, so
-# that "exclusive" means one thing on this machine rather than two, and so that
-# `dr-dep status` can see the forge beside the gateway.
+# For resources that are not mounds. dr-forge claims the forge VM this way. Thus
+# "exclusive" has one meaning on this machine, not two, and `dr-dep status`
+# shows the forge next to the gateway.
 claim)
     [ -n "$key" ] || dr_die "dr-dep claim needs a key" "For example:  dr-dep claim vm:UE5-Test"
     excl=false
@@ -319,8 +319,8 @@ claim)
     ;;
 
 unclaim)
-    # No warden is stopped here: the resource is not ours to shut down, and the
-    # warden that owns it will notice the claim is gone at its next tick.
+    # Do not stop a warden here. We do not own the resource. At its next tick,
+    # the warden that owns it sees that the claim is gone.
     [ -n "$key" ] || dr_die "dr-dep unclaim needs a key"
     dr_dep_unclaim "$key" "$DR_REPO"
     dr_ok "released $key"

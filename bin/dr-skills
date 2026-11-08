@@ -1,44 +1,44 @@
 #!/usr/bin/env bash
-# dr-skills - watch, and seed, the one directory a sandbox can write to.
+# dr-skills: watch and seed the one directory that a sandbox can write to.
 #
-# The shared skills store is mounted READ-WRITE into every mound, is shared
-# between all of them, and survives sbx rm. That makes it the single exception to
-# "the sandbox cannot touch the host", and its contents are agent instructions -
-# so it is treated here as a reviewable artifact rather than a cache: show what
-# is there, show what changed, and let you say when you have looked.
+# Each mound mounts the shared skills store READ-WRITE. All mounds share it, and
+# it stays after sbx rm. Thus it is the one exception to "the sandbox cannot
+# touch the host". Its contents are agent instructions. Thus this command treats
+# it as a thing to review, not as a cache. It shows what is there, shows what
+# changed, and lets you record your review.
 #
-# ONE host directory - sbx does not partition it by agent - but sbx mounts it at
-# a path that depends on the agent: ~/.claude/skills in a claude mound,
-# ~/.agents/skills in a codex one. Each agent reads the path it is given; both
-# measured, by asking the agent itself to list its skills. This command is
-# machine-wide and has no repository to ask, so it reports the store rather than
-# any one mound's view of it.
+# ONE host directory, because sbx does not split it for each agent. But sbx
+# mounts it at a path that depends on the agent: ~/.claude/skills in a claude
+# mound, ~/.agents/skills in a codex mound. Each agent reads its path. Tests
+# showed both: each agent listed its skills on request. This command is for the
+# whole machine, and has no repository to ask. Thus it reports the store, not
+# the view of one mound.
 #
-#   dr-skills list       what is in the store, and whether the mount can be refused
-#   dr-skills diff       what has appeared or changed since you last accepted
+#   dr-skills list       what is in the store, and if you can refuse the mount
+#   dr-skills diff       what appeared or changed since your last accept
 #   dr-skills accept     record the current contents as reviewed
 #   dr-skills import     seed the store from your own host skill directories
-#   dr-skills install    put Draugr's own skills into the store
+#   dr-skills install    put the skills of Draugr into the store
 #
-# `list` also names the skills your PLUGINS ship. Those are a different thing in
-# a different directory: they load from the plugin, never from this store, and
-# only in a mound the plugin has been installed into - see docs/CLAUDE_PLUGINS.md
-# and `dr-plugin kit`. They are listed here because not listing them left this
-# command reporting one skill on a machine whose plugin library held fifteen.
+# `list` also names the skills of your PLUGINS. Those are a different thing in a
+# different directory. They load from the plugin, never from this store, and
+# only in a mound where the plugin is installed. See docs/CLAUDE_PLUGINS.md and
+# `dr-plugin kit`. They are in the list, because without them this command
+# reported one skill on a machine whose plugin library held fifteen.
 #
-# diff exits 1 when something has changed, so it can be used as a test.
+# If something changed, diff exits 1, so you can use it as a test.
 set -euo pipefail
 
 DR_PROG=dr-skills
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# list is the default because looking is free and the other three all assume you
-# already know what is in there.
+# list is the default, because a look costs nothing. The other actions assume
+# that you already know the contents.
 action=${1:-list}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
@@ -46,9 +46,9 @@ case "$action" in
     *) dr_die "unknown action: $action" "One of: list, diff, accept, import, install" ;;
 esac
 
-# -y is ours - it answers the confirmation below. Everything else is left alone
-# and handed to sbx on the import path, so --dry-run and --force keep working
-# without this having to know what they mean or track sbx growing more of them.
+# -y is ours. It answers the question below. All other arguments go to sbx on
+# the import path without change. Thus --dry-run and --force continue to work,
+# and this code does not have to know them, or follow new flags of sbx.
 passthrough=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -58,65 +58,66 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# No dr_context: the store is machine-wide, so this is one of the few commands
-# that has nothing to do with the repository you happen to be standing in.
+# No dr_context. The store is for the whole machine. Thus this is one of the few
+# commands that have nothing to do with the current repository.
 #
-# The CONFIG still matters, though, and dr_load_config with no repository loads
-# exactly the machine-wide layer, skipping both project ones. Without this call
-# the command ran on built-in defaults alone: DRAUGR_SBX in your config did
-# nothing here, and DRAUGR_PLUGIN_STORE was always empty - which silenced the
-# plugin section at the end of `list` however many plugin skills you had.
+# But the CONFIGURATION still matters. dr_load_config with no repository loads
+# only the layer of the machine, and skips both project layers. Without this
+# call, the command ran with only the built-in defaults. DRAUGR_SBX in your
+# configuration did nothing here, and DRAUGR_PLUGIN_STORE was always empty. Then
+# the plugin section at the end of `list` showed nothing, for any number of
+# plugin skills.
 dr_load_config
 
 skills_dir=$(dr_skills_dir) || dr_die \
     "cannot find sbx.exe" \
-    "The skills store is located relative to it. Name it in" \
+    "The code finds the skills store from its location. Name it in" \
     "your ~/.config/draugr/config, or in the environment:" \
     "  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
 
-# What you last said you had looked at. In the user config directory rather than
-# the repo, because the store is not a property of any one project.
+# What you looked at, as you last said. In the configuration directory of the
+# user, not in the repo, because the store does not belong to one project.
 seen_file="$DR_CONFIG_USER/skills.seen"
 
-# A report: content on stdout, so it survives being piped. See dr-status.
+# A report: content goes to stdout, so that it stays in a pipe. See dr-status.
 heading() { printf '\n%s%s%s\n' "$_DR_BOLD" "$*" "$_DR_OFF"; }
 
-# "<hash>  <name>" per skill, one line each. A skill is a directory, so the hash
-# covers everything inside it - a changed file within a skill is a changed skill.
+# "<hash>  <name>" for each skill, one line each. A skill is a directory, so the
+# hash covers all of its contents. A changed file in a skill is a changed skill.
 #
-# dotglob, in a subshell so it stays local to this walk, because a skill whose
-# directory name begins with a dot is still a skill and is still LOADED. Measured
-# against Claude Code 2.1.221: a store entry named .hidden-probe appears in its
-# own list of available skills exactly like a visible one. What Claude does not
-# read is anything a level deeper - <store>/parent/child/SKILL.md is ignored - so
-# depth is the limit, not the dot. Without dotglob the review commands would have
-# a blind spot precisely where someone would hide something.
-# Bash's dotglob still excludes . and .., so */ cannot match the store itself.
+# dotglob, in a subshell, so that it applies only to this walk. A skill whose
+# directory name starts with a dot is still a skill, and Claude still LOADS it.
+# A test with Claude Code 2.1.221 showed this. A store entry named .hidden-probe
+# is in its list of available skills, the same as a visible one. Claude does not
+# read entries one level deeper. It ignores <store>/parent/child/SKILL.md. Thus
+# the depth is the limit, not the dot. Without dotglob, the review commands have
+# a blind spot exactly where someone hides something.
+# The dotglob of bash still excludes . and .., so */ cannot match the store.
 current() {
     [ -d "$skills_dir" ] || return 0
     (
         shopt -s dotglob
         local d name
         for d in "$skills_dir"/*/; do
-            [ -d "$d" ] || continue      # no match leaves the glob unexpanded
+            [ -d "$d" ] || continue      # with no match, the glob stays as is
             name=${d%/}; name=${name##*/}
             printf '%s  %s\n' "$(dr_dir_hash "$d")" "$name"
         done
     )
 }
 
-# --- can the mount even be declined? ----------------------------------------
+# --- can you refuse the mount? ---------------------------------------------
 #
-# `sbx skills --help` says "use --no-share-skills to opt out", but that flag is
-# hidden behind a feature flag which is OFF by default - so on a stock install
-# the store is mounted into every mound and no visible flag turns it off.
+# `sbx skills --help` says "use --no-share-skills to opt out". But a feature
+# flag hides that flag, and the feature flag is OFF by default. Thus a default
+# install mounts the store into each mound, and no visible flag turns it off.
 #
-# All three states measured against sbx 0.37.1: with feature.shareSkills false
-# the mount is there regardless; with it true the flag appears AND works, giving
-# a mound with no skills line in /proc/mounts at all. So the message below says
-# "can be declined" only when that is true of this machine, and the flag only
-# ever bites at creation time - an existing mound keeps whatever it was born
-# with. Worth reporting, because the help text implies the flag is always there.
+# Tests with sbx 0.37.1 showed all three states. With feature.shareSkills false,
+# the mount is always there. With it true, the flag appears AND works, and gives
+# a mound with no skills line in /proc/mounts. Thus the message below says "can
+# be declined" only for a machine where that is true. The flag works only at
+# creation. An existing mound keeps its first state. The code reports it,
+# because the help text implies that the flag always exists.
 report_optout() {
     local out
     out=$(dr_sbx settings get feature.shareSkills 2>/dev/null) || {
@@ -126,14 +127,14 @@ report_optout() {
     case "$out" in
         *'"enabled":true'*)
             printf '  the mount CAN be declined:  sbx create --no-share-skills\n'
-            printf '  %s(only at create time - it is not retrofitted to an existing mound)%s\n' \
+            printf '  %s(only at creation. It does not change an existing mound)%s\n' \
                 "$_DR_DIM" "$_DR_OFF"
             ;;
         *)
             printf '  the mount cannot be declined on this machine\n'
             printf '  %s--no-share-skills is hidden until you run:%s\n' "$_DR_DIM" "$_DR_OFF"
             printf '  %s  sbx settings set feature.shareSkills true%s\n' "$_DR_DIM" "$_DR_OFF"
-            printf '  %sand it applies only to mounds created afterwards.%s\n' "$_DR_DIM" "$_DR_OFF"
+            printf '  %sand it applies only to mounds that you create after that.%s\n' "$_DR_DIM" "$_DR_OFF"
             ;;
     esac
 }
@@ -141,13 +142,13 @@ report_optout() {
 case "$action" in
 
 list)
-    # Three distinct states, and they are not the same news: no store at all
-    # (nothing has ever used skills on this machine), a store with nothing in it,
-    # and a store with contents you are being asked to recognise.
+    # Three different states, with different meanings: no store (nothing used
+    # skills on this machine), an empty store, and a store with contents that
+    # you must recognize.
     heading "shared skills store"
     printf '  %s\n' "$skills_dir"
     if [ ! -d "$skills_dir" ]; then
-        printf '  not created yet - sbx makes it on demand\n'
+        printf '  not created yet. sbx makes it when it needs it.\n'
     else
         n=$(current | grep -c . || true)
         if [ "$n" -eq 0 ]; then
@@ -158,37 +159,37 @@ list)
         fi
     fi
 
-    # One store, two mount paths, and each agent reads the one it is given -
-    # measured by asking the agent itself to list its skills, in both a claude
-    # and a codex mound. So a skill put here is in reach of every mound on this
-    # machine, whichever agent it runs.
+    # One store, two mount paths, and each agent reads its own path. Tests
+    # showed this: each agent listed its skills on request, in a claude mound
+    # and in a codex mound. Thus each mound on this machine can read a skill
+    # here, for each agent.
     heading "reach"
-    printf '  mounted read-write into every mound, and shared between them\n'
+    printf '  each mound mounts it read-write, and all mounds share it\n'
     printf '  claude: ~/.claude/skills    codex: ~/.agents/skills\n'
-    printf '  both paths are read by their agent - one store, every mound\n'
-    printf '  survives dr-rm\n'
+    printf '  each agent reads its path. One store, each mound\n'
+    printf '  stays after dr-rm\n'
     report_optout
 
-    # Also reachable, but NOT from here. A plugin's skills load from the plugin,
-    # so they never appear in the store above however many there are - and saying
-    # nothing left this command reporting one skill on a machine whose plugin
-    # library held fifteen, with no hint that the rest existed.
+    # Also available, but NOT from here. The skills of a plugin load from the
+    # plugin, so they never show in the store above. Before, this command said
+    # nothing about them. It reported one skill on a machine whose plugin
+    # library held fifteen, with no sign of the others.
     #
-    # Two guards, and they suppress the heading INDEPENDENTLY: with no library
-    # this test is false and the walk never runs, while a library holding no
-    # skill-bearing plugin is caught by the emptiness check below instead. So
-    # the section is silent unless there is something to put under it, and
-    # removing either one alone changes no output - both mutation-tested.
+    # Two guards, and each one hides the heading ALONE. With no library, this
+    # test is false, and the walk never runs. For a library with no plugin that
+    # has skills, the empty test below catches it. Thus a section with nothing
+    # to show is silent. A removal of one guard alone changes no output.
+    # Mutation tests showed this for both.
     if [ -n "${DRAUGR_PLUGIN_STORE:-}" ]; then
         plug_rows=$(dr_plugin_skills "$DRAUGR_PLUGIN_STORE")
         if [ -n "$plug_rows" ]; then
-            heading "also shipped by plugins you already have"
+            heading "also in plugins that you already have"
             printf '%s\n' "$plug_rows" | while read -r name id _; do
                 printf '    %-30s %s\n' "$name" "$id"
             done
-            # The condition is the point. These are not available the way a
-            # store entry is: nothing loads them until the plugin is installed
-            # in that mound, and claiming otherwise would mislead the other way.
+            # The condition is the purpose. These are not available as a store
+            # entry is. Nothing loads them until the plugin is installed in that
+            # mound. Another claim gives the wrong idea in the other direction.
             printf '  %snot in the store above, and not loaded until the plugin is%s\n' \
                 "$_DR_DIM" "$_DR_OFF"
             printf '  %sINSTALLED in that mound:  dr-plugin kit%s\n' \
@@ -201,14 +202,14 @@ list)
 diff)
     now=$(current)
 
-    # A missing baseline is not "nothing has changed" - it means nobody has
-    # looked yet, and saying so is the more useful answer.
+    # A missing baseline does not mean "nothing changed". It means that nobody
+    # looked yet. That is the more useful answer.
     if [ ! -f "$seen_file" ]; then
         if [ -z "$now" ]; then
             dr_ok "the shared skills store is empty"
             exit 0
         fi
-        dr_warn "you have never accepted the contents of the skills store"
+        dr_warn "you never accepted the contents of the skills store"
         printf '%s\n' "$now" | while read -r _ name; do printf '  new: %s\n' "$name"; done
         printf '  %sReview them, then record them with:  dr-skills accept%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
@@ -220,9 +221,9 @@ diff)
         [ -n "$name" ] && was[$name]=$hash
     done < "$seen_file"
 
-    # Walk what is there now against what you accepted, deleting each match from
-    # $was as it is handled. That is what leaves the "gone" set behind below,
-    # without a second pass or a third array.
+    # Compare the current contents with what you accepted, and delete each match
+    # from $was. The "gone" set then stays below, with no second pass and no
+    # third array.
     changes=0
     while read -r hash name; do
         [ -n "$name" ] || continue
@@ -234,25 +235,26 @@ diff)
         unset "was[$name]"
     done <<< "$now"
 
-    # Whatever is left in $was was accepted once and is not there now.
+    # The rest of $was is what you accepted once, and that is gone now.
     for name in "${!was[@]}"; do
         printf '  gone:    %s\n' "$name"; changes=$((changes + 1))
     done
 
-    # Exit 1 on any difference, so this works as a test. The closing advice names
-    # the command that clears it, because a report you cannot act on is a nag.
+    # Exit 1 for each difference, so that this works as a test. The last advice
+    # names the command that clears it. A report that you cannot act on only
+    # annoys you.
     if [ "$changes" -eq 0 ]; then
-        dr_ok "the skills store is as you last accepted it"
+        dr_ok "the skills store is the same as at your last accept"
         exit 0
     fi
-    printf '  %sSkills are instructions and every mound reads them. Review, then:%s\n' \
+    printf '  %sSkills are instructions, and each mound reads them. Review, then:%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %s  dr-skills accept%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     exit 1
     ;;
 
-# Records hashes, not names, so that an edit inside a skill you already accepted
-# still shows up as a change next time.
+# Record hashes, not names. Thus an edit inside an accepted skill still shows as
+# a change next time.
 accept)
     mkdir -p "$DR_CONFIG_USER"
     current > "$seen_file"
@@ -262,46 +264,46 @@ accept)
 
 # --- install ------------------------------------------------------------------
 #
-# Draugr ships skills of its own, under share/skills/. `sbx skills import` cannot
-# place them: it scans five fixed host directories (~/.agents/skills and the
-# per-agent ones) and takes no path, so the only way in is to copy into the store
-# directly. That is what this does.
+# Draugr ships its own skills, under share/skills/. `sbx skills import` cannot
+# put them there. It scans five fixed host directories (~/.agents/skills and the
+# directories of each agent), and takes no path. Thus the only way is a direct
+# copy into the store. This verb does that.
 #
-# Its own verb rather than something dr-setup does quietly, for the reason the
-# whole command exists: the store is shared by every mound on the machine and its
-# contents are instructions. Draugr putting instructions in an agent's reach
-# without being asked would be exactly the thing dr-skills diff exists to catch.
+# Its own verb, and not a silent step of dr-setup, for the reason of the whole
+# command. All mounds on the machine share the store, and its contents are
+# instructions. If Draugr put instructions within reach of an agent without a
+# request, dr-skills diff must catch exactly that.
 install)
     src="$DRAUGR_ROOT/share/skills"
     [ -d "$src" ] || dr_die "no skills shipped at $src" \
         "This checkout is missing share/skills/."
 
-    # Named before the confirmation, because "Draugr's own" is not a reason to
-    # skim them - they are instructions like any others, and this is the moment
-    # to read them.
+    # Named before the question. "From Draugr" is no reason to read them
+    # quickly. They are instructions, as all others are, and now is the time to
+    # read them.
     mapfile -t _shipped < <(cd "$src" && for d in */; do [ -d "$d" ] && printf '%s\n' "${d%/}"; done)
     [ ${#_shipped[@]} -gt 0 ] || dr_die "no skills to install in $src"
 
-    # Listed by name and path before the prompt: "Draugr's own" is not a reason
-    # to skim them, and this is the moment they are easiest to actually read.
+    # Listed with name and path before the question. "From Draugr" is no reason
+    # to read them quickly, and now they are easiest to read.
     dr_warn "this puts ${#_shipped[@]} skill(s) into the shared store"
     for _s in "${_shipped[@]}"; do
         printf '    %s  %s%s/%s/SKILL.md%s\n' "$_s" "$_DR_DIM" "$src" "$_s" "$_DR_OFF" >&2
     done
-    printf '  %sEvery mound on this machine reads them, whichever agent it runs.%s\n' \
+    printf '  %sEach mound on this machine reads them, for each agent.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     dr_confirm "Install ${#_shipped[@]} Draugr skill(s)?" || dr_die "cancelled"
 
     mkdir -p "$skills_dir"
     for _s in "${_shipped[@]}"; do
-        # Replaced wholesale rather than merged, so a file dropped from a newer
-        # version cannot linger - the same rule sbx applies on import.
+        # Replace all of it, do not merge. Thus a file that a newer version
+        # removed cannot stay. sbx uses the same rule on import.
         rm -rf "${skills_dir:?}/$_s"
         cp -a "$src/$_s" "$skills_dir/$_s" || dr_die "could not copy $_s into the store"
     done
 
-    # Re-baselined, so the next dr-skills diff is about the NEXT change rather
-    # than about the install you just asked for.
+    # A new baseline, so that the next dr-skills diff is about the NEXT change,
+    # not about the install that you just asked for.
     mkdir -p "$DR_CONFIG_USER"
     current > "$seen_file"
     dr_ok "installed ${#_shipped[@]} skill(s), and recorded the result as reviewed"
@@ -309,22 +311,23 @@ install)
 
 # --- import -----------------------------------------------------------------
 #
-# sbx does the copying; the value added here is saying what it means first, and
-# re-baselining afterwards so the next dr-skills diff is about the NEXT change
-# rather than about the import you just performed deliberately.
+# sbx does the copy. This code adds two things. It tells the meaning first.
+# After that, it makes a new baseline. Then the next dr-skills diff is about the
+# NEXT change, not about the import that you just did on purpose.
 import)
-    dr_warn "skills are instructions, and every mound will read them"
-    printf '  %sThe store is shared: a skill imported for one project is in reach of%s\n' \
+    dr_warn "skills are instructions, and each mound reads them"
+    printf '  %sThe store is shared. A skill that you import for one project is available to%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %severy sandbox on this machine, including ones created later.%s\n' \
+    printf '  %seach sandbox on this machine, also to sandboxes that you create later.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     dr_confirm "Import host skills into the shared store?" || dr_die "cancelled"
 
     dr_sbx skills import ${passthrough[0]+"${passthrough[@]}"} \
         || dr_die "sbx skills import failed"
 
-    # --dry-run copied nothing, so re-baselining would record a state that was
-    # never reached. Checking the flag beats checking the store for changes.
+    # --dry-run copied nothing. A new baseline then records a state that never
+    # existed. A test of the flag is better than a test of the store for
+    # changes.
     case " ${passthrough[*]-} " in
         *" --dry-run "*) ;;
         *) mkdir -p "$DR_CONFIG_USER"; current > "$seen_file"

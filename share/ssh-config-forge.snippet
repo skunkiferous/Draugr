@@ -1,24 +1,23 @@
 # >>> draugr forge (managed) >>>
-# The route from WSL to a forge VM, written by `dr-setup --forge` and only then:
-# a machine with no forge never sees this block. Nothing in WSL can dial the VM
-# directly - AppSandbox binds the WINDOWS loopback, and inside WSL2 127.0.0.1 is
-# WSL's own - so the route is WSL -> the gateway mound -> the host's pinned port
-# -> the guest's sshd, and this is where that route lives. With it, dr-sync,
-# dr-send, dr-merge and dr-data need no forge-specific transport: they address
-# the VM by name and ssh does the rest.
+# The route from WSL to a forge VM. Only `dr-setup --forge` writes it. A machine
+# with no forge never sees this block. Nothing in WSL can connect directly to the
+# VM. AppSandbox binds the WINDOWS loopback, and in WSL2, 127.0.0.1 belongs to
+# WSL. Thus the route is WSL -> the gateway mound -> the pinned port of the host
+# -> the sshd of the guest, and this block holds that route. With it, dr-sync,
+# dr-send, dr-merge, and dr-data need no special transport for the forge. They
+# address the VM by name, and ssh does the rest.
 #
-# ONE BLOCK FOR EVERY VM, because the port is pinned. 18022 is fixed so the mound
-# needs one rule instead of one per VM; the price is that every forge VM's alias
-# resolves to the same place and the VM's name is dropped at the first hop, so
-# what answers is whichever VM the tunnel supervisor serves. A per-VM block would
-# therefore be the same bytes with a different Host line - and one left behind
-# after its VM was deleted would quietly reach a DIFFERENT guest, which is how a
-# push lands in the wrong machine. `dr-forge doctor` is what tells the two apart.
-# See docs/FORGE.md, "The pinned port has a price".
+# ONE BLOCK FOR ALL VMS, because the port is pinned. 18022 is fixed, so that the
+# mound needs one rule, not one for each VM. The cost: the alias of each forge VM
+# goes to the same place, and the first hop drops the name of the VM. Thus the VM
+# of the tunnel supervisor answers. A block for each VM is the same bytes with a
+# different Host line. If one stays after its VM is deleted, it silently reaches
+# a DIFFERENT guest. That is how a push goes to the wrong machine. `dr-forge
+# doctor` tells the two apart. See docs/FORGE.md, "The pinned port has a price".
 #
 # socat, NOT ProxyJump. ProxyJump makes the jump host open a direct TCP
-# connection, and raw TCP from the mound to host.docker.internal does not work:
-# it has to be a CONNECT through the mound's own proxy, which is what socat does.
+# connection. Raw TCP from the mound to host.docker.internal does not work. It
+# must be a CONNECT through the own proxy of the mound, and socat does that.
 Host *.forge
     HostName host.docker.internal
     Port 18022
@@ -26,13 +25,14 @@ Host *.forge
     IdentityFile "@FORGE_KEY@"
     IdentitiesOnly yes
     ProxyCommand ssh -o BatchMode=yes @FORGE_GATEWAY@.sbx socat - PROXY:gateway.docker.internal:%h:%p,proxyport=3128
-    # A FILE OF THEIR OWN, because every forge VM presents on the same pinned
-    # host:port and so they all collide on one known_hosts line. Keeping them
-    # apart means clearing a rebuilt guest's key cannot touch a real server's,
-    # and a deleted VM's entry is one file to tidy rather than a line to find.
+    # A FILE OF THEIR OWN, because each forge VM is on the same pinned
+    # host:port, so they all collide on one known_hosts line. With a separate
+    # file, a removal of the key of a rebuilt guest cannot touch the key of a
+    # real server. The entry of a deleted VM is one file to clean, not a line
+    # to find.
     UserKnownHostsFile "@FORGE_KNOWN_HOSTS@"
-    # accept-new, not no: a guest rebuilt from a layer is a new host key on the
-    # same port, which is ordinary here rather than suspicious. A CHANGED key
-    # still refuses, which is the case the check exists for.
+    # accept-new, not no. A guest rebuilt from a layer is a new host key on the
+    # same port. Here, that is normal, not suspicious. A CHANGED key still
+    # refuses. That is the case that this test exists for.
     StrictHostKeyChecking accept-new
 # <<< draugr forge (managed) <<<

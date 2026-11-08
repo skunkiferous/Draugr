@@ -1,22 +1,23 @@
-# set-computer-name.ps1 - give the guest the VM's own name.
+# set-computer-name.ps1: give the guest the own name of the VM.
 #
-# WHY IT MATTERS ONCE THERE IS MORE THAN ONE VM. Every VM built on this layer stack inherits the
-# base image's computer name: measured, a VM called ue-427-test reporting `layer-0`.
-# With one VM that is a curiosity. With several it is a trap - every log line, every tool that
-# identifies the machine, and every "which box am I on?" answers the same thing for all of
-# them, and the one place the truth lives (vms.cfg) is not visible from inside the guest.
+# WHY IT IS IMPORTANT WITH MORE THAN ONE VM. Each VM on this layer stack
+# inherits the computer name of the base image. A test showed this: a VM called
+# ue-427-test reported `layer-0`. With one VM, that is a curiosity. With
+# several, it is a trap. Each log line, each tool that identifies the machine,
+# and each "which machine am I on?" give the same answer for all of them. The
+# one place with the truth (vms.cfg) is not visible from inside the guest.
 #
-# CONSTRAINTS WINDOWS IMPOSES, checked here rather than discovered on the failure:
-#   - 15 characters. NetBIOS's limit, whatever the VM is called
-#   - letters, digits and hyphens only: no underscores, dots or spaces
-#   - not all digits, and no leading or trailing hyphen
+# THE LIMITS OF WINDOWS, tested here, so that you do not find them in a failure:
+#   - 15 characters. The limit of NetBIOS, for each VM name
+#   - only letters, digits, and hyphens: no underscores, dots, or spaces
+#   - not all digits, and no hyphen at the start or the end
 #
-# A name that will not fit is REFUSED with the reason, never silently truncated. `layer-2-ue4`
-# would be worse than `layer-0`, because it looks deliberate.
+# The code REFUSES a name that does not fit, with the reason, and never cuts it
+# silently. `layer-2-ue4` is worse than `layer-0`, because it looks deliberate.
 #
-# A RENAME NEEDS A REBOOT and this does not take one by itself: it says what it changed and
-# leaves the timing to the caller, because the caller may be mid-provision with more to do.
-# -Restart asks for it explicitly.
+# A RENAME NEEDS A REBOOT, and this does not do one by itself. It says what it
+# changed, and the caller decides the time, because the caller can be in the
+# middle of provisioning, with more to do. -Restart asks for it explicitly.
 #
 #   powershell -ExecutionPolicy Bypass -File .\set-computer-name.ps1 -Name ue-427-test
 #   powershell -ExecutionPolicy Bypass -File .\set-computer-name.ps1 -Name ue-427-test -Restart
@@ -26,36 +27,37 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $Name) { Write-Error 'set-computer-name.ps1: -Name is required'; exit 2 }
 
-# Each rule reported separately, so the message says which one the name broke.
+# Each rule is reported separately, so that the message tells which rule the
+# name broke.
 $why = @()
-if ($Name.Length -gt 15)             { $why += "it is $($Name.Length) characters; NetBIOS allows 15" }
-if ($Name -notmatch '^[A-Za-z0-9-]+$') { $why += 'it has characters other than letters, digits and hyphens' }
+if ($Name.Length -gt 15)             { $why += "it has $($Name.Length) characters, and NetBIOS allows 15" }
+if ($Name -notmatch '^[A-Za-z0-9-]+$') { $why += 'it has characters other than letters, digits, and hyphens' }
 if ($Name -match '^-|-$')            { $why += 'it starts or ends with a hyphen' }
 if ($Name -match '^[0-9]+$')         { $why += 'it is all digits' }
 if ($why.Count) {
     Write-Error ("cannot use '$Name' as a computer name: " + ($why -join '; '))
-    Write-Host '  The VM keeps the name it has. Pick a shorter or simpler one and run this again.'
+    Write-Host '  The VM keeps its name. Select a shorter or simpler one, and run this again.'
     exit 1
 }
 
 $current = $env:COMPUTERNAME
 if ($current -ieq $Name) {
-    Write-Host "already named '$current' - nothing to do"
+    Write-Host "already named '$current'. Nothing to do."
     Write-Host 'DRAUGR_CHANGED=0'
     exit 0
 }
 
 Write-Host "renaming '$current' -> '$Name'"
-# -Force skips the confirmation prompt; there is no console to answer it in a provisioning run
-# or over ssh. -Restart is NOT passed through here: the reboot is decided below, so that the
-# "what changed" line is printed before the machine goes away.
+# -Force skips the question. A provisioning run or ssh has no console to answer
+# it. -Restart does NOT go to the cmdlet here. The code below decides the
+# reboot, so that the "what changed" line prints before the machine goes away.
 Rename-Computer -NewName $Name -Force
-Write-Host 'renamed. It takes effect at the next boot.'
+Write-Host 'renamed. It applies at the next boot.'
 Write-Host 'DRAUGR_CHANGED=1'
 
 if ($Restart) {
     Write-Host 'restarting now, as asked.'
     Restart-Computer -Force
 } else {
-    Write-Host 'Reboot the guest when convenient; until then it still answers to the old name.'
+    Write-Host 'Reboot the guest at a good time. Until then, it still answers to the old name.'
 }

@@ -1,37 +1,38 @@
 #!/usr/bin/env bash
-# dr-policy - what this mound can actually reach, and a way to open a hole now.
+# dr-policy: what this mound can really connect to, and a way to open a hole
+# now.
 #
-# The important word is *actually*. Your kit is not the whole story: sbx ships a
-# machine-wide local policy of around 190 allow rules covering package managers,
-# OS packages, the common code hosts and the AI service endpoints. So npm, pip
-# and github.com work without appearing in any kit you wrote, and a kit listing
-# one domain gets that domain IN ADDITION to all of those.
+# The important word is *really*. Your kit is not all of it. sbx ships a local
+# policy for the whole machine, with about 190 allow rules. They cover package
+# managers, OS packages, the usual code hosts, and the AI service endpoints.
+# Thus npm, pip, and github.com work, but are in no kit that you wrote. A kit
+# that lists one domain gets that domain IN ADDITION to all of those.
 #
-# Default-deny is still real - anything matching no rule anywhere is refused -
-# but "deny by default" and "only what I listed" are different claims, and this
-# command exists so you can see which one you have.
+# Default-deny is still real. sbx refuses all that matches no rule. But "deny by
+# default" and "only what I listed" are different claims. This command shows you
+# which one you have.
 #
-#   dr-policy                  everything in force for this mound
-#   dr-policy --denied         what this mound tried to reach and was refused
-#   dr-policy --check <host>   is this host reachable, and under which rule?
+#   dr-policy                  all rules in force for this mound
+#   dr-policy --denied         what this mound tried to reach, and sbx refused
+#   dr-policy --check <host>   can it connect to this host, and through which rule?
 #   dr-policy --allow <host>   open it now, on the RUNNING mound
-#   dr-policy --defaults       show the machine-wide rules you did not write
+#   dr-policy --defaults       show the rules for the machine that you did not write
 #
-# --denied and --allow are the two halves of a loop: run the build, ask what was
-# refused, open the hosts you accept, and let the build carry on in the same
-# session. The kit is written once at the end with `dr-kit adopt`.
+# --denied and --allow are the two halves of a loop. Run the build, ask what was
+# refused, open the hosts that you accept, and let the build continue in the
+# same session. At the end, `dr-kit adopt` writes the kit once.
 set -euo pipefail
 
 DR_PROG=dr-policy
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# --check and --allow both take a host, so each shifts to consume it. Anything
-# else is a mode with no argument.
+# --check and --allow both take a host, so each one shifts to read it. All other
+# options are modes with no argument.
 action=list
 host=
 while [ $# -gt 0 ]; do
@@ -51,95 +52,96 @@ dr_context
 
 case "$action" in
 
-# The policy table names its source per row, which is the whole point: you can
-# see at a glance which rules came from your kit and which were already there.
+# The policy table names the source of each row. That is the purpose. You see
+# quickly which rules came from your kit, and which were already there.
 list)
     dr_sbx policy ls
-    printf '\n  %sRows sourced "kit" are yours. The "local" row is the machine-wide%s\n' \
+    printf '\n  %sRows with the source "kit" are yours. The "local" row is the default set%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sdefault set - see it with:  dr-policy --defaults%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sfor the machine. See it with:  dr-policy --defaults%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %sTest one host:  dr-policy --check <host>%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     ;;
 
-# What was actually refused, from the PROXY's own log rather than from the build
-# output - which is the only way to get a straight answer. Measured against a
-# single blocked host: curl printed nothing at all, git named it exactly, and pip
-# said "Could not find a version that satisfies the requirement". Anything that
-# read build errors would be blind for one, misled by another, right by luck.
+# What sbx really refused, from the log of the PROXY, not from the build output.
+# Only that gives a clear answer. A test with one blocked host showed this. curl
+# printed nothing, git named it exactly, and pip said "Could not find a version
+# that satisfies the requirement". A reader of build errors sees nothing for
+# one, gets the wrong idea from another, and is correct only by luck.
 denied)
     mapfile -t _hosts < <(dr_policy_denied)
 
-    # Nothing refused and the record having been lost look identical from here,
-    # and only one of them means the build is fine - so say both out loud.
+    # "Nothing refused" and "the record is lost" look the same from here. Only
+    # one of them means that the build is good. Thus say both.
     if [ ${#_hosts[@]} -eq 0 ]; then
-        dr_ok "nothing has been refused for $DRAUGR_SANDBOX"
-        printf '  %sEither the build reached everything it needed, or it has not run.%s\n' \
+        dr_ok "sbx refused nothing for $DRAUGR_SANDBOX"
+        printf '  %sThe build reached all that it needed, or it did not run.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %sThe log lives in the running daemon, so restarting it clears this.%s\n' \
+        printf '  %sThe log is in the running daemon, so a restart clears it.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         exit 0
     fi
 
-    # The list first and bare, so it can be read or pasted; the advice after it.
+    # The list first, plain, so that you can read or paste it. The advice after
+    # it.
     printf '%s%d host(s) refused for %s%s\n' \
         "$_DR_BOLD" "${#_hosts[@]}" "$DRAUGR_SANDBOX" "$_DR_OFF"
     printf '  %s\n' "${_hosts[@]}"
 
-    # Naming the first host makes the next command copyable rather than a
-    # template, which is the difference between advice and a thing you can run.
-    printf '\n  %sOpen the ones this project genuinely needs. It takes effect at once,%s\n' \
+    # With the first host in it, the next command is ready to copy, not a
+    # template. That is the difference between advice and a command.
+    printf '\n  %sOpen the ones that this project really needs. It applies at once,%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %son the running mound, so the build can simply be retried:%s\n' \
+    printf '  %son the running mound, so you can run the build again:%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %s  dr-policy --allow %s%s\n' "$_DR_DIM" "${_hosts[0]}" "$_DR_OFF" >&2
-    printf '  %sThen write them into the kit once the build is clean:  dr-kit adopt%s\n' \
+    printf '  %sWhen the build is clean, write them into the kit:  dr-kit adopt%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     ;;
 
-# Worth having as its own verb because the answer is frequently surprising in
-# both directions, and it names the governing rule rather than just yes or no.
+# Its own verb, because the answer is often a surprise in both directions. It
+# names the rule that decides, not only yes or no.
 check)
     dr_sbx policy check network "$host" --sandbox "$DRAUGR_SANDBOX"
     ;;
 
-# The rules nobody in this project wrote. Worth a command of its own because
-# they are invisible otherwise and they are most of what is actually allowed.
+# The rules that nobody in this project wrote. Its own command, because you
+# cannot see them otherwise, and they are most of what sbx allows.
 defaults)
     dr_sbx policy inspect local-policy
-    printf '\n  %sNone of these came from your kit. They apply to every sandbox on%s\n' \
+    printf '\n  %sNone of these came from your kit. They apply to each sandbox on%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sthis machine. Narrow them with sbx policy, or add a deny to your kit.%s\n' \
+    printf '  %sthis machine. Make them narrower with sbx policy, or add a deny to your kit.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     ;;
 
-# Ad-hoc, and deliberately loud about it: a hole opened here lives in machine
-# state, not in the repo, so a teammate cloning the project does not get it and
-# you will not remember you opened it.
+# For one case, and with a clear warning, on purpose. A hole that you open here
+# is in the machine state, not in the repo. A teammate who clones the project
+# does not get it, and you forget that you opened it.
 allow)
     dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
         "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
 
-    # Said before the prompt, because the cost is not the hole itself - it is that
-    # the hole is invisible to everyone else who clones this repo.
+    # Before the question, because the cost is not the hole. The cost is that
+    # nobody else who clones this repo can see the hole.
     dr_warn "this opens $host for $DRAUGR_SANDBOX outside the kit"
-    printf '  %sIt is machine state, not repo state: it will not travel with the%s\n' "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sproject and a teammate will not get it. If the project genuinely%s\n' "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sneeds it, put it in the kit instead and commit that.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sIt is machine state, not repo state. It does not go with the%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sproject, and a teammate does not get it. If the project really%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sneeds it, put it in the kit, and commit the kit.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     dr_confirm "Allow $host for $DRAUGR_SANDBOX?" || dr_die "cancelled"
 
-    # --sandbox scopes the rule to this mound. Without it the hole would be
-    # machine-wide, which is a much larger promise than the user just made.
+    # --sandbox limits the rule to this mound. Without it, the hole is for the
+    # whole machine. That is much more than the user just accepted.
     dr_sbx policy allow network "$host" --sandbox "$DRAUGR_SANDBOX" || dr_die \
         "could not add the rule"
     dr_ok "allowed $host for $DRAUGR_SANDBOX"
-    # The project's own kit, not the first name in DRAUGR_KIT: a rule this repo
-    # needed belongs in this repo's kit, not in a library one every other project
-    # would silently inherit it through.
+    # The own kit of the project, not the first name in DRAUGR_KIT. A rule that
+    # this repo needs goes in the kit of this repo. In a library kit, each other
+    # project gets it with no message.
     if _kit=$(dr_kit_repo_dir); then
-        printf '  %sWrite it into the kit when the build is clean:  dr-kit adopt%s\n' \
+        printf '  %sWhen the build is clean, write it into the kit:  dr-kit adopt%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
     else
-        printf '  %sGraduate it into a kit so it survives dr-rm:  dr-init%s\n' \
+        printf '  %sMove it into a kit, so that it stays after dr-rm:  dr-init%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
     fi
     ;;

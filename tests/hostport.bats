@@ -1,13 +1,13 @@
 #!/usr/bin/env bats
-# Reaching a service on the HOST from inside a mound, without writing down an
-# address that stops being true.
+# Access to a service on the HOST from inside a mound, without a fixed address
+# that becomes wrong.
 #
-# The thing under test is not "can it add a policy rule" - sbx does that. It is
-# the bookkeeping around an address that changes: resolving it late, recognising
-# the rules this command wrote for addresses the machine no longer has, and
-# leaving alone every rule that came from somewhere else. Getting the last part
-# wrong means `policy rm` on somebody else's rule, so most of these tests are
-# about what is NOT touched.
+# The test is not about "can it add a policy rule". sbx does that. It is about
+# the records for an address that changes: a late resolve, a search for the
+# rules that this command wrote for addresses that the machine does not have
+# now, and no change to each rule from another source. A mistake in the last
+# part runs `policy rm` on the rule of somebody else. Thus most of these tests
+# are about what is NOT touched.
 
 load helper
 
@@ -22,8 +22,8 @@ setup() {
 
 teardown() { dr_test_teardown; }
 
-# The helpers are called in-process, so nothing has run the config cascade for
-# them. The dr-* commands get this from their own dr_context.
+# The helpers run in-process, so nothing ran the configuration cascade for them.
+# The dr-* commands get this from their own dr_context.
 load_helpers() {
     dr_load_common
     DRAUGR_SANDBOX=$SANDBOX
@@ -39,8 +39,8 @@ load_helpers() {
 }
 
 @test "dr_host_ip: a route with no source address is a failure, not an empty answer" {
-    # An empty string that looked like success would be concatenated into ":8080"
-    # and handed to sbx as a rule, which would then match nothing.
+    # An empty string that looks like a success becomes ":8080", and goes to sbx
+    # as a rule. That rule then matches nothing.
     export DR_MOCK_HOST_IP=
     load_helpers
     run dr_host_ip
@@ -65,8 +65,8 @@ load_helpers() {
 }
 
 @test "dr_hostport_rules: a kit's own rule is never returned" {
-    # editable:false is the discriminator, the same one dr_policy_adhoc uses.
-    # Removing a kit rule here would silently undo what the kit composed.
+    # editable:false tells them apart, the same as in dr_policy_adhoc. A removal
+    # of a kit rule here silently undoes what the kit composed.
     export DR_MOCK_KITHOST="172.19.192.26:11434"
     load_helpers
     run dr_hostport_rules 11434
@@ -74,9 +74,9 @@ load_helpers() {
 }
 
 @test "dr_hostport_rules: a rule holding several resources is left alone" {
-    # This command only ever writes one resource per rule, so a rule with more
-    # than one came from somewhere else - and removing it would take the other
-    # resources with it.
+    # This command always writes one resource for each rule. Thus a rule with
+    # more than one came from another source. Its removal also removes the
+    # other resources.
     export DR_MOCK_MULTI="172.19.192.26:11434 example.com:443"
     load_helpers
     run dr_hostport_rules 11434
@@ -100,8 +100,8 @@ load_helpers() {
 }
 
 @test "dr-hostport: already open at the right address changes nothing" {
-    # This runs on every dr-up. Rewriting the rule each time would churn machine
-    # state and make the output not worth reading.
+    # This runs at each dr-up. A new rule each time changes the machine state
+    # without need, and makes the output useless.
     export DR_MOCK_ADHOC="172.19.192.26:11434"
     run dr-hostport 11434
     [ "$status" -eq 0 ]
@@ -114,15 +114,15 @@ load_helpers() {
     export DR_MOCK_ADHOC="10.0.0.5:11434"
     run dr-hostport 11434
     [ "$status" -eq 0 ]
-    [[ "$output" == *"replaced 1 stale"* ]]
+    [[ "$output" == *"replaced 1 old"* ]]
     grep -q "policy rm network --sandbox $SANDBOX --id rule-0" "$DR_MOCK_LOG"
     grep -q "policy allow network --sandbox $SANDBOX 172.19.192.26:11434" "$DR_MOCK_LOG"
 }
 
 @test "dr-hostport: the stale rule goes before the new one is added" {
-    # After a reboot the machine can be handed back an address it used to have.
-    # Removing after adding would then delete the rule just written, leaving the
-    # port shut while the command reported success.
+    # After a reboot, the machine can get back an old address. A removal after
+    # the add then deletes the new rule. The port stays closed, but the command
+    # reports a success.
     export DR_MOCK_ADHOC="172.19.192.26:11434 10.0.0.5:11434"
     run dr-hostport 11434
     [ "$status" -eq 0 ]
@@ -157,7 +157,7 @@ load_helpers() {
 # --- refusals ---------------------------------------------------------------
 
 @test "dr-hostport: refuses something that is not a port number" {
-    # sbx would take "11434/tcp" as a hostname, match nothing, and look exactly
+    # sbx takes "11434/tcp" as a hostname, matches nothing, and looks exactly
     # like a rule that was never added.
     run dr-hostport 11434/tcp
     [ "$status" -ne 0 ]
@@ -175,20 +175,20 @@ load_helpers() {
     export DR_MOCK_HOST_IP=
     run dr-hostport 11434
     [ "$status" -ne 0 ]
-    [[ "$output" == *"could not work out this host's address"* ]]
+    [[ "$output" == *"could not find the address of this host"* ]]
     ! grep -q "policy allow" "$DR_MOCK_LOG"
 }
 
 # --- the loopback trap ------------------------------------------------------
 
 @test "dr-hostport: warns when the service is bound to loopback only" {
-    # The rule is still added - the service may be restarted correctly in a
-    # moment - but from inside the mound 127.0.0.1 is the mound, so this would
-    # fail in a way indistinguishable from a policy denial.
+    # The rule is still added, because a correct restart of the service can
+    # come soon. But in the mound, 127.0.0.1 is the mound. Thus this fails in
+    # the same way as a policy denial.
     export DR_MOCK_LISTEN="127.0.0.1:11434"
     run dr-hostport 11434
     [ "$status" -eq 0 ]
-    [[ "$output" == *"loopback only"* ]]
+    [[ "$output" == *"listens only on loopback"* ]]
     grep -q "policy allow network" "$DR_MOCK_LOG"
 }
 
@@ -215,13 +215,13 @@ load_helpers() {
 }
 
 @test "dr-hostport: a rule for a former address is listed as stale" {
-    # This is the state a reboot leaves behind, and it is otherwise
-    # indistinguishable from a working rule.
+    # A reboot leaves this state. Without this, it looks the same as a working
+    # rule.
     export DR_MOCK_ADHOC="10.0.0.5:11434"
     run dr-hostport
     [ "$status" -eq 0 ]
     [[ "$output" == *"10.0.0.5:11434"* ]]
-    [[ "$output" == *"stale"* ]]
+    [[ "$output" == *"old. This host is now"* ]]
 }
 
 @test "dr-hostport: a current rule is not called stale" {
@@ -242,9 +242,9 @@ load_helpers() {
 # --- dr-up applies it -------------------------------------------------------
 
 @test "dr-up: DRAUGR_HOST_PORTS is applied on every start" {
-    # Not only on the create. The address is only true for this boot, so the up
-    # that matters is the first one after a reboot - when the mound already
-    # exists and nothing is created at all.
+    # Not only on the create. The address is true only for this boot. Thus the
+    # important up is the first one after a reboot, when the mound already
+    # exists, and nothing is created.
     export DRAUGR_HOST_PORTS=11434
     run dr-up
     [ "$status" -eq 0 ]
@@ -265,12 +265,12 @@ load_helpers() {
     ! grep -q "policy allow" "$DR_MOCK_LOG"
 }
 
-# --- telling the mound where this host is ------------------------------------
+# --- tell the mound where this host is ---------------------------------------
 #
-# The mound cannot find this out on its own: no `ip` command, and
-# host.docker.internal is its own gateway. So dr-hostport writes it in. What is
-# asserted here is the command line Draugr built, which is the part that has to
-# be right - the mock does not keep a filesystem for this.
+# The mound cannot find this alone. It has no `ip` command, and
+# host.docker.internal is its own gateway. Thus dr-hostport writes it in. These
+# tests assert the command line that Draugr built. That part must be correct.
+# The mock keeps no filesystem for this.
 
 @test "dr-hostport: tells the mound this host address" {
     run dr-hostport 11435
@@ -280,8 +280,8 @@ load_helpers() {
 }
 
 @test "dr-hostport: the file lists what is open, not what was asked for" {
-    # A second port that this invocation did not touch still belongs in the file,
-    # and the numbers are sorted so the content does not churn between runs.
+    # A second port that this run did not touch still belongs in the file. The
+    # numbers are sorted, so that the content does not change between runs.
     export DR_MOCK_ADHOC="172.19.192.26:11435 172.19.192.26:5432"
     run dr-hostport 11435
     [ "$status" -eq 0 ]
@@ -289,8 +289,8 @@ load_helpers() {
 }
 
 @test "dr-hostport: an address from a previous boot is not written in" {
-    # The rules are filtered to the CURRENT address, so a stale rule left by a
-    # reboot cannot contribute a port the mound would then fail to reach.
+    # Only the rules for the CURRENT address count. Thus an old rule from a
+    # reboot cannot add a port that the mound then cannot reach.
     export DR_MOCK_ADHOC="10.0.0.5:9999"
     run dr-hostport 11435
     [ "$status" -eq 0 ]
@@ -298,7 +298,7 @@ load_helpers() {
 }
 
 @test "dr-hostport: writes nothing into a mound that is not running" {
-    # Starting one just to drop a file in it would turn a --close into a boot.
+    # A start of one only to put a file in it makes a --close into a boot.
     export DR_MOCK_STATE=stopped
     run dr-hostport 11435
     [ "$status" -eq 0 ]

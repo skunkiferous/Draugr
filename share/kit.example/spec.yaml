@@ -1,87 +1,88 @@
-# .draugr/kit/spec.yaml - what this project needs INSIDE the mound. Commit it.
+# .draugr/kit/spec.yaml: what this project needs IN the mound. Commit it.
 #
 # This is a standard sbx kit, not a Draugr invention. It works with plain
 #   sbx run claude --kit .draugr/kit
-# and can be packed and pushed to a registry to share across repositories:
+# To share it with other repositories, pack it and push it to a registry:
 #   sbx kit pack .draugr/kit && sbx kit push ...
 #
 # Full schema: https://docs.docker.com/ai/sandboxes/customize/kits/
 # Worked examples: https://github.com/docker/sbx-kits-contrib
 #
-# Check it before you find out the hard way:  dr-kit validate
-# See what is actually in force, defaults included:  dr-policy
-# Applying a changed kit recreates the container, so dr-up reports drift rather
-# than doing it behind your back.
+# Make sure that it is correct before a failure tells you:  dr-kit validate
+# See the rules that really apply, defaults included:  dr-policy
+# A changed kit recreates the container. Thus dr-up reports the drift, and does
+# not do it without your knowledge.
 
-# v2 spellings throughout. v1 still validates, but every field below has moved
-# and v1 now emits a deprecation warning on each check - and a warning you are
-# trained to ignore is worse than no warning. Verified against sbx 0.37.1.
+# v2 spellings in all places. v1 still validates, but each field below moved,
+# and v1 now gives a deprecation warning at each check. A warning that you
+# learn to ignore is worse than no warning. Tested with sbx 0.37.1.
 schemaVersion: "2"
 kind: mixin
-# `name` is the one constrained field: sbx requires lowercase alphanumeric with
-# hyphens, so it is a slug of the project name rather than the name itself.
-# displayName and description below are free text and keep the original spelling.
+# `name` is the one field with rules. sbx requires lowercase alphanumeric with
+# hyphens, so it is a slug of the project name, not the name itself.
+# displayName and description below are free text, and keep the original spelling.
 name: @SLUG@
 displayName: @NAME@ development environment
 description: Network rules and setup for the @NAME@ project.
 
-# No `requires: agent:` here, and that is deliberate. It is optional, and a kit
-# that names an agent CANNOT be composed with any other - sbx refuses outright,
-# so switching DRAUGR_AGENT would mean editing this file. Almost nothing below
-# is agent-specific: network rules, install commands and ports are properties of
-# the project. If you do need one kit per agent, put it in a directory with the
-# agent's name appended - .draugr/kit.codex/ - which Draugr prefers over this one
-# when that agent is configured.
+# No `requires: agent:` here, on purpose. It is optional. A kit that names an
+# agent CANNOT be composed with another kit. sbx refuses it. Thus a change of
+# DRAUGR_AGENT then needs an edit of this file. Almost nothing below is specific
+# to an agent. Network rules, install commands, and ports belong to the project.
+# If you need one kit for each agent, put it in a directory with the name of the
+# agent at the end: .draugr/kit.codex/. If that agent is configured, Draugr
+# prefers it to this one.
 
 caps:
   network:
-    # ADDED TO the machine-wide defaults, not instead of them. sbx ships a local
-    # policy of ~190 allow rules covering package managers, OS packages, the
-    # common code hosts and the AI service endpoints - so npm, pip and github.com
-    # already work without listing anything here.
+    # ADDED TO the machine-wide defaults. It does not replace them. sbx ships a
+    # local policy of ~190 allow rules for package managers, OS packages, the
+    # usual code hosts, and the AI service endpoints. Thus npm, pip, and
+    # github.com already work with nothing listed here.
     #
-    # Default-deny is still real: anything matching no rule anywhere is refused.
-    # Check a specific host with:  dr-policy --check <host>
+    # Default-deny still applies. sbx refuses each host that matches no rule.
+    # To test a specific host:  dr-policy --check <host>
     allow: []
       # - internal-registry.example.com
       # - files.example.org
 
-    # deny wins over allow, which is how you carve a hole in a wildcard or shut
-    # off something the machine-wide defaults let through.
+    # deny wins over allow. Use it to cut a hole in a wildcard, or to close
+    # something that the machine-wide defaults allow.
     #deny:
     #  - telemetry.example.com
 
 # Ports this project always serves. Top-level in v2, NOT under network:.
-# For one-off ports use dr-ports instead - editing the kit recreates the container.
+# For a temporary port, use dr-ports. An edit of the kit recreates the container.
 #publishedPorts:
 #  - container: 5173
 #    protocol: tcp
 #    name: dev-server
 
-# Each variable REPLACES what the image set, rather than extending it - which
-# makes PATH genuinely dangerous here. An absolute PATH that looks standard drops
-# whatever the image added, including the directory holding the agent binary, and
-# the next dr-go then ends in "command not found" before the agent starts. If a
-# program needs a particular interpreter, name it in the program
-# (.venv/bin/python3) rather than reaching for PATH here.
+# Each variable REPLACES the value of the image, and does not extend it. That
+# makes PATH dangerous here. An absolute PATH that looks standard drops all that
+# the image added, also the directory of the agent binary. The next dr-go then
+# ends in "command not found" before the agent starts. If a program needs a
+# specific interpreter, name it in the program (.venv/bin/python3). Do not use
+# PATH here.
 #environment:
 #  variables:
 #    NODE_ENV: development
 
 commands:
-  # Runs once, when the sandbox is created - and BEFORE your repository is in
-  # the workspace. At that moment the working directory is EMPTY and the repo is
-  # read-only at /run/sandbox/source, so a command that reads a project file
-  # fails however right it looks. Measured against sbx 0.37.1 in both clone and
-  # mount mode; `uv pip install -r requirements.txt` here gives you nothing but
-  # `error: File not found`.
+  # Runs once, when the sandbox is created, and BEFORE your repository is in
+  # the workspace. At that moment, the working directory is EMPTY, and the repo
+  # is read-only at /run/sandbox/source. Thus a command that reads a project
+  # file fails, also if it looks correct. Tests on sbx 0.37.1 showed this, in
+  # clone mode and in mount mode. Here, `uv pip install -r requirements.txt`
+  # gives only `error: File not found`.
   #
-  # apt-get install belongs here unchanged. Anything that reads the project has
-  # to name the read-only copy, and put its result somewhere the agent session
-  # will not later overwrite - the workspace is not that place.
+  # apt-get install can stay here with no change. A command that reads the
+  # project must name the read-only copy. It must put its result in a place
+  # that the agent session does not overwrite later. The workspace is not
+  # that place.
   #
   # A failure here reaches sbx as a bare `500 ... failed to run sandbox
-  # container`. dr-up prints what sandboxd actually recorded underneath it.
+  # container`. dr-up prints the real record of sandboxd below it.
   install: []
     # - command: "uv venv /home/agent/.venv"
     #   user: "1000"
@@ -90,8 +91,8 @@ commands:
     #   user: "1000"
     #   description: Install dependencies, from the read-only copy of the repo
 
-  # Runs on every start, so it must be idempotent. Note that `command` must be a
-  # LIST here - unlike install, startup rejects a plain string.
+  # Runs at each start, so it must be idempotent (safe to run twice). Here,
+  # `command` must be a LIST. Unlike install, startup refuses a plain string.
   #startup:
   #  - command: ["sh", "-c", "nohup npm run dev >/tmp/dev.log 2>&1 &"]
   #    user: "1000"

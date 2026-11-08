@@ -1,10 +1,10 @@
 # Configuration reference
 
-Every `DRAUGR_*` key, what it does, and what happens if you get it wrong.
+Each `DRAUGR_*` key, what it does, and what happens if you get it wrong.
 
-`tests/docs.bats` fails if a key exists in `lib/common.sh` but not in this file, so this list cannot
-quietly fall behind the code. It can still fall behind in *accuracy* — if something here contradicts
-what a command does, the command is right and this is a bug worth reporting.
+If a key exists in `lib/common.sh` but not in this file, `tests/docs.bats` fails. Thus this list
+cannot silently fall behind the code. But its *accuracy* can fall behind. If a statement here does
+not agree with a command, the command is right, and this file has a bug. Please report it.
 
 ## Where settings come from
 
@@ -12,41 +12,42 @@ Four files, all plain shell (`KEY=value`, `#` comments), sourced in order:
 
 | File | Scope | Commit it? |
 |---|---|---|
-| `~/.config/draugr/config` | every project on this machine | n/a |
+| `~/.config/draugr/config` | each project on this machine | n/a |
 | `<repo>/.draugr.conf` | this project, shared with the team | **yes** |
-| `<repo>/.draugr.local.conf` | this project, just you | no — gitignored by `dr-init` |
+| `<repo>/.draugr.local.conf` | this project, only you | no: `dr-init` adds it to .gitignore |
 
-Precedence, lowest to highest:
+The order, from lowest to highest:
 
 ```
 built-in defaults → user config → project config → project-local → DRAUGR_* env → flags
 ```
 
-`dr-config` prints the merged result with the origin of each value, and `dr-config --changed` shows
-only what differs from the defaults. Use it before assuming anything on this page applies to you.
+`dr-config` prints the merged result, with the origin of each value. `dr-config --changed` shows
+only the values that are different from the defaults. Use it before you trust that a statement on
+this page applies to you.
 
-> **A project config is executed, not parsed.** Sourcing a file from a cloned repository runs its
-> code. Draugr records the hash of each project config the first time you accept it and refuses to
-> source one it has not seen. Editing your own re-prompts once. Run `dr-trust` to accept.
+> **Draugr executes a project configuration. It does not parse it.** To source a file from a cloned
+> repository runs its code. When you first accept a project configuration, Draugr records its hash.
+> It refuses to source a configuration that it does not know. If you edit your own, it asks once
+> again. Run `dr-trust` to accept.
 
-**A refused config is the failure mode that looks like nothing happening.** Trust is per *content*,
-so editing a file you already accepted revokes it — and from then on the table shows built-in
-defaults, which is indistinguishable from a file that set nothing. `dr-config` therefore says so
-twice: once where it happens, and again in red at the very bottom, which is the end you actually
-read.
+**A refused configuration is the failure that looks like nothing happened.** Trust is for the
+*content*. Thus an edit of a file that you accepted removes the trust. From then on, the table
+shows built-in defaults, and that looks the same as a file that set nothing. Thus `dr-config` says
+so two times: once at the line, and again in red at the bottom, which is the part that you read.
 
 ```
 DRAUGR_STOP_ON_EXIT        false                              built-in default
 
-dr-config: 1 config file was NOT sourced, because it is untrusted:
+dr-config: 1 configuration file was NOT sourced, because it is not trusted:
   /mnt/c/src/myproject/.draugr.conf
-  Nothing set there appears above. If a setting is not what you
-  wrote, that is why. Review it, then:  dr-trust
+  The table above shows no value from these files. If a setting is
+  not what you wrote, that is why. Read it, then run:  dr-trust
 ```
 
-It is loud rather than fatal: nothing has failed, so the exit status stays `0`. `dr-config --files`
-answers the same question as a table, and `dr-trust` with no arguments offers every unaccepted config
-and hook at once.
+It is loud, but not fatal. Nothing failed, so the exit status stays `0`. `dr-config --files` gives
+the same answer as a table. `dr-trust` with no arguments offers each configuration and hook that
+you did not accept, all at once.
 
 ---
 
@@ -54,24 +55,24 @@ and hook at once.
 
 ### `DRAUGR_AGENT`
 Default `claude`. One of `claude`, `codex`, `copilot`, `cursor`, `docker-agent`, `droid`, `gemini`,
-`kiro`, `opencode`, `shell`. Passed to `sbx create` as the agent name.
+`kiro`, `opencode`, `shell`. Draugr passes it to `sbx create` as the agent name.
 
-Everything except **memory** works the same for all of them: attaching, Ctrl+Z, the clone, kits,
-`dr-sync`, `dr-send`, `dr-data`. Memory is each agent's own private layout, so Draugr keeps one file
-per agent in `lib/agents/` and only claims to know the ones it has measured:
+All except **memory** works the same for each agent: attach, Ctrl+Z, the clone, kits, `dr-sync`,
+`dr-send`, `dr-data`. Each agent has its own private memory layout. Thus Draugr keeps one file for
+each agent in `lib/agents/`, and only claims to know the agents that it measured:
 
 | | memory | `dr-mem` |
 |---|---|---|
-| `claude` | `~/.claude/projects/<PATH-KEY>/memory/`, per project | full |
-| `codex` | `$CODEX_HOME/memories/` plus its SQLite state, **not** per project, **off by default** | full |
-| anything else | not measured | refuses, and says so |
+| `claude` | `~/.claude/projects/<PATH-KEY>/memory/`, for each project | full |
+| `codex` | `$CODEX_HOME/memories/` and its SQLite state, **not** for each project, **off by default** | full |
+| other agents | not measured | refuses, and says so |
 
-An agent Draugr has no module for still works — `dr-mem` declines rather than copying a directory
-into a place the agent will never read. Turn the automatic half off with `DRAUGR_MEM_SYNC=off`.
+An agent with no Draugr module still works. `dr-mem` refuses, and does not copy a directory into a
+place that the agent never reads. To turn off the automatic half, set `DRAUGR_MEM_SYNC=off`.
 
-Switching this on an existing repository is reported by `dr-up` as creation drift: the agent is
-frozen into the sandbox spec, so it takes a `dr-up --recreate`. One mound holds one agent. If you
-want a Claude mound and a Codex mound for the same project at once, give them separate names and
+If you change this on an existing repository, `dr-up` reports creation drift. The agent is fixed in
+the sandbox spec, so the change needs `dr-up --recreate`. One mound holds one agent. For a Claude
+mound and a Codex mound on the same project at the same time, give them separate names and
 separate remotes in `.draugr.local.conf`:
 
 ```bash
@@ -79,30 +80,30 @@ DRAUGR_SANDBOX=draugr-myproject-codex
 DRAUGR_REMOTE=draugr-codex
 ```
 
-Credentials are held by `sbx` on the host, not inside the mound — its proxy authenticates on the
-agent's behalf, so nothing is baked in at creation and signing in later needs no rebuild.
-`sbx secret set -g anthropic --oauth` for Claude, `sbx secret set -g openai --oauth` for Codex.
+`sbx` holds the credentials on the host, not inside the mound. Its proxy authenticates for the
+agent. Thus nothing is fixed at creation, and a later sign-in needs no rebuild. Use
+`sbx secret set -g anthropic --oauth` for Claude, and `sbx secret set -g openai --oauth` for Codex.
 `dr-doctor` reports a missing one.
 
 ### `DRAUGR_AGENT_ARGS`
-Default empty. Arguments handed to the agent after `--` on every `dr-go`, for flags you would
-otherwise retype every session:
+Default empty. Arguments that Draugr gives to the agent after `--` on each `dr-go`. Use it for the
+flags that you otherwise type in each session:
 
 ```bash
 DRAUGR_AGENT_ARGS="--continue"        # dr-go resumes by default
 ```
 
-The command line **replaces** these rather than adding to them, following the same precedence as
-every other setting — and it is the only way to drop a configured argument for one run:
+The command line **replaces** these, and does not add to them. That follows the same order as all
+other values. It is also the only way to drop a configured argument for one run:
 
 | | |
 |---|---|
 | `dr-go --bare` | pass the agent nothing |
 | `dr-go -- --model opus` | pass these instead |
 
-These are the agent's own flags, passed through without being interpreted — so the spelling is the
-agent's, not Draugr's. "Carry on from last time" is `--continue` for Claude Code and
-`resume --last` for Codex, which is a subcommand rather than a flag and works here all the same:
+These are the own flags of the agent, passed with no interpretation. Thus the agent sets the
+spelling, not Draugr. "Continue from last time" is `--continue` for Claude Code, and
+`resume --last` for Codex. The Codex form is a subcommand, not a flag, but it works here too:
 
 ```bash
 DRAUGR_AGENT_ARGS="resume --last"     # dr-go resumes the last Codex thread
@@ -112,32 +113,32 @@ Neither means anything to `shell`.
 
 > ### Codex on a ChatGPT plan usually needs a model named here
 >
-> `sbx` writes only `model_provider = "sandboxd"` into the mound's `config.toml` and no `model`, so
-> the image's Codex falls back to its own built-in default. On a ChatGPT-plan account that default is
-> frequently not one you are entitled to, and **every prompt fails** with:
+> `sbx` writes only `model_provider = "sandboxd"` into the `config.toml` of the mound, and no
+> `model`. Thus the Codex of the image uses its own built-in default. On a ChatGPT-plan account,
+> your plan often does not include that default, and **each prompt fails** with:
 >
 > ```text
 > ERROR: {"detail":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}
 > ```
 >
-> That is not a credentials problem, and no amount of signing in fixes it — `sbx secret ls` will
-> happily show `openai (oauth configured)` throughout. Name a model your account has instead:
+> That is not a credentials problem, and a sign-in does not fix it. `sbx secret ls` shows
+> `openai (oauth configured)` all the time. Name a model that your account has:
 >
 > ```bash
 > DRAUGR_AGENT_ARGS="--model gpt-5.6-terra"
 > ```
 >
-> `-m/--model` is accepted by both `codex` and `codex exec`, checked against the 0.146.0 in `sbx`'s
-> image. To see what your account is offered, look at the model cache written by a Codex you have
-> logged in on the host:
+> Both `codex` and `codex exec` accept `-m/--model`. We tested this on the 0.146.0 in the image of
+> `sbx`. To see the models of your account, look at the model cache of a Codex that you logged in
+> to on the host:
 >
 > ```bash
 > jq -r '.. | .id? // empty' ~/.codex/models_cache.json | sort -u
 > ```
 
 ### `DRAUGR_AGENT_ARGS_<AGENT>`
-Default **unset** — the only keys with no built-in value, and that is deliberate. One per agent,
-winning over `DRAUGR_AGENT_ARGS` whenever that agent is the one configured:
+Default **unset**. These are the only keys with no built-in value, on purpose. There is one for
+each agent. When that agent is the configured one, it wins over `DRAUGR_AGENT_ARGS`:
 
 | | |
 |---|---|
@@ -147,199 +148,199 @@ winning over `DRAUGR_AGENT_ARGS` whenever that agent is the one configured:
 | `DRAUGR_AGENT_ARGS_KIRO` | `DRAUGR_AGENT_ARGS_OPENCODE` |
 | `DRAUGR_AGENT_ARGS_SHELL` | `DRAUGR_AGENT_ARGS_DOCKER_AGENT` |
 
-The name is the agent uppercased, with `-` turned into `_`, because `docker-agent` is a legal agent
-name and a hyphen is not legal in a variable name.
+The name is the agent in uppercase, with `-` changed to `_`. `docker-agent` is a legal agent name,
+but a hyphen is not legal in a variable name.
 
-These exist because `DRAUGR_AGENT_ARGS` holds the *agent's* flags, which makes a machine-wide value
-a contradiction the moment you run a second agent: `--settings` is Claude Code's spelling and a
-codex mound handed it fails at every attach. So the generic key belongs in a project, and this one
-belongs in `~/.config/draugr/config`:
+These exist because `DRAUGR_AGENT_ARGS` holds the flags of the *agent*. Thus a machine value is
+wrong when you run a second agent. `--settings` is the spelling of Claude Code, and a codex mound
+that gets it fails at each attach. Thus put the generic key in a project, and this one in
+`~/.config/draugr/config`:
 
 ```bash
 DRAUGR_AGENT_ARGS_CLAUDE="--continue"
 DRAUGR_AGENT_ARGS_CODEX="resume --last"
 ```
 
-**A shell conditional cannot do this job**, which is why these are keys rather than advice.
-`~/.config/draugr/config` is sourced *before* the project's config, and `DRAUGR_AGENT` is normally
-set by the project — so `$DRAUGR_AGENT` still holds the default while the machine-wide layer runs,
-whatever the project goes on to say.
+**A shell conditional cannot do this job.** That is why these are keys, and not advice. Draugr
+sources `~/.config/draugr/config` *before* the project configuration, and the project usually sets
+`DRAUGR_AGENT`. Thus while the machine layer runs, `$DRAUGR_AGENT` still holds the default, whatever
+the project sets later.
 
-It **replaces** the generic key rather than adding to it, the same rule `.draugr/kit.<agent>/`
-follows against `.draugr/kit/`. And unset is not the same as empty: leaving one out falls through to
-`DRAUGR_AGENT_ARGS`, while setting it to `""` is a deliberate "nothing for this agent" that beats a
+It **replaces** the generic key, and does not add to it. `.draugr/kit.<agent>/` follows the same
+rule against `.draugr/kit/`. And unset is not the same as empty. If you leave one out, Draugr uses
+`DRAUGR_AGENT_ARGS`. If you set it to `""`, that means "nothing for this agent", and wins over a
 generic value. `dr-config` shows which one won:
 
 ```text
 DRAUGR_AGENT_ARGS   --continue   ~/.config/draugr/config (via DRAUGR_AGENT_ARGS_CLAUDE)
 ```
-
 ### `DRAUGR_ATTACH`
 Default `ssh`. How `dr-go` and `dr-shell` get a terminal inside the mound. The other value is `sbx`.
 
-**`ssh` is the only one where Ctrl+Z works**, and that is the whole reason for the setting.
+**Ctrl+Z works only with `ssh`**, and that is the full reason for this key.
 
 | | |
 |---|---|
-| `ssh` | Ctrl+Z suspends the agent and hands you a shell **in the mound**; `fg` goes back |
+| `ssh` | Ctrl+Z suspends the agent, and gives you a shell **in the mound**. `fg` goes back |
 | `sbx` | Ctrl+Z kills the session with `ERROR: inspect exec: context deadline exceeded` |
 
-`sbx run` and `sbx exec` reach the sandbox through `sbx.exe`, a *Windows* binary that WSL runs over
-interop. The terminal you are typing at belongs to WSL; the process reading it does not. Ctrl+Z
-therefore suspends the relay rather than anything inside the sandbox — the keystroke never arrives,
-the daemon stops hearing from its client, and a few seconds later the whole session dies. Measured
-against `sbx 0.37.1`, both ways.
+`sbx run` and `sbx exec` reach the sandbox through `sbx.exe`, a *Windows* binary that WSL runs
+through interop. Your terminal belongs to WSL, but the process that reads it does not. Thus Ctrl+Z
+suspends the relay, and nothing inside the sandbox. The keystroke never arrives, the daemon stops
+hearing from its client, and a few seconds later the full session dies. Measured with
+`sbx 0.37.1`, in both modes.
 
-ssh has no such seam: a native Linux client, a real pty at the far end, and job control happening
-inside the sandbox where it belongs. It is also the transport `dr-sync` and `dr-data` already use,
-so the `*.sbx` block `dr-setup` writes is the only setup either mode needs.
+ssh has no such gap. It is a native Linux client, with a real pty at the far end, and job control
+happens inside the sandbox, where it belongs. `dr-sync` and `dr-data` already use it as their
+transport. Thus the `*.sbx` block that `dr-setup` writes is the only setup that either mode needs.
 
-Over ssh the agent runs as a job of an interactive bash, started from `PROMPT_COMMAND`. Draugr writes
-that shell's **rcfile** — the startup script named by `bash --rcfile`, filling the slot `~/.bashrc`
-normally fills — and sends it into the mound at attach time; it is also how anything else the agent
-needs in its environment gets there. Starting the agent from the body of that file instead **hangs**,
-because bash has not enabled job control while it is still running its startup files. When the
-agent exits normally the session ends and `dr-go` returns its status, exactly as `sbx run` did; only
-Ctrl+Z is different, and that is by design:
+Over ssh, the agent runs as a job of an interactive bash, started from `PROMPT_COMMAND`. Draugr
+writes the **rcfile** of that shell. That is the startup script named by `bash --rcfile`, in the
+place of the usual `~/.bashrc`. Draugr sends it into the mound at attach. It also carries all else
+that the agent needs in its environment. A start of the agent from the body of that file **hangs**,
+because job control is not on while bash runs its startup files. When the agent exits normally,
+the session ends, and `dr-go` returns its status, exactly as `sbx run` did. Only Ctrl+Z is
+different, by design:
 
 ```text
 Ctrl+Z   →  $? is 148 (128 + SIGTSTP)  →  stay, and you have the mound's shell
 exit     →  the agent's own status      →  leave
 ```
 
-Set `DRAUGR_ATTACH=sbx` if a future `sbx` changes its ssh proxy, or to compare behaviour. You lose
-Ctrl+Z, and `dr-shell --root` goes back to `-u root` instead of `sudo`.
+Set `DRAUGR_ATTACH=sbx` if a later `sbx` changes its ssh proxy, or to compare behavior. You lose
+Ctrl+Z, and `dr-shell --root` uses `-u root` again, not `sudo`.
 
 ### `DRAUGR_SANDBOX`
-Default `draugr-<repo folder name>`. `sbx` rejects underscores and most punctuation, so the name is
-filtered to letters, digits, `.`, `+` and `-`: `my_project` becomes `draugr-my-project`.
+Default `draugr-<repo folder name>`. `sbx` rejects underscores and most punctuation. Thus Draugr
+keeps only letters, digits, `.`, `+` and `-`: `my_project` becomes `draugr-my-project`.
 
-Set it explicitly to attach Draugr to a sandbox created by hand.
+Set it explicitly to connect Draugr to a sandbox that you created by hand.
 
 ### `DRAUGR_MEMORY`
-Default empty, meaning `sbx`'s own default — 50% of host RAM, capped at 32 GiB. Binary units:
-`8g`, `1024m`.
+Default empty, which means the default of `sbx`: 50% of host RAM, with a limit of 32 GiB. Binary
+units: `8g`, `1024m`.
 
 ### `DRAUGR_CPUS`
-Default empty, meaning all host CPUs.
+Default empty, which means all host CPUs.
 
 ### `DRAUGR_CLONE`
-Default `true`. The agent works on a private clone inside the mound; your working tree is mounted
+Default `true`. The agent works on a private clone inside the mound. Your working tree is mounted
 **read-only** at `/run/sandbox/source`.
 
-`false` bind-mounts your real working tree read-write, which is the thing Draugr exists to prevent.
-`dr-go` confirms interactively every single time and no config key can silence that prompt. See
+`false` bind-mounts your real working tree read-write, and Draugr exists to prevent that. Each
+time, `dr-go` asks you to confirm, and no configuration key can stop that prompt. Refer to
 [SECURITY.md](SECURITY.md).
 
 ### `DRAUGR_TEMPLATE`
-Default empty. A container image to use instead of the agent's default.
+Default empty. A container image to use in place of the default of the agent.
 
 ---
 
 ## What the agent may reach
 
 ### `DRAUGR_KIT`
-Default `.draugr/kit`. A **space-separated list** of directories, ZIPs, git refs or OCI images
-holding [`sbx` kits](https://docs.docker.com/ai/sandboxes/customize/kits/).
+Default `.draugr/kit`. A **list, separated by spaces**, of directories, ZIPs, git refs or OCI
+images that hold [`sbx` kits](https://docs.docker.com/ai/sandboxes/customize/kits/).
 
-**Network rules and setup commands are not Draugr keys.** They belong to the kit, which is a
-first-party declarative format that already does the job and works with plain `sbx run --kit` too.
-`dr-init` writes a starter `spec.yaml`; commit it.
+**Network rules and setup commands are not Draugr keys.** They belong to the kit. That is a
+declarative format from Docker, which already does the job, and also works with plain
+`sbx run --kit`. `dr-init` writes a starter `spec.yaml`. Commit it.
 
-It is a list because `sbx` **merges** kits rather than choosing between them — verified, two mixins on
-one sandbox contributed both their install commands and both their network rules. So a shared kit
-*adds* to the project's:
+It is a list, because `sbx` **merges** the kits, and does not select one. A test showed that two
+mixins on one sandbox gave both their install commands and both their network rules. Thus a shared
+kit *adds* to the kit of the project:
 
 ```bash
 DRAUGR_KIT=".draugr/kit lua"     # this project's kit, plus the library's "lua"
 ```
 
-Each entry resolves in order: absolute path → a directory in the repo → a named kit in
-`DRAUGR_KIT_STORE` → anything containing `:` or `@`, passed through as an OCI or git reference. The
-repo is searched before the library so a local directory of the same name always wins.
+Each entry resolves in this order: an absolute path, a directory in the repo, a named kit in
+`DRAUGR_KIT_STORE`, and then an entry with `:` or `@`, passed through as an OCI or git reference.
+Draugr searches the repo before the library, so a local directory of the same name always wins.
 
-Each of those is tried twice — with `.<agent>` appended, then plain. So `.draugr/kit.codex` beats
-`.draugr/kit` under `DRAUGR_AGENT=codex`, and a library kit `lua.codex` beats `lua`. Most kits need
-nothing of the sort: network rules, install commands and ports are properties of the project, not of
-the agent running in it. An OCI or git reference gets no suffix — it is not Draugr's to invent a tag
-in somebody else's registry.
+Draugr tries each of those two times: first with `.<agent>` added, then plain. Thus with
+`DRAUGR_AGENT=codex`, `.draugr/kit.codex` wins over `.draugr/kit`, and a library kit `lua.codex`
+wins over `lua`. Most kits do not need this. Network rules, install commands and ports belong to
+the project, not to the agent that runs in it. An OCI or git reference gets no suffix. Draugr must
+not make up a tag in the registry of another party.
 
-A kit **may** pin itself with `requires: agent: claude`, and `sbx` then refuses to compose it with
-any other agent:
+A kit **can** pin itself with `requires: agent: claude`. `sbx` then refuses to combine it with
+other agents:
 
 ```text
 ERROR: request failed: 400 Bad Request: kit_artifacts: compose:
 kit "myproject" requires base agent "claude" but was composed with "codex"
 ```
 
-`sbx kit validate` accepts such a kit — the mismatch only exists at creation — so Draugr reads the
-field itself and refuses first, in `dr-up`, `dr-kit validate` and `dr-doctor`. `dr-init` does not
-write the field, because freezing today's agent into a committed file would make trying another one
-an edit rather than a setting.
+`sbx kit validate` accepts such a kit, because the mismatch exists only at creation. Thus Draugr
+reads the field itself, and refuses first, in `dr-up`, `dr-kit validate` and `dr-doctor`. `dr-init`
+does not write the field. With the agent of today fixed in a committed file, a try of a different
+agent needs an edit, not a configuration value.
 
-`dr-up` warns when the list has changed since the mound was built, because applying it recreates the
-container — that must be a decision, not a side effect. **How** depends on the change, because `sbx`
-can only ever add a kit to a running mound *(measured)*: kits added to the end of the list go in with
-`dr-kit apply`, in place, keeping the clone; a kit edited, removed or reordered needs `dr-up
---recreate`. The reason is not caution. `sbx kit add` refuses a kit the sandbox already has, and when it
-adds a new one it leaves the old rules in force beside the new ones, so a narrowing edit applied that
-way would narrow nothing. `dr-kit apply` checks which case you are in and says so. A remote reference
-contributes only its *name* to that comparison; a tag that moved under you is drift Draugr cannot see,
-and `dr-kit drift` says so rather than implying a clean bill of health.
+When the list changed after the build of the mound, `dr-up` warns, because an apply recreates the
+container. That must be a decision, not a side effect. The **method** depends on the change,
+because `sbx` can only add a kit to a running mound *(measured)*. `dr-kit apply` adds kits at the
+end of the list in place, and keeps the clone. A kit that you edited, removed or moved needs
+`dr-up --recreate`. The reason is not caution. `sbx kit add` refuses a kit that the sandbox already
+has. When it adds a new one, the old rules stay in force beside the new ones. Thus an edit that
+narrows, applied that way, narrows nothing. `dr-kit apply` finds your case, and says so. A remote
+reference gives only its *name* to that comparison. Draugr cannot see a tag that moved, and
+`dr-kit drift` says so, and does not claim that all is clean.
 
 ### `DRAUGR_KIT_STORE`
-Default `~/.config/draugr/kits`. Your library of named kits, shared across repositories — "the Lua
+Default `~/.config/draugr/kits`. Your library of named kits, shared between repositories. "The Lua
 toolchain" is a fact about you, not about one repo.
 
 | | |
 |---|---|
-| `dr-kit save <name>` | copy this project's own kit into the library |
-| `dr-kit list` | what is in there, with each `displayName` |
-| `dr-kit adopt` | write hosts opened with `dr-policy --allow` into this project's kit |
+| `dr-kit save <name>` | copy the own kit of this project into the library |
+| `dr-kit list` | the contents, with each `displayName` |
+| `dr-kit adopt` | write hosts opened with `dr-policy --allow` into the kit of this project |
 
-`adopt` is the end of the build-your-own-kit loop described in
-[WORKFLOW.md](WORKFLOW.md#letting-the-agent-build-the-kit). It reads back what was actually opened
-for the mound, skips whatever the kit already declares, and writes the rest into
-`caps.network.allow` — so nothing has to be remembered while the loop runs. It edits only that one
-block; a kit it does not recognise is reported and left untouched rather than guessed at.
+`adopt` is the end of the loop to build your own kit, in
+[WORKFLOW.md](WORKFLOW.md#letting-the-agent-build-the-kit). It reads back the hosts that were
+opened for the mound. It skips the hosts that the kit already declares, and writes the rest into
+`caps.network.allow`. Thus you need to remember nothing while the loop runs. It edits only that one
+block. If it does not know the shape of a kit, it reports it, and does not change it.
 
-`save` copies rather than symlinks, so editing one side never silently changes the other. Editing the
-library copy does put every repo that uses it into drift until it is rebuilt with `dr-up --recreate`
-— which is the point of drift detection, not a flaw in it. For sharing across *machines*, `sbx kit pack` and
-`sbx kit push` already work, and an OCI reference is a valid `DRAUGR_KIT` entry.
+`save` copies, and does not make a symlink, so an edit on one side never silently changes the
+other. But an edit of the library copy puts each repo that uses it into drift, until
+`dr-up --recreate` rebuilds it. That is the purpose of drift detection, not a fault in it. To share
+between *machines*, `sbx kit pack` and `sbx kit push` already work, and an OCI reference is a valid
+`DRAUGR_KIT` entry.
 
 ### `DRAUGR_PORTS`
-Default empty. Space-separated `HOST:SANDBOX` pairs, published to Windows loopback:
+Default empty. `HOST:SANDBOX` pairs, separated by spaces, published to Windows loopback:
 
 ```bash
 DRAUGR_PORTS="5173:5173 8080:8080"
 ```
 
-A kit can declare `publishedPorts` too, but it **cannot name the host port**: `spec.PublishedPort`
-has no such field, so `sbx` picks an ephemeral one that changes on every recreate. Anything you want
-to reach at a fixed URL — a dev server you keep open in a browser tab — has to be pinned here.
-`dr-ports` does the same thing mid-session, without a rebuild.
+A kit can also declare `publishedPorts`, but it **cannot name the host port**. `spec.PublishedPort`
+has no such field. Thus `sbx` selects a random port, which changes on each recreate. Set each port
+that you want at a fixed URL here, for example a dev server in a browser tab. `dr-ports` does the
+same during a session, with no rebuild.
 
-They land on **Windows** loopback, not WSL's, so open them in a Windows browser; `curl` from inside
-WSL reaches the WSL VM's own loopback and will not connect.
+They are on the **Windows** loopback, not that of WSL. Thus open them in a Windows browser. `curl`
+from inside WSL reaches the own loopback of the WSL VM, and does not connect.
 
 ### `DRAUGR_HOST_PORTS`
-Default empty. Space-separated **port numbers** on this machine that the mound is allowed to reach:
+Default empty. **Port numbers** on this machine, separated by spaces, that the mound can reach:
 
 ```bash
 DRAUGR_HOST_PORTS="11434"        # a local Ollama on the host's GPU, say
 ```
 
-The mirror image of `DRAUGR_PORTS`. That publishes a port *out* of the mound so a Windows browser can
-reach in; this opens a port *into* your machine so the agent can call out. `dr-up` applies it on
-every start, and `dr-hostport` is the mid-session equivalent — the same pairing as
-`DRAUGR_PORTS` and `dr-ports`.
+This is the opposite of `DRAUGR_PORTS`. That key publishes a port *out* of the mound, so that a
+Windows browser can reach in. This key opens a port *into* your machine, so that the agent can call
+out. `dr-up` applies it on each start, and `dr-hostport` does the same during a session. That is
+the same pair as `DRAUGR_PORTS` and `dr-ports`.
 
-Only the port is ever named. The address is resolved each time this is applied, because WSL's is
-handed out per boot and cannot be pinned — WSL 2.6.1 has no `natNetwork` setting at all. A rule
-written with a literal IP is correct until the next reboot and then fails **closed and silently**:
-the connection is accepted by the sandbox's interception layer and dropped, with no error to read.
-Rules left behind for addresses this machine no longer has are removed as they are found.
+You name only the port. Draugr resolves the address at each apply, because WSL gets a new address at
+each boot, and you cannot set it. WSL 2.6.1 has no `natNetwork` value. A rule with a literal IP is
+correct until the next reboot. Then it fails **closed and silently**: the interception layer of the
+sandbox accepts the connection, and drops it, with no error to read. Draugr removes the rules for
+old addresses of this machine when it finds them.
 
 `dr-up` also writes the address into the mound, at `~/.draugr/host.env`:
 
@@ -348,41 +349,40 @@ DRAUGR_HOST_ADDR=172.19.192.26
 DRAUGR_HOST_PORTS="11435"
 ```
 
-The mound cannot work this out for itself — there is no `ip` command in the image, and
-`host.docker.internal` resolves to the mound's own gateway rather than to your machine. **Nothing
-sources that file for you.** Draugr does not touch anything inside the mound that the agent owns, so
-a project that wants the value asks for it, in its own run script or a kit startup command:
+The mound cannot find it by itself. There is no `ip` command in the image, and
+`host.docker.internal` resolves to the own gateway of the mound, not to your machine. **Nothing
+sources that file for you.** Draugr does not touch the files of the agent inside the mound. Thus a
+project that needs the value reads it, in its own run script or a kit startup command:
 
 ```sh
 . "$HOME/.draugr/host.env"
 OLLAMA_URL="http://$DRAUGR_HOST_ADDR:11435"
 ```
 
-That is the whole reason the file exists rather than a committed setting: the address is different
-after every reboot, so anywhere you could write it down is somewhere it would be wrong.
+That is the full reason for the file, in place of a committed value. The address changes after
+each reboot. Thus each place where you write it down becomes wrong.
 
-The service has to be listening on `0.0.0.0`, not `127.0.0.1` — from inside the mound, `127.0.0.1` is
-the mound. `dr-hostport` warns when it can see that mistake.
+The service must listen on `0.0.0.0`, not `127.0.0.1`. Inside the mound, `127.0.0.1` is the mound.
+If `dr-hostport` can see that mistake, it warns.
 
-> This is a hole from the sandbox to your machine, and the more serious of the two directions: on the
-> other side is a process outside the mound. Anything the agent can reach there, it can use. Declaring
-> it in a project's `.draugr.conf` takes effect only after you have accepted that file with `dr-trust`,
-> which is where the consent lives.
-
+> This is a hole from the sandbox to your machine, and the more serious of the two directions. On
+> the other side is a process outside the mound. The agent can use all that it can reach there. In
+> the `.draugr.conf` of a project, it applies only after you accept that file with `dr-trust`. That
+> is where you give consent.
 ### `DRAUGR_MOUNTS`
-Default empty. Extra host directories, space-separated, each `PATH[:ro]`:
+Default empty. Extra host directories, separated by spaces, each `PATH[:ro]`:
 
 ```bash
 DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"
 ```
 
-Paths are translated to the Windows spelling `sbx` requires, and must be on a Windows drive. **A
-sandbox can read every byte of anything you mount into it** — never mount `~/.claude`, which holds
-your agent credentials.
+Draugr translates the paths to the Windows spelling that `sbx` needs. They must be on a Windows
+drive. **A sandbox can read each byte of each mount.** Never mount `~/.claude`, which holds your
+agent credentials.
 
-**A mount lands at the mirrored path**, the same rule the repo itself follows: `C:\Code\TabuLua`
-appears at `/c/Code/TabuLua`. So a sibling project stays a sibling, and a relative path across the
-two keeps working unchanged:
+**A mount arrives at the mirrored path**, by the same rule as the repo itself. `C:\Code\TabuLua`
+shows at `/c/Code/TabuLua`. Thus a sibling project stays a sibling, and a relative path between the
+two works unchanged:
 
 ```bash
 # in C:\Code\MyGame/.draugr.conf
@@ -394,375 +394,367 @@ DRAUGR_MOUNTS="/mnt/c/Code/TabuLua:ro"
 /c/Code/TabuLua               ← the mount, read-only
 ```
 
-`../TabuLua` resolves from inside the clone with nothing rewritten. Measured: the agent reads it,
+`../TabuLua` resolves from inside the clone, with no rewrite. Measured: the agent reads it,
 `echo >>` and `touch` both fail with `:ro`, and the clone stays writable.
 
-**The mount is your live working tree, not a clone.** Uncommitted edits on the host are visible
-inside the mound immediately — no commit, no push, no `dr-sync`. That is the difference from
-packaging a dependency into a kit, which would freeze it at whatever you last published.
+**The mount is your live working tree, not a clone.** The mound sees uncommitted edits on the host
+at once: no commit, no push, no `dr-sync`. That is the difference from a dependency in a kit, which
+stays at the version that you last published.
 
-Two things follow. The agent sees your work in progress, including a half-finished refactor. And
-`dr-scan` does **not** look inside extra mounts — it scans the repository you are in — so a
-credential-shaped file in a mounted directory is readable and unreported.
+Two results follow. The agent sees your work in progress, also a half-finished refactor. And
+`dr-scan` does **not** look inside extra mounts, because it scans only the current repository. Thus
+the agent can read a file that looks like a credential in a mounted directory, and nothing reports
+it.
 
-> **Mounts are fixed when the mound is built.** Adding one to `.draugr.conf` does nothing to a
-> sandbox that already exists. `dr-up` says so and names the setting; `dr-up --recreate` rebuilds.
+> **Mounts become fixed when Draugr builds the mound.** A new one in `.draugr.conf` has no effect
+> on an existing sandbox. `dr-up` says so, and names the key. `dr-up --recreate` rebuilds.
 
 ---
 
 ## Running the agent on a local model
 
 ### `DRAUGR_MODEL`
-Default empty. The name of a model to run **the agent itself** on, instead of its vendor's cloud:
+Default empty. The name of a model for **the agent itself**, in place of the cloud of its vendor:
 
 ```bash
 DRAUGR_MODEL="qwen3.8:27b"
 ```
 
-Empty — the default — means the agent reaches its own service exactly as it always has, and nothing
-else in this section applies.
+Empty, the default, means that the agent reaches its own service as before, and nothing else in
+this section applies.
 
-This is not the same feature as [`DRAUGR_HOST_PORTS`](#draugr_host_ports), and they are easy to
-confuse because they involve the same port. That key lets **the code you are working on** call a
-local service. This one changes what **the agent** is. A project that uses an LLM and an agent that
-runs on one are different things, and wanting both at once is ordinary.
+This is not the same feature as [`DRAUGR_HOST_PORTS`](#draugr_host_ports). They are easy to mix up,
+because they use the same port. That key lets **the code that you work on** call a local service.
+This key changes what **the agent** is. A project that uses an LLM, and an agent that runs on one,
+are different things. It is normal to want both at the same time.
 
-Draugr does not check that the name exists: the endpoint is asked for it at the first prompt, and an
-unknown name fails there. `ollama list` is where to read the spelling from — `qwen3.8:27b` and
-`qwen3.8` are different names to Ollama, and only the first is installed.
+Draugr does not make sure that the name exists. The endpoint gets it at the first prompt, and an
+unknown name fails there. Read the spelling from `ollama list`. For Ollama, `qwen3.8:27b` and
+`qwen3.8` are different names, and only the first is installed.
 
-> **On its own this is not a "my code stays here" setting.** It changes where the agent sends your
-> code by design; it does not change what the mound can reach, and `sbx`'s default policy allows the
-> AI service endpoints along with ~190 other hosts. Closing that needs kit `deny` rules as well —
-> [SECURITY.md](SECURITY.md#running-the-agent-on-a-local-model) covers what it buys and what it costs.
+> **Alone, this does not keep your code here.** By design, it changes where the agent sends your
+> code. It does not change what the mound can reach. The default policy of `sbx` allows the AI
+> service endpoints, with ~190 other hosts. To close that, you also need kit `deny` rules.
+> [SECURITY.md](SECURITY.md#running-the-agent-on-a-local-model) gives the benefit and the cost.
 
 ### `DRAUGR_MODEL_URL`
 Default `11435`. Where that model is served, in one of two spellings:
 
 | Value | Meaning |
 |---|---|
-| `11435` | a port on **this machine**, whose address is resolved at every attach |
+| `11435` | a port on **this machine**, whose address Draugr resolves at each attach |
 | `https://llm.corp.example` | a fixed endpoint, used exactly as written |
 
-A bare port number is the local case, and gets the same treatment as `DRAUGR_HOST_PORTS`: the address
-is never written down anywhere, because WSL's is handed out per boot and a rule carrying a literal IP
-is correct until the next reboot and then fails **closed and silently**.
+A bare port number is the local case. It gets the same treatment as `DRAUGR_HOST_PORTS`. Draugr
+never writes down the address, because WSL gets a new address at each boot. A rule with a literal IP
+is correct until the next reboot. Then it fails **closed and silently**.
 
-**A bare port must also appear in `DRAUGR_HOST_PORTS`, and `dr-go` refuses to start when it does
-not.** The two keys are not redundant — this one says where the model is, that one is where you
-consent to a hole into your machine, and Draugr will not manufacture the consent from the address. It
-is a refusal rather than a warning because the combination cannot work: without the rule the mound's
-connection is accepted by the sandbox's interception layer and dropped, so the agent fails at its
-first prompt with a timeout that names nothing and points nowhere. The message names the one line
-that fixes it:
+**A bare port must also be in `DRAUGR_HOST_PORTS`. If it is not, `dr-go` refuses to start.** The two
+keys are both necessary. This one says where the model is. That one is where you consent to a hole
+into your machine. Draugr does not make the consent from the address. It is a refusal, not a
+warning, because the combination cannot work. Without the rule, the interception layer of the
+sandbox accepts the connection of the mound, and drops it. The agent then fails at its first prompt,
+with a timeout that names nothing. The message names the one line that fixes it:
 
 ```
 dr-go: DRAUGR_MODEL_URL is port 11435, which is not in DRAUGR_HOST_PORTS
-  The mound cannot reach it, and the agent would fail at its first prompt.
+  The mound cannot connect to it, and the agent will fail at its first prompt.
   Add it:  DRAUGR_HOST_PORTS="11435"
 ```
 
-A URL with a scheme is exempt: it is somebody else's address, reached under the ordinary network
-policy, and `DRAUGR_HOST_PORTS` has nothing to do with it. Check that one with `dr-policy --check`
-instead.
+A URL with a scheme is exempt. It is the address of another party, under the normal network policy,
+and `DRAUGR_HOST_PORTS` does not apply to it. Test that one with `dr-policy --check`.
 
-The default is `11435` and not Ollama's own `11434` deliberately. Ollama has no authentication and no
-read-only mode, so the port serving inference also serves `POST /api/pull`, `POST /api/create` —
-which reads local files — and `DELETE /api/delete`. `11435` is the query-only proxy in
-[`share/ollama-proxy/`](../share/ollama-proxy/), and pointing at it by default makes the safe
-arrangement the one you get without reading this paragraph.
+The default is `11435`, not the `11434` of Ollama, on purpose. Ollama has no authentication and no
+read-only mode. Thus the inference port also serves `POST /api/pull`, `POST /api/create` (which
+reads local files) and `DELETE /api/delete`. `11435` is the query-only proxy in
+[`share/ollama-proxy/`](../share/ollama-proxy/). With it as the default, you get the safe setup
+without this paragraph.
 
-Anything with a scheme is taken literally and never resolved: a model on another machine, or a
-company endpoint fronting several. It has to speak whatever API the configured agent expects, which
-for `claude` is Anthropic's Messages API at `/v1/messages`.
+Draugr takes a value with a scheme literally, and never resolves it: a model on a different
+machine, or a company endpoint in front of several. It must speak the API that the configured agent
+expects. For `claude`, that is the Messages API of Anthropic at `/v1/messages`.
 
-**The vendor's own API is a legal value, and Draugr contributes nothing to the authentication
-there.** `sbx`'s proxy rewrites the authorization header for Anthropic's hosts whatever the mound
-sent — measured, a request from inside a mound carrying no credential at all is answered — so the
-placeholder token Draugr writes is inert rather than wrong. What the setting buys in that case is the
-model pinning below: three tiers nailed to names you chose, instead of whatever the account defaults
-to. What it cannot buy is a different credential. That one is `sbx secret`, and
+**The own API of the vendor is a legal value, and there Draugr does nothing for the
+authentication.** The proxy of `sbx` rewrites the authorization header for the hosts of Anthropic,
+whatever the mound sent. Measured: a request from inside a mound with no credential gets an answer.
+Thus the placeholder token from Draugr is inert, not wrong. In that case, the key gives the model
+pinning below: three tiers fixed to names that you selected, not the defaults of the account. It
+cannot give a different credential. That is `sbx secret`, and
 [SECURITY.md](SECURITY.md#running-the-agent-on-a-local-model) says why.
 
 ### `DRAUGR_MODEL_FAST`
-Default: whatever `DRAUGR_MODEL` is set to. The model for the agent's cheap background calls — Claude
-Code's Haiku tier, which it uses for summaries and titles rather than for your work:
+Default: the value of `DRAUGR_MODEL`. The model for the cheap background calls of the agent. That is
+the Haiku tier of Claude Code, which it uses for summaries and titles, not for your work:
 
 ```bash
 DRAUGR_MODEL="qwen3.8:27b"
 DRAUGR_MODEL_FAST="qwen3:8b"      # only if both fit in VRAM at once
 ```
 
-Defaulting it to the main model rather than to something smaller is the conservative choice, and the
-reason is memory rather than quality. Two models are only faster if both stay resident: a 17 GB model
-and a 5 GB one do not both fit on a 24 GB card once the KV cache is counted, so the second one evicts
-the first and every background call pays a reload that the next foreground call pays again. One
-resident model beats two that take turns. Set this only after checking that `ollama ps` still reports
+The default is the main model, not a smaller one. That is the careful choice, and the reason is
+memory, not quality. Two models are faster only if both stay loaded. With the KV cache, a 17 GB
+model and a 5 GB model do not both fit on a 24 GB card. Thus the second one removes the first, and
+each background call pays a reload, and the next foreground call pays it again. One loaded model is
+better than two that take turns. Set this only after you make sure that `ollama ps` still reports
 `100% GPU` with both loaded.
 
 ### How it reaches the agent
 
-Worth writing down, because two of the three obvious routes are already known not to work.
+We write this down, because two of the three clear routes do not work.
 
-**Not over ssh.** `sbx`'s ssh proxy honours no `AcceptEnv` at all — measured against 0.37.1, and the
-reason [`share/ssh-config.snippet`](../share/ssh-config.snippet) sends only `LANG` and `LC_*`.
-Nothing crosses that way today, so `SendEnv ANTHROPIC_BASE_URL` would be a setting that silently does
-nothing.
+**Not over ssh.** The ssh proxy of `sbx` ignores `AcceptEnv`. We measured this on 0.37.1. That is
+why [`share/ssh-config.snippet`](../share/ssh-config.snippet) sends only `LANG` and `LC_*`. Nothing
+crosses that way today. Thus `SendEnv ANTHROPIC_BASE_URL` is a value that silently does nothing.
 
-**Not in the kit.** A kit's `environment.variables` is static and committed, and the local address is
-per-boot. It is the same reason `DRAUGR_HOST_PORTS` names a port and not an address.
+**Not in the kit.** The `environment.variables` of a kit are static and committed, but the local
+address changes at each boot. For the same reason, `DRAUGR_HOST_PORTS` names a port, not an address.
 
-**In the attach rcfile**, therefore — the startup script described under
-[`DRAUGR_ATTACH`](#draugr_attach), which Draugr generates on the host and sends into the mound at
-every attach. It is built at the moment the address is known, which is exactly the shape this needs.
-The variables are exported there, and a mound started for one model can be re-attached to another
-without a rebuild.
+**Thus in the attach rcfile.** That is the startup script in [`DRAUGR_ATTACH`](#draugr_attach),
+which Draugr makes on the host and sends into the mound at each attach. Draugr builds it when the
+address is known, and that is exactly the necessary shape. The variables are exported there. You
+can attach a mound started for one model to a different model, with no rebuild.
 
-That last point is why these keys are **not** `dr_create_facts`, and so never appear as drift: like
-`DRAUGR_AGENT_ARGS`, they are applied at attach rather than at creation. Changing one costs you a
-`Ctrl+D` and another `dr-go`, not a recreate.
+That is why these keys are **not** in `dr_create_facts`, and never show as drift. As for
+`DRAUGR_AGENT_ARGS`, they apply at attach, not at creation. A change costs a `Ctrl+D` and another
+`dr-go`, not a recreate.
 
-Which variables get exported is the agent's business, not Draugr's, so it joins the module interface
-in [`lib/agents/`](../lib/agents/) beside the memory functions:
+The agent decides which variables to export, not Draugr. Thus this is part of the module interface
+in [`lib/agents/`](../lib/agents/), beside the memory functions:
 
 | | |
 |---|---|
-| `dr_agent_model_supported` | `0` when this agent can be pointed at another endpoint |
+| `dr_agent_model_supported` | `0` when this agent can point at a different endpoint |
 | `dr_agent_model_env <url> <model> <fast>` | the `KEY=value` lines to export |
 
-For `claude` that is `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` — required, and ignored by Ollama —
-and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers. For `codex` it is a different set entirely, which is
-the whole reason this is a function on the module rather than a table in `common.sh`. An agent whose
-module returns failure for `dr_agent_model_supported` makes `DRAUGR_MODEL` an error rather than a
-setting that quietly does nothing.
+For `claude`, that is `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` (necessary, but Ollama ignores
+it) and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers. For `codex`, it is a fully different set. That
+is why this is a function of the module, and not a table in `common.sh`. If the module of an agent
+returns failure for `dr_agent_model_supported`, `DRAUGR_MODEL` is an error, not a value that
+silently does nothing.
 
 ### What checks that the model is really there
 
-One probe, `dr_model_probe`, shared by everything that asks - because the check
-that refuses to start a session and the check that explains why have to be the
-same check, or `dr-doctor` ends up approving what `dr-go` is about to reject. It
-answers with a word rather than a status:
+One probe, `dr_model_probe`, serves each caller. The test that refuses to start a session and the
+test that explains why must be the same test. If not, `dr-doctor` approves what `dr-go` then
+rejects. It answers with a word, not a status:
 
 | | |
 |---|---|
 | `proxy` | the query-only front door, with a model server behind it |
-| `stalled` | the proxy answers, nothing is behind it |
-| `bare` | a model server with no proxy - the agent can administer it too |
-| `alive` | answering, and neither of those: somebody else's endpoint |
-| `dead` | nothing listening |
-| `unknown` | no `curl` here, so the question cannot be asked |
+| `stalled` | the proxy answers, but nothing is behind it |
+| `bare` | a model server with no proxy: the agent can also administer it |
+| `alive` | it answers, and is neither of those: the endpoint of another party |
+| `dead` | nothing listens |
+| `unknown` | no `curl` here, so the probe cannot run |
 
-`alive` is the reason this is not a boolean. A company endpoint has never heard
-of `/healthz`, answers 404, and works perfectly - so "not the proxy" must not
-mean "not working", or the one case a full URL exists for would be refused.
+`alive` is why this is not a boolean. A company endpoint does not know `/healthz`, answers 404, and
+works well. Thus "not the proxy" must not mean "not working". If it does, Draugr refuses the one
+case that a full URL is for.
 
-**`dr-go` refuses on `dead` and `stalled`**, after `dr-up` and before the agent
-starts. Neither has a partial session to offer: every prompt would fail with a
-dial error naming an address and nothing else. The way past is to start the
-service, or `DRAUGR_MODEL= dr-go` to use the cloud once. `bare` is a warning
-rather than a refusal, because it does work - it is only more exposed than the
-default arrangement.
+**`dr-go` refuses on `dead` and `stalled`**, after `dr-up` and before the agent starts. Neither can
+give a partial session. Each prompt fails with a dial error that names an address and nothing else.
+To continue, start the service, or run `DRAUGR_MODEL= dr-go` to use the cloud once. `bare` is a
+warning, not a refusal, because it works. It is only more exposed than the default setup.
 
-It runs after `dr-up` because `post-up` is the hook the proxy documents for
-starting itself, and before the terminal check so a scripted `dr-go` fails on
-the real problem rather than on not having a tty.
-
-`dr-doctor` reports all six, and `dr-status` shows the model with its
-reachability whenever `DRAUGR_MODEL` is set - a model that is not answering
-otherwise looks identical to one that is, right up until the first prompt.
+It runs after `dr-up`, because the proxy documents `post-up` as the hook to start itself. It runs
+before the terminal test, so that a scripted `dr-go` fails on the real problem, and not on the
+missing tty.
+`dr-doctor` reports all six. When `DRAUGR_MODEL` is set, `dr-status` shows the model and whether it
+answers. If not, a model that does not answer looks the same as one that does, until the first
+prompt.
 
 ### What `dr-doctor` has to stop saying
 
-`dr-doctor` reports a missing agent credential - *"no 'anthropic' secret - the
-agent starts logged out"*. With `DRAUGR_MODEL` set that advice is wrong, and
-confidently so: you deliberately do not need that secret, and following the
-suggestion signs you in to a service the agent is not going to call.
-`dr_agent_secret` returns failure while `DRAUGR_MODEL` is set, which is the
-existing spelling for "this agent has no secret worth naming" and needs no new
-machinery.
+`dr-doctor` reports a missing agent credential: *"no 'anthropic' secret. The agent starts signed
+out."* With `DRAUGR_MODEL` set, that advice is wrong. You do not need that secret, on purpose, and
+the advice signs you in to a service that the agent does not call. While `DRAUGR_MODEL` is set,
+`dr_agent_secret` returns failure. That already means "this agent has no secret to name", so no new
+mechanism is necessary.
 
-There is one case this gets wrong. `DRAUGR_MODEL_URL` can point at the vendor's
-own API, and the secret is load-bearing again the moment it does: `sbx`'s proxy
-still supplies it, and an expired one fails every prompt with a 401. `dr-doctor`
-goes quiet at exactly the moment its advice would have been right. Narrowing the
-suppression to a URL that is not the vendor's own host is a small change, and
-has not been made.
+This gets one case wrong. `DRAUGR_MODEL_URL` can point at the own API of the vendor. Then the
+secret is necessary again. The proxy of `sbx` still gives it, and an expired one fails each prompt
+with a 401. `dr-doctor` is silent exactly when its advice is right. A small change can limit the
+silence to a URL that is not the own host of the vendor. Nobody made that change yet.
 
 ---
 
 ## Environment for the agent
 
 ### `DRAUGR_ENV`
-Default empty. Space-separated `NAME=value` pairs, exported into the agent's session:
+Default empty. `NAME=value` pairs, separated by spaces, exported into the session of the agent:
 
 ```bash
 DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=25"
 ```
 
-The escape hatch, for anything Draugr has no key of its own for. It exists because the setting that
-matters most on a local model — the point at which Claude Code compacts, which has to come down from
-the model's advertised window to whatever your card actually holds — is spelled with a variable that
-is **not in Claude Code's documentation** and appeared between two point releases. A typed
-`DRAUGR_MODEL_CONTEXT` would hardcode that name; this leaves the judgement with you.
+The way out, for all that has no Draugr key of its own. On a local model, the most important value
+is the point where Claude Code compacts. It must come down from the advertised window of the model
+to what your card really holds. Its variable is **not in the documentation of Claude Code**, and it
+showed up between two point releases. A typed `DRAUGR_MODEL_CONTEXT` fixes that name in code. This
+key leaves the decision to you.
 
-**Values cannot contain spaces**, because spaces separate entries. That is the same limitation every
-other list-shaped key here has, and the same reason: a config file is shell, and a quoting scheme
-inside a quoted string is one nobody remembers correctly at the point of writing it.
+**Values cannot contain spaces**, because spaces separate entries. All other list keys here have
+the same limit, for the same reason. A configuration file is shell. Nobody remembers a quoting
+scheme inside a quoted string correctly.
 
-Entries are **validated, not passed through**. An entry with no `=`, or a name that is not a shell
-identifier, is refused by `dr-go` before the mound is built. This is not fussiness: an environment
-variable the agent does not recognise is *ignored* rather than rejected, so a typo produces a session
-that looks entirely correct and behaves as though you had never written the setting — which is the
-failure this key exists to prevent, reached from the other side. `PATH` and `HOME` are refused
-outright; both replace rather than extend, and a replacement inside the mound ends the next `dr-go`
-in `command not found` before the agent starts.
+Draugr **makes sure that the entries are valid, and does not pass them through as they are**. `dr-go` refuses an
+entry with no `=`, or a name that is not a shell identifier, before it builds the mound. That is
+necessary. The agent *ignores* an environment variable that it does not know, and does not reject
+it. Thus a typo gives a session that looks fully correct, and acts as if you never set the value.
+This key exists to prevent exactly that failure. Draugr refuses `PATH` and `HOME` fully. Both
+replace, and do not extend. A replacement inside the mound ends the next `dr-go` in
+`command not found`, before the agent starts.
 
-Applied in the **attach rcfile** described under [`DRAUGR_ATTACH`](#draugr_attach), like the model
-variables and for the same reasons — so it is not a `dr_create_facts` entry, never shows as drift,
-and changing it costs `Ctrl+D` and another `dr-go` rather than a recreate.
+It applies in the **attach rcfile** in [`DRAUGR_ATTACH`](#draugr_attach), as the model variables
+do, for the same reasons. Thus it is not a `dr_create_facts` entry, and never shows as drift. A
+change costs `Ctrl+D` and another `dr-go`, not a recreate.
 
-It is exported **after** anything [`DRAUGR_MODEL`](#draugr_model) derived, so an explicit setting
-wins: an escape hatch the tool can silently overrule is not one. A collision is reported rather than
-left quiet, because two settings and an invisible winner is how an afternoon goes missing.
+Draugr exports it **after** the values from [`DRAUGR_MODEL`](#draugr_model), so an explicit value
+wins. A way out that the tool can silently overrule is not a way out. Draugr reports a collision,
+and is not silent about it. With two values and a hidden winner, you lose an afternoon.
 
 ```
-dr-go: DRAUGR_ENV sets ANTHROPIC_BASE_URL, overriding what DRAUGR_MODEL derived
+dr-go: DRAUGR_ENV sets ANTHROPIC_BASE_URL, and that replaces the value from DRAUGR_MODEL
 ```
 
-It reaches the **agent's session only**, not `dr-shell`. A shell in the mound is for looking around,
-and it starts without an rcfile at all.
+It reaches **only the session of the agent**, not `dr-shell`. A shell in the mound is to look
+around, and it starts with no rcfile.
 
-> A project's `.draugr.conf` can set any variable in the agent's environment this way. That is no
-> more reach than the rest of that file already has — it is shell, and Draugr runs it — and it is
-> gated by the same `dr-trust` acceptance.
+> The `.draugr.conf` of a project can set any variable in the environment of the agent this way.
+> That gives no more reach than the rest of that file has. It is shell, and Draugr runs it. The
+> same `dr-trust` acceptance controls it.
 
 ---
 
 ## Moving code
 
 ### `DRAUGR_BRANCH`
-Default empty, meaning whatever branch is checked out. Fixes the branch `dr-sync` fetches.
+Default empty, which means the current branch. Sets the branch that `dr-sync` fetches.
 
 ### `DRAUGR_REMOTE`
-Default `draugr`. The name of the git remote pointing at the mound. Your `origin` is never touched.
+Default `draugr`. The name of the git remote that points at the mound. Draugr never touches your
+`origin`.
 
 ### `DRAUGR_REQUIRE_CLEAN`
-Default `true`. Refuses `dr-go` when the working tree is dirty, because a clone contains *committed
-history only* — uncommitted work simply is not in it, and the agent would quietly build on stale
-code. `dr-go --dirty` overrides for one run.
+Default `true`. Refuses `dr-go` when the working tree is dirty. A clone contains *only the committed
+history*. Uncommitted work is not in it, and the agent silently builds on old code. `dr-go --dirty`
+overrides this for one run.
 
-Paths matching `DRAUGR_DATA` are exempt: they travel by a different mechanism and are never expected
-to be committed.
+Paths that match `DRAUGR_DATA` are exempt. A different mechanism moves them, and you never commit
+them.
 
-**The exemption is all-or-nothing.** One dirty file that is *not* data still stops the session — the
-point of the check is that the agent would be working from stale code, and one stale file is enough.
+**The exemption is all or nothing.** One dirty file that is *not* data still stops the session. The
+purpose of the test is to stop an agent that works from old code, and one old file is sufficient.
 The refusal names only the files that blocked, and counts the rest:
 
 ```text
 dr-go: your working tree has uncommitted changes
 ?? skills.txt
 ?? skills/
-dr-go: 15 more match DRAUGR_DATA and are exempt - these are not
+dr-go: 15 more match DRAUGR_DATA and are exempt. These are not.
 ```
 
-**`.gitignore` is the circular one, and it is not exempt.** Adding a pattern to it is how you stop
-other files blocking — and that edit then blocks on its own account. Exempting it would be worse than
-the inconvenience: the mound gets a clone, a clone contains only commits, so an **uncommitted ignore
-rule is one the agent's clone does not have**. `DRAUGR_DATA` files rsync'd in under such a rule look
-untracked to the agent, which is how a scratch directory you believed was ignored ends up committed.
-Commit the `.gitignore` instead — that is the step that makes the rule true on both sides.
+**`.gitignore` is the circular case, and it is not exempt.** You add a pattern to it, so that other
+files do not block. That edit then blocks by itself. An exemption is worse than the problem. The
+mound gets a clone, and a clone contains only commits. Thus **the clone of the agent does not have
+an uncommitted ignore rule**. Under such a rule, `DRAUGR_DATA` files that rsync moved in look
+untracked to the agent. That is how a scratch directory that you thought was ignored gets committed.
+Commit the `.gitignore`. That step makes the rule true on both sides.
 
-For a rule that only *this* checkout should have, use **`.git/info/exclude`**. It is untracked, so it
-never reaches this check and never needs committing. The same caveat applies in reverse: `git clone`
-does not copy it, so the agent's clone will not honour it either — the difference is that there you
-chose the divergence.
+For a rule for *this* checkout only, use **`.git/info/exclude`**. It is untracked, so it never
+reaches this test, and you never commit it. The same limit applies in reverse. `git clone` does not
+copy it, so the clone of the agent also ignores it. The difference: there you selected the
+difference on purpose.
 
 ### `DRAUGR_STOP_ON_EXIT`
-Default `false`. When true, `dr-go` stops the mound after you leave the agent — last of all, once the
-sync, the memory export and the data pull have run, because each of those needs it alive.
+Default `false`. When true, `dr-go` stops the mound after you leave the agent. That is the last step,
+after the sync, the memory export and the data pull, because each of those needs a running mound.
 
-Off by default for two reasons. Stopping silently kills anything the kit starts through
-`publishedPorts` or `startup` commands, which is a workflow the kit format exists to support; and
-`dr-go` is re-entered constantly, where a cold start costs measurably more than an attach.
+Off by default, for two reasons. A stop silently kills all that the kit starts through
+`publishedPorts` or `startup` commands, and the kit format exists to support that workflow. Also,
+you run `dr-go` often, and a cold start costs clearly more than an attach.
 
 | measured on one machine | |
 |---|---|
-| RAM a running mound holds | ~1.4 GB, fully recovered on stop |
+| RAM that a running mound holds | ~1.4 GB, all of it freed on stop |
 | cold start (`stopped → running`) | 4.2 s |
 | attach to a running mound | 0.36 s |
 
-Worth turning on per-project for anything that serves nothing, or in `~/.config/draugr/config` if you
-would rather pay the four seconds. It is **not** a durability measure — what protects the agent's
-work is the `dr-sync` that has already run. See
-[the durability model](WORKFLOW.md#what-is-durable-and-what-is-not).
+Turn it on for each project that serves nothing, or in `~/.config/draugr/config` if the four seconds
+are acceptable to you. It does **not** protect your work. The `dr-sync` that already ran protects
+the work of the agent. Refer to [the durability model](WORKFLOW.md#what-is-durable-and-what-is-not).
 
 ### `DRAUGR_AUTO_SYNC`
-Default `true`. Runs `dr-sync` when you leave the agent. It only fetches — nothing is merged and your
-branch does not move — so the worst case is a few seconds and a remote-tracking branch you ignore.
+Default `true`. Runs `dr-sync` when you leave the agent. It only fetches. Nothing is merged, and your
+branch does not move. Thus the worst case is a few seconds, and a remote-tracking branch that you
+ignore.
 
 ### `DRAUGR_ON_MISSING_REPO`
 Default `fail`. What to do when you point Draugr at a directory that is not a git repository.
 
 | Value | |
 |---|---|
-| `fail` | Refuse, naming the alternatives. Clone mode needs a repository, and clone mode is what keeps your files read-only to the agent. |
-| `create-add-all` | `git init` and commit everything. For *"this is a code project I forgot to `git init`"*. Credential-shaped names and `DRAUGR_DATA` patterns are gitignored **first**, never committed. |
-| `create-data-only` | `git init` with a `.gitignore` of `*`, so git tracks nothing and `git status` is empty forever. Files travel by `DRAUGR_DATA`, which is set to `*` for you. For folders of documents or data. |
+| `fail` | Refuse, and name the alternatives. Clone mode needs a repository, and clone mode keeps your files read-only for the agent. |
+| `create-add-all` | `git init`, and commit all files. For *"this is a code project, and I forgot `git init`"*. Names that look like credentials, and `DRAUGR_DATA` patterns, go into .gitignore **first**, and are never committed. |
+| `create-data-only` | `git init` with a `.gitignore` of `*`. Thus git tracks nothing, and `git status` is always empty. Files travel by `DRAUGR_DATA`, which Draugr sets to `*` for you. For folders of documents or data. |
 
-Only `dr-init` and `dr-up` will ever create a repository. `dr-status`, `dr-scan` and the rest still
-refuse — a command you run to find out what is going on must not change what is going on.
+Only `dr-init` and `dr-up` ever create a repository. `dr-status`, `dr-scan` and the others still
+refuse. A command that shows the state must not change the state.
 
-`create-data-only` gives up `dr-diff` and `dr-merge`: there are no commits to compare. Review is
-`dr-data status`, which reports which files differ rather than what changed inside them.
+`create-data-only` loses `dr-diff` and `dr-merge`, because there are no commits to compare. For
+review, `dr-data status` reports which files are different, but not what changed inside them.
 
 ---
 
 ## Moving data
 
-Large or half-processed files travel beside git rather than through it. See
+Large or half-processed files travel beside git, not through it. Refer to
 [WORKFLOW.md](WORKFLOW.md#working-with-data-files).
 
 ### `DRAUGR_DATA`
-Default empty. Space-separated, repo-relative patterns. Three shapes, and the shape decides the
-meaning:
+Default empty. Patterns relative to the repo, separated by spaces. There are three shapes, and the
+shape sets the meaning:
 
 | Entry | Means |
 |---|---|
-| `scratch/raw/` | trailing slash: that directory and everything under it |
+| `scratch/raw/` | trailing slash: that directory and all under it |
 | `tmp/**` | contains a slash: a path pattern, anchored at the repo root |
 | `*.parquet` | no slash: a bare name or extension, matched at **any** depth |
 
-`.git` and `.draugr` are always excluded, whatever you write here — without that, `DRAUGR_DATA="*"`
-would push your `.git` over the mound clone's, and even `*.sample` would reach into `.git/hooks/`.
+Draugr always excludes `.git` and `.draugr`, whatever you write here. Without that,
+`DRAUGR_DATA="*"` pushes your `.git` over that of the clone in the mound, and even `*.sample`
+reaches into `.git/hooks/`.
 
 ### `DRAUGR_DATA_PUSH`
 Default `auto`. Host → sandbox, before the agent starts. `auto`, `manual` or `off`.
 
-The first transfer of a large tree is a real wait, and it happens inside `dr-up` at the moment you
-expected a prompt. That is what `dr-data status` is for, and why `manual` exists.
+The first transfer of a large tree is a real wait. It happens inside `dr-up`, when you expect a
+prompt. That is why `dr-data status` and `manual` exist.
 
 ### `DRAUGR_DATA_PULL`
-Default `manual`. Sandbox → host, when you detach. A pull overwrites host files, so it is opt-in.
+Default `manual`. Sandbox → host, when you detach. A pull overwrites host files, so you must turn
+it on.
 
 ### `DRAUGR_DATA_DELETE`
-Default `false`. Whether a transfer propagates deletions (`rsync --delete`). Even when `true`, each
-run asks: the destructive case is the one where you tidied one side and forgot the other holds your
+Default `false`. Whether a transfer also removes deleted files (`rsync --delete`). Even when `true`,
+each run asks. The destructive case: you cleaned one side, and forgot that the other side holds your
 only copy.
 
 ### `DRAUGR_DATA_CHMOD`
-Default `D755,F644`. Files on `/mnt/c` are mode 777 under WSL, and a naive transfer carries that into
-the mound. This normalises on the way **in**.
+Default `D755,F644`. Files on `/mnt/c` are mode 777 under WSL, and a plain transfer takes that into
+the mound. This sets normal modes on the way **in**.
 
-It does nothing on the way **out**, and it is worth knowing why: DrvFs ignores `chmod`, so a file
-pulled onto `/mnt/c` lands `-rwxrwxrwx` whatever this is set to. Measured — the pulled file passes
-`test -x` and runs. Do not read this key as a guard against the sandbox landing something executable
-on your host; [`dr-data diff`](SECURITY.md#the-data-channel-has-no-commit-to-read) is that guard.
+It does nothing on the way **out**. Know why: DrvFs ignores `chmod`. Thus a file pulled onto
+`/mnt/c` arrives as `-rwxrwxrwx`, whatever the value of this key. Measured: the pulled file passes
+`test -x`, and runs. This key does not stop the sandbox from putting an executable on your host.
+[`dr-data diff`](SECURITY.md#the-data-channel-has-no-commit-to-read) is that guard.
 
 ### `DRAUGR_DATA_DIFF_MAX`
-Default `262144` (256 KB). The per-file ceiling for `dr-data diff`. Text files at or under it are
-shown as a real unified diff; anything larger is reported by name and size instead, because a diff of
-a 4 GB CSV helps nobody. Binary files are never shown regardless of size. Raise it when you have a
-large generated file you genuinely need to read.
+Default `262144` (256 KB). The size limit for each file in `dr-data diff`. Text files at or under it
+show as a real unified diff. A larger file shows only by name and size, because a diff of a 4 GB CSV
+helps nobody. Binary files never show, whatever their size. Increase it for a large generated file
+that you really need to read.
 
 ---
 
@@ -773,14 +765,13 @@ Default `auto`.
 
 | Value | |
 |---|---|
-| `auto` | Import on `dr-up`, export when you leave the agent. The import only ever fills a mound with **no** memory — the store is by definition the older copy. |
-| `manual` | No automatic transfers, but `dr-rm` still refuses to destroy unexported memory and `dr-status` still reports it. |
-| `off` | You do not keep agent memory: no transfers, no refusal, no memory section. |
+| `auto` | Import on `dr-up`, export when you leave the agent. The import only fills a mound with **no** memory, because the store is always the older copy. |
+| `manual` | No automatic transfers. But `dr-rm` still refuses to destroy unexported memory, and `dr-status` still reports it. |
+| `off` | You keep no agent memory: no transfers, no refusal, no memory section. |
 
 ### `DRAUGR_MEM_STORE`
-Default `~/.local/share/draugr/memory`. Where `dr-mem export` writes: by the host form of the project
-key, then by agent.
-
+Default `~/.local/share/draugr/memory`. Where `dr-mem export` writes: by the host form of the
+project key, then by agent.
 ```text
 ~/.local/share/draugr/memory/
 └── c--Code-TabuLua/          the project, host-keyed so it never starts with "-"
@@ -792,21 +783,22 @@ key, then by agent.
         └── memory/           memories/*.md, and the SQLite session state
 ```
 
-Two agents' memories of one project are different things in different shapes, so they get separate
-corners; the project comes first so everything about it stays in one place. A store written before
-0.2.0 had `memory/` sitting directly in the project's corner — the first `dr-mem` or `dr-status`
-after upgrading moves it under `claude/` and says so.
+The memories of two agents for one project are different things, with different shapes. Thus each
+gets its own corner. The project comes first, so that all about it stays in one place. A store
+from before 0.2.0 had `memory/` directly in the corner of the project. After the upgrade, the first
+`dr-mem` or `dr-status` moves it under `claude/`, and says so.
 
-May live anywhere, including WSL's own filesystem — Draugr stages transfers through the repo because
-`sbx cp` is a Windows binary that will not write to a WSL path.
+It can be in any place, also on the filesystem of WSL. Draugr moves the files through the repo,
+because `sbx cp` is a Windows binary that cannot write to a WSL path.
 
 ---
 
 ## Plugins
 
 ### `DRAUGR_PLUGIN_STORE`
-Empty by default, and the feature is off until it is set. Names the directory `dr-plugin` manages:
-the plugin library every mound reads, held on your host as inert files and mounted **read-only**.
+Empty by default, and the feature is off until you set it. It names the directory that `dr-plugin`
+manages. That is the plugin library that each mound reads, on your host as inert files, and mounted
+**read-only**.
 
 ```text
 /mnt/c/Code/claude-plugins/
@@ -815,189 +807,191 @@ the plugin library every mound reads, held on your host as inert files and mount
 └── settings.json   which plugins are switched on
 ```
 
-Unlike [`DRAUGR_MEM_STORE`](#draugr_mem_store) this **must be on a Windows drive**: a mound has to be
-pointed at it, and sbx workspaces are Windows paths, so a store on WSL's own filesystem could never
-be mounted. `dr-plugin` refuses one that is not.
+This one **must be on a Windows drive**, not as [`DRAUGR_MEM_STORE`](#draugr_mem_store). A mound
+must point at it, and sbx workspaces are Windows paths. Thus a store on the filesystem of WSL can
+never be mounted. `dr-plugin` refuses such a store.
 
-Setting it makes `dr-plugin` work. It does **not** make the plugins reach your mounds — that is three
-more settings, and `dr-plugin` with no arguments checks them and prints the exact lines if they are
-missing. See [docs/CLAUDE_PLUGINS.md](CLAUDE_PLUGINS.md).
+With it set, `dr-plugin` works. But the plugins do **not** reach your mounds yet. That needs three
+more values. `dr-plugin` with no arguments tests them, and prints the exact lines if they are
+missing. Refer to [docs/CLAUDE_PLUGINS.md](CLAUDE_PLUGINS.md).
 
 ---
 
 ## Run-state dependencies
 
-One `dr-up` brings up whatever this repository's mound needs and is not already running, then the
-mound itself. Empty by default, so this does not exist until a project asks for it. The whole design,
-including what a claim is and why a stale one is harmless, is in
-[docs/DEPENDENCIES.md](DEPENDENCIES.md).
+One `dr-up` starts the mounds that the mound of this repository needs, if they are not already
+running, then the mound itself. Empty by default, so this does not exist until a project asks for
+it. [docs/DEPENDENCIES.md](DEPENDENCIES.md) has the full design, with what a claim is, and why an
+old claim is harmless.
 
 ### `DRAUGR_REQUIRES`
-Empty by default. Space-separated **repository paths** whose mounds must be running before this one
-is any use — the gateway that gives a forge VM its only way out being the case it was written for.
+Empty by default. **Repository paths**, separated by spaces, whose mounds must run before this one
+is of any use. It was written for the gateway, which gives a forge VM its only way out.
 
 ```bash
 DRAUGR_REQUIRES="$HOME/code/draugr-gateway"
 ```
 
-Each entry is a repository, not a sandbox name, because `dr-up` is what brings a mound up. Absolute
-paths, `~/`-relative and repo-relative all work. Bringing one up is that repository's own `dr-up`:
-idempotent, and it runs that repository's `post-up` hook, which is where a dependency's readiness
-check already lives. "Ready" means its `dr-up` returned 0.
+Each entry is a repository, not a sandbox name, because `dr-up` starts a mound. Absolute paths,
+paths relative to `~/`, and paths relative to the repo all work. To start one, Draugr runs the own
+`dr-up` of that repository. That is idempotent, and it runs the `post-up` hook of that repository.
+The readiness test of a dependency is already in that hook. "Ready" means that its `dr-up` returned
+0.
 
-> **Requiring a repository means running its code.** Its `.draugr.conf` is shell and its hooks run on
-> your machine, as you. Draugr refuses a dependency whose config you have not accepted with
-> `dr-trust`, rather than carrying on with default values — a config that is not sourced would leave
-> `DRAUGR_SANDBOX` at `draugr-<leaf>`, and starting the wrong mound is worse than stopping.
+> **To require a repository is to run its code.** Its `.draugr.conf` is shell, and its hooks run on
+> your machine, as you. Draugr refuses a dependency whose configuration you did not accept with
+> `dr-trust`. It does not continue with default values. Without its configuration, `DRAUGR_SANDBOX`
+> is `draugr-<leaf>`, and a start of the wrong mound is worse than a stop.
 
-`dr-up --skip-deps` starts this mound alone. `dr-dep` shows what is required, what is running, and
-who else is using it.
+`dr-up --skip-deps` starts only this mound. `dr-dep` shows what is required, what runs, and who else
+uses it.
 
 ### `DRAUGR_EXCLUSIVE`
-Default `false`. Read from the **dependency's** config, never from the consumer's: exclusivity is a
-property of the resource. A gateway fronting one Windows desktop is exclusive; a database that
-queues its callers is not.
+Default `false`. Draugr reads it from the configuration of the **dependency**, never from that of
+the consumer, because exclusivity belongs to the resource. A gateway in front of one Windows desktop
+is exclusive. A database that queues its callers is not.
 
-With `true`, the second project to want it is refused by name:
+With `true`, Draugr refuses the second project that wants it, by name:
 
 ```text
-dr-up: gwmound is exclusive, and /home/you/code/TabuLua has been using it since 14:02
+dr-up: gwmound is exclusive, and /home/you/code/TabuLua uses it since 14:02
 ```
 
-It is declared by the dependency rather than by the projects that use it, because leaving it to each
-consumer means one careless repository defeats it. A lock whose holder is gone is taken over rather
-than waited for, and a second terminal in the same project is never locked out by the first.
+The dependency declares it, not the projects that use it. If each consumer decides, one careless
+repository defeats it. If the holder of a lock is gone, Draugr takes the lock over, and does not
+wait. The first terminal in a project never locks out a second terminal in the same project.
 
 ### `DRAUGR_LINGER`
-Default `10m`. Also read from the dependency's config. How long a mound that is up **as a dependency**
-stays up after its last user leaves; `off` keeps it up until somebody stops it.
+Default `10m`. Draugr also reads it from the configuration of the dependency. It sets how long a
+mound that is up **as a dependency** stays up after its last user leaves. `off` keeps it up until
+somebody stops it.
 
-The delay is the point. A `dr-up --recreate`, a crash and a retry, or one terminal closed and another
-opened all drop the count for a few seconds, and a forge VM that takes minutes to boot must not fall
-over because of it. A new user inside the window cancels the stop. Written as `30s`, `10m`, `1h`
-or `off`; anything else is a refusal rather than a guess.
+The delay is the purpose. A `dr-up --recreate`, a crash and a retry, or a terminal closed and
+another opened, all drop the count for a few seconds. A forge VM that takes minutes to boot must not
+fail because of that. A new user inside the window cancels the stop. Write `30s`, `10m`, `1h` or
+`off`. Draugr refuses all other values, and does not guess.
 
-A mound you started yourself is never touched by this — only one that another repository's `dr-up`
-brought up.
+This never touches a mound that you started yourself, only a mound that the `dr-up` of a different
+repository started.
 
 ---
 
 ## Safety rails
 
 ### `DRAUGR_SCAN`
-Default `true`. Runs `dr-scan` before the mound exists, which is the point: a credential should be
-found before anything can read it.
+Default `true`. Runs `dr-scan` before the mound exists, and that is the purpose. Draugr must find a
+credential before anything can read it.
 
 ### `DRAUGR_SCAN_PATTERNS`
 Default `.env *.pem *.key id_rsa id_ed25519 credentials.json secrets.*`. Globs matched against the
-**basename** of every file git is not tracking — ignored or not, which is the whole point.
+**basename** of each file that git does not track, ignored or not. That is the full purpose.
 
 ### `DRAUGR_SCAN_FAIL`
-Default `block`. `block` turns a finding into a refusal; `warn` reports and continues.
+Default `block`. `block` makes a finding a refusal. `warn` reports and continues.
 
-Leave it at `block`. `.gitignore` hides files from git, not from the filesystem: an untracked `.env`
-is fully readable through the read-only mount even though it is absent from the agent's clone.
+Keep `block`. `.gitignore` hides files from git, not from the filesystem. The agent can read an
+untracked `.env` through the read-only mount, though it is not in the clone of the agent.
 
 ### `DRAUGR_FORGE`
-Default empty, which means **there is no forge** — the right answer unless you need work done
-inside a Windows VM. Set it to the VM's name and `dr-forge` starts working; leave it and
-`dr-forge` refuses every action, so the feature cannot be stumbled into.
+Default empty, which means that **there is no forge**. That is the right answer, unless you need
+work done inside a Windows VM. Set it to the name of the VM, and `dr-forge` starts to work. If you
+leave it empty, `dr-forge` refuses each action. Thus nobody gets the feature by accident.
 
-It names a **VM**, not a path, because the VM is what exists on both sides of the boundary:
-AppSandbox knows it by name and so does the tunnel supervisor. Everything else — which disk, which
-engine, where the layers live — follows from that name. See [FORGE.md](FORGE.md).
+It names a **VM**, not a path, because the VM exists on both sides of the boundary. AppSandbox
+knows it by name, and so does the tunnel supervisor. All else follows from that name: which disk,
+which engine, where the layers are. Refer to [FORGE.md](FORGE.md).
 
-**It is the only key the forge needs to exist**, and `dr-forge up` keeps it that way. It needs the gateway
-mound running, and takes that from [`DRAUGR_REQUIRES`](#draugr_requires), which already means "this
-repo needs that one's mound running" — `dr-dep up` brings up everything named there, so nothing has
-to work out which of them is the gateway. So a game project that uses the forge names it exactly as
-it would name any other mound it depends on, and nothing forge-specific appears in the config.
+**It is the only key that the forge needs**, and `dr-forge up` keeps it that way. `up` needs the
+gateway mound to run, and gets it from [`DRAUGR_REQUIRES`](#draugr_requires). That key already
+means "this repo needs the mound of that one". `dr-dep up` starts all mounds named there, so
+nothing must find which one is the gateway. Thus a game project that uses the forge names it as any
+other mound that it depends on, and its configuration has nothing special for the forge.
 
-Run from inside the gateway's own directory, `dr-forge up` starts that repository's own mound instead,
-recognising it by its `DRAUGR_PORTS` publishing `127.0.0.1:18888` — the port the VM's only way out
-arrives on. Every other piece `up` needs ships in Draugr, including the tunnel supervisor, so no
-other repository has to be present or laid out in any particular way.
+From inside the own directory of the gateway, `dr-forge up` starts the own mound of that
+repository. It knows it by its `DRAUGR_PORTS`, which publish `127.0.0.1:18888`. The only way out of
+the VM arrives on that port. Each other part that `up` needs comes with Draugr, also the tunnel
+supervisor. Thus no other repository must be present, or have a specific layout.
 
 ### `DRAUGR_FORGE_NOSCAN`
 Default empty. Guest paths that `dr-forge init` excludes from Microsoft Defender, separated by
-**semicolons** — a Windows path contains spaces and does not contain semicolons, which is why
-Windows itself separates paths that way.
+**semicolons**. A Windows path can contain spaces, but not semicolons. That is why Windows itself
+separates paths that way.
 
 ```bash
 DRAUGR_FORGE_NOSCAN="C:\UE_4.27;D:\work\MyGame;D:\work\MyGame\DerivedDataCache"
 ```
 
-**Why this is a key rather than a built-in list.** Real-time protection reads every file a build
-writes and every file it reads back, and in a forge VM that is the write pattern a differencing
-disk punishes hardest ([FORGE.md](FORGE.md#what-is-a-layer-not-the-base)). But `init` is generic:
-it cannot know which trees are regenerable build output and which hold something worth scanning.
-So Draugr supplies the mechanism and your project supplies the paths.
+**Why this is a key, and not a built-in list.** Real-time protection reads each file that a build
+writes, and each file that it reads back. In a forge VM, a differencing disk handles that write
+pattern worst ([FORGE.md](FORGE.md#what-is-a-layer-not-the-base)). But `init` is generic. It cannot
+know which trees are build output that you can make again, and which hold something to scan. Thus
+Draugr gives the mechanism, and your project gives the paths.
 
-**It only ever adds.** An exclusion `init` did not create is left alone — removing one somebody
-added by hand, on the grounds that it is absent from a config file, is not a decision a setup
-script should take. So emptying this key does not undo what it did; `Remove-MpPreference` in the
-guest does.
+**It only adds.** It leaves alone an exclusion that `init` did not create. A setup script must not
+remove an exclusion that somebody added by hand, only because a configuration file does not name it.
+Thus an empty key does not undo what it did. `Remove-MpPreference` in the guest does.
 
-**`*` disables Defender entirely**, rather than excluding anything:
+**`*` disables Defender fully**, and excludes nothing:
 
 ```bash
 DRAUGR_FORGE_NOSCAN="*"
 ```
 
-The list is reused as the switch because one key with a sentinel is less to keep in step than two
-keys that can disagree, and `*` cannot be a real path. Any other entries alongside it have nothing
-left to exclude, and `init` says so.
+The list is also the switch, because one key with a special value is easier to keep correct than two
+keys that can disagree. `*` cannot be a real path. Other entries beside it have nothing left to
+exclude, and `init` says so.
 
-**Think about this one.** The guest downloads installers and assets from vendor stores, so the protection has
-a job; excluding the build trees takes the hot path out of its way without removing it, which is why
-that is the default shape. What makes `*` defensible when it is defensible: the guest has **no
-network adapter**, so every byte it fetches has already passed the gateway's allowlist, and the
-forge's security claim is [already weaker than a mound's](SECURITY.md). What makes it a real
-decision: an agent driving that guest can run anything the allowlist reaches.
+**Think about this one.** The guest downloads installers and assets from vendor stores, so the
+protection has a job. An exclusion of the build trees moves the busy path out of its way, but keeps
+the protection. That is why it is the default shape. When `*` is defensible, this is why. The guest
+has **no network adapter**, so each byte that it fetches already passed the allowlist of the
+gateway. Also, the security claim of the forge is [already weaker than that of a
+mound](SECURITY.md). Why it is a real decision: an agent that controls that guest can run all that
+the allowlist reaches.
 
-Two practical notes. **Tamper Protection blocks it** — on by default on Windows 11 — and the cmdlet
-can return without error, so `init` checks by effect and tells you when the change did not take.
-And Windows may re-enable real-time protection after an update, so this is not permanent; re-running
-`init` turns it off again.
+Two practical notes. **Tamper Protection blocks it.** It is on by default on Windows 11, and the
+cmdlet can return with no error. Thus `init` tests the effect, and tells you when the change did not
+apply. Also, Windows can turn real-time protection on again after an update, so this is not
+permanent. A new run of `init` turns it off again.
 
 ---
 
 ### `DRAUGR_FORGE_LAYERS`
 Default empty, which means `C:\ForgeLayers`. Where
-[`dr-layer`](FORGE.md#the-layer-mechanism-as-a-command-dr-layer) keeps the forge's disk layers.
+[`dr-layer`](FORGE.md#the-layer-mechanism-as-a-command-dr-layer) keeps the disk layers of the forge.
 
 ```bash
 DRAUGR_FORGE_LAYERS="D:\ForgeLayers"
 ```
 
-**It must be your fastest disk rather than your biggest.** Reads walk the chain: anything the top
-layer does not hold is fetched from its parent, and so on down. The frozen parents are therefore the
-hot read path — they hold Windows, Visual Studio and the engine — so putting them on a spinning disk
-to save space on an SSD punishes every read the project makes. Archives are the opposite case and
-belong on the big slow disk, since nothing reads them until a restore.
+**It must be your fastest disk, not your biggest.** Reads walk the chain. If the top layer does not
+hold a block, the read goes to its parent, and so on down. Thus the frozen parents are the busy read
+path. They hold Windows, Visual Studio and the engine. On a spinning disk, to save space on an SSD,
+they slow each read of the project. Archives are the opposite case, and go on the big slow disk,
+because nothing reads them until a restore.
 
-It must also be **outside AppSandbox's own tree**, though not for the reason it looks like. Deleting
-a VM removes *its disk's folder* recursively, so the risk follows the VM **registration**, not the
-path: a base under `C:\ForgeLayers` with a VM still pointing at it is exactly as deletable as one
-under `ProgramData`. `dr-layer freeze --unregister` is what ends that. Being outside AppSandbox's
-tree buys something different and worth having: nothing AppSandbox does to its own directory — an
-uninstall, a reset, a future tidy-up — can reach a layer that was never in it.
+It must also be **outside the own tree of AppSandbox**, but not for the clear reason. A deletion of
+a VM removes *the folder of its disk*, with all its contents. Thus the risk follows the VM
+**registration**, not the path. A base under `C:\ForgeLayers` with a VM that still points at it is
+as deletable as one under `ProgramData`. `dr-layer freeze --unregister` ends that risk. A place
+outside the tree of AppSandbox gives a different benefit. Nothing that AppSandbox does to its own
+directory can reach a layer that was never in it: an uninstall, a reset, a later clean-up.
 
-**Layer stores on more than one drive are normal**, not exotic: the engine layers are the big ones,
-so they often live on the big disk while `layer-0` stays on the fast one. This key is the default,
-and `dr-layer --root <path>` overrides it for one command. The guards that look for a layer's
-children search every fixed drive's `ForgeLayers` whatever this is set to, because a chain that
-crosses drives is the shape this machine actually has — *measured*, when a check that
-scanned one root found no children for a layer that had four on another drive.
+**Layer stores on more than one drive are normal.** The engine layers are the big ones. Thus they
+are often on the big disk, while `layer-0` stays on the fast one. This key is the default, and
+`dr-layer --root <path>` overrides it for one command. The guards that look for the children of a
+layer search the `ForgeLayers` of each fixed drive, whatever the value of this key. A chain across
+drives is the real shape of this machine. A test showed this: a scan of one root found no children
+for a layer that had four on a different drive.
 
 ## Hooks
 
 Not keys, but the same job. Executable scripts at
 `.draugr/hooks/{pre-up,post-up,post-create,pre-attach,post-attach,post-sync,pre-rm}`.
 
-They run on the **host**, in WSL, with the merged config in the environment — which is precisely what
-a kit's commands cannot do, since a kit runs inside the mound and cannot see your machine. A hook
-that exits non-zero aborts the command, so hooks can veto.
+They run on the **host**, in WSL, with the merged configuration in the environment. The commands of
+a kit cannot do that, because a kit runs inside the mound, and cannot see your machine. If a hook
+exits non-zero, the command stops. Thus a hook can say no.
 
-`post-create` fires only when a sandbox is actually built; `post-up` fires on every `dr-up`,
-including the ones that just start a stopped mound.
+`post-create` runs only when Draugr really builds a sandbox. `post-up` runs on each `dr-up`, also
+when it only starts a stopped mound.

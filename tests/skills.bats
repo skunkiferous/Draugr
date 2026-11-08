@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
-# dr-skills: the one directory a sandbox can write to, treated as reviewable.
+# dr-skills: the one directory that a sandbox can write to, open to review.
 #
-# No sandbox is needed. The store is an ordinary directory on the host, so these
-# tests create one and check that appearances, edits and removals are all
-# reported - which is the whole job, since nothing here judges content.
+# No sandbox is necessary. The store is a normal directory on the host. Thus
+# these tests create one, and make sure that new, edited and removed entries are
+# all reported. That is the full job, because nothing here judges content.
 
 load helper
 
@@ -15,7 +15,8 @@ setup() {
 
 teardown() { dr_test_teardown; }
 
-# A skill is a directory of instructions; only its name and contents matter here.
+# A skill is a directory of instructions. Here, only its name and contents
+# matter.
 make_skill() {
     local name=$1 body=${2:-do the thing}
     mkdir -p "$DR_SKILLS_DIR/$name"
@@ -40,9 +41,10 @@ make_skill() {
 }
 
 @test "dr-skills list: a hidden skill directory is not a hiding place" {
-    # Measured: Claude Code lists a store entry named .hidden-probe among its own
-    # available skills, so a dot-prefixed directory is a live instruction and has
-    # to be reported. Codex writes one - .system - the first time it runs.
+    # A test showed this. Claude Code lists a store entry named .hidden-probe in
+    # its available skills. Thus a directory that starts with a dot is a live
+    # instruction, and must be reported. Codex writes one, .system, on its first
+    # run.
     make_skill .system
     run dr-skills list
     [ "$status" -eq 0 ]
@@ -62,9 +64,10 @@ make_skill() {
 
 @test "dr-skills list: states the reach of the store, every time" {
     run dr-skills list
-    # The reason this command exists: read-write, shared, and outlives the mound.
-    [[ "$output" == *"read-write into every mound"* ]]
-    [[ "$output" == *"survives dr-rm"* ]]
+    # The reason for this command: read-write, shared, and lives longer than the
+    # mound.
+    [[ "$output" == *"each mound mounts it read-write"* ]]
+    [[ "$output" == *"stays after dr-rm"* ]]
 }
 
 # --- diff ---------------------------------------------------------------------
@@ -87,14 +90,14 @@ make_skill() {
     dr-skills accept >/dev/null 2>&1
     run dr-skills diff
     [ "$status" -eq 0 ]
-    [[ "$output" == *"as you last accepted"* ]]
+    [[ "$output" == *"the same as at your last accept"* ]]
 }
 
 @test "dr-skills diff: a skill that appeared since is reported as new" {
     make_skill deploy
     dr-skills accept >/dev/null 2>&1
 
-    # The case that matters: a sandbox left something behind for the next one.
+    # The important case: a sandbox left something for the next one.
     make_skill exfiltrate
     run dr-skills diff
     [ "$status" -eq 1 ]
@@ -106,7 +109,7 @@ make_skill() {
     make_skill deploy "the original instructions"
     dr-skills accept >/dev/null 2>&1
 
-    # Same name, different content - which a listing of names would miss.
+    # Same name, different content. A list of names misses that.
     printf 'something else entirely\n' > "$DR_SKILLS_DIR/deploy/SKILL.md"
     run dr-skills diff
     [ "$status" -eq 1 ]
@@ -146,11 +149,11 @@ make_skill() {
 # --- import -------------------------------------------------------------------
 
 @test "dr-skills import: says what it means before doing it" {
-    # No terminal and no --yes, so the confirmation refuses rather than assuming.
+    # No terminal and no --yes, so the confirmation refuses, and does not guess.
     run dr-skills import
     [ "$status" -ne 0 ]
     [[ "$output" == *"instructions"* ]]
-    [[ "$output" == *"every mound"* ]]
+    [[ "$output" == *"each mound"* ]]
 }
 
 @test "dr-skills import: hands the flags to sbx" {
@@ -164,7 +167,7 @@ make_skill() {
     dr-skills accept >/dev/null 2>&1
     make_skill appeared
 
-    # --dry-run copies nothing, so the skill that appeared must still be news.
+    # --dry-run copies nothing, so the new skill must still show as new.
     dr-skills import --dry-run -y >/dev/null 2>&1
     run dr-skills diff
     [ "$status" -eq 1 ]
@@ -173,9 +176,9 @@ make_skill() {
 
 # --- install ------------------------------------------------------------------
 #
-# Draugr's own skills. `sbx skills import` cannot place them - it scans five
-# fixed host directories and takes no path - so this copies into the store
-# directly, and is a verb you have to type for the same reason import is.
+# The own skills of Draugr. `sbx skills import` cannot place them, because it
+# scans five fixed host directories and takes no path. Thus this copies into the
+# store directly. You must type the verb, for the same reason as for import.
 
 @test "dr-skills install: says what it is about to put in reach of every mound" {
     run dr-skills install
@@ -197,8 +200,8 @@ make_skill() {
 }
 
 @test "dr-skills install: replaces rather than merges" {
-    # A file dropped from a newer version must not linger - the rule sbx applies
-    # on import, and the reason this is rm -rf then cp rather than cp -a over.
+    # A file removed in a newer version must not stay. sbx applies that rule on
+    # import. That is why this is rm -rf then cp, not cp -a on top.
     dr-skills install -y >/dev/null 2>&1
     printf 'stale\n' > "$DR_SKILLS_DIR/draugr-kit/LEFTOVER.md"
     dr-skills install -y >/dev/null 2>&1
@@ -206,8 +209,8 @@ make_skill() {
 }
 
 @test "dr-skills install: the shipped skill is loadable by both agents" {
-    # One SKILL.md serves Claude and Codex - measured, both list a store skill by
-    # name - but only if the frontmatter is there for them to read.
+    # One SKILL.md works for Claude and Codex. A test showed that both list a
+    # store skill by name. But they need the frontmatter to read.
     run head -4 "$DR_ROOT/share/skills/draugr-kit/SKILL.md"
     [[ "${lines[0]}" = "---" ]]
     [[ "$output" == *"name: draugr-kit"* ]]
@@ -216,13 +219,13 @@ make_skill() {
 
 # --- the skills your plugins ship ---------------------------------------------
 #
-# A plugin's skills load from the plugin, never from this store, so they can
-# never appear in the section above. Saying nothing about them left dr-skills
-# reporting one skill on a machine whose plugin library held fifteen.
+# The skills of a plugin load from the plugin, never from this store. Thus they
+# never show in the section above. Without this section, dr-skills reported one
+# skill on a machine whose plugin library held fifteen.
 
-# A plugin library with one installed plugin carrying one skill. NOT on a Windows
-# drive, deliberately: dr-skills only reads the directory, and unlike dr-plugin
-# it never has to mount it into anything.
+# A plugin library with one installed plugin that has one skill. NOT on a
+# Windows drive, on purpose. dr-skills only reads the directory. It never mounts
+# it, as dr-plugin does.
 fake_plugin_lib() {
     local dir
     export DRAUGR_PLUGIN_STORE="$DR_TMP/plugins"
@@ -237,13 +240,13 @@ fake_plugin_lib() {
     fake_plugin_lib
     run dr-skills list
     [ "$status" -eq 0 ]
-    [[ "$output" == *"also shipped by plugins"* ]]
+    [[ "$output" == *"also in plugins that you already have"* ]]
     [[ "$output" == *"writing-plans"* ]]
-    # The plugin too, since installing it is what makes the skill reachable.
+    # The plugin also, because its install makes the skill available.
     [[ "$output" == *"plug-a@mkt-a"* ]]
 
-    # The condition is the whole point. These are not available the way a store
-    # entry is, and claiming they were would mislead in the opposite direction.
+    # The condition is the full purpose. These are not available as a store
+    # entry is. A claim that they are misleads in the other direction.
     [[ "$output" == *"INSTALLED in that mound"* ]]
 }
 
@@ -253,24 +256,24 @@ fake_plugin_lib() {
     run dr-skills list
     [ "$status" -eq 0 ]
     [[ "$output" == *"deploy"* ]]
-    # Once, under the plugin heading - not also among the store's own contents.
+    # Once, under the plugin heading, not also in the own contents of the store.
     [ "$(printf '%s\n' "$output" | grep -c 'writing-plans')" -eq 1 ]
 }
 
 @test "dr-skills list: reads the library named in your config, not just the environment" {
     fake_plugin_lib
-    # THE REAL FAILURE this guards, and the one the two tests above cannot see
-    # because they export the variable: DRAUGR_PLUGIN_STORE normally lives in a
-    # config FILE. dr-skills loads no repository, so without a machine-wide
-    # config load it ran on built-in defaults, the store read as empty, and the
-    # section never appeared however many plugin skills there were.
+    # THE REAL FAILURE for this guard. The two tests above cannot see it,
+    # because they export the variable. DRAUGR_PLUGIN_STORE is usually in a
+    # configuration FILE. dr-skills loads no repository. Without a load of the
+    # machine configuration, it used built-in defaults. The store read as
+    # empty, and the section never showed, for any number of plugin skills.
     printf 'DRAUGR_PLUGIN_STORE="%s"\n' "$DRAUGR_PLUGIN_STORE" \
         > "$DRAUGR_CONFIG_HOME/config"
     unset DRAUGR_PLUGIN_STORE
 
     run dr-skills list
     [ "$status" -eq 0 ]
-    [[ "$output" == *"also shipped by plugins"* ]]
+    [[ "$output" == *"also in plugins that you already have"* ]]
     [[ "$output" == *"writing-plans"* ]]
 }
 
@@ -282,8 +285,8 @@ fake_plugin_lib() {
     [[ "$output" == *"deploy"* ]]
 
     # An empty heading on a machine with no library is worse than no heading.
-    # Note what mutation-testing showed: dr-skills guards this TWICE and either
-    # guard alone suffices, so this goes red only when both are removed - never
-    # when one is. Worth knowing before "simplifying" either of them.
+    # Mutation testing showed this: dr-skills guards this TWICE, and one guard
+    # is enough. Thus this fails only when both are removed, never when one is.
+    # Know this before you "simplify" either of them.
     [[ "$output" != *"also shipped by plugins"* ]]
 }

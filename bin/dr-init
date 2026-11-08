@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
-# dr-init - set this project up for Draugr.
+# dr-init: set up this project for Draugr.
 #
-# Writes .draugr.conf (commit it), a starter sbx kit at .draugr/kit/ (commit that
-# too), gitignores the per-user layer, and trusts the config it just wrote.
+# It writes .draugr.conf (commit it) and a starter sbx kit at .draugr/kit/
+# (commit that too). It adds the layer for each user to .gitignore, and trusts
+# the configuration that it wrote.
 #
 #   dr-init                  set up the current repository
-#   dr-init --agent codex    pick the agent up front
+#   dr-init --agent codex    select the agent now
 #   dr-init --force          overwrite files that already exist
 set -euo pipefail
 
 DR_PROG=dr-init
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# ${2:?msg} aborts with that message when --agent is given no value.
+# If --agent has no value, ${2:?msg} stops with that message.
 force=
 agent=
 while [ $# -gt 0 ]; do
@@ -30,10 +31,10 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# dr-init and dr-up are the only two commands that may create a repository, and
-# this is the more natural of the two to do it from: setting a project up is
-# exactly what you came here for. Honours DRAUGR_ON_MISSING_REPO; refuses as
-# before when that is "fail", which is the default.
+# dr-init and dr-up are the only two commands that can create a repository.
+# This one is the more natural place, because you came here to set up a project.
+# It obeys DRAUGR_ON_MISSING_REPO. If that is "fail" (the default), it refuses,
+# as before.
 dr_context_create
 repo=$DR_REPO
 [ -n "$agent" ] && DRAUGR_AGENT=$agent
@@ -45,12 +46,11 @@ wrote=0
 # --- .draugr.conf ----------------------------------------------------------
 conf="$repo/.draugr.conf"
 if [ -f "$conf" ] && [ -z "$force" ]; then
-    # "kept existing" would be a lie in the create modes: dr_repo_create writes
-    # a .draugr.conf of its own moments earlier, and reporting that as something
-    # you had already is the sort of small dishonesty that makes people stop
-    # reading the output.
+    # In the create modes, "kept existing" is false. dr_repo_create wrote its
+    # own .draugr.conf a moment earlier. If the output calls that your file, it
+    # is a small lie, and such lies make people stop reading the output.
     if [ -n "${DR_REPO_CREATED:-}" ]; then
-        dr_info "using the .draugr.conf just written for this directory"
+        dr_info "using the .draugr.conf that was just written for this directory"
     else
         dr_info "kept existing .draugr.conf"
     fi
@@ -66,9 +66,9 @@ else
 fi
 
 # --- the kit ---------------------------------------------------------------
-# DRAUGR_KIT is a list, and dr-init writes the project's OWN kit - the first
-# entry. Using the whole value would create a directory literally named
-# ".draugr/kit lua" the moment someone has added a library kit to the list.
+# DRAUGR_KIT is a list, and dr-init writes the OWN kit of the project, the first
+# entry. With the whole value, it creates a directory named ".draugr/kit lua" as
+# soon as somebody adds a library kit to the list.
 read -ra _kit_entries <<< "${DRAUGR_KIT:-.draugr/kit}"
 kitentry=${_kit_entries[0]:-.draugr/kit}
 kitdir="$repo/$kitentry"
@@ -78,13 +78,13 @@ if [ -f "$kitdir/spec.yaml" ] && [ -z "$force" ]; then
     dr_info "kept existing kit at ${kitdir#"$repo"/}"
 else
     mkdir -p "$kitdir"
-    # Two substitutions from one project name: @SLUG@ for the `name:` field,
-    # which sbx requires to be lowercase alphanumeric with hyphens, and @NAME@
-    # for the free-text fields, which should read the way you spell it.
+    # Two substitutions from one project name. @SLUG@ is for the `name:` field.
+    # sbx requires lowercase letters, digits, and hyphens there. @NAME@ is for
+    # the free-text fields, with your spelling.
     #
-    # The agent is NOT written in. A kit that pins one cannot be composed with
-    # any other, so freezing today's choice into a committed file would make
-    # trying a different agent an edit rather than a setting.
+    # The agent is NOT in the kit. sbx cannot compose a kit that pins an agent
+    # with a different agent. If the current choice is in a committed file, a
+    # different agent needs an edit, not a configuration change.
     sed -e "s|@SLUG@|$(dr_kit_slug "$name")|g" \
         -e "s|@NAME@|$name|g" \
         "$DRAUGR_SHARE/kit.example/spec.yaml" > "$kitdir/spec.yaml"
@@ -92,24 +92,24 @@ else
     wrote=$((wrote + 1))
 fi
 
-# --- gitignore what describes this checkout rather than the project ----------
+# --- gitignore the files of this checkout, not of the project ---------------
 #
-# .draugr/kit/ is meant to be committed - it is the project's sandbox rules. The
-# four below are not, and each would otherwise show up as an untracked file:
-# with DRAUGR_REQUIRE_CLEAN=true that is not merely untidy, it blocks dr-go.
+# You commit .draugr/kit/, because it holds the sandbox rules of the project.
+# You do not commit the four below. Without this step, each shows as an
+# untracked file. With DRAUGR_REQUIRE_CLEAN=true, that is not only untidy. It
+# blocks dr-go.
 ignore="$repo/.gitignore"
 ignore_entries=(
-    '.draugr.local.conf'     # per-user settings, never shared
-    '.draugr/kit.applied'    # which kit this checkout's mound was built from
-    '.draugr/create.applied' # the settings it was built with - ports, mounts, memory
-    '.draugr/tmp/'           # staging for sbx cp, removed after every transfer
+    '.draugr.local.conf'     # configuration for one user, never shared
+    '.draugr/kit.applied'    # the kit of the mound of this checkout
+    '.draugr/create.applied' # its configuration at creation: ports, mounts, memory
+    '.draugr/tmp/'           # staging for sbx cp, removed after each transfer
 )
 
-# Tested one at a time rather than all-or-nothing, so a repo initialised by an
-# older Draugr picks up the entries that did not exist then. In data-only mode
-# there is nothing to add: that .gitignore is a single "*", which already covers
-# these and everything else, and three redundant lines under it would only
-# invite the question of what they are for.
+# Test one entry at a time, not all together. Thus a repo from an older Draugr
+# gets the entries that did not exist then. In data-only mode, there is nothing
+# to add. That .gitignore is one "*", which already covers these and all other
+# files. More lines below it only make people ask what they are for.
 missing=()
 if [ "${DR_REPO_CREATED:-}" != create-data-only ]; then
     for entry in "${ignore_entries[@]}"; do
@@ -118,15 +118,16 @@ if [ "${DR_REPO_CREATED:-}" != create-data-only ]; then
 fi
 
 if [ ${#missing[@]} -gt 0 ]; then
-    # Decide whether the file ends mid-line BEFORE opening the append redirect:
-    # reading and writing the same file in one pipeline is asking for trouble.
-    # $(...) strips trailing newlines, so a non-empty result means no final \n.
+    # BEFORE the append, find out whether the file ends in the middle of a line.
+    # A read and a write of the same file in one pipeline cause problems. $(...)
+    # removes the final newlines, so a non-empty result means that there is no
+    # final \n.
     terminator=
     if [ -s "$ignore" ] && [ -n "$(tail -c1 "$ignore")" ]; then
         terminator=$'\n'
     fi
     {
-        printf '%s\n# Draugr: describes this checkout, not the project.\n' "$terminator"
+        printf '%s\n# Draugr: files of this checkout, not of the project.\n' "$terminator"
         printf '%s\n' "${missing[@]}"
     } >> "$ignore"
     dr_ok "gitignored ${missing[*]}"
@@ -134,22 +135,22 @@ if [ ${#missing[@]} -gt 0 ]; then
 fi
 
 # --- trust what we just wrote ----------------------------------------------
-# Draugr wrote this file itself, so there is nothing for the user to review yet.
-# The prompt exists to stop a *cloned* config running unread; it would be theatre
-# here, and theatre is how people learn to click through real warnings.
+# Draugr wrote this file, so the user has nothing to review yet. The question
+# exists to stop a *cloned* configuration that nobody read. Here, it is only a
+# show, and a show teaches people to click through real warnings.
 dr_trust_add "$conf"
 
-# If this repository did not exist when dr-init started, everything above is an
-# uncommitted change in it. Committing them here is what makes "dr-init leaves
-# you with a clean tree" true in the modes that create a repo; it does nothing
-# in the ordinary case, where the repo was yours all along.
+# If this repository did not exist at the start of dr-init, all the changes
+# above are uncommitted. A commit here makes "dr-init leaves a clean tree" true
+# in the modes that create a repo. It does nothing in the usual case, where the
+# repo was always yours.
 dr_repo_commit_setup "$repo"
 
-# Say plainly whether anything changed: re-running dr-init is harmless, and you
-# should be able to tell the difference without diffing your own repo.
+# Tell clearly whether something changed. You can run dr-init again with no
+# damage, and you must see the difference without a diff of your repo.
 printf '\n'
 if [ "$wrote" -eq 0 ]; then
-    dr_info "nothing to do - this project was already initialised"
+    dr_info "nothing to do. This project was already set up."
 else
     dr_ok "$name is ready"
 fi
@@ -157,19 +158,19 @@ fi
 cat >&2 <<EOF
 
   ${_DR_BOLD}Next${_DR_OFF}
-    1. Edit ${_DR_BOLD}${kitdir#"$repo"/}/spec.yaml${_DR_OFF} - list the domains your build needs
+    1. Edit ${_DR_BOLD}${kitdir#"$repo"/}/spec.yaml${_DR_OFF}. List the domains that your build needs
        under network.allowedDomains, and your setup under commands.install.
-       The agent reaches nothing you do not list.
-    2. Commit what this wrote. A teammate then gets the same mound in one command.
+       The agent can connect only to what you list.
+    2. Commit the new files. A teammate then gets the same mound with one command.
     3. ${_DR_BOLD}dr-go${_DR_OFF}
 
-  Check anything with:  dr-doctor   dr-config
+  Look at the state with:  dr-doctor   dr-config
 EOF
 
-# CHECKED, not assumed: in the modes that create the repository, dr_repo_commit_setup
-# above has already committed all of this, and telling someone to commit a clean tree is
-# how a reader learns to ignore the next instruction too.
+# TESTED, not assumed. In the modes that create the repository,
+# dr_repo_commit_setup above already committed all of this. If you tell somebody
+# to commit a clean tree, the reader learns to ignore the next instruction too.
 if ! dr_repo_is_clean "$repo"; then
-    dr_info "dr-go refuses while these are uncommitted: the mound gets a CLONE, and a"
-    dr_info "clone contains only commits."
+    dr_info "dr-go refuses while these are uncommitted. The mound gets a CLONE, and a"
+    dr_info "clone holds only commits."
 fi

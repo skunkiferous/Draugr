@@ -5,8 +5,9 @@ DR_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export DR_ROOT
 export PATH="$DR_ROOT/tests/mocks:$DR_ROOT/bin:$PATH"
 
-# Point sbx discovery at the mock, and keep every test out of the real
-# ~/.config/draugr so a run can never trust something on the developer's machine.
+# Point the sbx search at the mock, and keep each test out of the real
+# ~/.config/draugr. Thus a run can never trust something on the machine of the
+# developer.
 dr_test_setup() {
     DR_TMP=$(mktemp -d)
     export DR_TMP
@@ -21,15 +22,15 @@ dr_test_setup() {
 dr_test_teardown() {
     [ -n "${DR_TMP:-}" ] && [ -d "$DR_TMP" ] && rm -rf "$DR_TMP"
 
-    # The Windows-drive scratch directory lives outside $TMPDIR, so nothing else
-    # is going to clean it up. Its name is DERIVED from $DR_TMP rather than
-    # remembered in a variable, because every caller writes
+    # The Windows-drive scratch directory is outside $TMPDIR, so nothing else
+    # cleans it. Its name COMES FROM $DR_TMP, and is not kept in a variable,
+    # because each caller writes
     #
     #     REPO=$(dr_make_win_repo)
     #
-    # and a command substitution is a subshell: an `export` inside it never
-    # reaches this function. That is how 5311 directories accumulated under
-    # C:\Temp before anyone looked - roughly thirty per test run, silently.
+    # A command substitution is a subshell. An `export` in it never reaches
+    # this function. That is how 5311 directories collected under C:\Temp
+    # before somebody looked: about thirty for each test run, silently.
     if [ -n "${DR_WIN_TMP:-}" ] && [ -d "$DR_WIN_TMP" ]; then
         rm -rf "$DR_WIN_TMP"
     elif [ -n "${DR_TMP:-}" ]; then
@@ -39,9 +40,9 @@ dr_test_teardown() {
     return 0
 }
 
-# A throwaway git repo. Note this is NOT under a real /mnt/<drive>/ path, so it
-# deliberately fails dr_require_win_path - path translation is unit-tested
-# against literal strings instead, which keeps those tests runnable on any OS.
+# A throwaway git repo. It is NOT under a real /mnt/<drive>/ path, so it fails
+# dr_require_win_path, on purpose. Unit tests test the path translation against
+# literal strings. Thus those tests can run on each OS.
 dr_make_repo() {
     local name=${1:-testrepo}
     local dir="$DR_TMP/$name"
@@ -63,29 +64,29 @@ dr_load_common() {
 
 # --- repos on a Windows drive ------------------------------------------------
 #
-# Every mound command calls dr_require_win_path, so testing one at all means
-# having a repo whose path starts /mnt/<letter>/. The check is pure string
-# matching - no hypervisor is involved - so any writable directory under such a
-# path will do:
+# Each mound command calls dr_require_win_path. Thus a test of one needs a repo
+# whose path starts with /mnt/<letter>/. The test only matches strings, with no
+# hypervisor. Thus each writable directory under such a path works:
 #
 #   in WSL   /mnt/c is the real C: drive
 #   in CI    a plain directory that the workflow creates with sudo
-#   elsewhere  nothing, and the tests that need one skip rather than fail
+#   elsewhere  nothing, and the tests that need one skip, and do not fail
 #
-# $DRAUGR_TEST_WINROOT overrides the search for anyone whose drives sit elsewhere.
+# $DRAUGR_TEST_WINROOT overrides the search, for people whose drives are in
+# another place.
 dr_win_root() {
     local candidate
 
-    # An explicit override replaces the search rather than joining it, so that
-    # pointing it at nothing is a supported way to exercise the skip path.
+    # An explicit override replaces the search, and does not add to it. Thus you
+    # can point it at nothing, to exercise the skip path.
     if [ -n "${DRAUGR_TEST_WINROOT:-}" ]; then
         [ -d "$DRAUGR_TEST_WINROOT" ] && [ -w "$DRAUGR_TEST_WINROOT" ] || return 1
         printf '%s' "$DRAUGR_TEST_WINROOT"
         return 0
     fi
 
-    # /mnt/c/Temp first: on a real machine it is a scratch directory, whereas the
-    # drive root is somebody's C:\ and does not want test litter in it.
+    # /mnt/c/Temp first. On a real machine, it is a scratch directory. The drive
+    # root is the C:\ of somebody, and must not get test files.
     for candidate in /mnt/c/Temp /mnt/c; do
         if [ -d "$candidate" ] && [ -w "$candidate" ]; then
             printf '%s' "$candidate"
@@ -95,21 +96,22 @@ dr_win_root() {
     return 1
 }
 
-# --- standing in for the mound's git repository ------------------------------
+# --- a stand-in for the git repository of the mound -------------------------
 #
-# dr-sync and friends talk to ssh://<name>.sbx/<mound path>. There is no sandbox
-# in a test, so we use git's own url.<base>.insteadOf rewriting to point that URL
-# at a local clone. git then does a genuine fetch over the filesystem, which
-# means the code under test is unmodified - no test-only branch, no backdoor
-# variable, and the fetch, the ref names and the commit counting are all real.
+# dr-sync and the related commands talk to ssh://<name>.sbx/<mound path>. A test
+# has no sandbox. Thus we use the own url.<base>.insteadOf rewrite of git to
+# point that URL at a local clone. git then does a real fetch over the
+# filesystem. Thus the code under test has no change: no test-only branch, no
+# backdoor variable. The fetch, the ref names, and the commit count are all
+# real.
 #
-# Prints the stand-in repo's path. Commits made there appear to Draugr exactly as
-# the agent's commits would.
+# Prints the path of the stand-in repo. Commits there look to Draugr exactly
+# like the commits of the agent.
 dr_fake_mound() {
     local repo=$1 name=$2 url mound fake
 
-    # The URL Draugr will derive. It has to match exactly, so it is built the
-    # same way dr_sandbox_url builds it: /mnt is stripped to give the mound path.
+    # The URL that Draugr derives. It must match exactly, so it is built the
+    # same way as in dr_sandbox_url. /mnt is removed to give the mound path.
     mound=${repo#/mnt}
     url="ssh://$name.sbx$mound"
 
@@ -125,14 +127,14 @@ dr_fake_mound() {
 
 # --- a fake sbx installation tree ---------------------------------------------
 #
-# dr-scan finds the shared skills store by walking up from sbx.exe:
-# <root>/bin/sbx.exe -> <root>/sandboxes/state/agent-skills. Pointing DRAUGR_SBX
-# straight at tests/mocks/sbx would therefore make it look inside the repo, so
-# this puts a copy of the mock in a throwaway tree.
+# dr-scan finds the shared skills store with a walk up from sbx.exe:
+# <root>/bin/sbx.exe -> <root>/sandboxes/state/agent-skills. If DRAUGR_SBX
+# points directly at tests/mocks/sbx, it looks in the repo. Thus this puts a
+# copy of the mock in a throwaway tree.
 #
-# Sets DR_SKILLS_DIR rather than printing it: the caller would have to write
-# $(dr_fake_sbx_root), and a command substitution is a subshell, so the
-# `export DRAUGR_SBX` would be discarded the moment it returned.
+# Sets DR_SKILLS_DIR, and does not print it. Else, the caller must write
+# $(dr_fake_sbx_root). A command substitution is a subshell, so the `export
+# DRAUGR_SBX` is lost when it returns.
 dr_fake_sbx_root() {
     local root="$DR_TMP/sbxroot"
     mkdir -p "$root/bin" "$root/sandboxes/state/agent-skills"
@@ -143,19 +145,19 @@ dr_fake_sbx_root() {
     export DR_SKILLS_DIR
 }
 
-# --- standing in for the mound's filesystem ----------------------------------
+# --- a stand-in for the filesystem of the mound -----------------------------
 #
-# The companion to dr_fake_mound: that one stands in for the mound's git repo,
-# this one for its disk. Sets DR_MOCK_MOUND, which makes the mock sbx run 'exec'
-# and 'cp' against a real directory tree, and DR_MEMDIR, where this repo's
-# memory lives inside it.
+# The partner of dr_fake_mound. That one is a stand-in for the git repo of the
+# mound, and this one for its disk. Sets DR_MOCK_MOUND, which makes the mock sbx
+# run 'exec' and 'cp' against a real directory tree. Also sets DR_MEMDIR, the
+# place of the memory of this repo in it.
 #
-# Sets rather than prints, for the same reason dr_fake_sbx_root does: writing
-# $(dr_mound_memory_dir …) would run it in a subshell and throw the export away.
+# Sets, and does not print, for the same reason as dr_fake_sbx_root. With
+# $(dr_mound_memory_dir …), it runs in a subshell, and loses the export.
 #
-# The project key is derived here independently of dr_mem_key - strip /mnt, then
-# every "/" becomes "-". If the two ever disagree the tests fail, which is the
-# entire value: a translation that only agrees with itself is untested.
+# The project key comes from here, independently of dr_mem_key. Remove /mnt, and
+# each "/" becomes "-". If the two are ever different, the tests fail. That is
+# the full value. A translation that only agrees with itself is untested.
 dr_mound_memory_dir() {
     local repo=$1 key
     key=$(printf '%s' "${repo#/mnt}" | tr '/' '-')
@@ -164,20 +166,20 @@ dr_mound_memory_dir() {
     export DR_MEMDIR
 }
 
-# The same, for Codex - which files nothing under the project's name, so there is
-# no key and the repo is not even an argument. DR_CODEXDIR is $CODEX_HOME inside
-# the stand-in tree; the memories live one level below it, and the databases sit
-# directly in it. Spelled out here rather than derived from the module, for the
-# same reason as above: a layout that only agrees with itself is untested.
+# The same, for Codex. Codex files nothing under the name of the project. Thus
+# there is no key, and the repo is not an argument. DR_CODEXDIR is $CODEX_HOME
+# in the stand-in tree. The memories are one level below it, and the databases
+# are directly in it. Written here, not derived from the module, for the same
+# reason as above. A layout that only agrees with itself is untested.
 dr_mound_codex_dir() {
     export DR_MOCK_MOUND="$DR_TMP/mound-fs"
     DR_CODEXDIR="$DR_MOCK_MOUND/home/agent/.codex"
     export DR_CODEXDIR
 }
 
-# A gitignored secret, with the .gitignore committed so the working tree is
-# CLEAN. That matters: a dirty tree makes dr-go refuse for its own reasons, and a
-# scan test that trips the clean-tree check instead is testing nothing.
+# A gitignored secret, with the .gitignore committed, so that the working tree
+# is CLEAN. That is important. A dirty tree makes dr-go refuse for its own
+# reasons. A scan test that fails on the clean-tree test tests nothing.
 dr_add_ignored_secret() {
     local repo=$1 name=${2:-secrets.env}
     printf '%s\n' "$name" >> "$repo/.gitignore"
@@ -186,7 +188,7 @@ dr_add_ignored_secret() {
     printf 'AWS_SECRET=hunter2\n' > "$repo/$name"
 }
 
-# Make a commit in the stand-in, the way the agent would.
+# Make a commit in the stand-in, as the agent does.
 dr_mound_commit() {
     local fake=$1 msg=${2:-agent work}
     printf '%s\n' "$msg" >> "$fake/agent.txt"
@@ -197,25 +199,25 @@ dr_mound_commit() {
 # Prints the repo path. Call it as:
 #   repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
 #
-# The scratch directory is named after $DR_TMP rather than made with mktemp, so
-# that dr_test_teardown can find it again by name. It cannot be handed back in a
-# variable: every caller uses a command substitution, which is a subshell, so an
-# `export` here dies with it - and the directory then lives on a real drive that
-# nothing else cleans. That leaked 5311 directories into C:\Temp before it was
-# noticed, which is the argument for deriving the name instead of passing it.
+# The scratch directory gets its name from $DR_TMP, and is not made with mktemp.
+# Thus dr_test_teardown can find it again by name. A variable cannot give it
+# back. Each caller uses a command substitution, which is a subshell, so an
+# `export` here dies with it. The directory then stays on a real drive that
+# nothing else cleans. That left 5311 directories in C:\Temp before somebody saw
+# it. That is the reason to derive the name, and not to pass it.
 dr_make_win_repo() {
     local root name=${1:-testrepo} dir
     root=$(dr_win_root) || return 1
 
-    # Under $root rather than $TMPDIR, which is the whole point: the path has to
-    # begin /mnt/<letter>/ to be accepted.
+    # Under $root, not $TMPDIR. That is the full purpose. The path must start
+    # with /mnt/<letter>/ to be accepted.
     DR_WIN_TMP="$root/draugr-test.${DR_TMP##*/}"
     mkdir -p "$DR_WIN_TMP" || return 1
     export DR_WIN_TMP
     dir="$DR_WIN_TMP/$name"
 
-    # One commit, so the tree is clean and has history - dr-go's clean-tree check
-    # and the clone itself both need something to have been committed at least once.
+    # One commit, so that the tree is clean and has history. The clean-tree test
+    # of dr-go and the clone itself both need one commit or more.
     mkdir -p "$dir"
     git -C "$dir" init -q -b main
     git -C "$dir" config user.email test@example.com

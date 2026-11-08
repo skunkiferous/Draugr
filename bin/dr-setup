@@ -1,35 +1,36 @@
 #!/usr/bin/env bash
-# dr-setup - one-time machine setup: the ssh bridge, and the kit library.
+# dr-setup: the setup of the machine, once: the ssh bridge and the kit library.
 #
-# This is the step people miss. `sbx setup ssh` configures the WINDOWS ssh client
-# only. WSL has its own ~/.ssh/config, and Draugr runs in WSL - so without a
-# matching block here, neither `ssh <name>.sbx` nor git's ssh:// transport works,
-# which means dr-sync cannot fetch the agent's commits.
+# People often forget this step. `sbx setup ssh` configures only the WINDOWS ssh
+# client. WSL has its own ~/.ssh/config, and Draugr runs in WSL. Without a block
+# here, `ssh <name>.sbx` and the ssh:// transport of git do not work. Then
+# dr-sync cannot fetch the commits of the agent.
 #
-# It also creates DRAUGR_KIT_STORE, the library of named kits shared across your
-# repositories. Both are machine-level: everything else Draugr does is per-repo.
+# It also creates DRAUGR_KIT_STORE, the library of named kits that your
+# repositories share. Both are for the machine. All else in Draugr is for one
+# repo.
 #
-#   dr-setup           write the block if it is missing, create the library
-#   dr-setup --force   rewrite it even if something is already there
-#   dr-setup --print   print what would be written, change nothing
+#   dr-setup           write the block if it is missing, and create the library
+#   dr-setup --force   write it again, even if something is already there
+#   dr-setup --print   print what it writes, and change nothing
 #   dr-setup --forge   also write the `Host *.forge` block, for a forge VM
-#   dr-setup --forge-gateway <mound>   the same, naming the gateway mound
+#   dr-setup --forge-gateway <mound>   the same, with the name of the gateway mound
 #
-# THE FORGE BLOCK IS OPT-IN AND STICKY. Opt-in because a machine with no forge VM
-# should never carry a block mentioning one. Sticky because the strip-and-rewrite
-# below removes managed blocks before putting them back, so a later plain run has
-# to mean "leave it as it was" rather than "delete it".
+# THE FORGE BLOCK IS ONLY ON REQUEST, AND IT STAYS. Only on request, because a
+# machine with no forge VM must never have a block about one. It stays, because
+# the code below removes the managed blocks before it writes them again. Thus a
+# later plain run must mean "keep it", not "delete it".
 set -euo pipefail
 
 DR_PROG=dr-setup
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# --print is a dry run: it shows the block and touches nothing.
+# --print is a dry run. It shows the block, and touches nothing.
 force=
 print=
 forge=
@@ -42,7 +43,7 @@ while [ $# -gt 0 ]; do
         --forge)    forge=1; forge_given=1 ;;
         --forge-gateway)
             shift
-            [ -n "${1:-}" ] || dr_die "--forge-gateway needs the gateway mound's name" \
+            [ -n "${1:-}" ] || dr_die "--forge-gateway needs the name of the gateway mound" \
                 "For example:  dr-setup --forge-gateway draugr-gateway"
             forge=1; forge_given=1; forge_gw=$1 ;;
         -h|--help)  dr_help "$0"; exit 0 ;;
@@ -51,31 +52,33 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# No repository is involved here, and dr_load_config takes that in its stride:
-# with no repo argument it lays down the defaults and applies only the user-home
-# layer. That is the right precedence for a machine-level command, and it is what
-# makes DRAUGR_KIT_STORE readable below - including when you have moved it.
+# No repository is part of this, and dr_load_config accepts that. With no repo
+# argument, it sets the defaults and applies only the layer of the user home.
+# That is the correct order for a command for the machine. It also makes
+# DRAUGR_KIT_STORE readable below, also after you moved it.
 dr_load_config
 
-# Hoisted above --print so the dry run can report the forge block too, and so the block that
-# is already there can be found before anything is written.
+# Above --print, so that the dry run can also report the forge block. Here the
+# code also finds the existing block, before it writes something.
 config="$HOME/.ssh/config"
 
-# Already there? Then it stays, whether or not this run asked for it.
+# Is it already there? Then it stays, also without a request in this run.
 forge_had=
 if grep -qE '^# >>> draugr forge \(managed\) >>>$' "$config" 2>/dev/null; then
     forge_had=1
     forge=1
 fi
 
-# The gateway mound's name is the one thing in that block that varies, and it is REMEMBERED
-# from the block rather than re-defaulted: a plain re-run must not quietly repoint the route
-# at a mound that is not serving it.
+# The name of the gateway mound is the one variable thing in that block. The
+# code READS it from the block, and does not use the default again. A plain
+# second run must not silently point the route to a mound that does not serve
+# it.
 if [ -z "$forge_gw" ] && [ -n "$forge_had" ]; then
     forge_gw=$(sed -n 's/^[[:space:]]*ProxyCommand ssh .*[[:space:]]\([^[:space:]]*\)\.sbx socat .*/\1/p' \
                "$config" | head -1)
 fi
-# Draugr generates the gateway, so Draugr gets to name it: the default is the name it uses.
+# Draugr generates the gateway, so Draugr names it. The default is the name that
+# it uses.
 [ -n "$forge_gw" ] || forge_gw=draugr-gateway
 
 forge_key="$HOME/.ssh/draugr_forge_ed25519"
@@ -84,18 +87,19 @@ forge_known="$HOME/.ssh/draugr_forge_known_hosts"
 sbx_exe=$(dr_find_sbx) || dr_die \
     "cannot find sbx.exe" \
     "Install it first:  winget install Docker.sbx" \
-    "Or point Draugr at it:  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
+    "Or tell Draugr where it is:  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
 
-# sbx keeps its host keys next to its own state. Derive the path from the binary
-# rather than guessing a username: sbx.exe lives in <root>/bin/sbx.exe.
+# sbx keeps its host keys next to its own state. Get the path from the binary,
+# and do not guess a user name. sbx.exe is in <root>/bin/sbx.exe.
 sbx_home=$(dirname "$(dirname "$sbx_exe")")
 known_hosts="$sbx_home/sandboxes/config/ssh/known_hosts"
 if [ ! -d "$sbx_home/sandboxes" ]; then
-    # WinGet installs a shim in Links/; fall back to LOCALAPPDATA in that case.
-    # An `if`, not `[ -n "$lad" ] && ...`: as the last command in this branch that && list
-    # returns 1 when cmd.exe answers nothing, and `set -e` then kills dr-setup in silence -
-    # exit 1, no message, nothing written. cmd.exe answers nothing whenever the working
-    # directory is WSL-native, which it is for anyone running this from their home directory.
+    # WinGet installs a shim in Links/. In that case, use LOCALAPPDATA. An `if`,
+    # not `[ -n "$lad" ] && ...`. If cmd.exe answers nothing, that && list
+    # returns 1, because it is the last command in this branch. Then `set -e`
+    # stops dr-setup silently: exit 1, no message, nothing written. If the
+    # working directory is on the WSL file system, cmd.exe answers nothing. That
+    # is true for each person who runs this from the home directory.
     if command -v cmd.exe >/dev/null 2>&1; then
         lad=$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r\n') || lad=
         if [ -n "$lad" ]; then
@@ -105,15 +109,16 @@ if [ ! -d "$sbx_home/sandboxes" ]; then
     fi
 fi
 
-# The ProxyCommand runs on the Windows side, so it needs the Windows path form;
-# UserKnownHostsFile is read by WSL's ssh, so that one stays a /mnt path.
+# The ProxyCommand runs on the Windows side, so it needs the Windows path form.
+# The ssh of WSL reads UserKnownHostsFile, so that one stays a /mnt path.
 snippet=$(sed \
     -e "s|@SBX_EXE@|$sbx_exe|" \
     -e "s|@KNOWN_HOSTS@|$known_hosts|" \
     "$DRAUGR_SHARE/ssh-config.snippet")
 
-# Rendered even for --print, and empty when the forge was neither asked for nor already there -
-# which is what keeps the block out of the file, and out of the dry run, on every other machine.
+# Made also for --print. If nobody asked for the forge, and it is not there,
+# it is empty. Thus the block is not in the file, and not in the dry run, on all
+# other machines.
 forge_snippet=
 if [ -n "$forge" ]; then
     forge_snippet=$(sed \
@@ -123,29 +128,30 @@ if [ -n "$forge" ]; then
         "$DRAUGR_SHARE/ssh-config-forge.snippet")
 fi
 
-# The dry run, before anything is created: the blocks as they would be written, and the library
-# only described. Nothing below this point runs, which is the whole promise of --print.
+# The dry run, before the code creates something: the blocks as the code writes
+# them, and only a description of the library. Nothing below runs. That is the
+# promise of --print.
 if [ -n "$print" ]; then
     printf '%s\n' "$snippet"
     [ -n "$forge_snippet" ] && printf '\n%s\n' "$forge_snippet"
-    printf '\n# Would also create the kit library at %s\n' "$(dr_kit_store)"
+    printf '\n# It also creates the kit library at %s\n' "$(dr_kit_store)"
     exit 0
 fi
 
-# The kit library, created here because this is the one command that sets up the
-# MACHINE rather than a repository - and because an empty directory is a much
-# better first encounter than `dr-kit list` explaining what a kit store is.
+# The kit library, here because this is the one command that sets up the
+# MACHINE, not a repository. An empty directory is also a better first view than
+# a text from `dr-kit list` about what a kit store is.
 #
-# Done before the ssh work so it happens even on the "already configured" exit
-# below: someone re-running dr-setup after upgrading has a working ssh block and
-# no library, which is exactly the case that would otherwise be skipped.
+# Before the ssh work, so that it also happens at the "already configured" exit
+# below. After an upgrade, a person who runs dr-setup again has a working ssh
+# block and no library. Otherwise the code skips exactly that case.
 store=$(dr_kit_store)
 if [ -d "$store" ]; then
     dr_debug "kit library already at $store"
 else
     mkdir -p "$store" || dr_die "could not create the kit library at $store"
     dr_ok "created the kit library at $store"
-    printf '  %sPut a reusable kit there from any repo:  dr-kit save <name>%s\n' \
+    printf '  %sPut a kit for many repos there, from a repo:  dr-kit save <name>%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
 fi
 
@@ -154,14 +160,15 @@ chmod 700 "$HOME/.ssh"
 touch "$config"
 chmod 600 "$config"
 
-# A SEPARATE key from the Windows-side admin one, for two reasons that both still hold: ssh
-# refuses a key read off /mnt/c, where Windows files present as world-readable, and a second
-# credential can be revoked without touching the first. Minted here because the block names it
-# and an alias pointing at a file that does not exist fails at connect time, not at write time.
+# A SEPARATE key, not the admin key of the Windows side, for two reasons. ssh
+# refuses a key from /mnt/c, where Windows files look world-readable. You can
+# also revoke a second credential and not touch the first. It is made here,
+# because the block names it. An alias for a file that does not exist fails at
+# connection time, not at write time.
 if [ -n "$forge" ]; then
     if [ ! -f "$forge_key" ]; then
         ssh-keygen -t ed25519 -N '' -C 'draugr-forge-wsl' -f "$forge_key" >/dev/null
-        dr_ok "minted $forge_key"
+        dr_ok "made $forge_key"
     fi
     chmod 600 "$forge_key"
 fi
@@ -171,38 +178,39 @@ if grep -qE '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$config" 2>/dev/null; then
     existing=1
 fi
 
-# Something is already there and we were not told to force. Two cases: a working
-# sbx block (leave it alone and say so), or something else wearing the same Host
-# pattern (refuse - we do not rewrite ssh config we did not author).
-# --forge and --forge-gateway skip this exit on purpose. Without that, asking for the forge
-# block on a machine set up before the forge existed would print "already configured" and do
-# nothing at all. Rewriting is safe: it is idempotent and the previous file is backed up.
+# Something is already there, and nobody asked to force. Two cases. For a
+# working sbx block, do not touch it, and say so. For something else with the
+# same Host pattern, refuse, because we do not rewrite ssh configuration that we
+# did not write. --forge and --forge-gateway skip this exit, on purpose. Without
+# that, a request for the forge block on a machine that is older than the forge
+# prints "already configured", and does nothing. A rewrite is safe: it is
+# idempotent, and the previous file has a backup.
 if [ -n "$existing" ] && [ -z "$force" ] && [ -z "$forge_given" ]; then
     proxy=$(grep -A8 -E '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$config" \
             | grep -i ProxyCommand | head -1 || true)
     if printf '%s' "$proxy" | grep -q sbx; then
-        dr_ok "already configured - a Host *.sbx block with an sbx ProxyCommand exists"
+        dr_ok "already configured. A Host *.sbx block with an sbx ProxyCommand exists."
         printf '  %s%s%s\n' "$_DR_DIM" "$config" "$_DR_OFF" >&2
-        printf '  %sRewrite it anyway with: dr-setup --force%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sTo write it again anyway: dr-setup --force%s\n' "$_DR_DIM" "$_DR_OFF" >&2
         exit 0
     fi
     dr_die \
-        "a Host *.sbx block already exists but has no sbx ProxyCommand" \
-        "Draugr will not silently rewrite ssh configuration it did not author." \
-        "Inspect $config, then run:  dr-setup --force"
+        "a Host *.sbx block already exists, but has no sbx ProxyCommand" \
+        "Draugr does not silently rewrite ssh configuration that it did not write." \
+        "Look at $config, then run:  dr-setup --force"
 fi
 
 backup="$config.draugr-backup.$(date +%Y%m%d%H%M%S)"
 cp "$config" "$backup"
 
-# Drop any managed block that is already there, so re-running cannot end up with
-# two of them. An awk program is a list of  PATTERN { ACTION }  pairs, run once
-# per input line; here a flag called `skip` tracks whether we are inside a block
-# we intend to discard.
+# Remove each managed block that is already there, so that a second run cannot
+# make two of them. An awk program is a list of  PATTERN { ACTION }  pairs, run
+# once for each input line. Here, a flag called `skip` records whether we are
+# inside a block to discard.
 #
-# The order of the rules matters. The opening markers set skip=1 BEFORE the
-# print rule is reached, so the marker line itself is dropped; the closing
-# markers clear it AFTER, so the closing line is dropped too.
+# The order of the rules is important. The opening markers set skip=1 BEFORE the
+# print rule, so the marker line is removed too. The closing markers clear it
+# AFTER, so the closing line is also removed.
 tmp=$(mktemp)
 awk '
     /^# >>> draugr \(managed\) >>>$/           { skip = 1 }
@@ -214,11 +222,11 @@ awk '
     /^# <<< docker sandboxes \(managed\) <<<$/ { skip = 0 }
 ' "$config" > "$tmp"
 
-# A hand-written "Host *.sbx" has no markers around it, so the pass above leaves
-# it alone. We only get here with --force, which means the user has said to
-# replace it. An ssh config block runs until the next Host line, so: start
-# skipping at ours, stop at whatever Host comes next. `next` skips the remaining
-# rules for this line, which is how the Host line itself is dropped.
+# A "Host *.sbx" that a person wrote has no markers, so the pass above does not
+# touch it. We get here only with --force, so the user said to replace it. An
+# ssh configuration block continues until the next Host line. Thus start to skip
+# at ours, and stop at the next Host. `next` skips the other rules for this
+# line, so the Host line is removed too.
 if grep -qE '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$tmp"; then
     awk '
         /^[[:space:]]*Host[[:space:]]+\*\.sbx([[:space:]]|$)/ { skip = 1; next }
@@ -228,7 +236,7 @@ if grep -qE '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$tmp"; then
     mv "$tmp.2" "$tmp"
 fi
 
-# Grouping commands in { } lets one redirect capture all of their output.
+# Commands in { } share one redirect, which captures all of their output.
 {
     cat "$tmp"
     printf '\n'
@@ -236,10 +244,10 @@ fi
     [ -n "$forge_snippet" ] && printf '\n%s\n' "$forge_snippet"
 } > "$config.new"
 
-# Collapse runs of blank lines left behind by the deletions above, so repeated
-# --force runs do not slowly push the file apart. NF is awk's field count, so
-# `NF == 0` is "blank line": count them instead of printing, then when a real
-# line arrives emit at most one blank before it.
+# Reduce the groups of blank lines that the deletions above leave, so that many
+# --force runs do not slowly make the file longer. NF is the field count of awk,
+# so `NF == 0` is "blank line". Count them, and do not print them. Then, at a
+# real line, print one blank line before it at most.
 awk 'NF == 0 { blank++; next } { while (blank-- > 1) print ""; blank = 0; print }' \
     "$config.new" > "$config"
 rm -f "$tmp" "$config.new"
@@ -256,11 +264,12 @@ printf '  %sknown_hosts: %s%s\n' "$_DR_DIM" "$known_hosts" "$_DR_OFF" >&2
 if [ -n "$forge_snippet" ]; then
     printf '  %sforge gateway mound: %s%s\n' "$_DR_DIM" "$forge_gw" "$_DR_OFF" >&2
     printf '  %sforge key:   %s%s\n' "$_DR_DIM" "$forge_key" "$_DR_OFF" >&2
-    # The public half, because somebody has to authorise it inside the guest before the route
-    # carries anything. Printed rather than installed: this command cannot reach the VM.
-    printf '\n  %sAuthorise this in the guest (dr-forge init will, once it exists):%s\n' \
+    # The public half, because somebody must authorize it inside the guest
+    # before the route carries traffic. Printed, not installed, because this
+    # command cannot reach the VM.
+    printf '\n  %sAuthorize this in the guest (dr-forge init does, when the VM exists):%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %s\n' "$(cat "$forge_key.pub")" >&2
 fi
 
-printf '\n  %sVerify with:  dr-doctor%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+printf '\n  %sMake sure that it works with:  dr-doctor%s\n' "$_DR_DIM" "$_DR_OFF" >&2

@@ -1,93 +1,93 @@
 # shellcheck shell=bash
 #
-# lib/agents/claude.sh - what Draugr knows about Claude Code, and nothing else.
+# lib/agents/claude.sh: what Draugr knows about Claude Code, and nothing else.
 #
 # shellcheck disable=SC2016
-# Single-quoted "$1" appears throughout and is deliberate: those strings are
-# scripts for the MOUND's shell, and the whole point is that the host does not
-# expand them. See dr_mound_sh in lib/common.sh for how the arguments get there.
+# "$1" in single quotes occurs in many places, on purpose. Those strings are
+# scripts for the shell of the MOUND. The host must not expand them. See
+# dr_mound_sh in lib/common.sh for how the arguments get there.
 #
-# Sourced by dr_agent_load when DRAUGR_AGENT is "claude", which is the default.
-# Every module in this directory answers the same set of dr_agent_* questions;
-# lib/agents/default.sh carries the list and what each one means.
+# dr_agent_load sources this file when DRAUGR_AGENT is "claude", the default.
+# Each module in this directory answers the same dr_agent_* questions.
+# lib/agents/default.sh has the list, and the meaning of each question.
 #
-# The point of the split is that an agent's private layout is exactly the kind of
-# thing that changes without telling you. Keeping each one in its own file means
-# a wrong guess about Codex cannot break a Claude session, and the next agent is
-# a new file rather than a new branch in six commands.
+# The reason for the split: the private layout of an agent can change with no
+# notice. With one file for each agent, a wrong guess about Codex cannot break
+# a Claude session. The next agent is a new file, not a new branch in six
+# commands.
 
 # ---------------------------------------------------------------------------
 # Memory, and the project-key translation
 #
-# Claude Code keeps per-project memory at
+# Claude Code keeps the memory of each project at
 #     <home>/.claude/projects/<PROJECT-KEY>/memory/
-# and derives PROJECT-KEY from the project's ABSOLUTE PATH. One repository
-# therefore has a different key on each side of the boundary:
+# It makes PROJECT-KEY from the ABSOLUTE PATH of the project. Thus one
+# repository has a different key on each side of the boundary:
 #
 #   Windows   C:\Code\Draugr       c--Code-Draugr
 #   WSL       /mnt/c/Code/Draugr   -mnt-c-Code-Draugr
 #   Mound     /c/Code/Draugr       -c-Code-Draugr
 #
-# Measured rather than assumed: on this machine one repo really does appear as
-# c--Code-claude on the host and -c-Code-claude inside its mound.
+# A test showed this. On one machine, one repo is c--Code-claude on the host
+# and -c-Code-claude in its mound.
 #
-# Copy the directory across without renaming and you get one the agent silently
-# never reads. No error, no warning, just an agent that has forgotten
-# everything - and that silence is the entire reason dr-mem exists.
+# If you copy the directory with no rename, the agent never reads the copy.
+# There is no error and no warning. The agent only forgot everything. That
+# silence is the reason that dr-mem exists.
 #
-# The encoder itself (dr_mem_key and friends) stays in lib/common.sh: it is a
-# pure path function, and the store uses it to name a directory whatever agent
-# is in play. What lives here is the LAYOUT built on top of it.
+# The encoder (dr_mem_key and the related functions) stays in lib/common.sh.
+# It is a pure path function, and the store uses it to name a directory for
+# each agent. This file holds the LAYOUT on top of it.
 # ---------------------------------------------------------------------------
 
-# dr_mem_mound_dir <repo> - the project directory inside the mound.
+# dr_mem_mound_dir <repo>: the project directory in the mound.
 dr_mem_mound_dir() {
     printf '%s/.claude/projects/%s' "$DR_MOUND_HOME" "$(dr_mem_key_mound "$1")"
 }
 
 # --- the module interface ---------------------------------------------------
 
-# Claude Code is the agent Draugr was built against, so its layout is known.
+# Draugr was built for Claude Code, so its layout is known.
 dr_agent_mem_supported() { return 0; }
 dr_agent_mem_label()     { printf 'Claude Code'; }
 
-# dr_agent_mem_dir <repo> - the directory holding memory inside the mound. Its
-# parent is what dr-mem creates and copies into, so the two stay in step by
-# construction rather than by two functions agreeing with each other.
+# dr_agent_mem_dir <repo>: the directory in the mound that holds memory. dr-mem
+# creates its parent and copies into it. Thus the two always agree, because of
+# how they are built. Two functions do not have to agree with each other.
 dr_agent_mem_dir() {
     printf '%s/memory' "$(dr_mem_mound_dir "$1")"
 }
 
-# dr_agent_mem_survey - listed when dr_agent_mem_dir turns out not to exist.
+# dr_agent_mem_survey: the code lists this when dr_agent_mem_dir does not exist.
 #
-# A wrong project key is the exact failure dr-mem exists to prevent, so when the
-# expected directory is missing it is worth showing what the mound does have:
-# one of those entries being this repo under another name is the symptom.
+# dr-mem exists to prevent a wrong project key. If the expected directory is
+# missing, show what the mound has. If one of those items is this
+# repo under a different name, that is the symptom.
 dr_agent_mem_survey() {
     printf '%s/.claude/projects' "$DR_MOUND_HOME"
 }
 
-# dr_agent_mem_present <repo> - is there anything in the mound worth exporting?
+# dr_agent_mem_present <repo>: does the mound hold data to export?
 #
-# The project key we computed is a prediction. If the mound disagrees, say so and
-# show what is actually there: a wrong key is the exact failure dr-mem exists to
-# prevent, so it must never be the silent kind. An existing project directory
-# with no memory in it is the ordinary "not yet" case and says nothing.
+# The project key that the code calculated is a prediction. If the mound does
+# not agree, say so and show what is there. dr-mem exists to prevent a wrong
+# key, so a wrong key must never be silent. A project directory with no memory
+# in it is the usual "not yet" case, and the code says nothing.
 dr_agent_mem_present() {
     local repo=$1 dir present
     dir=$(dr_agent_mem_dir "$repo")
 
-    # No project directory at all is the interesting case: either this repo has
-    # never had a session, or the key is wrong. Listing what IS there tells the
-    # two apart at a glance.
+    # No project directory is the important case. This repo never had a
+    # session, or the key is wrong. A list of what IS there shows at once
+    # which of the two it is.
     if ! dr_mound_sh 'test -d "$1"' "$(dirname "$dir")"; then
         present=$(dr_mound_sh 'ls -1 "$1" 2>/dev/null' "$(dr_agent_mem_survey)" | head -20)
         if [ -n "$present" ]; then
-            dr_warn "no project directory at $(dirname "$dir"), but the mound does have:"
+            dr_warn "no project directory at $(dirname "$dir"), but the mound has:"
             printf '%s\n' "$present" | sed 's/^/    /' >&2
-            printf '  %sIf one of those is this repo, dr_mem_key needs a case it does not%s\n' \
+            printf '  %sIf one of those is this repo, dr_mem_key does not yet know that case.%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
-            printf '  %shandle yet - worth reporting, with the repo path.%s\n' \
+            printf '  %sPlease report it, with the path of the repo.%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
         fi
         return 1
@@ -96,22 +96,23 @@ dr_agent_mem_present() {
     dr_mound_sh 'test -d "$1"' "$dir"
 }
 
-# dr_agent_mem_list <repo> - the carried set, hashed, named as pack writes them.
+# dr_agent_mem_list <repo>: the copied files, with hashes, and with the names
+# that pack writes.
 #
-# find -printf '%P' prints the path with the starting directory stripped, and
-# xargs -r declines to run sha256sum at all when there are no files - without
-# it, an empty directory would leave sha256sum reading stdin forever.
+# find -printf '%P' prints the path without the start directory. When there
+# are no files, xargs -r does not run sha256sum. Without -r, sha256sum reads
+# stdin and never stops for an empty directory.
 dr_agent_mem_list() {
     local dir; dir=$(dr_agent_mem_dir "$1")
     dr_mound_sh 'cd "$1" 2>/dev/null || exit 0
                  find . -type f -printf "%P\0" | sort -z | xargs -0 -r sha256sum' "$dir"
 }
 
-# dr_agent_mem_pack <repo> <stage> - everything worth keeping, into <stage>.
+# dr_agent_mem_pack <repo> <stage>: copy all the data to keep into <stage>.
 #
-# Claude Code's memory is one directory of markdown, so the packed tree is simply
-# its contents. "$2/." rather than "$2" copies what is INSIDE the directory,
-# which is what makes the packed tree the same shape for every agent.
+# The memory of Claude Code is one directory of markdown. Thus the packed tree
+# is its contents. "$2/." (not "$2") copies what is INSIDE the directory. Thus
+# the packed tree has the same format for each agent.
 dr_agent_mem_pack() {
     local repo=$1 stage=$2
     dr_mound_run 'set -e
@@ -119,11 +120,11 @@ dr_agent_mem_pack() {
                   cp -a "$2/." "$1/"' "$stage" "$(dr_agent_mem_dir "$repo")"
 }
 
-# dr_agent_mem_unpack <repo> <stage> - and back again.
+# dr_agent_mem_unpack <repo> <stage>: the copy in the other direction.
 #
-# The destination is replaced rather than merged: an import is "make the mound
-# look like this", and a merge would leave files from a previous session that
-# the store has no record of.
+# The code replaces the destination, and does not merge. An import means "make
+# the mound look like this". A merge leaves files from an earlier session, and
+# the store has no record of them.
 dr_agent_mem_unpack() {
     local repo=$1 stage=$2 dir
     dir=$(dr_agent_mem_dir "$repo")
@@ -132,15 +133,15 @@ dr_agent_mem_unpack() {
                   cp -a "$1/." "$2/"' "$stage" "$dir"
 }
 
-# dr_agent_mem_host_dir <repo> - the host's own live Claude memory for this repo,
-# if any. Two installs are possible and they use different keys: Claude Code run
-# under Windows, and Claude Code run inside WSL. Prints the first that exists
-# and returns 1 when neither does.
+# dr_agent_mem_host_dir <repo>: the live Claude memory of the host for this repo,
+# if there is one. Two installs are possible, and they use different keys:
+# Claude Code on Windows, and Claude Code in WSL. The function prints the first
+# that exists. If neither exists, it returns 1.
 dr_agent_mem_host_dir() {
     local repo=$1 userprofile candidate
 
-    # Windows first: on a WSL host $HOME is ext4 and usually has no Claude
-    # install at all, while the Windows profile normally does.
+    # Windows first. On a WSL host, $HOME is ext4 and usually has no Claude
+    # install. The Windows profile usually has one.
     if command -v cmd.exe >/dev/null 2>&1; then
         userprofile=$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')
         if [ -n "$userprofile" ] && [ "$userprofile" != '%USERPROFILE%' ]; then
@@ -155,11 +156,11 @@ dr_agent_mem_host_dir() {
     return 1
 }
 
-# dr_agent_mem_status_extra <repo> - the keys, for `dr-mem status`.
+# dr_agent_mem_status_extra <repo>: the keys, for `dr-mem status`.
 #
-# Worth a section of its own because they are the thing that goes wrong: three
-# spellings of one repository, and a copy filed under the wrong one is invisible.
-# Seeing all three side by side is how you recognise the one in the mound.
+# They get their own section, because the keys are what goes wrong. One
+# repository has three spellings, and nobody sees a copy under the wrong one.
+# With all three next to each other, you can find the one in the mound.
 dr_agent_mem_status_extra() {
     printf '\n%skeys%s\n' "$_DR_BOLD" "$_DR_OFF"
     printf '  %-6s %s\n' host  "$(dr_mem_key_win "$1")"
@@ -167,89 +168,86 @@ dr_agent_mem_status_extra() {
     printf '  %-6s %s\n' mound "$(dr_mem_key_mound "$1")"
 }
 
-# dr_agent_mem_host_hint <repo> - where the search above looked, for the message
-# printed when it found nothing. Naming the two keys is the useful half: someone
-# whose memory IS on this machine can see at a glance which spelling it is under.
+# dr_agent_mem_host_hint <repo>: where the search above looked, for the message
+# when it found nothing. The two keys are the useful part. If your memory IS on
+# this machine, you can see at once under which spelling it is.
 dr_agent_mem_host_hint() {
     printf 'Looked under keys %s and %s in ~/.claude/projects.' \
         "$(dr_mem_key_win "$1")" "$(dr_mem_key_wsl "$1")"
 }
 
-# dr_agent_secret - the name sbx stores this agent's credentials under.
+# dr_agent_secret: the name under which sbx stores the credentials of this agent.
 #
-# The token never enters the mound: sbx's proxy authenticates on the agent's
-# behalf, which is why signing in after a mound was built needs no rebuild.
-# How to GET that token is dr_agent_signin below, and it is not what you would
-# guess.
+# The token never goes into the mound. The proxy of sbx authenticates for the
+# agent. Thus a sign-in after the mound was built needs no rebuild. How to GET
+# that token is in dr_agent_signin below, and it is not what you expect.
 #
-# With DRAUGR_MODEL set there is no secret worth naming: the agent is not going
-# to call Anthropic at all, and dr-doctor's "the agent starts logged out" would
-# be advice to authenticate against a service this session does not use.
-# Returning failure is the existing spelling for that, and dr-doctor already
-# says nothing when it gets one.
+# When DRAUGR_MODEL is set, there is no secret to name. The agent does not call
+# Anthropic. The message of dr-doctor, "the agent starts logged out", then
+# tells you to authenticate with a service that this session does not use. The
+# function returns a failure for that case, and dr-doctor then says nothing.
 dr_agent_secret() {
     [ -z "${DRAUGR_MODEL:-}" ] || return 1
     printf 'anthropic'
 }
 
-# dr_agent_signin - and how to get one, which for Anthropic is backwards from
-# every other service sbx handles.
+# dr_agent_signin: how to get the secret. For Anthropic, the method is the
+# opposite of the method for all other services of sbx.
 #
-# `sbx secret set -g anthropic --oauth` is the obvious command and sbx REFUSES
-# it, measured against 0.37.1:
+# `sbx secret set -g anthropic --oauth` is the obvious command, and sbx REFUSES
+# it. A test on 0.37.1 showed this:
 #
 #   ERROR: anthropic OAuth cannot be started from `sbx secret set`;
 #          sign in from inside the Claude sandbox
 #
-# `sbx secret set --help` bears that out - its only --oauth example is openai,
-# so the flag works for the secret Codex uses and not for this one. The store
-# holds the RESULT of a login rather than the means to perform one, and for
-# Anthropic the only thing that knows how to run the flow is Claude Code itself.
-# So the sign-in happens in a mound and sbx captures what comes out of it;
-# every later mound is then covered, because the secret is global.
+# `sbx secret set --help` agrees. Its only --oauth example is openai. Thus the
+# flag works for the secret of Codex, but not for this one. The store holds the
+# RESULT of a login, not the method to do one. For Anthropic, only Claude Code
+# can run the flow. Thus the sign-in occurs in a mound, and sbx captures the
+# result. Then each later mound has it too, because the secret is global.
 #
-# An API key can still be pasted in directly, since a key is a value you already
-# have rather than one a flow has to produce. Named second because it is the
-# answer to a different question.
+# You can also paste an API key directly. A key is a value that you already
+# have, and no flow must make it. It is second, because it answers a
+# different question.
 dr_agent_signin() {
-    printf 'Sign in from INSIDE a mound - sbx refuses to start this flow itself:\n'
+    printf 'Sign in from INSIDE a mound. sbx refuses to start this flow itself:\n'
     printf '  dr-go     then run  /login  in Claude Code\n'
-    printf 'The token is captured globally, so other mounds need no rebuild.\n'
-    printf 'Or paste an API key instead:  echo "$KEY" | sbx secret set -g %s\n' "$1"
+    printf 'sbx stores the token globally, so other mounds need no rebuild.\n'
+    printf 'Or paste an API key:  echo "$KEY" | sbx secret set -g %s\n' "$1"
 }
 
 # ---------------------------------------------------------------------------
 # Plugins
 #
-# Claude Code keeps a plugin library at ~/.claude/plugins, and two variables
-# redirect it. They are not interchangeable and dr-plugin needs both names:
+# Claude Code keeps a plugin library at ~/.claude/plugins. Two variables change
+# its location. They are not the same, and dr-plugin needs both names:
 #
-#   CLAUDE_CODE_PLUGIN_CACHE_DIR   the library to READ AND WRITE. This is what
-#                                  makes a seed buildable: point the CLI at a
-#                                  directory and every install lands there
-#   CLAUDE_CODE_PLUGIN_SEED_DIR    a READ-ONLY library, consulted once at session
-#                                  startup. Never read by the CLI subcommands -
-#                                  measured, and the reason `claude plugin
-#                                  marketplace list` reports nothing in a mound
-#                                  that is working perfectly well
+#   CLAUDE_CODE_PLUGIN_CACHE_DIR   the library to READ AND WRITE. With it, Draugr
+#                                  can build a seed. Give the CLI a directory,
+#                                  and each install goes there
+#   CLAUDE_CODE_PLUGIN_SEED_DIR    a READ-ONLY library, read one time at the
+#                                  start of a session. The CLI subcommands never
+#                                  read it. A test showed this. It is the reason
+#                                  that `claude plugin marketplace list` reports
+#                                  nothing in a mound that works correctly
 #
-# So dr-plugin writes through the first and the mounds read through the second.
+# Thus dr-plugin writes through the first, and the mounds read through the second.
 # ---------------------------------------------------------------------------
 
 dr_agent_plugin_supported() { return 0; }
 dr_agent_plugin_cache_var() { printf 'CLAUDE_CODE_PLUGIN_CACHE_DIR'; }
 dr_agent_plugin_seed_var()  { printf 'CLAUDE_CODE_PLUGIN_SEED_DIR'; }
 
-# dr_agent_plugin_cli <verb> [arg...] - one operation, a word a line.
+# dr_agent_plugin_cli <verb> [arg...]: one operation, one word on each line.
 #
-# A word a line rather than a string because the caller feeds it to mapfile and
-# then to sbx exec: quoting a command line and re-splitting it is how the
-# `dr-shell -- "VAR=x cmd"` trap happens, and this avoids the question.
+# One word on each line, not a string. The caller gives it to mapfile, then to
+# sbx exec. If you quote a command line and split it again, you get the trap of
+# `dr-shell -- "VAR=x cmd"`. This format prevents that.
 #
-# -y everywhere it is accepted, because none of this runs on a TTY. On install
-# and update it accepts a marketplace-declared command that has CHANGED since it
-# was last agreed to, which is a real review step - dr-plugin prints what the CLI
-# says rather than swallowing it.
+# Use -y in each place that accepts it, because none of this runs on a TTY. On
+# install and update, -y accepts a command from a marketplace that CHANGED
+# since the last agreement. That is a real review step. dr-plugin prints what
+# the CLI says, and does not hide it.
 dr_agent_plugin_cli() {
     local verb=$1; shift
     local argv=(claude plugin)
@@ -267,24 +265,24 @@ dr_agent_plugin_cli() {
 }
 
 # ---------------------------------------------------------------------------
-# Pointing Claude Code at another endpoint
+# Send Claude Code to a different endpoint
 #
-# Claude Code reads its endpoint from ANTHROPIC_BASE_URL, and sends no request
-# at all without ANTHROPIC_AUTH_TOKEN even when the far side ignores it. So the
-# token below is a placeholder and deliberately not a real credential: nothing
-# here should put a live token on a local port.
+# Claude Code reads its endpoint from ANTHROPIC_BASE_URL. Without
+# ANTHROPIC_AUTH_TOKEN, it sends no request, even if the other side ignores the
+# token. Thus the token below is a placeholder, and not a real credential, on
+# purpose. Nothing here must put a live token on a local port.
 #
-# The three tier variables are not redundant. Claude Code picks a tier per call
-# rather than using one model - a small one for background work, a larger one
-# for yours - and any tier left unmapped falls through to a cloud model name the
-# local endpoint has never heard of. That surfaces as "model not found" at a
-# moment with no obvious connection to what you were doing, so all three are set
-# even when two of them name the same model.
+# The three tier variables are all necessary. Claude Code selects a tier for
+# each call, and does not use one model. It uses a small model for background
+# work and a larger model for your work. A tier with no value uses the name of
+# a cloud model, and the local endpoint does not know that name. You then see
+# "model not found" at a time that has no clear relation to your work. Thus
+# the code sets all three, also when two of them name the same model.
 # ---------------------------------------------------------------------------
 
 dr_agent_model_supported() { return 0; }
 
-# dr_agent_model_env <url> <model> <fast> - KEY=value a line, for the rcfile.
+# dr_agent_model_env <url> <model> <fast>: one KEY=value on each line, for the rcfile.
 dr_agent_model_env() {
     printf 'ANTHROPIC_BASE_URL=%s\n'             "$1"
     printf 'ANTHROPIC_AUTH_TOKEN=%s\n'           'draugr-local'

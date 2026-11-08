@@ -1,32 +1,34 @@
 #!/usr/bin/env bash
-# dr-up - make sure this repo's mound exists and is running. Does not attach.
+# dr-up: make sure that the mound of this repo exists and runs. It does not
+# attach.
 #
-# Idempotent: absent means create, stopped means start, running means say so and
-# stop. Creation flags (ports, memory, template, kit) only apply when the sandbox
-# is actually created - sbx bakes them into the spec, so changing one in the
-# config and re-running dr-up will NOT take effect until you dr-rm and recreate.
+# Idempotent (safe to run twice). Absent means create, stopped means start, and
+# running means say so and stop. Creation flags (ports, memory, template, kit)
+# apply only at the creation of the sandbox. sbx fixes them in the spec. If you
+# change one in the configuration and run dr-up again, the change does NOT apply
+# until you run dr-rm and create the mound again.
 #
 #   dr-up              create or start it
-#   dr-up --recreate   remove it first, so creation flags are re-applied
-#   dr-up --print      show the sbx command line, run nothing
-#   dr-up --force      with --recreate, also skip the unfetched/unexported checks
-#   dr-up --skip-deps  start this mound alone, without what DRAUGR_REQUIRES names
+#   dr-up --recreate   remove it first, so that the creation flags apply again
+#   dr-up --print      show the sbx command line, and run nothing
+#   dr-up --force      with --recreate, also skip the unfetched/unexported tests
+#   dr-up --skip-deps  start only this mound, without what DRAUGR_REQUIRES names
 set -euo pipefail
 
 DR_PROG=dr-up
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# --print is a dry run and --recreate is destructive, so they are deliberately
-# separate flags rather than one clever one.
+# --print is a dry run, and --recreate is destructive. Thus they are separate
+# flags, on purpose, not one clever flag.
 #
-# --yes and --force are separate for the reason dr-rm keeps them separate: --yes
-# means "stop asking me" and still refuses to destroy work that exists nowhere
-# else, while --force means "I know it is there and I want it gone".
+# --yes and --force are separate, for the same reason as in dr-rm. --yes means
+# "stop asking me", and still refuses to destroy work that exists only here.
+# --force means "I know that it is there, and I want it gone".
 recreate=
 print=
 force=
@@ -44,50 +46,50 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# Creating a mound implies creating whatever the mound is *of*, so this is the
-# other command allowed to make a repository - and the one that lets `dr-go`
-# work in a fresh directory. Identical to dr_context unless
-# DRAUGR_ON_MISSING_REPO says otherwise, and that defaults to refusing.
+# A new mound needs the repository that it is *of*. Thus this is the other
+# command that can make a repository, and the one that lets `dr-go` work in a
+# new directory. It is the same as dr_context, unless DRAUGR_ON_MISSING_REPO
+# says otherwise. The default of that key is to refuse.
 dr_context_create
 
 # --- assemble the creation command ------------------------------------------
 #
-# Built as an array, never as a string, so that a workspace path containing a
-# space stays one argument. Order matters only in that the agent and the paths
-# are positional and must come last: `sbx create [flags] AGENT PATH [PATH...]`.
+# An array, never a string, so that a workspace path with a space stays one
+# argument. The order matters only for the agent and the paths. They are
+# positional, and must come last: `sbx create [flags] AGENT PATH [PATH...]`.
 create_args=(create --name "$DRAUGR_SANDBOX")
 
-# The whole premise of the tool. false gives the agent your real working tree,
-# read-write; dr-go is where that gets challenged, because dr-up is also called
-# from scripts where a prompt would hang.
+# The basis of the tool. false gives the agent your real working tree,
+# read-write. dr-go asks about that, because scripts also call dr-up, and there
+# a question hangs.
 if dr_is_true "$DRAUGR_CLONE"; then
     create_args+=(--clone)
 fi
 
-# Empty means "let sbx decide", which is a better default than anything we could
-# invent, so each of these is only passed when the user actually set it.
+# Empty means "let sbx decide". That is better than a default that we invent.
+# Thus the code passes only the values that the user set.
 [ -n "$DRAUGR_MEMORY" ]   && create_args+=(-m "$DRAUGR_MEMORY")
 [ -n "$DRAUGR_CPUS" ]     && create_args+=(--cpus "$DRAUGR_CPUS")
 [ -n "$DRAUGR_TEMPLATE" ] && create_args+=(-t "$DRAUGR_TEMPLATE")
 
 # DRAUGR_KIT is a list, and each entry becomes its own --kit. sbx takes the flag
-# repeatedly and merges what it finds, so a shared library kit ADDS to the
-# project's rather than replacing it - verified against sbx 0.37.1, where two
-# mixins on one sandbox contributed both their install commands and both their
-# network rules.
+# many times, and merges what it finds. Thus a shared library kit ADDS to the
+# kit of the project, and does not replace it. A test with sbx 0.37.1 showed
+# this: two mixins on one sandbox gave both their install commands and both
+# their network rules.
 #
-# A resolved entry that is a directory on this disk has to be spelled the Windows
-# way for sbx.exe; anything else is a reference format we do not own and goes
-# through untouched. "Is it a directory?" is the honest way to tell them apart.
+# For sbx.exe, a resolved entry that is a directory on this disk needs a Windows
+# path. Other entries are a reference format that we do not own, and go without
+# change. "Is it a directory?" is the correct test to tell them apart.
 if [ -n "$DRAUGR_KIT" ]; then
     while IFS= read -r _ref; do
         if [ -d "$_ref" ]; then
-            # dr_path_win_kit, not dr_path_win: the kit library defaults to
-            # ~/.config/draugr/kits, which is on WSL's own ext4 and has no
-            # drive-letter spelling. A kit is read host-side rather than
-            # bind-mounted, so the UNC form works there - see the helper.
+            # dr_path_win_kit, not dr_path_win. The default kit library is
+            # ~/.config/draugr/kits. That is on the ext4 of WSL, and has no path
+            # with a drive letter. sbx reads a kit on the host, and does not
+            # bind-mount it, so the UNC form works there. See the helper.
             create_args+=(--kit "$(dr_path_win_kit "$_ref")") || dr_die \
-                "cannot spell $_ref in a way sbx.exe can read" \
+                "cannot write $_ref as a path that sbx.exe can read" \
                 "Kits outside /mnt/<drive> need \$WSL_DISTRO_NAME, which WSL sets." \
                 "Move the kit onto a Windows drive, or set DRAUGR_KIT_STORE to one."
         else
@@ -95,17 +97,17 @@ if [ -n "$DRAUGR_KIT" ]; then
         fi
     done < <(dr_kit_refs)
 
-    # Entries that resolved to nothing are reported one by one, by the name you
-    # wrote. A kit is optional, so this warns rather than refusing - but a silent
-    # miss would mean a mound quietly built without the network rules you meant.
+    # Report each entry that resolved to nothing, with the name that you wrote.
+    # A kit is optional, so this warns, and does not refuse. A silent miss gives
+    # a mound without the network rules that you wanted, with no message.
     while IFS= read -r _miss; do
         [ -n "$_miss" ] || continue
         if [ "${DR_ORIGIN[DRAUGR_KIT]}" = "built-in default" ]; then
-            # The default location, and nobody asked for it: an ordinary repo
-            # that has not opted into kits, not a mistake worth a warning.
+            # The default location, and nobody asked for it. This is an ordinary
+            # repo with no kits, not an error, so it gets no warning.
             dr_debug "no kit at $_miss (default location, none configured)"
         else
-            dr_warn "no kit found for '$_miss' - creating the mound without it"
+            dr_warn "no kit found for '$_miss'. Creating the mound without it."
             printf '  %sLooked in %s and in the kit store %s%s\n' \
                 "$_DR_DIM" "$DR_REPO" "$(dr_kit_store)" "$_DR_OFF" >&2
             printf '  %sDRAUGR_KIT came from %s. Saved kits:  dr-kit list%s\n' \
@@ -114,19 +116,20 @@ if [ -n "$DRAUGR_KIT" ]; then
     done < <(dr_kit_missing)
 fi
 
-# read -ra splits on whitespace into an array. Quoting "$DRAUGR_PORTS" here would
-# make it a single argument, and leaving it unquoted at the call site would work
-# but relies on word splitting happening to be right - this says so explicitly.
+# read -ra splits on whitespace into an array. With quotes, "$DRAUGR_PORTS" is
+# one argument. Without quotes at the call, it works, but only because word
+# splitting is correct by chance. This form says it explicitly.
 if [ -n "$DRAUGR_PORTS" ]; then
     read -ra _ports <<< "$DRAUGR_PORTS"
     for _p in "${_ports[@]}"; do create_args+=(-p "$_p"); done
 fi
 
-# Positional tail: the agent, this repo, then any extra workspaces.
+# The positional end: the agent, this repo, then the extra workspaces.
 create_args+=("$DRAUGR_AGENT" "$DR_REPO_WIN")
 
-# Extra mounts carry an optional ":ro" suffix that must survive translation, so
-# the suffix is split off, the path converted, and the suffix put back.
+# Extra mounts have an optional ":ro" suffix, and it must stay after the
+# translation. Thus the code removes the suffix, converts the path, and adds the
+# suffix again.
 if [ -n "$DRAUGR_MOUNTS" ]; then
     read -ra _mounts <<< "$DRAUGR_MOUNTS"
     for _m in "${_mounts[@]}"; do
@@ -137,15 +140,15 @@ if [ -n "$DRAUGR_MOUNTS" ]; then
         esac
         _win=$(dr_path_win "$_m") || dr_die \
             "extra mount is not on a Windows drive: $_m" \
-            "sbx can only mount Windows paths. See DRAUGR_MOUNTS in your config."
+            "sbx can only mount Windows paths. See DRAUGR_MOUNTS in your configuration."
         create_args+=("$_win$_mode")
     done
 fi
 
-# Print the resolved sbx.exe rather than the bare word "sbx": it is not on WSL's
-# PATH, so a line starting "sbx create" would not run if you pasted it. %q quotes
-# each argument for bash, which is what makes the result pasteable at all - a
-# Windows path is full of backslashes and at least one of these has a space in it.
+# Print the resolved sbx.exe, not the word "sbx". It is not on the PATH of WSL,
+# so a pasted line that starts with "sbx create" does not run. %q quotes each
+# argument for bash. Only that makes the result ready to paste. A Windows path
+# has many backslashes, and at least one of these has a space.
 if [ -n "$print" ]; then
     printf '%q %s\n' "$(dr_find_sbx)" "$(printf '%q ' "${create_args[@]}")"
     exit 0
@@ -155,152 +158,152 @@ fi
 
 state=$(dr_sandbox_state "$DRAUGR_SANDBOX")
 
-# A kit pinned to another agent cannot be composed with this one, and sbx says so
-# only when asked to create - in its own words, about a YAML field you did not
-# know it had read. `sbx kit validate` accepts such a kit happily, so this check
-# has to be ours.
+# sbx cannot compose a kit for another agent with this one. It says so only at
+# creation, in its own words, about a YAML field that you did not know it read.
+# `sbx kit validate` accepts such a kit. Thus this test must be ours.
 #
-# Run BEFORE the --recreate removal below, not at the point of creation: refusing
-# afterwards would leave you with no mound at all, having destroyed a working one
-# over a problem that was visible before it was touched. Measured, by doing
-# exactly that.
+# It runs BEFORE the --recreate removal below, not at creation. A refusal after
+# the removal leaves you with no mound. It destroys a working mound because of a
+# problem that was visible before. A test showed this: somebody did exactly
+# that.
 if [ "$state" = absent ] || [ -n "$recreate" ]; then
     while IFS=' ' read -r _kit _want; do
         [ -n "$_kit" ] || continue
         dr_die "kit $_kit requires agent \"$_want\", but DRAUGR_AGENT is \"$DRAUGR_AGENT\"" \
-               "sbx refuses to compose them, and would say so in its own words." \
-               "Either drop the 'requires: agent:' line from $_kit/spec.yaml," \
+               "sbx refuses to compose them, and says so in its own words." \
+               "Remove the 'requires: agent:' line from $_kit/spec.yaml," \
                "or keep a separate kit for this agent:  $_kit.$DRAUGR_AGENT/"
     done < <(dr_kit_agent_conflicts)
 fi
 
-# --recreate destroys the mound, and a mound holds three things that exist
-# nowhere else. All three are checked BEFORE anything is removed, for the reason
-# the kit-agent check above is: refusing afterwards would leave you with no mound
-# at all, over a problem that was visible before it was touched.
+# --recreate destroys the mound, and a mound holds three things that exist only
+# there. The code tests all three BEFORE it removes something, for the same
+# reason as the kit-agent test above. A refusal after the removal leaves you
+# with no mound, because of a problem that was visible before.
 #
-# The first two are commits the agent made and you never fetched, and the memory
-# it wrote. dr-rm refuses over both. This path called `sbx rm --force` directly
-# and so asked about neither, which made --recreate quietly MORE destructive than
-# the command whose entire job is destroying things - and --recreate is what you
-# run after editing the config, which is not a moment anyone is thinking about
-# the agent's memory.
+# The first two: commits of the agent that you never fetched, and the memory
+# that it wrote. dr-rm refuses for both. Before, this path called `sbx rm
+# --force` directly, and asked about neither. Thus --recreate was silently MORE
+# destructive than the command whose job is to destroy. You run --recreate
+# after you edit the configuration, and then nobody thinks about the memory of
+# the agent.
 #
-# Duplicated from dr-rm rather than shared, the same way the policy guard below
-# is, because the remedy differs: there it ends "then dr-rm again", here it names
-# the command you were actually running.
+# A copy of dr-rm, not shared, as the policy guard below, because the fix
+# differs. There it ends with "then dr-rm again". Here it names the command
+# that you ran.
 if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
     if [ -x "$_dr_bin/dr-sync" ]; then
         _check=0
         "$_dr_bin/dr-sync" --check-only || _check=$?
         case "$_check" in
             1) dr_die \
-                   "$DRAUGR_SANDBOX has commits you have not fetched" \
-                   "Recreating destroys them. Fetch them first with:  dr-sync" \
-                   "Then dr-up --recreate again. To throw them away:  dr-up --recreate --force" ;;
-            2) dr_warn "could not reach $DRAUGR_SANDBOX to check for unfetched commits" ;;
+                   "$DRAUGR_SANDBOX has commits that you did not fetch" \
+                   "A recreate destroys them. Fetch them first with:  dr-sync" \
+                   "Then run dr-up --recreate again. To discard them:  dr-up --recreate --force" ;;
+            2) dr_warn "could not connect to $DRAUGR_SANDBOX to look for unfetched commits" ;;
         esac
     fi
 
-    # DRAUGR_MEM_SYNC=off means "I do not keep agent memory", so refusing over it
-    # would be an obstacle rather than a guard. Same exemption dr-rm makes.
+    # DRAUGR_MEM_SYNC=off means "I do not keep agent memory". A refusal for it
+    # is an obstacle, not a guard. dr-rm makes the same exception.
     if [ "${DRAUGR_MEM_SYNC:-}" != off ] && [ -x "$_dr_bin/dr-mem" ]; then
         _mcheck=0
         "$_dr_bin/dr-mem" check || _mcheck=$?
         case "$_mcheck" in
             1) dr_die \
-                   "$DRAUGR_SANDBOX has memory you have not exported" \
-                   "Recreating destroys it. Export it first with:  dr-mem export" \
-                   "Then dr-up --recreate again. To throw it away:  dr-up --recreate --force" ;;
-            2) dr_warn "could not reach $DRAUGR_SANDBOX to check for unexported memory" ;;
+                   "$DRAUGR_SANDBOX has memory that you did not export" \
+                   "A recreate destroys it. Export it first with:  dr-mem export" \
+                   "Then run dr-up --recreate again. To discard it:  dr-up --recreate --force" ;;
+            2) dr_warn "could not connect to $DRAUGR_SANDBOX to look for memory that is not exported" ;;
         esac
     fi
 fi
 
-# The third: every host opened by dr-policy --allow. Those rules are scoped to
-# the sandbox and do not outlive it, which makes this the cruellest possible
-# moment to lose them - recreating is exactly what you do once the build finally
-# works, so the list that made it work would go in the act of making it
-# permanent. Same remedy as the guard in dr-rm.
+# The third: each host that dr-policy --allow opened. Those rules are for the
+# sandbox, and die with it. This is the worst time to lose them. You recreate
+# after the build finally works. Thus the list that made it work goes away at
+# the moment that you want to make it permanent. The fix is the same as the
+# guard in dr-rm.
 if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
     mapfile -t _opened < <(dr_policy_unadopted)
     if [ ${#_opened[@]} -gt 0 ]; then
         dr_die "${#_opened[@]} host(s) are open for $DRAUGR_SANDBOX, and not in the kit" \
                "$(printf '%s ' "${_opened[@]}")" \
-               "Recreating destroys them. Write them down first:  dr-kit adopt" \
+               "A recreate destroys them. Write them down first:  dr-kit adopt" \
                "Or accept the loss:  dr-up --recreate --force"
     fi
 fi
 
 
-# What this mound needs RUNNING, before anything here is destroyed or built.
+# What this mound needs to RUN, before the code destroys or builds something.
 #
-# Before, for the reason the checks above are before: an exclusive dependency
-# held by another project refuses, and refusing after the removal would leave
-# you with no mound at all over a problem that was visible beforehand. It is
-# also the right order on its own terms - the gateway has to answer before the
-# mound that will use it exists.
+# Before, for the same reason as the tests above. An exclusive dependency that
+# another project holds refuses. A refusal after the removal leaves you with no
+# mound, because of a problem that was visible before. It is also the correct
+# order for its own reason. The gateway must answer before the mound that uses
+# it exists.
 #
-# --print has already exited above, so a dry run never starts anything.
+# --print already exited above, so a dry run never starts anything.
 if [ -z "$skip_deps" ] && [ -n "${DRAUGR_REQUIRES:-}" ]; then
     "$_dr_bin/dr-dep" up || exit 1
 fi
 
-# --recreate exists because creation flags are frozen into the sandbox spec: the
-# only way to change a port mapping or the memory limit is to build a new mound.
+# --recreate exists because the creation flags are frozen in the sandbox spec.
+# To change a port mapping or the memory limit, you must build a new mound.
 if [ -n "$recreate" ] && [ "$state" != absent ]; then
-    dr_confirm "Remove and recreate $DRAUGR_SANDBOX? Anything uncommitted inside it is lost." \
+    dr_confirm "Remove and recreate $DRAUGR_SANDBOX? All uncommitted work inside it is lost." \
         || dr_die "cancelled"
     dr_sbx rm --force "$DRAUGR_SANDBOX" >/dev/null
     dr_ok "removed the old $DRAUGR_SANDBOX"
     state=absent
 fi
 
-# A sandbox that already exists was built with whatever the kit said at the time.
-# Editing the kit changes nothing until it is applied, and applying it recreates
-# the container - so say so rather than letting the difference go unnoticed.
+# An existing sandbox has the kit from the time of its build. An edit of the kit
+# changes nothing until you apply it, and the apply recreates the container.
+# Thus say so, so that you see the difference.
 report_drift() {
     local stamp changed
     if dr_kit_refs >/dev/null; then
         stamp=$(dr_kit_stamp)
-        # First line only: the stamp also records each kit, for dr-kit apply.
+        # Only the first line. The stamp also records each kit, for dr-kit
+        # apply.
         if [ -f "$stamp" ] && [ "$(dr_kit_hash_all)" != "$(dr_kit_stamp_hash)" ]; then
-            dr_warn "the kit has changed since $DRAUGR_SANDBOX was built"
+            dr_warn "the kit changed after $DRAUGR_SANDBOX was built"
             printf '  %sThe mound still has the old rules and setup. Apply them with:%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
-            printf '  %s  dr-kit apply      (says whether it can, or needs a recreate)%s\n' \
+            printf '  %s  dr-kit apply      (tells if it can, or if it needs a recreate)%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
         fi
     fi
 
-    # The same silent no-op, for the settings sbx freezes into the sandbox spec.
-    # Adding a mount and running dr-go otherwise leaves you looking at a
-    # directory that is simply not there, with nothing on screen to explain it.
+    # The same silent no-op, for the keys that sbx freezes in the sandbox spec.
+    # Otherwise, after a new mount and dr-go, you look at a directory that is
+    # not there, and nothing on the screen tells why.
     changed=$(dr_create_drift)
     [ -n "$changed" ] || return 0
-    # tr rather than an unquoted expansion: the list is newline separated and a
-    # bare $changed would be at the mercy of whatever IFS and globbing decided.
-    dr_warn "changed since $DRAUGR_SANDBOX was built: $(printf '%s' "$changed" | tr '\n' ' ')"
-    printf '  %sThese are fixed when the mound is created, so the running one still%s\n' \
+    # tr, not an unquoted expansion. The list has a newline between items. A
+    # bare $changed depends on the decisions of IFS and globbing.
+    dr_warn "changed after $DRAUGR_SANDBOX was built: $(printf '%s' "$changed" | tr '\n' ' ')"
+    printf '  %sThese are fixed at the creation of the mound, so the running one still%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %shas the old values. Rebuild it with:%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %shas the old values. Build it again with:%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %s  dr-up --recreate%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     case "$changed" in
-        # Ports are the one that has a mid-session answer, so name it rather than
-        # sending someone to rebuild a mound for a port they could just publish.
+        # Only ports have an answer during a session. Thus name it, and do not
+        # send somebody to rebuild a mound for a port that they can publish.
         *DRAUGR_PORTS*) printf '  %s  dr-ports          (ports only, no rebuild)%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2 ;;
     esac
 }
 
-# Set here so create_failed can be read on its own: it is given a real value
-# immediately before the create attempt.
+# Set here, so that create_failed works alone. It gets a real value directly
+# before the create attempt.
 _log_mark=0
 
-# What to say when sbx refuses to create. Its own message is already on screen
-# and is often nothing but a 500, so the useful part is whatever its daemon
-# recorded - see dr_sbx_log_error. Printed above the advice rather than dimmed
-# along with it, because it is evidence, not a suggestion.
+# The message for a refused create. Its own message is already on the
+# screen, and is often only a 500. Thus the useful part is what its daemon
+# recorded. See dr_sbx_log_error. Printed above the advice, and not dim, because
+# it is evidence, not a suggestion.
 create_failed() {
     local detail line
     detail=$(dr_sbx_log_error "$_log_mark") || detail=
@@ -312,35 +315,36 @@ create_failed() {
         printf '\n' >&2
     fi
 
-    # A failed install command is the one case worth explaining outright, because
-    # the command usually looks correct: commands.install runs BEFORE the repo is
-    # in the workspace, so anything reading a project file cannot work. Measured
-    # in both clone and mount mode against sbx 0.37.1 - the working directory is
-    # empty, and in clone mode the repo is read-only at /run/sandbox/source.
+    # A failed install command is the one case to explain directly, because the
+    # command usually looks correct. commands.install runs BEFORE the repo is in
+    # the workspace. Thus a command that reads a project file cannot work. Tests
+    # with sbx 0.37.1 in clone mode and in mount mode showed this. The working
+    # directory is empty, and in clone mode the repo is read-only at
+    # /run/sandbox/source.
     if [ "${detail#*commands.install}" != "$detail" ]; then
         dr_die "could not create $DRAUGR_SANDBOX" \
             "A kit install command failed. Those run BEFORE your repository is in" \
-            "the workspace, so one that reads a project file always fails: at that" \
-            "point the working directory is empty, and the repo is read-only at" \
-            "/run/sandbox/source. Install tools there, not the project itself."
+            "the workspace, so one that reads a project file always fails. At that" \
+            "time, the working directory is empty, and the repo is read-only at" \
+            "/run/sandbox/source. Install tools there, not the project."
     fi
 
-    # A kit is the likeliest other cause, and sbx says so in its own vocabulary
-    # two steps from the cause - "invalid name" turns out to be about a field in
-    # a YAML file you did not know it had read. So when kits are in play, name
-    # the command that checks them before offering the debug flag.
+    # A kit is the most likely other cause. sbx says so in its own words, two
+    # steps from the cause. "invalid name" is about a field in a YAML file that
+    # you did not know it read. Thus, with kits, name the command that tests
+    # them before the debug flag.
     if dr_kit_refs >/dev/null; then
         dr_die "could not create $DRAUGR_SANDBOX" \
-            "The message above is sbx's own. If it mentions the kit, check it with:" \
+            "The message above is from sbx. If it names the kit, test it with:" \
             "  dr-kit validate" \
-            "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
+            "To see the exact sbx command line, run again with DRAUGR_DEBUG=1."
     fi
     dr_die "could not create $DRAUGR_SANDBOX" \
-        "Re-run with DRAUGR_DEBUG=1 to see the exact sbx command line."
+        "To see the exact sbx command line, run again with DRAUGR_DEBUG=1."
 }
 
-# pre-up runs on every dr-up; post-create only when one is actually built. Both
-# run on the HOST, in WSL, which is precisely what a kit's commands cannot do.
+# pre-up runs at each dr-up. post-create runs only after a mound is built. Both
+# run on the HOST, in WSL. The commands of a kit cannot do that.
 dr_hook pre-up "$DR_REPO"
 
 case "$state" in
@@ -349,10 +353,10 @@ running)
     report_drift
     ;;
 
-# Stopped sandboxes keep their state and their clone. `exec true` is the way to
-# start one without attaching: sbx starts a stopped sandbox before running the
-# command, and `true` is the cheapest possible command. (`sbx run` would start it
-# too, but it also attaches, which is dr-go's job rather than dr-up's.)
+# Stopped sandboxes keep their state and their clone. `exec true` starts one
+# without an attach. sbx starts a stopped sandbox before it runs the command,
+# and `true` is the cheapest command. (`sbx run` also starts it, but it attaches
+# too. That is the job of dr-go, not of dr-up.)
 stopped)
     dr_info "starting $DRAUGR_SANDBOX"
     dr_sbx exec "$DRAUGR_SANDBOX" true >/dev/null \
@@ -361,20 +365,21 @@ stopped)
     report_drift
     ;;
 
-# The hooks bracket creation because that is the only moment a repo can set up
-# something on the HOST side - a kit runs inside the mound and cannot reach it.
+# The hooks are before and after creation, because only then can a repo set up
+# something on the HOST side. A kit runs inside the mound, and cannot reach it.
 absent)
     dr_info "creating $DRAUGR_SANDBOX for $DR_REPO_WIN"
     dr_debug "sbx $(printf '%q ' "${create_args[@]}")"
-    # Where sandboxd's log stands before the attempt, so that a failure is
-    # reported from what THIS create appended and nothing older.
+    # The position of the log of sandboxd before the attempt. Thus a failure
+    # report uses only what THIS create added, and nothing older.
     _log_mark=$(dr_sbx_log_mark)
     dr_sbx "${create_args[@]}" || create_failed
     dr_ok "created $DRAUGR_SANDBOX"
 
-    # Record what this was built from, so a later edit is detectable as drift
-    # instead of silently doing nothing. The kit stamp is written only when there
-    # are kits; the settings one always, because every mound has settings.
+    # Record the source of the build, so that a later edit shows as drift, and
+    # does not do nothing silently. The kit stamp exists only for a mound with
+    # kits. The configuration stamp always exists, because each mound has a
+    # configuration.
     mkdir -p "$DR_REPO/.draugr"
     if dr_kit_refs >/dev/null; then
         dr_kit_stamp_write
@@ -384,41 +389,42 @@ absent)
     dr_hook post-create "$DR_REPO"
     ;;
 
-# dr_sandbox_state prints "unknown" when it cannot reach sbx at all, and anything
-# else here means sbx grew a state we have not seen. Neither is worth guessing at.
+# If dr_sandbox_state cannot reach sbx, it prints "unknown". Other values here
+# mean that sbx has a new state that we did not see. Do not guess for either.
 *)
     dr_die "$DRAUGR_SANDBOX is in an unexpected state: $state" \
-           "Check it with:  dr-ls"
+           "Look at it with:  dr-ls"
     ;;
 esac
 
-# Data goes in after the mound is up but before the agent starts, so the files
-# are already there when it looks. Push is host-wins, which is the safe default
-# direction: the host copy is the one you can still recover from git or backup.
+# Data goes in after the mound starts, but before the agent starts. Thus the
+# files are already there at its first look. In a push, the host wins. That is
+# the safe default direction, because you can get the host copy back from git or
+# a backup.
 if [ "$DRAUGR_DATA_PUSH" = auto ] && [ -n "$DRAUGR_DATA" ] && [ -x "$_dr_bin/dr-data" ]; then
-    "$_dr_bin/dr-data" push --yes || dr_warn "auto data push failed; retry with:  dr-data push"
+    "$_dr_bin/dr-data" push --yes || dr_warn "auto data push failed. Try again with:  dr-data push"
 fi
 
-# Memory, same timing and for the same reason: the agent reads it at startup, so
-# it has to be in place before dr-go attaches. --if-empty is what makes this safe
-# to run on every dr-up rather than only on the one that created the mound - the
-# store is always the older copy, so it may fill a mound that has nothing and
-# must never overwrite one that has something.
+# Memory, at the same time and for the same reason. The agent reads it at its
+# start, so it must be there before dr-go attaches. --if-empty makes this safe
+# at each dr-up, not only at the one that created the mound. The store is always
+# the older copy. Thus it can fill an empty mound, but must never overwrite a
+# mound that has something.
 if [ "$DRAUGR_MEM_SYNC" = auto ] && [ -x "$_dr_bin/dr-mem" ]; then
     "$_dr_bin/dr-mem" import --if-empty --yes \
-        || dr_warn "auto memory import failed; retry with:  dr-mem import"
+        || dr_warn "auto memory import failed. Try again with:  dr-mem import"
 fi
 
-# Host ports last, because the address they resolve to is only true for as long
-# as this boot lasts. Re-resolved on every up rather than stored, which is the
-# whole of what makes DRAUGR_HOST_PORTS survive a reboot - see dr_host_ip. A
-# failure warns rather than dies: the mound is already up, and a session
-# without the hole is still a session.
+# Host ports last, because their address is true only for this boot. The code
+# resolves it again at each up, and does not store it. Only that makes
+# DRAUGR_HOST_PORTS work after a reboot. See dr_host_ip. A failure warns, and
+# does not stop. The mound already runs, and a session without the hole is still
+# a session.
 if [ -n "$DRAUGR_HOST_PORTS" ] && [ -x "$_dr_bin/dr-hostport" ]; then
     read -ra _hostports <<< "$DRAUGR_HOST_PORTS"
     for _hp in "${_hostports[@]}"; do
         "$_dr_bin/dr-hostport" "$_hp" \
-            || dr_warn "could not open host port $_hp; retry with:  dr-hostport $_hp"
+            || dr_warn "could not open host port $_hp. Try again with:  dr-hostport $_hp"
     done
 fi
 

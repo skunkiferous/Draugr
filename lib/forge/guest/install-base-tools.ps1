@@ -1,23 +1,22 @@
-# install-base-tools.ps1 - the default base image's Unix toolchain.
+# install-base-tools.ps1: the Unix toolchain of the default base image.
 #
-# Run this IN THE GUEST, after MSYS2 exists and the tunnel is up. Everything comes
-# from the pinned MSYS2 repository the `base` kit already allows, so installing it
-# needs no policy change (Draugr docs/FORGE.md, "The default base").
+# Run this IN THE GUEST, after MSYS2 exists and the tunnel is up. All comes from
+# the pinned MSYS2 repository that the `base` kit already allows. Thus the
+# install needs no policy change (Draugr docs/FORGE.md, "The default base").
 #
-# The list is deliberately short: tools an agent or a human wants in almost any
-# session, plus the ones this design named specifically. Anything engine-specific,
-# account-specific or project-specific belongs in a layer, not here.
+# The list is short, on purpose: tools that an agent or a person wants in almost
+# each session, and the ones that this design named. Tools for one engine, one
+# account, or one project belong in a layer, not here.
 #
-# Two things measured the hard way:
-#   - **stdin must be closed.** Over ssh there is no terminal, and any pacman prompt
-#     that --noconfirm does not cover then blocks forever with no output, no CPU and
-#     nothing in the log but the command line. `< /dev/null` turns that hang into an
-#     error you can read.
-#   - **MSYS2's native packages are UCRT64 now**, so the prefix is
-#     `mingw-w64-ucrt-x86_64-`, not `mingw-w64-x86_64-`, and the binaries land in
-#     /ucrt64/bin. The old names simply report "target not found".
+# Two things that tests found the hard way:
+#   - **stdin must be closed.** Through ssh, there is no terminal. Each pacman question that
+#     --noconfirm does not cover then blocks forever, with no output, no CPU, and nothing in
+#     the log but the command line. `< /dev/null` makes that hang an error that you can read.
+#   - **The native packages of MSYS2 are UCRT64 now.** Thus the prefix is
+#     `mingw-w64-ucrt-x86_64-`, not `mingw-w64-x86_64-`, and the binaries go to /ucrt64/bin.
+#     The old names report "target not found".
 #
-# Measured cost: MSYS2 grew from 439 MB to 487 MB - 48 MB for the whole set.
+# Measured cost: MSYS2 grew from 439 MB to 487 MB, so 48 MB for the whole set.
 #
 #   powershell -ExecutionPolicy Bypass -File .\install-base-tools.ps1            # install and verify
 #   powershell -ExecutionPolicy Bypass -File .\install-base-tools.ps1 -VerifyOnly
@@ -28,20 +27,20 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-# msys packages: POSIX builds, which is what a shell session wants.
+# msys packages: POSIX builds, as a shell session wants.
 $msysPkgs = @(
-    'git',                      # projects are versioned; git is the replication path
+    'git',                      # projects have versions. git is the replication path
     'rsync',                    # artifacts and logs without a share
     'openssh',                  # keys, ssh-keygen, scp
-    'curl', 'wget',             # fetching through the gateway proxy
+    'curl', 'wget',             # downloads through the gateway proxy
     'unzip', 'zip', 'p7zip',    # assets arrive as archives
-    'jq',                       # .uproject is JSON - this is how EngineAssociation is set
-    'diffutils', 'patch',       # comparing and patching config between engine versions
+    'jq',                       # .uproject is JSON. jq sets EngineAssociation
+    'diffutils', 'patch',       # compare and patch configuration between engine versions
     'make',                     # build glue
     'openssl',                  # hashes and certificates
-    'less', 'file', 'tree', 'nano'   # the minimum for a human looking around over ssh
+    'less', 'file', 'tree', 'nano'   # the minimum for a person who looks around through ssh
 )
-# Native Windows builds, for tools that walk Windows paths at speed.
+# Native Windows builds, for tools that walk Windows paths fast.
 $ucrtPkgs = @(
     'mingw-w64-ucrt-x86_64-ripgrep',
     'mingw-w64-ucrt-x86_64-fd'
@@ -50,52 +49,60 @@ $ucrtPkgs = @(
 $bash = Join-Path $Msys 'usr\bin\bash.exe'
 if (-not (Test-Path $bash)) { throw "no MSYS2 bash at $bash" }
 
-# Always `< /dev/null`: see the header. `du` rather than Get-ChildItem -Recurse,
-# which takes minutes over an MSYS2 tree and tells you nothing extra.
-# The redirect wraps the whole command in a subshell on purpose. Appending
-# "< /dev/null" to a PIPELINE redirects only its LAST stage, so `foo | head -1`
-# would leave head reading /dev/null and report every tool missing - which is
-# exactly the false result the first version produced.
-# Add-ToMachinePath - put a directory on the MACHINE PATH, once, JUST BEFORE System32.
+# Always `< /dev/null`. See the header. `du`, not Get-ChildItem -Recurse, which
+# takes minutes on an MSYS2 tree and tells nothing more. The redirect puts the
+# whole command in a subshell, on purpose. "< /dev/null" at the end of a
+# PIPELINE applies only to its LAST stage. Thus with `foo | head -1`, head reads
+# /dev/null, and the code reports each tool as missing. The first version gave
+# exactly that false result.
+
+# Add-ToMachinePath: put a directory on the MACHINE PATH, once, JUST BEFORE
+# System32.
 #
-# Not appended and not prepended: positioned. MSYS2 ships find.exe and sort.exe that
-# shadow the Windows ones, which is the POINT - the GNU versions are what anyone wants -
-# and link.exe, which shadows MSVC's linker and is the one that could hurt.
+# Not at the end and not at the start, but at an exact position. MSYS2 ships
+# find.exe and sort.exe that hide the Windows ones. That is the PURPOSE, because
+# people want the GNU versions. It also ships link.exe, which hides the linker
+# of MSVC. That one can cause damage.
 #
-# MEASURED, which is why prepending is safe: with C:\msys64\usr\bin placed
-# FIRST and then vcvars64.bat run, `where link` answers
+# A TEST SHOWED THIS, and it is why the start of PATH is safe. With
+# C:\msys64\usr\bin FIRST, and then a run of vcvars64.bat, `where link` answers
 #   C:\...\MSVC\14.38.33130\bin\Hostx64\x64\link.exe      <- MSVC, first
 #   C:\msys64\usr\bin\link.exe
-# because vcvars PREPENDS the toolchain directory itself. UnrealBuildTool is safe either
-# way: it resolves the toolchain by absolute path. The residual case is a bare `link`
-# outside a developer prompt, where nothing should expect MSVC anyway.
+# because vcvars PUTS the toolchain directory at the START. UnrealBuildTool is
+# safe in both cases, because it resolves the toolchain with an absolute path.
+# The other case is a bare `link` outside a developer prompt, and there nothing
+# expects MSVC.
 #
-# AND IT SHADOWS curl.exe TOO, which cost a dead verification. MEASURED: with
-# this directory on PATH, bare `curl.exe` in the guest is the CYGWIN build, and Cygwin eats
-# the braces out of `-w '%{http_code}'` before curl sees them. preflight.ps1 was therefore
-# comparing the literal string '%http_code' against '000' and reporting egress OK whatever
-# happened. It now names C:\Windows\System32\curl.exe by absolute path, which is the rule
-# this block implies for every other script: if the OUTPUT FORMAT matters, name the binary.
+# IT ALSO HIDES curl.exe, and that cost a broken test. A TEST SHOWED THIS. With
+# this directory on PATH, a bare `curl.exe` in the guest is the CYGWIN build.
+# Cygwin removes the braces from `-w '%{http_code}'` before curl sees them. Thus
+# preflight.ps1 compared the literal string '%http_code' with '000', and always
+# reported egress OK. It now names C:\Windows\System32\curl.exe with an absolute
+# path. This block implies that rule for each other script: if the OUTPUT FORMAT
+# matters, name the binary.
 #
-# BUT NOT AT THE VERY FRONT, because MSYS2 also ships ssh.exe, scp.exe and ssh-keygen.exe.
-# MEASURED: prepending made `ssh` resolve to C:\msys64\usr\bin\ssh.exe instead
-# of the Windows OpenSSH client, and MSYS2's client reads key paths, HOME and known_hosts
-# with POSIX semantics. Everything else in this project - the host tunnel, the guest's own
-# sshd, every script here - is Windows OpenSSH, and one ssh behaving differently from the
-# others inside the guest is a trap laid for later.
+# BUT NOT AT THE VERY START, because MSYS2 also ships ssh.exe, scp.exe, and
+# ssh-keygen.exe. A TEST SHOWED THIS. At the start, `ssh` resolved to
+# C:\msys64\usr\bin\ssh.exe, not to the Windows OpenSSH client. The MSYS2 client
+# reads key paths, HOME, and known_hosts with POSIX semantics. All else in this
+# project (the host tunnel, the own sshd of the guest, each script here) is
+# Windows OpenSSH. One ssh that works differently from the others inside the
+# guest is a trap for later.
 #
-# So: insert immediately BEFORE the System32 entry. MSYS2 still outranks Windows for find
-# and sort, and anything deliberately placed ahead of System32 - which is where the
-# OpenSSH directory sits - keeps winning. If System32 is not on PATH at all, something is
-# already very wrong, and prepending is the harmless fallback.
+# Thus: insert directly BEFORE the System32 entry. MSYS2 still wins over Windows
+# for find and sort. All entries that are on purpose before System32 still win,
+# and the OpenSSH directory is there. If System32 is not on PATH, something is
+# already very wrong, and the start of PATH is the safe fallback.
 #
-# Windows composes PATH as MACHINE then USER, so anything added here also precedes the
-# per-user entries - including %USERPROFILE%\.local\bin. MSYS2 ships no python.exe, so it
-# cannot shadow the interpreter install-automation.ps1 puts there.
+# Windows builds PATH as MACHINE, then USER. Thus all that this adds also comes
+# before the entries of the user, also %USERPROFILE%\.local\bin. MSYS2 ships no
+# python.exe, so it cannot hide the interpreter that install-automation.ps1 puts
+# there.
 #
-# IDENTICAL TO THE COPY IN install-automation.ps1, DELIBERATELY. Every guest script here
-# is copied into the guest alone and run alone, so a shared helper file would make "copy
-# one file, run it" false - and this one is needed by both. Change one, change both.
+# THE SAME AS THE COPY IN install-automation.ps1, ON PURPOSE. Each guest script
+# here goes into the guest alone, and runs alone. A shared helper file makes
+# "copy one file, run it" false, and both need this one. If you change one,
+# change both.
 function Add-ToMachinePath([string]$Dir, [string]$Before = "$env:SystemRoot\system32") {
     $cur = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $parts = @($cur -split ';' | Where-Object { $_ })
@@ -134,16 +141,16 @@ if (-not $VerifyOnly) {
 }
 
 # --- and make them REACHABLE ----------------------------------------------------------
-# Installing 387 executables and leaving none of them on PATH is most of the way to not
-# having installed them. MEASURED: a finished base image had git, make, rsync,
-# perl, bash, curl, tar and unzip all present and not one of them resolvable as a command.
+# 387 installed executables with none of them on PATH are almost as useless as
+# no install. A TEST SHOWED THIS. A finished base image had git, make, rsync,
+# perl, bash, curl, tar, and unzip, and not one of them resolved as a command.
 if (-not $VerifyOnly) {
     Write-Host ''
     Write-Host 'PATH'
     [void](Add-ToMachinePath (Join-Path $Msys 'usr\bin'))
 }
 
-# Verify by RUNNING each tool, not by asking pacman what it installed: a package
+# Test by a RUN of each tool, not by a question to pacman. A package that is
 # recorded as present is not the same as a binary that starts.
 Write-Host ''
 Write-Host '--- verification ---'
@@ -172,12 +179,12 @@ foreach ($name in $checks.Keys) {
 }
 Write-Host ''
 if ($missing.Count) { Write-Host "MISSING: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
-# Reported rather than judged: this script may be run before a reboot, and the PATH it
-# just set reaches new processes only - so a "missing" here would be about this session
-# rather than about the machine.
+# Reported, not judged. This script can run before a reboot, and the PATH that
+# it just set reaches only new processes. Thus a "missing" here is about this
+# session, not about the machine.
 $onPath = ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';') |
           Where-Object { $_.TrimEnd('\') -ieq (Join-Path $Msys 'usr\bin').TrimEnd('\') }
 Write-Host ("  {0,-9} {1}" -f 'PATH', $(if ($onPath) { "$Msys\usr\bin is on the machine PATH" }
                                         else { 'NOT on the machine PATH' }))
 Write-Host ''
-Write-Host 'all tools present and runnable.' -ForegroundColor Green
+Write-Host 'all tools are present and run.' -ForegroundColor Green

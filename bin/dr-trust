@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
-# dr-trust - accept a project config after reviewing it.
+# dr-trust: accept a project configuration after you review it.
 #
-# .draugr.conf is shell, and sourcing it runs it. Draugr records its hash the
-# first time you accept it and refuses to source a version it has not seen. Same
-# bargain your shell makes with direnv, and for the same reason.
+# .draugr.conf is shell, and a source of it runs it. At your first accept,
+# Draugr records its hash. It refuses to source a version that it did not see.
+# Your shell makes the same agreement with direnv, for the same reason.
 #
-#   dr-trust                 review and accept this repo's configs
-#   dr-trust <file>          accept a specific file
-#   dr-trust --list          what is currently trusted
-#   dr-trust --revoke <file> forget it again
+#   dr-trust                 review and accept the configuration files of this repo
+#   dr-trust <file>          accept one file
+#   dr-trust --list          the files that are trusted now
+#   dr-trust --revoke <file> remove the trust
 set -euo pipefail
 
 DR_PROG=dr-trust
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# Anything that is not an option is taken as a config file path to act on.
+# Each argument that is not an option is the path of a configuration file.
 action=accept
 files=()
 
-# -* catches a mistyped option; a bare word is collected as a file path.
+# -* catches a wrong option. A word without a dash is a file path.
 while [ $# -gt 0 ]; do
     case "$1" in
         --list)    action=list ;;
@@ -36,13 +36,13 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# --list: replay the trust file, re-hashing each entry so the report says not
-# just what you trusted but whether it still says what it said at the time.
+# --list: read the trust file, and hash each entry again. Thus the report tells
+# what you trusted, and also whether the file is still the same.
 if [ "$action" = list ]; then
     [ -f "$DR_TRUST_FILE" ] || { printf 'Nothing trusted yet.\n'; exit 0; }
-    printf '%s\n' "Trusted project configs ($DR_TRUST_FILE):"
+    printf '%s\n' "Trusted project configuration files ($DR_TRUST_FILE):"
 
-    # Each record is "<hash>  <path>", which read splits into two variables.
+    # Each record is "<hash>  <path>", and read splits it into two variables.
     while read -r hash path; do
         [ -n "$path" ] || continue
         if [ ! -f "$path" ]; then
@@ -50,37 +50,38 @@ if [ "$action" = list ]; then
         elif [ "$(_dr_hash "$path")" = "$hash" ]; then
             state="${_DR_GREEN}current${_DR_OFF}"
         else
-            state="${_DR_YELLOW}EDITED since you trusted it${_DR_OFF}"
+            state="${_DR_YELLOW}EDITED after you trusted it${_DR_OFF}"
         fi
         printf '  %-58s %b\n' "$path" "$state"
     done < "$DR_TRUST_FILE"
     exit 0
 fi
 
-# Default to everything in this repo that Draugr will execute on your machine.
-# Hooks belong in that set as much as the configs do - they are scripts that run
-# on the HOST, as you, and they arrive with a clone just as a config does.
+# By default, all files in this repo that Draugr runs on your machine. Hooks are
+# in that set, as the configuration files are. They are scripts that run on the
+# HOST, as you, and they come with a clone, as a configuration does.
 if [ ${#files[@]} -eq 0 ]; then
     repo=$(dr_repo_root)
     for f in "$repo/.draugr.conf" "$repo/.draugr.local.conf"; do
         [ -f "$f" ] && files+=("$f")
     done
 
-    # Only the hooks that would actually run: dr_hook ignores a non-executable
-    # one, so trusting it would record a promise about a file nothing reads.
+    # Only the hooks that really run. dr_hook ignores a hook that is not
+    # executable. Its trust records a promise about a file that nothing reads.
     for f in "$repo"/.draugr/hooks/*; do
         [ -x "$f" ] && files+=("$f")
     done
 
     [ ${#files[@]} -gt 0 ] || dr_die \
         "nothing to trust in $repo" \
-        "Draugr executes .draugr.conf, .draugr.local.conf and .draugr/hooks/*." \
+        "Draugr runs .draugr.conf, .draugr.local.conf, and .draugr/hooks/*." \
         "Create a config with:  dr-init"
 fi
 
-# --revoke: filter the path out of the trust file. Entries are keyed by absolute
-# path, so resolve whatever was typed before matching - and fold its case, because
-# on a Windows drive `pwd` reports the spelling you typed (dr_path_canon_case).
+# --revoke: remove the path from the trust file. The key of each entry is the
+# absolute path. Thus resolve the typed path before the comparison, and fix its
+# case. On a Windows drive, `pwd` reports the path as you typed it
+# (dr_path_canon_case).
 if [ "$action" = revoke ]; then
     for f in "${files[@]}"; do
         abs=$(dr_path_canon_case "$(cd "$(dirname "$f")" && pwd)/$(basename "$f")")
@@ -89,7 +90,7 @@ if [ "$action" = revoke ]; then
             mv "$DR_TRUST_FILE.tmp" "$DR_TRUST_FILE"
             dr_ok "revoked $abs"
         else
-            dr_warn "$abs was not trusted anyway"
+            dr_warn "$abs was not trusted"
         fi
     done
     exit 0
@@ -104,17 +105,17 @@ for f in "${files[@]}"; do
         continue
     fi
 
-    # Show it. This is the entire point of the command - a prompt you accept
-    # without reading is worse than no prompt, because it feels like diligence.
+    # Show it. This is the purpose of the command. A question that you accept
+    # without a read is worse than no question, because it feels like care.
     dr_heading "$abs"
     printf '%s\n' "${_DR_DIM}---------------------------------------------------------------${_DR_OFF}" >&2
     cat "$abs" >&2
     printf '%s\n' "${_DR_DIM}---------------------------------------------------------------${_DR_OFF}" >&2
-    printf 'This file is shell. Draugr will run it. ' >&2
+    printf 'This file is shell. Draugr runs it. ' >&2
 
-    # Three ways this can go: --yes (you have already reviewed it), an
-    # interactive prompt, or no terminal at all - in which case refuse, because
-    # silently trusting a config in a script is exactly the failure this guards.
+    # Three cases: --yes (you already reviewed it), an interactive question, or
+    # no terminal. With no terminal, refuse. A silent trust of a configuration
+    # in a script is exactly the failure that this guards against.
     if [ -n "${DR_ASSUME_YES:-}" ]; then
         printf 'Accepting (--yes).\n' >&2
     elif [ -t 0 ]; then
@@ -126,7 +127,7 @@ for f in "${files[@]}"; do
         esac
     else
         dr_die "refusing to trust $abs without a terminal" \
-               "Run dr-trust interactively, or pass --yes if you have already reviewed it."
+               "Run dr-trust in a terminal, or give --yes if you already reviewed it."
     fi
 
     dr_trust_add "$abs"

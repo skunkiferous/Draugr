@@ -1,12 +1,12 @@
 #!/usr/bin/env bats
-# DRAUGR_ENV: arbitrary environment for the agent's session.
+# DRAUGR_ENV: any environment for the session of the agent.
 #
-# The escape hatch, and the reason it is validated rather than passed through: an
-# environment variable an agent does not recognise is IGNORED, not refused. A
-# typo'd name therefore produces a session that looks entirely correct and
-# behaves as though the setting had never been written - which is the failure
-# this key exists to prevent, reached from the other side. So most of what is
-# tested here is what gets refused, and when.
+# The general fallback. It is validated, and not passed through, for this
+# reason. An agent IGNORES an environment variable that it does not know, and
+# does not refuse it. Thus a typo in a name gives a session that looks correct,
+# but works as if the value was never written. That is the failure that this key
+# must prevent, from the other side. Thus most tests here are about what gets
+# refused, and when.
 
 load helper
 
@@ -40,8 +40,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_env_pairs: several, in the order written" {
-    # Order matters on the far side: two entries naming one variable resolve to
-    # the last, the same way the rest of the config cascade does.
+    # The order is important on the far side. If two entries name one variable,
+    # the last wins, as in the rest of the configuration cascade.
     DRAUGR_ENV="A=1 B=2 C=3"
     run dr_env_pairs
     [ "${lines[0]}" = "A=1" ]
@@ -57,8 +57,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_env_pairs: a glob in a value is not expanded" {
-    # read -ra rather than an unquoted expansion: the trap documented at
-    # dr_kit_refs, where * would become a listing of the current directory.
+    # read -ra, not an unquoted expansion. See the trap documented at
+    # dr_kit_refs, where * becomes a list of the current directory.
     DRAUGR_ENV="PATTERN=*"
     run dr_env_pairs
     [ "$output" = "PATTERN=*" ]
@@ -74,8 +74,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_env_pairs: a name that is not an identifier is refused" {
-    # It could not be exported at all: the rcfile would fail to source and take
-    # the whole session with it, rather than just this variable.
+    # It cannot be exported. The rcfile then fails to source, and takes the full
+    # session with it, not only this variable.
     DRAUGR_ENV="9BAD=x"
     run dr_env_pairs
     [ "$status" -ne 0 ]
@@ -87,8 +87,9 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_env_pairs: PATH and HOME are refused" {
-    # PATH REPLACES rather than extends, so an absolute one drops the directory
-    # holding the agent binary and the next dr-go ends in "command not found".
+    # PATH REPLACES, and does not extend. Thus an absolute one drops the
+    # directory of the agent binary, and the next dr-go ends in "command not
+    # found".
     DRAUGR_ENV="PATH=/usr/bin"
     run dr_env_pairs
     [ "$status" -ne 0 ]
@@ -100,8 +101,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_env_pairs: a bad entry refuses the whole set, not just itself" {
-    # Half-applied environment is worse than none: the session would start with
-    # some of what you asked for and no indication which half.
+    # A half-applied environment is worse than none. The session starts with a
+    # part of your request, and nothing tells you which part.
     DRAUGR_ENV="GOOD=1 NOEQUALS GOOD2=2"
     run dr_env_pairs
     [ "$status" -ne 0 ]
@@ -124,8 +125,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_attach_rc: a value with shell metacharacters round-trips" {
-    # Quoted with %q here and read back by a bash over there. Unquoted, the
-    # semicolon would end the export and run the rest as a command.
+    # Quoted with %q here, and read back by a bash there. Without quotes, the
+    # semicolon ends the export, and runs the rest as a command.
     DRAUGR_ENV='X=a;rm_-rf_/'
     run dr_attach_rc claude
     [ "$status" -eq 0 ]
@@ -134,8 +135,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_attach_rc: DRAUGR_ENV comes after the model variables" {
-    # So an explicit setting wins. An escape hatch the tool can silently
-    # overrule is not an escape hatch.
+    # Thus an explicit value wins. A fallback that the tool can silently
+    # override is not a fallback.
     DRAUGR_MODEL="qwen3.8:27b"
     DRAUGR_ENV="ZZZ=1"
     run dr_attach_rc claude
@@ -146,19 +147,19 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_attach_rc: a collision with a model variable is reported" {
-    # It still wins - but two settings and an invisible winner is how an
-    # afternoon goes missing, so it is said out loud.
+    # It still wins. But two values and a hidden winner can cost an afternoon,
+    # so the output says it aloud.
     DRAUGR_MODEL="qwen3.8:27b"
     DRAUGR_ENV="ANTHROPIC_BASE_URL=http://elsewhere:1234"
     run dr_attach_rc claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"overriding what DRAUGR_MODEL derived"* ]]
+    [[ "$output" == *"and that replaces the value from DRAUGR_MODEL"* ]]
     [[ "$output" == *"export ANTHROPIC_BASE_URL=http://elsewhere:1234"* ]]
 }
 
 @test "dr_attach_rc: a malformed DRAUGR_ENV writes no rcfile at all" {
-    # Not even the entries before the bad one: a half-applied environment is
-    # worse than none, because nothing on screen says which half arrived.
+    # Also not the entries before the bad one. A half-applied environment is
+    # worse than none, because nothing on the screen says which half arrived.
     DRAUGR_ENV="GOOD=1 NOEQUALS"
     run dr_attach_rc claude
     [ "$status" -ne 0 ]
@@ -166,7 +167,7 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_attach_rc: still starts the agent from PROMPT_COMMAND" {
-    # The exports must not disturb the job-control arrangement they sit above.
+    # The exports must not disturb the job-control setup below them.
     DRAUGR_ENV="FOO=bar"
     run dr_attach_rc claude
     [[ "$output" == *"PROMPT_COMMAND="* ]]

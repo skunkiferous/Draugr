@@ -1,33 +1,31 @@
 # Design notes
 
-Why Draugr is shaped the way it is, including the paths that were tried and abandoned. Kept because
-the rejected ones are the questions most likely to be asked again — usually by someone who has just
-had the same good idea.
+Why Draugr has this shape, with the paths that we tried and abandoned. We keep the rejected ones,
+because people are likely to ask about them again, usually right after they had the same good idea.
 
 ## Why this exists at all
 
-Running an agent with `--dangerously-skip-permissions` on your real machine is fast and reckless.
-Approving every tool call is safe and miserable. Draugr takes the third option: make the blast radius
-small enough that "let it run" is the *responsible* choice.
+An agent with `--dangerously-skip-permissions` on your real machine is fast and reckless. The
+approval of each tool call is safe and slow. Draugr takes a third option. It makes the possible
+damage so small that "let it run" is the *responsible* choice.
 
-`sbx` already provides the isolation. What it does not provide is a workflow — out of the box you
-are hand-building git remotes, remembering that the git daemon is unreachable from WSL, discovering
-that agent memory lives under a path-derived key that differs between host and sandbox, and re-typing
-five commands per session.
+`sbx` already gives the isolation, but not a workflow. Without Draugr, you build git remotes by
+hand. You must remember that WSL cannot reach the git daemon. Agent memory is under a key that
+comes from the path, and the key is different on the host and in the sandbox. You type five
+commands in each session.
 
 ### Prior art
 
-Surveyed August 2026, before any code was written. Wrappers around `sbx` exist —
+Surveyed in August 2026, before any code existed. Wrappers around `sbx` exist:
 [sbxgo](https://github.com/HenrikPoulsen/sbxgo), [sbx-toolkit](https://github.com/maxkrivich/sbx-toolkit),
 [streamingfast/sbox](https://github.com/streamingfast/sbox),
 [code-sandbox-console](https://github.com/ainova-systems/code-sandbox-console), and thinner ones in
 [awesome-docker-sbx](https://github.com/ajeetraina/awesome-docker-sbx).
 
-They overlap Draugr on the *config-file* idea and nowhere else. None implements the sandbox→host git
-loop, agent memory transfer, or data sync, and **none mentions WSL**. That last gap is the decisive
-one: `sbx.exe` being absent from WSL's `PATH`, the three-way path translation, and the git daemon
-binding Windows loopback where WSL2's NAT cannot reach it are the problems that made this worth
-building.
+They share only the *configuration file* idea with Draugr. None has the sandbox→host git loop,
+agent memory transfer, or data sync, and **none mentions WSL**. That last gap decides it. These
+problems made Draugr worth building: `sbx.exe` is not on the `PATH` of WSL, paths need a three-way
+translation, and the git daemon binds Windows loopback, where the NAT of WSL2 cannot reach it.
 
 ---
 
@@ -35,214 +33,214 @@ building.
 
 ### Kits own the inside of the mound; Draugr owns the boundary
 
-The largest decision, and it removed four planned config keys.
+This is the largest decision, and it removed four planned configuration keys.
 
-[`sbx kit`](https://docs.docker.com/ai/sandboxes/customize/kits/) is a first-party declarative
-artifact that already declares network allow/deny lists, install commands that run once at creation,
-startup commands, published ports, seeded files, environment variables, appended agent instructions,
-and credentials brokered through a host-side proxy so the secret never enters the microVM.
+[`sbx kit`](https://docs.docker.com/ai/sandboxes/customize/kits/) is a declarative artifact from
+Docker. It already declares network allow and deny lists, install commands that run once at
+creation, startup commands, published ports, seeded files, environment variables, and extra agent
+instructions. It also gives credentials through a proxy on the host, so that the secret never
+enters the microVM.
 
-That is most of what a network-policy layer in `.draugr.conf` would have reimplemented, worse and
-only for this tool. So `DRAUGR_NET_STRICT`, `DRAUGR_NET_ALLOW`, `DRAUGR_NET_DENY` and
-`DRAUGR_BOOTSTRAP` do not exist; there is a single `DRAUGR_KIT` pointing at a directory. `dr-policy`
-survives as a viewer plus an escape hatch for ad-hoc rules on a running mound.
+A network-policy layer in `.draugr.conf` copies most of that, worse, and only for this tool.
+Thus `DRAUGR_NET_STRICT`, `DRAUGR_NET_ALLOW`, `DRAUGR_NET_DENY` and `DRAUGR_BOOTSTRAP` do not
+exist. There is a single `DRAUGR_KIT`, which points at a directory. `dr-policy` stays, as a viewer,
+and as a way to add ad-hoc rules on a running mound.
 
-**The rule that follows:** anything a kit can express is a kit's job. What is left is what a kit
-structurally cannot see — your WSL paths, your git remotes, your working tree, your machine's memory
-store — and that is exactly Draugr's config surface.
+**The rule that follows:** all that a kit can express is the job of the kit. The rest is what a kit
+cannot see: your WSL paths, your git remotes, your working tree, the memory store of your machine.
+That is exactly the configuration of Draugr.
 
-Draugr's own contribution is noticing when a kit changes: `dr-up` hashes the kit directory and
-compares it to the hash recorded at creation, because applying a kit recreates the container and that
-must be a decision rather than a side effect.
+Draugr sees when a kit changes. `dr-up` hashes the kit directory, and compares it to the hash from
+creation. An apply of a kit recreates the container, and that must be a decision, not a side
+effect.
 
 ### Bash, one script per verb
 
-A binary would need a release pipeline; a Python package would need an interpreter inside a project
-that may not want one. Bash is already there, in the shell where the work happens.
+A binary needs a release pipeline. A Python package needs an interpreter, inside a project that
+possibly does not want one. Bash is already there, in the shell where the work happens.
 
-One script per verb keeps each file small enough to read in full before you trust it — which, for a
-tool whose entire premise is containment, is the point. It also means you can override any single
-command by putting your own earlier on `PATH`.
+With one script for each verb, each file is small enough to read fully before you trust it. For a
+tool that is about containment, that is the purpose. You can also override one command with your
+own script earlier on `PATH`.
 
 ### Shell-syntax config rather than TOML or YAML
 
-No parser dependency, comments are free, and a config can compute values
-(`DRAUGR_PORTS="$(cat .ports)"`). The cost is that sourcing a repo's config executes its code, which
-is why trust-on-first-use exists — the same bargain your shell makes with `direnv`, for the same
+No parser dependency, free comments, and a configuration can compute values
+(`DRAUGR_PORTS="$(cat .ports)"`). The cost: to source the configuration of a repo runs its code.
+That is why trust on first use exists. Your shell makes the same deal with `direnv`, for the same
 reason.
 
 ### Config provenance by snapshot-and-diff
 
-Each layer is sourced in turn with a before/after snapshot of every key, so a config file gets the
-blame for exactly the keys it changed. Costs a handful of variable copies and gives `dr-config` an
-exact origin per key with no bookkeeping in the config files themselves.
+Draugr sources each layer in turn, with a snapshot of each key before and after. Thus each file gets
+the blame for exactly the keys that it changed. That costs a few variable copies. It gives
+`dr-config` an exact origin for each key, with no records in the configuration files.
 
-The consequence worth knowing: `dr_load_config` must be called **exactly once** per process. A second
-call would see the values the first computed, decide they came from the environment, and rank them
-above every config file.
+Know this result: each process must call `dr_load_config` **exactly once**. A second call sees the
+values that the first call computed. It then decides that they came from the environment, and ranks
+them above each configuration file.
 
 ### `--clone` is the default, and `DRAUGR_CLONE=false` prompts every time
 
-No config key can silence that prompt. A bind-mounted working tree is the thing the project exists to
-prevent, so if you want the confirmation gone you are outside the premise.
+No configuration key can stop that prompt. The project exists to prevent a bind-mounted working
+tree. Thus if you want no confirmation, you are outside the purpose of the project.
 
 ### Names: `draugr-<leaf>` and the `draugr` remote
 
-Sandbox names come from the repo folder, filtered to `sbx`'s charset — it rejects underscores, so
-`my_project` becomes `draugr-my-project`. The git remote is `draugr`. Neither collides with anything
-`sbx` creates on its own.
+Sandbox names come from the repo folder, with only the characters that `sbx` accepts. It rejects
+underscores, so `my_project` becomes `draugr-my-project`. The git remote is `draugr`. Neither name
+collides with anything that `sbx` creates itself.
 
 ### `jq` is a dependency
 
-The alternative is hand-parsing `sbx ls --json` in bash, which is exactly the kind of fragile
-cleverness this project should not contain. `dr-doctor` checks for it.
+The alternative is to parse `sbx ls --json` by hand in bash. That is exactly the fragile trick that
+this project must not contain. `dr-doctor` makes sure that it is installed.
 
 ### The forge is off by default, and `dr-forge` speaks verbs
 
-The forge is a Windows 11 VM an agent drives: a GPU partition, an installed toolchain and a
-desktop, none of which a Linux microVM can offer. It is the least general thing in
-Draugr, and two decisions keep it from costing anything to the people who will never want it.
+The forge is a Windows 11 VM that an agent controls: a GPU partition, an installed toolchain and a
+desktop. A Linux microVM can give none of these. It is the least general part of Draugr. Two
+decisions make sure that it costs nothing to the people who never want it.
 
-**It does not exist unless [`DRAUGR_FORGE`](CONFIG.md#draugr_forge) names a VM.** Empty is the
-default, so there is no extra dependency, no prompt, no line in `dr-doctor` to explain away, and
-nothing in [SECURITY.md](SECURITY.md)'s guarantees that moves. With the key empty `dr-forge` says so
-and stops rather than adopting a VM it found lying around. The cost lands on the people who do turn
-it on, and it is a real one: the guest is a machine the agent administers, not a mound, so almost
-none of the mound's guarantees transfer
-([SECURITY.md](SECURITY.md#the-forge-if-you-turn-it-on) states the weaker claim in full).
+**It does not exist unless [`DRAUGR_FORGE`](CONFIG.md#draugr_forge) names a VM.** The default is
+empty. Thus there is no extra dependency, no prompt, no line in `dr-doctor` to explain, and no
+change to the guarantees of [SECURITY.md](SECURITY.md). With the key empty, `dr-forge` says so and
+stops. It does not adopt a VM that it found. The people who turn it on pay the cost, and it is a
+real cost. The guest is a machine that the agent administers, not a mound. Thus almost none of the
+guarantees of the mound apply
+([SECURITY.md](SECURITY.md#the-forge-if-you-turn-it-on) gives the full, weaker claim).
 
-**`dr-forge`'s surface is verbs, never the backend's nouns** — `status`, `doctor`, `init`, `up`,
-`down`, `screen`, `base`, `rollback`, `rm`, `exec`, `push`, `pull`. AppSandbox is what sits behind
-them today; a replacement would have to match the verbs, not the API. The one place that abstraction
-is deliberately thin is `base`/`rollback`, which offer a single baseline rather than a history
-because of the upstream bug in the risks below — the shape of a defect, visible in the surface.
+**The surface of `dr-forge` is verbs, never the nouns of the backend**: `status`, `doctor`, `init`,
+`up`, `down`, `screen`, `base`, `rollback`, `rm`, `exec`, `push`, `pull`. AppSandbox is behind them
+today. A replacement must match the verbs, not the API. The one place where that abstraction is thin
+on purpose is `base`/`rollback`. They give a single baseline, not a history, because of the
+upstream bug in the risks below. The shape of a defect is visible in the surface.
 
-[FORGE.md](FORGE.md) is the design, with the measurements it rests on.
+[FORGE.md](FORGE.md) is the design, with its measurements.
 
 ---
 
 ## Directories that are not repositories
 
-Supported since 0.1.0, via [`DRAUGR_ON_MISSING_REPO`](CONFIG.md#draugr_on_missing_repo), after
-establishing what the constraint actually is.
+Supported since 0.1.0, through [`DRAUGR_ON_MISSING_REPO`](CONFIG.md#draugr_on_missing_repo), after
+we found the real limit.
 
-**Measured first.** `sbx create` does *not* require a git repository; only `--clone` does, and it
-says so plainly. Without `--clone`, a plain directory is bind-mounted read-write and there is no
-`/run/sandbox/source` at all — a write to `report.md` from inside the mound went straight through to
-the host file, replacing it.
+**Measured first.** `sbx create` does *not* need a git repository. Only `--clone` does, and it says
+so clearly. Without `--clone`, a plain directory is bind-mounted read-write, and there is no
+`/run/sandbox/source`. A write to `report.md` from inside the mound went directly to the host file,
+and replaced it.
 
-So "just drop the git requirement" means shipping `DRAUGR_CLONE=false`, giving up the read-only host
-tree that the whole safety model rests on. The way out is to keep clone mode and give it something to
-clone.
+Thus "remove the git requirement" means `DRAUGR_CLONE=false`. That gives up the read-only host tree,
+and the full safety model rests on it. The way out: keep clone mode, and give it something to clone.
 
 Two creation modes, and they are **not symmetric**:
 
-- `create-add-all` fixes only the first session. The next edit dirties the tree and the
-  commit-before-each-session discipline returns — correct for a code project, wrong for a folder of
+- `create-add-all` fixes only the first session. The next edit makes the tree dirty, and you must
+  commit before each session again. That is correct for a code project, but wrong for a folder of
   documents.
-- `create-data-only` is self-sustaining. Everything is gitignored, so `git status` is empty forever
-  and `DRAUGR_REQUIRE_CLEAN` can never fire.
+- `create-data-only` keeps itself clean. All files are in .gitignore, so `git status` is always
+  empty, and `DRAUGR_REQUIRE_CLEAN` never fires.
 
-Three properties of the data-only repo, each verified with real git: the clone contains only the
-committed setup files and none of the user's; the tree stays clean through edits; and
-`git ls-files --others` still lists a `secrets.env`, so `dr-scan` keeps working under a `.gitignore`
-of `*`. That last one is luck earned earlier — bare `--others` was chosen because it lists ignored
-files, and it pays off in a mode it was not written for.
+Three properties of the data-only repo, each tested with real git. The clone contains only the
+committed setup files, and none of the files of the user. The tree stays clean after edits.
+`git ls-files --others` still lists a `secrets.env`, so `dr-scan` still works under a `.gitignore`
+of `*`. That last one is luck from an earlier choice. We chose bare `--others` because it lists
+ignored files, and that pays off in a mode that it was not written for.
 
-`create-add-all` seeds `.gitignore` from `DRAUGR_SCAN_PATTERNS` **before** committing, and that is a
-safety fix rather than tidiness: `dr-scan` only reports untracked files, so committing a credential
-would put it in the agent's clone and in history while silencing the scan that exists to catch it.
+`create-add-all` fills `.gitignore` from `DRAUGR_SCAN_PATTERNS` **before** the commit. That is a
+safety fix, not tidiness. `dr-scan` reports only untracked files. Thus a committed credential goes
+into the clone of the agent and into history, and the scan that exists to find it goes silent.
 
-Only `dr-init` and `dr-up` may create a repository. Every other command keeps refusing, for the
-reason `dr-status` will not start a stopped mound — and that is enforced by which function a command
-calls (`dr_context_create` versus `dr_context`), not by care.
+Only `dr-init` and `dr-up` can create a repository. All other commands still refuse, for the same
+reason that `dr-status` does not start a stopped mound. The function that a command calls enforces
+that (`dr_context_create` or `dr_context`), not care.
 
 ---
 
 ## Repos on ext4, via a `subst` drive
 
-**Tested, rejected.** The obvious objection to "your repo must live on a Windows drive" is that a WSL
-path can be made to look like a Windows one:
+**Tested, rejected.** The clear objection to "your repo must be on a Windows drive": you can make a
+WSL path look like a Windows path:
 
 ```cmd
 subst W: \\wsl.localhost\Ubuntu\home\me
 ```
 
-It is a good idea and it very nearly works. Measured end to end, in order:
+It is a good idea, and it almost works. Measured end to end, in order:
 
-1. `subst` accepts the UNC path on Windows 11 — it historically did not, so this is worth knowing.
-2. `sbx create claude W:\repo` **succeeds** in bind-mount mode. The workspace appears inside the
-   mound at `/w/repo` and its contents are readable.
+1. `subst` accepts the UNC path on Windows 11. Before, it did not, so this is useful to know.
+2. `sbx create claude W:\repo` **succeeds** in bind-mount mode. The workspace shows inside the
+   mound at `/w/repo`, and its contents are readable.
 3. `sbx create --clone …` **refuses**: *"requires a Git repository, but `W:\repo` is not in a Git
-   repository"* — though it plainly is one.
-4. The real cause is not `sbx`. `subst` is transparent to git, which resolves the drive back to
-   `//wsl.localhost/Ubuntu/home/me/repo` and refuses it for **dubious ownership**: file ownership
+   repository"*, though it clearly is one.
+4. The real cause is not `sbx`. `subst` is transparent to git. git resolves the drive back to
+   `//wsl.localhost/Ubuntu/home/me/repo`, and refuses it for **dubious ownership**. The file owner
    across the WSL redirector does not match the Windows user.
-5. Add a `safe.directory` exception and git accepts it — then `sbx` pulls the image and dies with
+5. Add a `safe.directory` exception, and git accepts it. Then `sbx` pulls the image, and dies with
    `500 Internal Server Error: failed to run sandbox container`. **The microVM cannot bind-mount a
-   path behind the Windows network redirector.** That is the wall, and it sits below anything Draugr
-   could work around.
+   path behind the Windows network redirector.** That is the wall, and it is below all that Draugr
+   can work around.
 
-So the only mode that survives is `DRAUGR_CLONE=false`. The mode Draugr is built on is the one that
-fails.
+Thus only `DRAUGR_CLONE=false` works. The mode that Draugr rests on is the mode that fails.
 
-**And it would not have simplified the code even if it had worked**, which is the part worth
-recording, because the appeal of the idea is that it looks like a simplification:
+**And a working `subst` drive does not make the code simpler.** That is the important part,
+because the idea looks like a simplification:
 
-- **Path translation gets worse.** `/mnt/c/x ↔ C:\x` is a deterministic pure function, which is why
-  `tests/paths.bats` runs in CI on machines with no WSL at all. A `subst` mapping is machine-local,
-  user-created, discovered at runtime, ambiguous in reverse, and absent by default.
-- **The project-key translation is unchanged in size.** Still three forms.
-- **`sbx cp` still demands a Windows path**, so the staging hop stays exactly as it is.
-- **Files still arrive mode 777** over that path, so `DRAUGR_DATA_CHMOD` is still needed.
+- **Path translation gets worse.** `/mnt/c/x ↔ C:\x` is a fixed pure function. That is why
+  `tests/paths.bats` runs in CI on machines with no WSL. A `subst` mapping is local to one machine,
+  made by the user, found at runtime, ambiguous in reverse, and absent by default.
+- **The project-key translation has the same size.** Still three forms.
+- **`sbx cp` still needs a Windows path**, so the staging step stays exactly the same.
+- **Files still arrive as mode 777** over that path, so `DRAUGR_DATA_CHMOD` is still necessary.
 
-What it would have bought is not simplicity but **speed** — a repo on ext4 gets native-speed git from
-WSL, which is the one genuine cost of the current design. Worth revisiting only if a future `sbx` can
-mount a WSL path directly.
+It gives **speed**, not simplicity. A repo on ext4 gets native-speed git from WSL, and that is
+the one real cost of the current design. Look at it again only if a later `sbx` can mount a WSL path
+directly.
 
 ---
 
 ## Deliberately not in v1
 
-Named so nobody has to wonder whether they were forgotten:
+Named, so that nobody needs to ask whether we forgot them:
 
-- **Multi-repo mounds.** One repository per sandbox.
-- **Linux or macOS hosts.** The whole path story is WSL-specific.
-- **Running the agent non-interactively for CI.** `dr-shell -- <command>` is as close as this gets.
-- **A TUI.** `sbx tui` exists if you want one.
-- **Anything that pushes to `origin` on your behalf.** You publish; that is the model.
-- **Bidirectional data sync.** There is no merge algorithm for a parquet file: if both sides changed
-  it, any bidirectional sync silently picks a winner and destroys the other version. Each transfer
-  declares a source of truth instead.
+- **Multi-repo mounds.** One repository for each sandbox.
+- **Linux or macOS hosts.** The full path design is specific to WSL.
+- **The agent with no terminal, for CI.** `dr-shell -- <command>` is the closest option.
+- **A TUI.** If you want one, `sbx tui` exists.
+- **Anything that pushes to `origin` for you.** You publish. That is the model.
+- **Data sync in both directions.** There is no merge algorithm for a parquet file. If both sides
+  changed it, a sync in both directions silently selects one version, and destroys the other. Each
+  transfer declares a source of truth.
 
 ---
 
 ## Standing risks
 
-- **`sbx kit` self-identifies as EXPERIMENTAL** — "may change or be removed in future releases". So
-  does `sbx skills`. Draugr wraps both rather than reimplementing them, which is the right call while
-  they exist and a migration if they change shape.
-- **`sbx` feature flags can be set remotely.** `feature.ssh` reads as `enabled:true` from source
-  `remote`, not from anything local. A capability statement about `sbx` is a statement about today.
-- **`sbx settings` is undocumented** — absent from `sbx --help` — and Draugr reads
-  `feature.shareSkills` through it. If that command changes, `dr-skills list` loses its ability to
-  report whether the skills mount can be declined.
-- **The forge's backend is six months old and one person's project.** AppSandbox is at 0.1.8, and
-  its author treats pull requests as "suggestions and examples of possible solutions" that he is
-  "unlikely to formally review or merge", using them as a reference for his own fix (*read*: the
-  repository's PR template). So a bug Draugr finds is fixed on his schedule, not Draugr's, and
-  Draugr must keep working on **released** versions — never on a patched build nobody else has. Two
-  things make that acceptable rather than reckless: `dr-forge`'s surface is verbs, so the backend
-  stays swappable, and the whole feature is invisible unless `DRAUGR_FORGE` is set. One thing cuts
-  the other way, and it is worth saying: AppSandbox ships EV-Authenticode-signed binaries with
-  Microsoft-attestation-signed drivers, which is not maturity but is evidence that somebody is home.
-- **The snapshot bug under the forge's undo is open upstream, and waiting is no longer a plan.**
-  Only the *first* snapshot of a VM captures its current state; every later one branches from the
-  base disk, silently discarding the work it was taken to protect
-  ([#152](https://github.com/jamesstringer90/appsandbox/issues/152)). The author replied asking for
-  a version that keeps parent disks immutable and recovers from failure partway; that version is
-  [#199](https://github.com/jamesstringer90/appsandbox/pull/199), in the form the author asks for.
-  Nothing says whether or when it lands, so "wait for upstream" means "wait indefinitely" — which is
-  why `dr-forge base` takes one baseline and refuses a second, rather than pretending to keep a
-  history. If #199 ever lands, that restriction can be lifted and nothing else in the design has to
-  move ([FORGE.md](FORGE.md#backup-and-rollback) has the call sequence).
+- **`sbx kit` calls itself EXPERIMENTAL**: "may change or be removed in future releases". So does
+  `sbx skills`. Draugr wraps both, and does not copy them. That is the right choice while they
+  exist, and a migration if they change shape.
+- **A remote source can set `sbx` feature flags.** `feature.ssh` reads as `enabled:true` from the
+  source `remote`, not from a local value. A statement about what `sbx` can do is true only today.
+- **`sbx settings` has no documentation.** `sbx --help` does not show it, and Draugr reads
+  `feature.shareSkills` through it. If that command changes, `dr-skills list` can no longer report
+  whether you can decline the skills mount.
+- **The backend of the forge is six months old, and the project of one person.** AppSandbox is at
+  0.1.8. Its author treats pull requests as "suggestions and examples of possible solutions", which
+  the author is "unlikely to formally review or merge", and uses them as a reference for their own
+  fix (*read*: the PR template of the repository). Thus the author fixes a bug that Draugr finds on
+  their own schedule, not on that of Draugr. Draugr must keep working on **released** versions,
+  never on a patched build that nobody else has. Two facts make that acceptable, not reckless. The
+  surface of `dr-forge` is verbs, so you can replace the backend. And the full feature is not
+  visible unless `DRAUGR_FORGE` is set. One fact points the other way, and we must say it.
+  AppSandbox ships EV-Authenticode-signed binaries, with drivers signed by Microsoft attestation.
+  That is not maturity, but it shows that somebody is active.
+- **The snapshot bug under the undo of the forge is open upstream, and a wait is no longer a
+  plan.** Only the *first* snapshot of a VM captures its current state. Each later snapshot branches
+  from the base disk, and silently discards the work that it was taken to protect
+  ([#152](https://github.com/jamesstringer90/appsandbox/issues/152)). The author asked for a
+  version that keeps parent disks immutable, and recovers from a failure halfway. That version is
+  [#199](https://github.com/jamesstringer90/appsandbox/pull/199), in the form that the author asked
+  for. Nothing says whether or when it lands. Thus "wait for upstream" means "wait forever". That is
+  why `dr-forge base` takes one baseline and refuses a second, and does not claim to keep a history.
+  If #199 lands, that limit can go, and nothing else in the design must move
+  ([FORGE.md](FORGE.md#backup-and-rollback) has the call sequence).

@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# dr-doctor - check every precondition and say exactly what to fix.
+# dr-doctor: test each precondition, and tell what to fix.
 #
-# Run this first, and run it again whenever something behaves oddly. Each failure
-# carries its own remedy; you should never have to search for what a line means.
+# Run it first. If something does not work as expected, run it again. Each
+# failure comes with its fix, so you never must search for the meaning of a
+# line.
 #
-#   dr-doctor          check everything
+#   dr-doctor          test everything
 #   dr-doctor --quiet  only report problems
 set -euo pipefail
 
 DR_PROG=dr-doctor
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# Only one option, so a plain case beats an argument loop here.
+# There is only one option, so a case is simpler than an argument loop.
 quiet=
 case "${1:-}" in
     --quiet|-q) quiet=1 ;;
@@ -32,10 +33,10 @@ warns=0
 #
 #     bad "<label>" "<what is wrong>" "<remedy line>" "<remedy line>" ...
 #
-# %-34s pads the label to 34 columns so the second column lines up. The `shift 2`
-# drops the label and summary, leaving the remedy lines in "$@" to be indented
-# underneath. `|| shift $#` covers being called with fewer than two arguments,
-# where `shift 2` would fail and, under `set -e`, abort the script.
+# %-34s pads the label to 34 columns, so that the second column lines up.
+# `shift 2` removes the label and the summary. The fix lines stay in "$@", and
+# print indented below. `|| shift $#` is for a call with fewer than two
+# arguments. Then `shift 2` fails, and `set -e` stops the script.
 ok()   { [ -n "$quiet" ] || printf '  %s✓%s %-34s %s\n' "$_DR_GREEN" "$_DR_OFF" "$1" "${2:-}"; }
 bad()  {
     fails=$((fails + 1))
@@ -52,9 +53,9 @@ soft() {
 
 # version_ge 0.37.1 0.37  ->  true
 #
-# Print both versions, sort them with `sort -V` (version sort, which knows that
-# 0.10 is newer than 0.9), and check the minimum ended up first. If the smaller
-# of the two is the one we require, then what we have is at least that.
+# Print both versions, and sort them with `sort -V` (a version sort: 0.10 is
+# newer than 0.9). If the minimum is first, the version that we have is at
+# least the minimum.
 version_ge() {
     [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]
 }
@@ -64,15 +65,15 @@ printf '%sDraugr %s%s\n' "$_DR_BOLD" "$DRAUGR_VERSION" "$_DR_OFF"
 # --- the host --------------------------------------------------------------
 printf '\n%sHost%s\n' "$_DR_BOLD" "$_DR_OFF"
 
-# Two independent signals, because WSL_DISTRO_NAME is not set in every shell
-# (cron, some IDE terminals) while /proc/version always names the kernel.
+# Two independent signs. Some shells do not set WSL_DISTRO_NAME (cron, some IDE
+# terminals), but /proc/version always names the kernel.
 if [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null; then
     ok "WSL" "${WSL_DISTRO_NAME:-detected}"
 else
     soft "WSL" "not detected" \
-        "Draugr is built for WSL2 on Windows: it drives sbx.exe, translates" \
-        "/mnt/c paths, and reaches the mound over the *.sbx ssh transport." \
-        "Other platforms are not supported yet."
+        "Draugr is for WSL2 on Windows. It runs sbx.exe, translates /mnt/c" \
+        "paths, and connects to the mound through the *.sbx ssh transport." \
+        "Draugr does not support other platforms yet."
 fi
 
 if version_ge "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" 4.2; then
@@ -84,43 +85,43 @@ fi
 # --- required tools --------------------------------------------------------
 printf '\n%sTools%s\n' "$_DR_BOLD" "$_DR_OFF"
 
-# git: required, and old enough versions lack flags dr-sync relies on.
+# git: required. Old versions do not have flags that dr-sync needs.
 if command -v git >/dev/null 2>&1; then
     gitver=$(git --version | awk '{print $3}')
     if version_ge "$gitver" 2.40; then
         ok "git" "$gitver"
     else
-        soft "git" "$gitver is older than 2.40" "Draugr is only tested against 2.40 and newer."
+        soft "git" "$gitver is older than 2.40" "Draugr was tested only with 2.40 and newer."
     fi
 else
     bad "git" "not found" "sudo apt install git"
 fi
 
-# jq: required. Every sandbox state lookup parses 'sbx ls --json'.
+# jq: required. Each lookup of a sandbox state parses 'sbx ls --json'.
 if command -v jq >/dev/null 2>&1; then
     ok "jq" "$(jq --version 2>/dev/null)"
 else
     bad "jq" "not found" \
-        "Draugr reads 'sbx ls --json' to find out what your sandboxes are doing." \
+        "Draugr reads 'sbx ls --json' to find the state of your sandboxes." \
         "sudo apt install jq"
 fi
 
-# rsync: optional, and only DRAUGR_DATA needs it - hence soft, not bad.
+# rsync: optional. Only DRAUGR_DATA needs it, so it is soft, not bad.
 if command -v rsync >/dev/null 2>&1; then
     ok "rsync" "$(rsync --version 2>/dev/null | head -1 | awk '{print $3}')"
 else
     soft "rsync" "not found" \
-        "Only needed for DRAUGR_DATA file sync. Everything else works without it." \
+        "Only the DRAUGR_DATA file sync needs it. All else works without it." \
         "sudo apt install rsync"
 fi
 
-# ssh: required. Commits, data AND the agent's terminal all cross on it.
+# ssh: required. Commits, data, AND the terminal of the agent all go through it.
 if command -v ssh >/dev/null 2>&1; then
     ok "ssh" "$(ssh -V 2>&1 | cut -d, -f1)"
 else
     bad "ssh" "not found" \
-        "dr-sync moves commits over git's ssh:// transport, and dr-go attaches" \
-        "over the same one - it is the only transport where Ctrl-Z works." \
+        "dr-sync moves commits through the ssh:// transport of git. dr-go attaches" \
+        "through the same one. It is the only transport where Ctrl-Z works." \
         "sudo apt install openssh-client"
 fi
 
@@ -130,41 +131,41 @@ printf '\n%sDocker Sandboxes%s\n' "$_DR_BOLD" "$_DR_OFF"
 if sbx_path=$(dr_find_sbx 2>/dev/null); then
     ok "sbx.exe" "$sbx_path"
 
-    # Pull the first x.y.z out of whatever 'sbx version' prints, so the check
-    # survives a change of wording around it.
+    # Take the first x.y.z from the output of 'sbx version'. If the words around
+    # it change, the test still works.
     if sbxver=$("$sbx_path" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1); then
         if version_ge "$sbxver" 0.37; then
             ok "sbx version" "$sbxver"
         else
             bad "sbx version" "$sbxver is older than 0.37" \
-                "Draugr uses 'sbx ls --json' and per-sandbox policy scoping." \
+                "Draugr uses 'sbx ls --json' and policies for each sandbox." \
                 "winget upgrade Docker.sbx"
         fi
     else
-        soft "sbx version" "could not parse 'sbx version' output"
+        soft "sbx version" "could not parse the output of 'sbx version'"
     fi
 
-    # A successful 'ls' is the cheapest proof the daemon is actually up.
+    # An 'ls' that works is the cheapest proof that the daemon runs.
     if "$sbx_path" ls --json >/dev/null 2>&1; then
         count=$("$sbx_path" ls --json 2>/dev/null | jq '(.sandboxes // []) | length' 2>/dev/null || echo '?')
         ok "sandbox daemon" "reachable, $count sandbox(es)"
     else
         bad "sandbox daemon" "not reachable" \
-            "Start it, or diagnose with:  sbx diagnose" \
-            "On Windows the Hypervisor Platform feature must be enabled."
+            "Start it, or find the cause with:  sbx diagnose" \
+            "On Windows, the Hypervisor Platform feature must be on."
     fi
 else
     bad "sbx.exe" "not found" \
-        "sbx is a Windows binary and is not on WSL's PATH by default." \
+        "sbx is a Windows binary. By default, it is not on the PATH of WSL." \
         "Install:  winget install Docker.sbx" \
-        "Or point Draugr at it:  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
+        "Or tell Draugr where it is:  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
 fi
 
 # --- the WSL ssh bridge ----------------------------------------------------
 printf '\n%sssh bridge (WSL)%s\n' "$_DR_BOLD" "$_DR_OFF"
 
-# The block must exist AND its ProxyCommand must mention sbx: an ssh config can
-# easily contain a Host *.sbx stanza that does not actually reach a sandbox.
+# The block must exist, AND its ProxyCommand must name sbx. An ssh configuration
+# can have a Host *.sbx block that does not connect to a sandbox.
 ssh_config="$HOME/.ssh/config"
 if [ -f "$ssh_config" ] && grep -qE '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$ssh_config"; then
     proxy=$(grep -A6 -E '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$ssh_config" \
@@ -172,61 +173,61 @@ if [ -f "$ssh_config" ] && grep -qE '^[[:space:]]*Host[[:space:]]+\*\.sbx' "$ssh
     if printf '%s' "$proxy" | grep -q 'sbx'; then
         ok "*.sbx block" "present in ~/.ssh/config"
     else
-        bad "*.sbx block" "present but has no sbx ProxyCommand" \
+        bad "*.sbx block" "present, but without an sbx ProxyCommand" \
             "Rewrite it with:  dr-setup --force"
     fi
 else
-    bad "*.sbx block" "missing from WSL's ~/.ssh/config" \
-        "This is the step people miss. 'sbx setup ssh' configures the WINDOWS" \
-        "ssh client only; WSL has its own config, and without this block neither" \
-        "'ssh <name>.sbx' nor git's ssh:// transport works from here - so" \
-        "dr-go cannot attach either, not just dr-sync." \
+    bad "*.sbx block" "missing from the ~/.ssh/config of WSL" \
+        "People often forget this step. 'sbx setup ssh' configures only the" \
+        "WINDOWS ssh client. WSL has its own configuration. Without this block," \
+        "'ssh <name>.sbx' and the ssh:// transport of git do not work here." \
+        "Thus dr-go cannot attach, and dr-sync does not work." \
         "Fix:  dr-setup"
 fi
 
 # --- this project ----------------------------------------------------------
 printf '\n%sThis project%s\n' "$_DR_BOLD" "$_DR_OFF"
 
-# Everything below is about the project you are standing in, so all of it is
-# skipped - with a warning, not an error - when that is not a repository.
+# All of the tests below are about the current project. Outside a repository,
+# dr-doctor skips them, with a warning and not an error.
 if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
     ok "git repository" "$repo"
 
-    # The constraint the README leads with, checked before anything depends on it.
+    # The first constraint of the README. Test it before other tests need it.
     if mound=$(dr_path_mound "$repo" 2>/dev/null); then
         ok "on a Windows drive" "$(dr_path_win "$repo")  ->  $mound in the mound"
     else
         bad "on a Windows drive" "$repo is not under /mnt/<drive>/" \
-            "sbx.exe workspaces are Windows paths, so a repo on WSL's own ext4" \
-            "filesystem has no path sbx can mount." \
-            "Move the project under /mnt/c/ and work on it from there."
+            "sbx.exe workspaces are Windows paths. A repo on the ext4 file system" \
+            "of WSL has no path that sbx can mount." \
+            "Move the project under /mnt/c/, and work on it there."
     fi
 
-    # An untrusted config is silently ignored by the loader, which is exactly
-    # the kind of thing someone would otherwise spend an hour not noticing.
+    # The loader ignores a configuration that is not trusted, with no message.
+    # Without this test, a person can look for an hour and not see it.
     for f in "$repo/.draugr.conf" "$repo/.draugr.local.conf"; do
         [ -f "$f" ] || continue
         name=./${f#"$repo"/}
         if dr_trust_is_trusted "$f"; then
             ok "$name" "trusted"
         else
-            bad "$name" "untrusted, so it is being IGNORED" \
-                "Draugr sources this file, which means running it." \
-                "Review it, then:  dr-trust"
+            bad "$name" "not trusted, so Draugr IGNORES it" \
+                "Draugr sources this file, so it runs the file." \
+                "Read it, then run:  dr-trust"
         fi
     done
 
-    # The kit carries the network rules, so a missing one means the mound will
-    # be built with no allow-list at all.
+    # The kit holds the network rules. Without a kit, the mound gets no allow
+    # list.
     dr_load_config "$repo"
 
-    # DR_REPO is what dr_kit_resolve searches for a repo-relative entry. dr-doctor
-    # reaches this point without dr_context - it deliberately keeps running where
-    # dr_context would have stopped - so it is set here rather than assumed.
+    # dr_kit_resolve searches DR_REPO for an entry relative to the repo.
+    # dr-doctor gets here without dr_context. It continues on purpose where
+    # dr_context stops. Thus the code sets DR_REPO here, and does not assume it.
     DR_REPO=$repo
     if [ -n "$DRAUGR_KIT" ]; then
-        # Each entry is reported separately, because "the kit is missing" is the
-        # wrong sentence when two of three resolved and one name is misspelled.
+        # Report each entry alone. If two of three entries resolved, and one
+        # name has a spelling error, "the kit is missing" is wrong.
         mapfile -t _kit_missing < <(dr_kit_missing)
         if [ ${#_kit_missing[@]} -eq 0 ]; then
             ok "kit" "$DRAUGR_KIT"
@@ -234,53 +235,53 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
             for _k in "${_kit_missing[@]}"; do
                 soft "kit '$_k'" "not found" \
                     "Looked in $repo and in the kit store $(dr_kit_store)." \
-                    "Network rules and setup commands live in the kit." \
+                    "The kit holds the network rules and the setup commands." \
                     "Your library:  dr-kit list      A starter kit:  dr-init"
             done
         fi
 
-        # A kit pinned to another agent is valid, and fails only at creation -
-        # in sbx's words, about a field you did not know it had read.
+        # A kit for another agent is valid. It fails only at creation, with a
+        # message from sbx about a field that you did not know sbx read.
         while IFS=' ' read -r _k _want; do
             [ -n "$_k" ] || continue
             bad "kit agent" "$_k requires \"$_want\", not \"$DRAUGR_AGENT\"" \
-                "sbx will refuse to compose them, so dr-up cannot create the mound." \
-                "Drop the 'requires: agent:' line, or keep a $_k.$DRAUGR_AGENT/"
+                "sbx refuses to compose them, so dr-up cannot create the mound." \
+                "Remove the 'requires: agent:' line, or keep a $_k.$DRAUGR_AGENT/"
         done < <(dr_kit_agent_conflicts)
     fi
 
-    # The agent needs credentials, and they are held on the HOST by sbx rather
-    # than inside the mound - the proxy injects them per request, so nothing is
-    # baked in at creation and signing in later needs no rebuild. sbx warns about
-    # a missing one when it creates a sandbox and never again, which is the wrong
-    # moment: by the time it matters you are looking at a logged-out agent.
+    # The agent needs credentials. sbx keeps them on the HOST, not in the mound.
+    # The proxy adds them to each request, so creation does not put them in the
+    # mound. A later sign-in needs no rebuild. sbx warns about a missing secret
+    # only at the creation of a sandbox. That is the wrong time, because you see
+    # the problem later, as an agent that is not signed in.
     _svc=$(dr_agent_secret) || _svc=
     if [ -n "$_svc" ]; then
         if dr_sbx secret ls 2>/dev/null | grep -qE "^\(global\)[[:space:]]+service[[:space:]]+$_svc\b"; then
             ok "$DRAUGR_AGENT credentials" "$_svc configured with sbx"
         else
-            # The how-to comes from the agent module rather than from here,
-            # because it genuinely differs: sbx runs the OAuth flow itself for
-            # openai and refuses to for anthropic, telling you to sign in inside
-            # the sandbox instead. One hardcoded line was wrong for one of the
-            # two agents Draugr knows, and named a command sbx rejects outright.
+            # The instructions come from the agent module, because they differ.
+            # sbx runs the OAuth flow for openai. For anthropic, it refuses, and
+            # tells you to sign in inside the sandbox. One fixed line was wrong
+            # for one of the two agents that Draugr knows. It named a command
+            # that sbx refuses.
             mapfile -t _hints < <(dr_agent_signin "$_svc")
-            soft "$DRAUGR_AGENT credentials" "no '$_svc' secret - the agent starts logged out" \
-                "The token stays on the host; sbx's proxy injects it per request." \
+            soft "$DRAUGR_AGENT credentials" "no '$_svc' secret. The agent starts signed out." \
+                "The token stays on the host. The proxy of sbx adds it to each request." \
                 "${_hints[@]}"
         fi
     fi
 
-    # The agent's own model, when DRAUGR_MODEL asks for one. These exist because
-    # DRAUGR_MODEL_URL defaults to the ollama-proxy port: a default that assumes
-    # a piece of software is a default that has to verify it. Nothing here
-    # imports anything from share/ollama-proxy - they are plain HTTP requests, so
-    # the two stay independent of each other.
+    # The model of the agent, for a DRAUGR_MODEL that names one. The default of
+    # DRAUGR_MODEL_URL is the ollama-proxy port. A default that assumes a
+    # program must make sure that the program is there. Nothing here imports
+    # from share/ollama-proxy. These are plain HTTP requests, so the two stay
+    # independent.
     if [ -n "${DRAUGR_MODEL:-}" ]; then
         _mok=1
 
-        # The refusal dr-go would hit, reported here first so it is found while
-        # you are looking for problems rather than while you are starting work.
+        # The refusal that dr-go gives. Report it here first. Then you find it
+        # during a search for problems, not at the start of work.
         if dr_model_is_port "${DRAUGR_MODEL_URL:-}"; then
             _mfound=
             for _p in ${DRAUGR_HOST_PORTS:-}; do
@@ -288,27 +289,27 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
             done
             if [ -z "$_mfound" ]; then
                 bad "DRAUGR_MODEL_URL" "port $DRAUGR_MODEL_URL is not in DRAUGR_HOST_PORTS" \
-                    "The mound cannot reach it, and dr-go refuses to start." \
+                    "The mound cannot connect to it, and dr-go refuses to start." \
                     "Add it:  DRAUGR_HOST_PORTS=\"$DRAUGR_MODEL_URL\""
                 _mok=
             fi
         fi
 
-        # An unmeasured agent is a refusal rather than a silent no-op: it would
-        # keep talking to its cloud while you believed the work was staying here.
+        # An agent that nobody tested gets a refusal, not a silent no-op. It
+        # continues to use its cloud, while you think that the work stays here.
         if ! dr_agent_model_supported; then
             bad "DRAUGR_MODEL" "Draugr cannot point $DRAUGR_AGENT at another endpoint" \
-                "Which variables an agent reads for this has not been measured." \
+                "Nobody tested which variables this agent reads for this." \
                 "Unset DRAUGR_MODEL, or use DRAUGR_AGENT=claude."
         elif [ -n "$_mok" ]; then
             _murl=$(dr_model_url) || _murl=
 
-            # One probe, shared with dr-go. The check that refuses to attach and
-            # the check that explains why have to be the same check, or this
-            # command ends up cheerfully approving what dr-go is about to reject.
+            # One probe, shared with dr-go. The test that refuses to attach and
+            # the test that tells why must be the same test. Otherwise this
+            # command approves what dr-go then refuses.
             if [ -z "$_murl" ]; then
-                bad "DRAUGR_MODEL" "this machine's address could not be resolved" \
-                    "A bare DRAUGR_MODEL_URL needs it, and dr-up needs it too."
+                bad "DRAUGR_MODEL" "could not resolve the address of this machine" \
+                    "A DRAUGR_MODEL_URL with only a port needs it, and dr-up needs it too."
             else
                 case $(dr_model_probe "$_murl") in
                     proxy)
@@ -316,32 +317,32 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
                     alive)
                         ok "$DRAUGR_AGENT model" "$DRAUGR_MODEL at $_murl" ;;
                     stalled)
-                        bad "$DRAUGR_AGENT model" "the proxy answers, but nothing is behind it" \
-                            "$_murl serves /healthz but not /api/version, so the" \
-                            "proxy is up and the model server is not." \
+                        bad "$DRAUGR_AGENT model" "the proxy answers, but no server is behind it" \
+                            "$_murl serves /healthz but not /api/version. Thus the" \
+                            "proxy runs, and the model server does not." \
                             "Start it:  ollama serve" ;;
                     bare)
-                        soft "$DRAUGR_AGENT model" "answering at $_murl, with no proxy" \
-                            "No /healthz there, so this is the model server itself:" \
-                            "the agent can POST /api/pull and DELETE /api/delete on" \
-                            "the same port. A front door:  $DRAUGR_SHARE/ollama-proxy/" ;;
+                        soft "$DRAUGR_AGENT model" "answers at $_murl, with no proxy" \
+                            "There is no /healthz, so this is the model server. The" \
+                            "agent can POST /api/pull and DELETE /api/delete on the" \
+                            "same port. A proxy in front:  $DRAUGR_SHARE/ollama-proxy/" ;;
                     dead)
-                        bad "$DRAUGR_AGENT model" "nothing answering at $_murl" \
-                            "dr-go will refuse to attach, because every prompt would" \
-                            "fail with a dial error naming that address and nothing" \
-                            "else. Start it:  $DRAUGR_SHARE/ollama-proxy/ollama-proxy start" ;;
+                        bad "$DRAUGR_AGENT model" "nothing answers at $_murl" \
+                            "dr-go refuses to attach. Otherwise each prompt fails with" \
+                            "a dial error, which names only that address." \
+                            "Start it:  $DRAUGR_SHARE/ollama-proxy/ollama-proxy start" ;;
                     unknown)
-                        soft "$DRAUGR_AGENT model" "cannot check $_murl - no curl here" \
-                            "Install curl, or ask by hand:  curl $_murl/healthz" ;;
+                        soft "$DRAUGR_AGENT model" "cannot test $_murl, because curl is missing" \
+                            "Install curl, or test it yourself:  curl $_murl/healthz" ;;
                 esac
             fi
         fi
     fi
 
-    # Dependencies: every failure here happens at the next dr-up, so it is worth
-    # finding now. A path that is gone, a directory that is not a repository and
-    # a config nobody has read are all refusals, not warnings - dr-up stops on
-    # each of them. Cycles are left to dr-up, which sees the whole chain.
+    # Dependencies. Each failure here also happens at the next dr-up, so find it
+    # now. A missing path, a directory that is not a repository, and a
+    # configuration that nobody read are refusals, not warnings. dr-up stops on
+    # each of them. dr-up finds cycles, because it sees the whole chain.
     if [ -n "${DRAUGR_REQUIRES:-}" ]; then
         while read -r _dep; do
             [ -n "$_dep" ] || continue
@@ -350,11 +351,11 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
                     "Named in DRAUGR_REQUIRES (${DR_ORIGIN[DRAUGR_REQUIRES]:-built-in default})."
             elif ! git -C "$_dep" rev-parse --show-toplevel >/dev/null 2>&1; then
                 bad "requires $(basename "$_dep")" "not a git repository: $_dep" \
-                    "dr-up brings up repositories, so a dependency has to be one."
+                    "dr-up starts repositories, so a dependency must be one."
             elif [ -f "$_dep/.draugr.conf" ] && ! dr_trust_is_trusted "$_dep/.draugr.conf"; then
-                bad "requires $(basename "$_dep")" "its config is untrusted" \
-                    "Requiring a repo means running its config and hooks, as you." \
-                    "Read it, then:  dr-trust $_dep/.draugr.conf"
+                bad "requires $(basename "$_dep")" "its configuration is not trusted" \
+                    "A required repo runs its configuration and hooks, as you." \
+                    "Read it, then run:  dr-trust $_dep/.draugr.conf"
             else
                 _dn=$(dr_dep_config "$_dep" DRAUGR_SANDBOX)
                 ok "requires ${_dn:-$(basename "$_dep")}" \
@@ -363,12 +364,12 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
         done < <(dr_dep_requires "$DR_REPO")
     fi
 
-    # Claims this repo left behind on resources it no longer requires. Harmless
-    # - they age out, and an exclusive one is taken over rather than waited for
-    # - but they keep a warden alive, which keeps a mound up.
-    # The names this repo is entitled to hold, so that a claim on anything else
-    # stands out. Built once rather than per claim, since each entry costs a
-    # dr-config in another repository.
+    # Claims of this repo on resources that it no longer requires. They do no
+    # damage. They expire, and another repo takes an exclusive one and does not
+    # wait. But they keep a warden alive, and the warden keeps a mound running.
+    # Below are the names that this repo can hold, so that other claims are easy
+    # to see. The list is made once, not for each claim, because each entry
+    # costs a dr-config in another repository.
     _wanted=" "
     if [ -n "${DRAUGR_REQUIRES:-}" ]; then
         while read -r _dep; do
@@ -380,25 +381,24 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
     _mine=$(_dr_hash_text "$DR_REPO")
     for _cdir in "$DR_RUN_DIR"/*/; do
         [ -f "$_cdir$_mine.claim" ] || continue
-        # The key as it was claimed, not the directory name it was sanitised
-        # into. A claim dr-forge made on something that is not a mound - the
-        # VM, as "vm:<name>" - is not in DRAUGR_REQUIRES and never will be, so
-        # it is not an orphan.
+        # The key of the claim, not the cleaned directory name. dr-forge claims
+        # the VM, which is not a mound, as "vm:<name>". That key is never in
+        # DRAUGR_REQUIRES, so it is not an orphan.
         _ckey=$(sed -n 's/^key=//p' "$_cdir$_mine.claim" | head -1)
         case "$_ckey" in *:*) continue ;; esac
         case "$_wanted" in *" $_ckey "*) continue ;; esac
         soft "claim on $_ckey" "held by this repo, which no longer requires it" \
-            "Nothing breaks; it keeps that resource up. Let it go:  dr-dep release"
+            "Nothing breaks, but the resource continues to run. To release it:  dr-dep release"
     done
 else
     soft "git repository" "$PWD is not one" \
-        "Draugr works on one repository at a time. cd into a project, or 'git init'."
+        "Draugr works on one repository at a time. Go to a project, or run 'git init'."
 fi
 
 # --- verdict ---------------------------------------------------------------
 #
-# Exit status is what a script would check, so only real failures make it
-# non-zero: a warning is something to know about, not something blocking.
+# A script reads the exit status, so only real failures make it non-zero. A
+# warning is information, not a block.
 printf '\n'
 if [ "$fails" -gt 0 ]; then
     printf '%s%d problem(s) to fix.%s' "$_DR_RED" "$fails" "$_DR_OFF"
@@ -410,4 +410,4 @@ if [ "$warns" -gt 0 ]; then
     printf '%sReady, with %d warning(s).%s\n' "$_DR_YELLOW" "$warns" "$_DR_OFF"
     exit 0
 fi
-printf '%sEverything checks out.%s\n' "$_DR_GREEN" "$_DR_OFF"
+printf '%sAll tests passed.%s\n' "$_DR_GREEN" "$_DR_OFF"

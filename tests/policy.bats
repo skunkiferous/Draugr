@@ -1,11 +1,10 @@
 #!/usr/bin/env bats
-# The build-your-own-kit loop: what was refused, what was opened, what got
+# The loop to build your own kit: what was refused, what was opened, what was
 # written down, and what refuses to destroy the difference.
 #
-# The parts that talk to sbx are exercised through the mock, which replays canned
-# JSON. What is genuinely tested here is Draugr's own reasoning on top of it: the
-# three-way split between a kit's rules, ad-hoc rules and the machine-wide
-# defaults, and the YAML edit that ends the loop.
+# The parts that talk to sbx use the mock, which replays fixed JSON. The real
+# test here is the logic of Draugr on top of it: the split between kit rules,
+# ad-hoc rules and machine defaults, and the YAML edit that ends the loop.
 
 load helper
 
@@ -19,14 +18,14 @@ setup() {
     DR_REPO=$REPO
     DRAUGR_SANDBOX=$DR_MOCK_NAME
 
-    # The helpers are called in-process here, so nothing has run the config
-    # cascade for them. dr-kit and dr-policy get this from their own dr_context.
+    # The helpers run in-process here, so nothing ran the configuration cascade
+    # for them. dr-kit and dr-policy get this from their own dr_context.
     DRAUGR_KIT=.draugr/kit
 }
 
 teardown() { dr_test_teardown; }
 
-# A kit whose allow list is whatever the caller names.
+# A kit whose allow list holds the names that the caller gives.
 make_kit_with() {
     mkdir -p "$REPO/.draugr/kit"
     {
@@ -41,9 +40,9 @@ make_kit_with() {
     } > "$REPO/.draugr/kit/spec.yaml"
 }
 
-# A kit that narrows the defaults without allowing anything of its own: network: is
-# present, allow: is absent entirely. Ordinary, and the shape make_kit_with can never
-# produce - which is exactly why `dr-kit adopt` could not handle it until it was fixed.
+# A kit that narrows the defaults, and allows nothing of its own: network: is
+# present, allow: is absent. A normal shape, but make_kit_with can never make
+# it. That is why `dr-kit adopt` failed on it until the fix.
 make_kit_deny_only() {
     mkdir -p "$REPO/.draugr/kit"
     printf 'schemaVersion: "2"\nkind: mixin\nname: k\ncaps:\n  network:\n    deny:\n      - telemetry.bad.example\npublishedPorts:\n  - container: 5173\n' \
@@ -60,8 +59,8 @@ make_kit_deny_only() {
 }
 
 @test "dr_kit_allow_list: does not wander into deny or publishedPorts" {
-    # The trap a bare "every - line" grep would fall into, and the reason this
-    # is scoped to the allow: key rather than to the file.
+    # A bare grep for "each - line" falls into this trap. That is why this reads
+    # only the allow: key, not the full file.
     make_kit_with one.example.com
     run dr_kit_allow_list "$REPO/.draugr/kit"
     [[ "$output" != *"telemetry.bad.example"* ]]
@@ -92,8 +91,8 @@ make_kit_deny_only() {
 # --- what was refused, and what was opened ------------------------------------
 
 @test "dr_policy_denied: names the hosts, without the port" {
-    # The log records host:443; neither `sbx policy allow network` nor a kit's
-    # allow list takes a port, so carrying it through would only be a trap.
+    # The log records host:443. Neither `sbx policy allow network` nor the allow
+    # list of a kit takes a port. Thus a port here is only a trap.
     export DR_MOCK_DENIED="a.example.com b.example.com"
     run dr_policy_denied
     [[ "$output" == *"a.example.com"* ]]
@@ -113,8 +112,8 @@ make_kit_deny_only() {
 }
 
 @test "dr_policy_adhoc: a kit's own rule is not an ad-hoc one" {
-    # Both are scoped to the sandbox and both appear in the same table. Getting
-    # this wrong would have dr-kit adopt copy the kit's rules back into itself.
+    # Both apply to the sandbox, and both are in the same table. If this is
+    # wrong, dr-kit adopt copies the rules of the kit back into the kit.
     export DR_MOCK_ADHOC="opened.example.com" DR_MOCK_KITHOST="fromkit.example.com"
     run dr_policy_adhoc
     [[ "$output" == *"opened.example.com"* ]]
@@ -136,11 +135,11 @@ make_kit_deny_only() {
 }
 
 @test "dr_policy_unadopted: a host adopted into a SECOND kit is not unadopted" {
-    # dr-kit adopt writes into the repo's own kit, but a host counts as written
-    # down whichever kit holds it. Reading only the first one told a project with
-    # several that hosts already in a kit were about to be lost, and offered
-    # --force - which is exactly what throws away the ones that really were
-    # unadopted. Measured against a real gateway with three kits.
+    # dr-kit adopt writes into the own kit of the repo. But a host is written
+    # down if any kit holds it. When Draugr read only the first kit, a project
+    # with several kits got a warning about loss of hosts that a kit held. It
+    # offered --force, and that throws away the hosts that nobody adopted. A
+    # test on a real gateway with three kits showed this.
     make_kit_with something.else.example
     mkdir -p "$REPO/kits/extra"
     printf 'schemaVersion: "2"\nkind: mixin\nname: extra\ncaps:\n  network:\n    allow:\n      - %s\n' \
@@ -152,7 +151,7 @@ make_kit_deny_only() {
 }
 
 @test "dr_policy_unadopted: with no kit at all, everything is unadopted" {
-    # There is nowhere for it to have been written down, so nothing has been.
+    # There is no place where it was written down, so nothing was.
     export DR_MOCK_ADHOC="opened.example.com"
     run dr_policy_unadopted
     [ "$output" = "opened.example.com" ]
@@ -170,11 +169,11 @@ make_kit_deny_only() {
 }
 
 @test "dr-policy --denied: an empty log says the daemon may have restarted" {
-    # The failure mode worth naming: "nothing refused" and "the record was lost"
-    # look identical, and only one of them means the build is fine.
+    # An important failure: "nothing refused" and "the record was lost" look the
+    # same. Only one of them means that the build is good.
     run dr-policy --denied
     [ "$status" -eq 0 ]
-    [[ "$output" == *"restarting it clears this"* ]]
+    [[ "$output" == *"a restart clears it"* ]]
 }
 
 # --- dr-kit adopt --------------------------------------------------------------
@@ -191,7 +190,7 @@ make_kit_deny_only() {
     make_kit_with
     export DR_MOCK_ADHOC="opened.example.com"
     dr-kit adopt -y >/dev/null 2>&1
-    # Both cannot be true at once, and sbx would reject the file if they were.
+    # Both cannot be true at the same time. If they are, sbx rejects the file.
     ! grep -q 'allow: \[\]' "$REPO/.draugr/kit/spec.yaml"
 }
 
@@ -209,7 +208,7 @@ make_kit_deny_only() {
     dr-kit adopt -y >/dev/null 2>&1
     grep -q "telemetry.bad.example" "$REPO/.draugr/kit/spec.yaml"
     grep -q "container: 5173" "$REPO/.draugr/kit/spec.yaml"
-    # And the new host landed under allow:, not somewhere that happened to parse.
+    # And the new host is under allow:, not in some other place that parses.
     run dr_kit_allow_list "$REPO/.draugr/kit"
     [[ "$output" == *"opened.example.com"* ]]
 }
@@ -233,17 +232,17 @@ make_kit_deny_only() {
 }
 
 @test "dr-kit adopt: writes hosts in the order they were reported" {
-    # `for (i in want)` in awk has unspecified order, and this file is committed, so
-    # an arbitrary order would be a spurious diff on every adopt.
+    # `for (i in want)` in awk has no fixed order, and this file is committed.
+    # Thus a random order gives a false diff on each adopt.
     #
-    # Read the FILE, not dr_kit_allow_list: that helper pipes through `sort -u`, so
-    # comparing against it would pass whatever order adopt happened to write.
+    # Read the FILE, not dr_kit_allow_list. That helper pipes through `sort -u`.
+    # A comparison with it passes, whatever the order that adopt wrote.
     make_kit_with
     export DR_MOCK_ADHOC="b.example.com a.example.com"
     expected=$(dr_policy_unadopted)
     dr-kit adopt -y >/dev/null 2>&1
-    # Scoped to the allow: block. A bare `sed -n 's/^      - //p'` would also pick up
-    # deny:, whose items sit at the same indent.
+    # Only the allow: block. A bare `sed -n 's/^      - //p'` also finds deny:,
+    # whose items have the same indent.
     written=$(awk '/^    allow:/ { f = 1; next }
                    f && /^      - / { sub(/^      - /, ""); print; next }
                    f { exit }' "$REPO/.draugr/kit/spec.yaml")
@@ -262,8 +261,8 @@ make_kit_deny_only() {
     export DR_MOCK_ADHOC="**.example.com"
     dr-kit adopt -y >/dev/null 2>&1
     grep -qF '      - "**.example.com"' "$REPO/.draugr/kit/spec.yaml"
-    # And it still reads back as the same host, quotes stripped, so a second adopt
-    # does not add it all over again.
+    # And it still reads back as the same host, without quotes. Thus a second
+    # adopt does not add it again.
     run dr_kit_allow_list "$REPO/.draugr/kit"
     [ "$output" = "**.example.com" ]
 }
@@ -287,13 +286,13 @@ make_kit_deny_only() {
 }
 
 @test "dr-kit adopt: a kit with no network: block is reported, not guessed at" {
-    # Still a refusal, and still for the original reason: with no caps.network
-    # anywhere there is no unambiguous place for the block, and a kit edited by a
-    # guess is worse than one you were asked to edit yourself.
+    # Still a refusal, and for the same reason. With no caps.network, there is
+    # no clear place for the block. A kit edited by a guess is worse than a
+    # request to edit it yourself.
     #
-    # Note what changed in: a kit that HAS network: but no allow: is no
-    # longer this case. There the location is not a guess, so adopt creates the key
-    # rather than refusing - see "creates allow: when the kit has only deny:".
+    # Note the change: a kit that HAS network: but no allow: is no longer this
+    # case. There the location is not a guess, so adopt creates the key, and
+    # does not refuse. Refer to "creates allow: when the kit has only deny:".
     mkdir -p "$REPO/.draugr/kit"
     printf 'schemaVersion: "2"\nkind: mixin\nname: k\n' > "$REPO/.draugr/kit/spec.yaml"
     before=$(cat "$REPO/.draugr/kit/spec.yaml")
@@ -313,10 +312,10 @@ make_kit_deny_only() {
 
 # --- the guards ----------------------------------------------------------------
 #
-# A rule scoped to a sandbox does not outlive it, so both of the commands that
-# destroy a mound have to refuse while the list is only in the daemon. Measured
-# against real sbx: after `sbx rm`, looking the rule up by id gives "policy or
-# rule not found".
+# A rule for a sandbox does not live longer than the sandbox. Thus both commands
+# that destroy a mound must refuse while the list is only in the daemon. A test
+# on the real sbx showed this. After `sbx rm`, a look-up of the rule by id gives
+# "policy or rule not found".
 
 @test "dr-rm: refuses while a host is open and not in the kit" {
     export DR_MOCK_ADHOC="opened.example.com"
@@ -324,7 +323,7 @@ make_kit_deny_only() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"opened.example.com"* ]]
     [[ "$output" == *"dr-kit adopt"* ]]
-    # And it got nowhere near destroying anything.
+    # And it did not come near the destruction of anything.
     ! grep -q "^rm " "$DR_MOCK_LOG"
 }
 
@@ -344,8 +343,8 @@ make_kit_deny_only() {
 }
 
 @test "dr-up --recreate: refuses BEFORE removing the mound" {
-    # The cruellest possible moment to lose them: recreating is exactly what you
-    # do once the build finally works.
+    # The worst time to lose them. You recreate the mound exactly when the build
+    # works at last.
     export DR_MOCK_ADHOC="opened.example.com" DR_MOCK_STATE=running
     run dr-up --recreate -y
     [ "$status" -ne 0 ]
@@ -370,10 +369,10 @@ make_kit_deny_only() {
 
 # --- rules DRAUGR_HOST_PORTS owns --------------------------------------------
 #
-# These are written by dr-up on every start, from an address that is only valid
-# for this boot. Treating them as ad-hoc hosts made dr-up --recreate refuse and
-# recommend `dr-kit adopt`, which would have committed 172.19.192.26:11435 to the
-# repository - the exact thing DRAUGR_HOST_PORTS exists to avoid.
+# dr-up writes these on each start, from an address that is valid only for this
+# boot. When Draugr read them as ad-hoc hosts, dr-up --recreate refused and gave
+# the advice `dr-kit adopt`. That commits 172.19.192.26:11435 to the repository.
+# DRAUGR_HOST_PORTS exists to avoid exactly that.
 
 @test "dr_policy_unadopted: a rule dr-hostport wrote is not unadopted" {
     export DR_MOCK_ADHOC="172.19.192.26:11435"
@@ -390,8 +389,8 @@ make_kit_deny_only() {
 }
 
 @test "dr_policy_unadopted: a hostname on a declared port is somebody else's" {
-    # Only dr-hostport writes bare addresses. A domain on the same port came from
-    # dr-policy --allow and still belongs in the kit.
+    # Only dr-hostport writes bare addresses. A domain on the same port came
+    # from dr-policy --allow, and still goes in the kit.
     export DR_MOCK_ADHOC="ollama.example.com:11435"
     DRAUGR_HOST_PORTS=11435
     run dr_policy_unadopted

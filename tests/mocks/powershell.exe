@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# A stand-in for powershell.exe, so the forge commands can be tested off Windows.
+# A stand-in for powershell.exe, so that the forge commands can be tested off
+# Windows.
 #
-# dr-forge reaches the Windows side ONLY through powershell.exe - that is the measured
-# constraint the whole bridge is built on (lib/forge/common.sh) - which makes this one file
-# enough to test all of it. Nothing here interprets PowerShell; it answers as the real thing
-# would and records what it was asked, and the tests decode that themselves.
+# dr-forge reaches the Windows side ONLY through powershell.exe. A test showed
+# this limit, and the full bridge rests on it (lib/forge/common.sh). Thus this
+# one file can test all of it. Nothing here interprets PowerShell. It answers as
+# the real tool does, and records the request. The tests decode that themselves.
 #
-#   DR_MOCK_LOG         file to append the argv to, prefixed "powershell " so the existing
-#                       calls() helper picks it out alongside the sbx and ssh lines
-#   DR_MOCK_FAIL        containing "powershell" makes every invocation fail
-#   DR_MOCK_PROBE       a file of key=value lines to answer a probe.ps1 call with; without
-#                       it, a healthy forge named by DR_MOCK_PROBE_VM is reported
-#   DR_MOCK_PROBE_VM    the VM name the default probe answer claims to serve (default mock-vm)
-#   DR_MOCK_GUEST_RC    what a guest.ps1 call exits with, standing in for the code the GUEST
-#                       returned - which is the one thing dr-forge exec must not invent
+#   DR_MOCK_LOG         file to append the argv to, with the prefix "powershell ", so that
+#                       the calls() helper finds it beside the sbx and ssh lines
+#   DR_MOCK_FAIL        with "powershell" in it, each call fails
+#   DR_MOCK_PROBE       a file of key=value lines that answers a probe.ps1 call. If it is
+#                       not set, the answer is a healthy forge named by DR_MOCK_PROBE_VM
+#   DR_MOCK_PROBE_VM    the VM name in the default probe answer (default mock-vm)
+#   DR_MOCK_GUEST_RC    the exit code of a guest.ps1 call. It acts as the code of the GUEST.
+#                       dr-forge exec must never make up that code
 #
-# The default probe answer is a HEALTHY forge on purpose: a test then overrides only the fact
-# it cares about, instead of restating fifteen keys to change one.
+# The default probe answer is a HEALTHY forge, on purpose. A test then changes
+# only the fact that it needs, and does not repeat fifteen keys to change one.
 set -euo pipefail
 
 if [ -n "${DR_MOCK_LOG:-}" ]; then
@@ -27,15 +28,17 @@ case " ${DR_MOCK_FAIL:-} " in
     *" powershell "*) printf 'mock powershell: cannot run\n' >&2; exit 1 ;;
 esac
 
-# Which script was asked for. -File is what dr-forge always uses - a -Command string loses a
-# layer of quoting at every parser it crosses - so that is the only form answered here.
+# The script that the call names. dr-forge always uses -File, because a -Command
+# string loses a layer of quoting at each parser. Thus only that form gets an
+# answer here.
 script=
 mode=
 while [ $# -gt 0 ]; do
     case "$1" in
         -File) script=${2:-}; shift ;;
-        # vm.ps1 does three different things behind one file, so the mode has to be read to
-        # answer it - which is also what lets a test assert that `up` asked for them in order.
+        # vm.ps1 does three different things in one file. Thus the mock reads
+        # the mode to answer it. That also lets a test assert that `up` asked
+        # for them in order.
         -Mode) mode=${2:-}; shift ;;
     esac
     shift
@@ -77,13 +80,14 @@ EOF
         fi
         ;;
     *guest.ps1)
-        # No output of its own: exec's stdout belongs to the guest, and inventing some here
-        # would hide a dr-forge that printed nothing.
+        # No output of its own. The stdout of exec belongs to the guest. Output
+        # made up here hides a dr-forge that printed nothing.
         exit "${DR_MOCK_GUEST_RC:-0}"
         ;;
     *rm.ps1)
-        # rm.ps1 inspects a folder on the Windows side and then asks the daemon to delete, so
-        # both halves are stubbed: the facts come from a file, the outcome from a code.
+        # rm.ps1 examines a folder on the Windows side, then asks the daemon to
+        # delete it. Both halves are stubs: the facts come from a file, the
+        # result from a code.
         #
         #   DR_MOCK_RM_FACTS  a file of key=value lines to answer with
         #   DR_MOCK_RM_RC     what it exits with (default 0)
@@ -96,24 +100,27 @@ EOF
         exit "${DR_MOCK_RM_RC:-0}"
         ;;
     *init.ps1)
-        # init.ps1 reaches into the GUEST over ssh, so there is nothing here to simulate: the
-        # tests care that dr-forge named the VM, handed over the WSL public key as a path, and
-        # acted on the code that came back. The argv is in DR_MOCK_LOG for the first two.
+        # init.ps1 goes into the GUEST over ssh, so nothing here simulates it.
+        # The tests examine three things. dr-forge named the VM, gave the WSL
+        # public key as a path, and acted on the returned code. The argv in
+        # DR_MOCK_LOG shows the first two.
         #
         #   DR_MOCK_INIT_RC   what it exits with (default 0)
         printf 'mock init.ps1\n'
         exit "${DR_MOCK_INIT_RC:-0}"
         ;;
     *snap.ps1)
-        # snap.ps1 answers with the snapshot tree in every mode, so the facts are stubbed the
-        # way rm's are. The default is the interesting case for `base`: a VM with no baseline.
+        # snap.ps1 answers with the snapshot tree in each mode, so the facts are
+        # stubs, as for rm. The default is the important case for `base`: a VM
+        # with no baseline.
         #
         #   DR_MOCK_SNAP_FACTS  a file of key=value lines to answer with
         #   DR_MOCK_SNAP_RC     what the ACTING modes exit with (default 0)
         #
-        # THE READ AND THE ACT NEED SEPARATE CODES. base and rollback describe before they
-        # act, which is two calls to this file, and the failures worth testing belong to the
-        # second one - a single code would fail the description instead and never reach it.
+        # THE READ AND THE ACT NEED SEPARATE CODES. base and rollback describe,
+        # then act. That is two calls to this file, and the failures to test are
+        # in the second call. With one code, the description fails, and the act
+        # never runs.
         if [ -n "${DR_MOCK_SNAP_FACTS:-}" ] && [ -f "$DR_MOCK_SNAP_FACTS" ]; then
             cat "$DR_MOCK_SNAP_FACTS"
         else
@@ -125,36 +132,40 @@ EOF
         exit "${DR_MOCK_SNAP_RC:-0}"
         ;;
     *provision.ps1)
-        # provision builds a Windows guest from an ISO: an hour of API calls, ssh and an
-        # unattended install, none of which exists off Windows. What dr-layer is tested on is
-        # what it SENT - the argv line above - and whether it brought the gateway up first.
+        # provision builds a Windows guest from an ISO: an hour of API calls,
+        # ssh and an unattended install. None of that exists off Windows. The
+        # tests examine what dr-layer SENT (the argv line above), and whether it
+        # started the gateway first.
         #
         #   DR_MOCK_PROVISION_RC  what it exits with (default 0)
         printf 'mock provision.ps1\n'
         exit "${DR_MOCK_PROVISION_RC:-0}"
         ;;
     *layer.ps1)
-        # layer.ps1 edits vms.cfg and drives the VHD cmdlets, neither of which exists off
-        # Windows - so nothing here simulates a layer. What dr-layer is tested on is what it
-        # SENT (the argv line above) and what it did with the code that came back.
+        # layer.ps1 edits vms.cfg and runs the VHD cmdlets. Neither exists off
+        # Windows, so nothing here simulates a layer. The tests examine what
+        # dr-layer SENT (the argv line above), and what it did with the returned
+        # code.
         #
-        #   DR_MOCK_LAYER_RC  what it exits with (default 0). 3, 20, 21 and 24 are the codes
-        #                     layer.ps1 documents, and each one makes dr-layer say something
-        #                     different while relaying the code unchanged.
+        #   DR_MOCK_LAYER_RC  what it exits with (default 0). layer.ps1 documents the codes
+        #                     3, 20, 21 and 24. For each one, dr-layer gives a different
+        #                     message, and returns the code unchanged.
         printf 'mock layer.ps1: %s\n' "${mode:-no mode}"
         exit "${DR_MOCK_LAYER_RC:-0}"
         ;;
     *vm.ps1)
-        # vm.ps1 drives the VM's lifecycle through the daemon's API, so there is nothing here
-        # to simulate: the tests care that dr-forge asked for the right mode, passed the right
-        # tunnel script, and handled the code that came back.
+        # vm.ps1 controls the lifecycle of the VM through the API of the daemon,
+        # so nothing here simulates it. The tests examine three things. dr-forge
+        # asked for the right mode, gave the right tunnel script, and handled
+        # the returned code.
         #
-        #   DR_MOCK_VM_RC_<MODE>  what that one mode exits with - DR_MOCK_VM_RC_TUNNEL=12
+        #   DR_MOCK_VM_RC_<MODE>  what that one mode exits with, for example DR_MOCK_VM_RC_TUNNEL=12
         #   DR_MOCK_VM_RC         what any other mode exits with (default 0)
         printf 'mock vm.ps1: %s\n' "${mode:-no mode}"
         _rc_var="DR_MOCK_VM_RC_$(printf '%s' "$mode" | tr '[:lower:]' '[:upper:]')"
-        # The indirect read is wrapped: under `set -u` a name that was never set is an error,
-        # and "this mode has no override" is the ordinary case rather than a fault.
+        # The indirect read has a wrapper. Under `set -u`, a name that is not
+        # set is an error. But "this mode has no override" is the normal case,
+        # not a fault.
         if [ -n "${!_rc_var:-}" ]; then exit "${!_rc_var}"; fi
         exit "${DR_MOCK_VM_RC:-0}"
         ;;

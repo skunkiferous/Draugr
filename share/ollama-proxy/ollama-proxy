@@ -1,70 +1,66 @@
 #!/usr/bin/env bash
-# ollama-proxy - a query-only front door for a local Ollama.
+# ollama-proxy: a query-only front door for a local Ollama.
 #
-#   ollama-proxy start     start it, and wait until it is actually answering
+#   ollama-proxy start     start it, and wait until it really answers
 #   ollama-proxy stop      stop it
 #   ollama-proxy status    is it up, on what address, and is Ollama behind it
-#   ollama-proxy config    print the config that would be used, and validate it
+#   ollama-proxy config    print the configuration that it uses, and validate it
 #
-# Ollama has no authentication and no read-only mode, so anything that can reach
-# it can also pull, create and delete models - /api/create can read local files
-# while it is at it. This puts nginx in front with a default-deny allowlist, so
-# an application gets inference and nothing else.
+# Ollama has no authentication and no read-only mode. Thus each client that can
+# reach it can also pull, create, and delete models. /api/create can also read
+# local files. This puts nginx in front, with a default-deny allowlist. Thus an
+# application gets inference, and nothing else.
 #
-# It is meant to pair with Draugr's DRAUGR_HOST_PORTS, but needs nothing from
-# Draugr and can be used on its own. The intended arrangement is:
+# It goes with DRAUGR_HOST_PORTS of Draugr, but needs nothing from Draugr, and
+# you can use it alone. The layout is:
 #
-#   Ollama          127.0.0.1:11434   loopback only, unreachable from outside
+#   Ollama          127.0.0.1:11434   loopback only, no access from outside
 #   this proxy      0.0.0.0:11435     the only way in, query-only
 #   the sandbox     DRAUGR_HOST_PORTS="11435"
 #
-# That is strictly LESS exposed than binding Ollama itself to 0.0.0.0, because
-# the management API then has no listener anything off-host can reach.
+# That exposes LESS than an Ollama bound to 0.0.0.0. Nothing off the host can
+# reach a listener for the management API.
 #
-# --- it will not disturb another nginx ---------------------------------------
+# --- it does not disturb another nginx ---------------------------------------
 #
-# This runs a private instance: its own prefix, config, pid file, logs and temp
-# paths, as an ordinary user, touching nothing under /etc/nginx. Measured on
-# nginx 1.28.3: `nginx -T` on this config resolves zero references to /etc/nginx,
-# a system instance and this one serve at the same time, and `-s quit` here stops
-# only this one. The single thing that WOULD couple them is installing a site
-# into /etc/nginx/sites-enabled, which this deliberately never does.
+# This runs a private instance as a normal user, with its own prefix,
+# configuration, pid file, logs, and temp paths. It touches nothing under
+# /etc/nginx. Tests on nginx 1.28.3 showed this. `nginx -T` on this
+# configuration finds zero references to /etc/nginx. A system instance and this
+# one serve at the same time. `-s quit` here stops only this one. Only a site in
+# /etc/nginx/sites-enabled can couple them, and this never installs one.
 #
-# Note that `apt install nginx` itself starts a system nginx on port 80 under
-# systemd. That is the distribution's doing, not this script's; disable it with
-# `sudo systemctl disable --now nginx` if you do not want it.
+# `apt install nginx` itself starts a system nginx on port 80 under systemd. The
+# distribution does that, not this script. If you do not want it, disable it
+# with `sudo systemctl disable --now nginx`.
 set -euo pipefail
 
 PROG=${0##*/}
 
-# Everything is overridable, and the defaults are the arrangement described
-# above. UPSTREAM is loopback because the whole point is that Ollama should not
-# be listening anywhere else.
+# You can override each value. The defaults are the layout above. UPSTREAM is
+# loopback, because Ollama must not listen in another place.
 LISTEN=${OLLAMA_PROXY_LISTEN:-0.0.0.0}
 PORT=${OLLAMA_PROXY_PORT:-11435}
 UPSTREAM=${OLLAMA_PROXY_UPSTREAM:-127.0.0.1:11434}
 
-# Machine state, not repo state, so it follows the XDG state directory rather
-# than living next to a project - the same reasoning that keeps sandbox policy
-# rules out of the kit.
+# Machine state, not repo state. Thus it goes in the XDG state directory, not
+# next to a project. The same reason keeps sandbox policy rules out of the kit.
 STATE=${OLLAMA_PROXY_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ollama-proxy}
 
-# The template sits beside this script, so a copied directory keeps working and
-# there is nothing to configure about where it lives.
-# The template sits beside this script, so a copied directory keeps working and
-# there is nothing to configure about where it lives. BASH_SOURCE is followed to
-# its target first, because the obvious way to put this on a PATH is
+# The template is beside this script. Thus a copied directory continues to work,
+# and its location needs no configuration. First, this follows BASH_SOURCE to
+# its target. The obvious way to put this on a PATH is
 #
 #   ln -s .../share/ollama-proxy/ollama-proxy ~/.local/bin/ollama-proxy
 #
-# and through a symlink BASH_SOURCE is the LINK, so dirname is ~/.local/bin and
-# the template is looked for next to the link rather than next to the script.
-# Measured: `ollama-proxy start` then fails with "template not found:
-# /home/you/.local/bin/nginx.conf.template", naming a path nobody chose.
+# Through a symlink, BASH_SOURCE is the LINK. Then dirname is ~/.local/bin, and
+# the search for the template is next to the link, not next to the script. A
+# test showed that `ollama-proxy start` then fails with "template not found:
+# /home/you/.local/bin/nginx.conf.template", a path that nobody chose.
 #
-# readlink -f resolves a chain of links and prints a real file unchanged, so this
-# costs the copied-directory case nothing. Guarded because a readlink that is
-# absent or non-GNU should leave the old behaviour rather than an empty path.
+# readlink -f follows a chain of links, and prints a real file with no change.
+# Thus a copied directory costs nothing. Guarded, because an absent or non-GNU
+# readlink must keep the old behavior, not give an empty path.
 _self=${BASH_SOURCE[0]}
 _target=$(readlink -f "$_self" 2>/dev/null) && [ -n "$_target" ] && _self=$_target
 HERE=$(cd "$(dirname "$_self")" && pwd)
@@ -73,17 +69,17 @@ TEMPLATE=${OLLAMA_PROXY_TEMPLATE:-$HERE/nginx.conf.template}
 die() { printf '%s: %s\n' "$PROG" "$1" >&2; shift; for l in "$@"; do printf '  %s\n' "$l" >&2; done; exit 1; }
 say() { printf '%s: %s\n' "$PROG" "$1"; }
 
-# nginx is the only hard dependency; curl is used for the readiness wait and the
-# status probe, and both are checked here so a missing one is a clear message
-# rather than a confusing failure three steps later.
+# nginx is the only hard dependency. curl does the readiness wait and the status
+# probe. This tests both here, so that a missing one gives a clear message, not
+# a confusing failure three steps later.
 need() {
     command -v "$1" >/dev/null 2>&1 \
         || die "$1 is not installed" "Install it with:  sudo apt install $2"
 }
 
-# Render the template into the prefix. Substitution is done with a shell
-# parameter expansion rather than sed, so a value containing a slash - an IPv6
-# address, a path - cannot break the delimiter.
+# Render the template into the prefix. A shell parameter expansion does the
+# substitution, not sed. Thus a value with a slash (an IPv6 address, a path)
+# cannot break the delimiter.
 render() {
     [ -f "$TEMPLATE" ] || die "template not found: $TEMPLATE"
     local conf
@@ -94,17 +90,17 @@ render() {
     printf '%s\n' "$conf"
 }
 
-# The prefix has to exist before nginx is asked to check the config: -t opens the
-# log files, so a missing logs/ directory fails validation for a reason that has
-# nothing to do with the config being wrong.
+# The prefix must exist before nginx tests the configuration. -t opens the log
+# files. Thus a missing logs/ directory fails the validation, for a reason that
+# is not a wrong configuration.
 prepare() {
     mkdir -p "$STATE/logs" "$STATE/tmp"
     render > "$STATE/nginx.conf"
 }
 
-# The pid file alone is not evidence: it survives a kill -9 and a reboot. So the
-# process it names has to still exist AND still be an nginx, which is what stops
-# this from adopting whatever process later inherits that pid.
+# The pid file alone proves nothing. It stays after a kill -9 and a reboot. Thus
+# its process must still exist AND still be an nginx. That stops this from the
+# use of a different process that gets that pid later.
 running() {
     local pid
     [ -f "$STATE/pid" ] || return 1
@@ -114,9 +110,9 @@ running() {
     tr -d '\0' < "/proc/$pid/cmdline" | grep -q nginx
 }
 
-# Wait for the port to actually answer before returning. Without this, a caller
-# that starts the proxy and immediately makes a request - a dr-up hook, say -
-# races the listener and gets a connection refused it did not deserve.
+# Wait until the port really answers, then return. Some callers start the proxy
+# and then immediately send a request (for example, a dr-up hook). Without this,
+# such a caller races the listener, and gets a wrong "connection refused".
 #
 # /healthz is served by nginx itself, so this tests the proxy and not Ollama.
 wait_ready() {
@@ -136,21 +132,21 @@ start)
     need curl curl
     prepare
 
-    # Idempotent, because this is meant to be safe to call from a hook on every
-    # sandbox start. An already-running proxy is a success, not an error.
+    # Idempotent (safe to run twice), so that a hook can call it at each sandbox
+    # start. A proxy that already runs is a success, not an error.
     if running; then
         say "already running on $LISTEN:$PORT (pid $(cat "$STATE/pid"))"
         exit 0
     fi
 
-    # Validated before starting, so a broken template is one clear nginx error
-    # rather than a process that dies immediately and leaves a stale pid file.
+    # Validated before the start. Thus a broken template gives one clear nginx
+    # error, not a process that dies immediately and leaves an old pid file.
     nginx -p "$STATE/" -c nginx.conf -t >/dev/null 2>&1 \
         || { nginx -p "$STATE/" -c nginx.conf -t; die "the rendered config is not valid" \
              "See it with:  $PROG config"; }
 
     nginx -p "$STATE/" -c nginx.conf \
-        || die "nginx would not start" "Look at:  $STATE/logs/error.log"
+        || die "nginx did not start" "Look at:  $STATE/logs/error.log"
 
     wait_ready || die "started, but $LISTEN:$PORT never answered" \
                       "Look at:  $STATE/logs/error.log"
@@ -158,8 +154,8 @@ start)
     ;;
 
 stop)
-    # Not an error when it is already down: a stop command that fails on an
-    # already-stopped service is one that cannot be used in a teardown script.
+    # Not an error if it is already down. A teardown script cannot use a stop
+    # command that fails on a stopped service.
     if ! running; then
         say "not running"
         exit 0
@@ -169,8 +165,8 @@ stop)
     ;;
 
 status)
-    # Exit 1 when it is down, so this is usable as a test in a script -
-    # `ollama-proxy status || ollama-proxy start` should do the obvious thing.
+    # Exit 1 if it is down, so that a script can use this as a test.
+    # `ollama-proxy status || ollama-proxy start` then does the obvious thing.
     if ! running; then
         say "not running"
         printf '  Start it with:  %s start\n' "$PROG"
@@ -178,12 +174,12 @@ status)
     fi
     say "running on $LISTEN:$PORT (pid $(cat "$STATE/pid"))"
 
-    # Two separate questions, and conflating them is how you spend an afternoon
-    # debugging the wrong process: is the PROXY up, and is OLLAMA up behind it.
+    # Two separate questions. A mix of them costs an afternoon on the wrong
+    # process: is the PROXY up, and is OLLAMA up behind it.
     if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/healthz" 2>/dev/null; then
         printf '  proxy   answering\n'
     else
-        printf '  proxy   NOT answering - see %s/logs/error.log\n' "$STATE"
+        printf '  proxy   NOT answering. See %s/logs/error.log\n' "$STATE"
     fi
 
     if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/api/version" 2>/dev/null; then
@@ -192,16 +188,16 @@ status)
         printf '  ollama  NOT reachable at %s\n' "$UPSTREAM"
     fi
 
-    # The refusal is the feature, so it is worth showing that it is live rather
-    # than assumed. A 403 here means the allowlist is doing its job.
+    # The refusal is the feature, so show that it works, and do not only assume
+    # it. A 403 here means that the allowlist does its job.
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \
                 -X POST "http://127.0.0.1:$PORT/api/pull" 2>/dev/null) || code=000
-    printf '  /api/pull returns %s (403 is correct - management is refused)\n' "$code"
+    printf '  /api/pull returns %s (403 is correct: management is refused)\n' "$code"
     ;;
 
 config)
-    # Printed AND checked, because a config you can read is not the same as one
-    # nginx accepts, and this is the command you reach for when start failed.
+    # Printed AND tested. A configuration that you can read is not the same as
+    # one that nginx accepts. Also, you use this command after a failed start.
     prepare
     render
     printf '\n' >&2

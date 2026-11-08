@@ -1,44 +1,44 @@
 #!/usr/bin/env bash
-# dr-mem - carry the agent's memory across dr-rm.
+# dr-mem: keep the memory of the agent across dr-rm.
 #
-# The mound's disk image survives dr-stop and dies with dr-rm, so everything the
-# agent learned about your project dies with it unless it was exported first.
-# Where that memory lives is the agent's own business and differs for each one,
-# so the layout comes from lib/agents/<agent>.sh rather than from here. For
-# Claude Code it is filed under a key derived from the project's absolute path,
-# which differs on every side of the boundary - so a straight copy lands in a
-# directory the agent silently never reads. That is why this command exists.
+# The disk image of the mound stays after dr-stop, and dies with dr-rm. All that
+# the agent learned about your project dies with it, unless you exported it
+# first. Each agent keeps its memory in its own place, so the layout comes from
+# lib/agents/<agent>.sh, not from here. Claude Code files it under a key from
+# the absolute path of the project. That path differs on each side of the
+# boundary. Thus a simple copy goes to a directory that the agent never reads,
+# with no message. That is why this command exists.
 #
 #   dr-mem status              where memory is on each side, and how much
 #   dr-mem export              mound -> $DRAUGR_MEM_STORE. Do this before dr-rm
-#   dr-mem import              store -> mound. Do this before launching the agent
-#   dr-mem import --from-host  the agent's own memory on your host -> mound
-#   dr-mem import --source D   some other directory -> mound
+#   dr-mem import              store -> mound. Do this before you start the agent
+#   dr-mem import --from-host  the memory of the agent on your host -> mound
+#   dr-mem import --source D   a different directory -> mound
 #   dr-mem import --if-empty   import only into a mound that has no memory yet
 #   dr-mem diff                what each side knows that the other does not
-#   dr-mem check               would dr-rm lose anything? (for scripts)
+#   dr-mem check               does dr-rm lose something? (for scripts)
 #
-# diff exits 1 when the two sides differ, so it can be used as a test. check
-# exits 0 when the store has everything the mound has, 1 when the mound holds
-# memory that was never exported, and 2 when it could not be reached at all -
-# the same three answers dr-sync --check-only gives, for the same reason.
+# If the two sides differ, diff exits 1, so you can use it as a test. The exit
+# codes of check: 0 means that the store has all that the mound has. 1 means
+# that the mound holds memory that was never exported. 2 means no connection.
+# These are the three answers of dr-sync --check-only, for the same reason.
 #
 # shellcheck disable=SC2016
-# Single-quoted "$1" appears throughout and is deliberate: those strings are
-# scripts for the MOUND's shell, and the whole point is that the host does not
-# expand them. See dr_mound_sh in lib/common.sh for how the arguments get there.
+# Single-quoted "$1" is in many places, on purpose. Those strings are scripts
+# for the shell of the MOUND, and the host must not expand them. See dr_mound_sh
+# in lib/common.sh for how the arguments get there.
 set -euo pipefail
 
 DR_PROG=dr-mem
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# status is the default because it is the only one that moves nothing, and
-# "which side has what" is the question you actually have first.
+# status is the default, because it is the only action that moves nothing, and
+# "which side has what?" is your first question.
 action=${1:-status}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
@@ -46,9 +46,9 @@ case "$action" in
     *) dr_die "unknown action: $action" "One of: status, export, import, diff, check" ;;
 esac
 
-# --source and --from-host both name where memory comes from, and --if-empty
-# decides whether to import at all; they are read here rather than per-action
-# because only `import` uses them and rejecting them elsewhere would be noise.
+# --source and --from-host both name the source of the memory. --if-empty
+# decides whether to import at all. One loop reads them for all actions. Only
+# `import` uses them, and a refusal in other actions is only noise.
 source_dir=
 from_host=
 if_empty=
@@ -66,39 +66,39 @@ done
 
 dr_context
 
-# Memory layout is agent-specific, and Draugr only knows the ones it has been
-# able to measure - see lib/agents/. Refusing beats copying a directory into a
-# place the agent never reads: that looks like it worked, and the agent has still
-# forgotten everything. `check` is the exception because dr-rm calls it before
-# destroying a mound, and "I do not know this agent" must answer "nothing to
-# lose" rather than failing the guard shut.
+# Each agent has its own memory layout, and Draugr knows only the layouts that
+# it tested (see lib/agents/). A refusal is better than a copy into a place that
+# the agent never reads. That copy looks like a success, but the agent still
+# forgot everything. `check` is the exception. dr-rm calls it before it destroys
+# a mound. "I do not know this agent" must answer "nothing to lose", and must
+# not close the guard.
 if ! dr_agent_mem_supported; then
     [ "$action" = check ] && exit 0
     dr_die "Draugr does not know where $(dr_agent_mem_label) keeps its memory" \
-           "Memory is the one thing that differs per agent; everything else works." \
+           "Memory is the one thing that differs for each agent. All else works." \
            "Known layouts:  $(dr_agent_known)" \
            "Turn the automatic export off with:  DRAUGR_MEM_SYNC=off"
 fi
 
-# The directory the agent actually reads, and its parent - which is what gets
-# created and copied into. Taking the parent from the child rather than asking
-# for both keeps them in step by construction.
+# The directory that the agent reads, and its parent. The code creates the
+# parent and copies into it. The parent comes from the child, and the code does
+# not ask for both. Thus the two cannot differ.
 mem_dir=$(dr_agent_mem_dir "$DR_REPO")
 dr_mem_store_migrate "$DR_REPO"
 store_dir=$(dr_mem_store_dir "$DR_REPO")
 marker="$store_dir/.draugr-export"
 
-# This is a report as much as a command, so its output is content and belongs on
-# stdout. dr_heading writes to stderr - right for prompts, wrong here, because
-# the two streams buffer independently and headings land in the wrong places the
-# moment the output is piped anywhere.
+# This is a report and a command, so its output is content, and goes to stdout.
+# dr_heading writes to stderr. That is correct for questions, but wrong here.
+# The two streams have separate buffers, and in a pipe the headings go to the
+# wrong places.
 heading() { printf '\n%s%s%s\n' "$_DR_BOLD" "$*" "$_DR_OFF"; }
 
 # --- talking to the mound ---------------------------------------------------
 #
-# dr_mound_sh (quiet) and dr_mound_run (loud) live in lib/common.sh, because the
-# agent modules need them too. Kept under the old short names here so the
-# scripts below read the way they always did.
+# dr_mound_sh (quiet) and dr_mound_run (loud) are in lib/common.sh, because the
+# agent modules need them too. The old short names stay here, so that the
+# scripts below do not change.
 mound_sh()  { dr_mound_sh  "$@"; }
 mound_run() { dr_mound_run "$@"; }
 
@@ -110,53 +110,54 @@ require_mound() {
 
 # --- listing both sides in one shape ----------------------------------------
 #
-# Both produce sha256sum's own "<hash>  <name>" lines, names relative to the
-# memory directory, so the two are directly comparable.
+# Both make the "<hash>  <name>" lines of sha256sum, with names relative to the
+# memory directory. Thus you can compare the two directly.
 #
-# find -printf '%P' prints the path with the starting directory stripped, and
-# xargs -r declines to run sha256sum at all when there are no files - without
-# it, an empty directory would leave sha256sum reading stdin forever.
+# find -printf '%P' prints the path without the starting directory. With no
+# files, xargs -r does not run sha256sum. Without -r, an empty directory makes
+# sha256sum read stdin forever.
 list_local() {
     local dir=$1
     [ -d "$dir" ] || return 0
     ( cd "$dir" && find . -type f -printf '%P\0' | sort -z | xargs -0 -r sha256sum )
 }
 
-# The mound's half of that comes from the agent module, since only it knows what
-# is worth carrying. One extra precaution here: keep only lines that really are
-# sha256sum output - 64 hex digits, two spaces, a name.
+# The half of the mound comes from the agent module, because only it knows what
+# to keep. One more precaution here: keep only lines that really are sha256sum
+# output, with 64 hex digits, two spaces, and a name.
 #
-# Anything else on stdout would otherwise be read as a file. Nothing in sbx
-# 0.37.1 does that (its "Sandbox … started successfully" banner goes to stderr,
-# checked), but the cost of being wrong here is silent and expensive: one stray
-# line and every comparison sees a file that does not exist, so dr-rm refuses to
-# destroy a mound over memory that was never there. Cheaper to insist on shape.
+# Otherwise the code reads each other line on stdout as a file. Nothing in sbx
+# 0.37.1 does that. Its "Sandbox … started successfully" banner goes to stderr
+# (a test showed this). But an error here is silent and expensive. With one
+# extra line, each comparison sees a file that does not exist. Then dr-rm
+# refuses to destroy a mound because of memory that was never there. A test of
+# the format costs less.
 #
-# The listing failing and the listing being empty are different answers, so the
-# module's failure is passed through while grep's "no lines matched" is not.
+# A failed list and an empty list are different answers. Thus the failure of the
+# module goes out, but the "no lines matched" of grep does not.
 list_mound() {
     local out
     out=$(dr_agent_mem_list "$DR_REPO") || return 1
     printf '%s\n' "$out" | grep -E '^[0-9a-f]{64}  ' || true
 }
 
-# grep -c prints 0 and exits 1 on no match, which set -e would treat as fatal.
+# With no match, grep -c prints 0 and exits 1, and set -e sees that as fatal.
 count_lines() { grep -c . || true; }
 
 case "$action" in
 
 # --- status -----------------------------------------------------------------
 status)
-    # Whatever this agent's own report is: Claude Code's three project keys,
-    # Codex's feature flag. Each prints its own heading, or nothing at all.
+    # The own report of this agent: the three project keys of Claude Code, or
+    # the feature flag of Codex. Each prints its own heading, or nothing.
     dr_agent_mem_status_extra "$DR_REPO"
 
     heading "memory"
     printf '  %-6s %3s file(s)  %s\n' store \
         "$(list_local "$store_dir/memory" | count_lines)" "$store_dir/memory"
 
-    # Absent is reported as a sentence rather than "0 file(s)": no host install
-    # and an empty one are different situations, and only the first is normal.
+    # A missing directory gets a sentence, not "0 file(s)". No host install and
+    # an empty one are different cases, and only the first is normal.
     if host_dir=$(dr_agent_mem_host_dir "$DR_REPO"); then
         printf '  %-6s %3s file(s)  %s\n' host \
             "$(list_local "$host_dir" | count_lines)" "$host_dir"
@@ -164,8 +165,8 @@ status)
         printf '  %-6s %s\n' host "no host $(dr_agent_mem_label) memory for this repo"
     fi
 
-    # Same distinction for the mound, and the reason status never creates one:
-    # you run this to decide whether to bother, not to make something happen.
+    # The same difference for the mound. Thus status never creates one. You run
+    # this to decide what to do, not to make something happen.
     if dr_sandbox_exists "$DRAUGR_SANDBOX"; then
         printf '  %-6s %3s file(s)  %s\n' mound \
             "$(list_mound | count_lines)" "$mem_dir"
@@ -183,45 +184,45 @@ status)
 export)
     require_mound
 
-    # Nothing to export is an ordinary state, not a failure: with
-    # DRAUGR_MEM_SYNC=auto this runs on every detach, including the ones before
-    # the agent has ever written a memory.
+    # Nothing to export is a usual state, not a failure. With
+    # DRAUGR_MEM_SYNC=auto, this runs at each detach, also before the agent
+    # wrote its first memory.
     if ! dr_agent_mem_present "$DR_REPO"; then
-        dr_ok "no memory in $DRAUGR_SANDBOX yet - nothing to export"
-        printf '  %s%s creates it the first time it writes one.%s\n' \
+        dr_ok "no memory in $DRAUGR_SANDBOX yet. Nothing to export."
+        printf '  %s%s creates it when it writes the first one.%s\n' \
             "$_DR_DIM" "$(dr_agent_mem_label)" "$_DR_OFF" >&2
         exit 0
     fi
 
-    # Staging, because sbx cp will not write to a WSL path - see dr_stage.
+    # Staging, because sbx cp does not write to a WSL path. See dr_stage.
     dr_stage
     trap 'rm -rf "$DR_STAGE"' EXIT
 
-    # Packed inside the mound first. What is worth carrying may be several files
-    # in several places - Codex keeps markdown and databases side by side - so
-    # the module assembles them into one directory and this moves that, in one
-    # copy whose result can be checked rather than trusted.
+    # Pack it inside the mound first. The memory can be several files in several
+    # places (Codex keeps markdown and databases together). Thus the module puts
+    # them into one directory, and this code moves it in one copy. You can test
+    # the result of that copy, and you do not have to trust it.
     dr_info "exporting $DRAUGR_SANDBOX memory"
     dr_agent_mem_pack "$DR_REPO" "$DR_MOUND_STAGE" \
-        || dr_die "could not assemble $(dr_agent_mem_label)'s memory in the mound" \
+        || dr_die "could not collect the memory of $(dr_agent_mem_label) in the mound" \
                   "Is the mound running?  dr-status"
 
     dr_sbx cp "$DRAUGR_SANDBOX:$DR_MOUND_STAGE" "$DR_STAGE_WIN" \
         || dr_die "sbx cp failed" "Is the mound running?  dr-status"
     mound_sh 'rm -rf "$1"' "$DR_MOUND_STAGE" || :
 
-    # "sbx cp exited 0" and "there is a directory here now" are different claims,
-    # and only the second one makes the rename below safe.
+    # "sbx cp exited 0" and "a directory is here now" are different claims. Only
+    # the second one makes the rename below safe.
     packed="$DR_STAGE/$(basename "$DR_MOUND_STAGE")"
     [ -d "$packed" ] || dr_die \
-        "sbx cp reported success but produced no memory directory" \
+        "sbx cp reported success, but made no memory directory" \
         "Looked in: $DR_STAGE"
 
-    # Land it by renaming, never by writing in place, so an export interrupted
-    # halfway cannot leave the store holding part of this copy and part of the
-    # last one. The copy being replaced is kept as memory.previous rather than
-    # deleted: an export always overwrites, and the case that stings is a mound
-    # that started empty overwriting a store that was not - one `mv` back.
+    # Put it in place with a rename, never with a write in place. Thus a stopped
+    # export cannot leave a store with part of this copy and part of the last
+    # one. The replaced copy stays as memory.previous, and is not deleted. An
+    # export always overwrites. The painful case is a mound that started empty,
+    # and overwrites a store that was not empty. Then one `mv` brings it back.
     mkdir -p "$store_dir"
     rm -rf "$store_dir/memory.incoming"
     mv "$packed" "$store_dir/memory.incoming"
@@ -233,8 +234,8 @@ export)
 
     n=$(list_local "$store_dir/memory" | count_lines)
 
-    # The marker is what lets `dr-mem import` tell your own export from a
-    # directory of somebody else's memories - see the import path below.
+    # With the marker, `dr-mem import` knows your own export from a directory
+    # with the memories of somebody else. See the import path below.
     {
         printf 'repo:    %s\n' "$DR_REPO"
         printf 'sandbox: %s\n' "$DRAUGR_SANDBOX"
@@ -249,17 +250,18 @@ export)
 import)
     require_mound
 
-    # --if-empty is what makes DRAUGR_MEM_SYNC=auto safe to run on every dr-up.
-    # Importing unconditionally would restore the store over memory the agent
-    # has since written - the store is by definition the older copy - so the
-    # automatic path only ever fills a mound that has nothing.
+    # --if-empty makes DRAUGR_MEM_SYNC=auto safe at each dr-up. An import
+    # without a condition puts the store over memory that the agent wrote later.
+    # The store is always the older copy. Thus the automatic path fills only a
+    # mound that has nothing.
     if [ -n "$if_empty" ] && [ -n "$(list_mound)" ]; then
         dr_debug "$DRAUGR_SANDBOX already has memory; --if-empty declines to import"
         exit 0
     fi
 
-    # Three sources, most explicit first. --from-host is the "I used to run the
-    # agent on this machine and want the mound to know what it knew" migration.
+    # Three sources, the most explicit first. --from-host is the migration for
+    # "I ran the agent on this machine before, and the mound must know what it
+    # knew".
     trusted=
     if [ -n "$source_dir" ]; then
         :
@@ -269,18 +271,18 @@ import)
             "$(dr_agent_mem_host_hint "$DR_REPO")"
     else
         source_dir="$store_dir/memory"
-        # Our own marker, naming this same repo, is the one case where the
-        # content provably came from this project's own agent.
+        # Our own marker names this repo. Only in this case can we prove that
+        # the content came from the agent of this project.
         if [ -f "$marker" ] && grep -qxF "repo:    $DR_REPO" "$marker"; then
             trusted=1
         fi
     fi
 
-    # An empty store under --if-empty is the ordinary state of a project that has
-    # never had a session, and DRAUGR_MEM_SYNC=auto runs this on every dr-up - so
-    # the very first one printed "auto memory import failed", which is alarming
-    # and describes nothing. Asked for explicitly, "there is nothing there" is
-    # still worth saying.
+    # With --if-empty, an empty store is the usual state of a project that never
+    # had a session. DRAUGR_MEM_SYNC=auto runs this at each dr-up. Before, the
+    # first one printed "auto memory import failed". That message frightens and
+    # tells nothing. For an explicit request, "there is nothing there" is still
+    # useful.
     if [ ! -d "$source_dir" ] || [ -z "$(list_local "$source_dir")" ]; then
         if [ -n "$if_empty" ]; then
             dr_debug "nothing in $source_dir to import"
@@ -289,36 +291,35 @@ import)
         [ -d "$source_dir" ] || dr_die \
             "no memory at $source_dir" \
             "Export some first with:  dr-mem export" \
-            "Or bring in your host's own:  dr-mem import --from-host"
-        dr_die "$source_dir contains no files"
+            "Or import the memory of your host:  dr-mem import --from-host"
+        dr_die "$source_dir has no files"
     fi
 
     n=$(list_local "$source_dir" | count_lines)
 
-    # Memory is not notes. An agent loads it into context and largely acts on it,
-    # so importing a directory is nearer to running a script than to copying
-    # data - which is why an unfamiliar source is confirmed every single time.
-    dr_warn "memory is instructions, not just notes"
-    printf '  %sImported files are loaded into the agent'\''s context and largely%s\n' \
+    # Memory is not notes. An agent loads it into context, and mostly acts on
+    # it. Thus the import of a directory is more like a run of a script than a
+    # copy of data. That is why an unknown source gets a question each time.
+    dr_warn "memory is instructions, not only notes"
+    printf '  %sThe agent loads imported files into its context, and mostly%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %strusted. Import your own freely; read anyone else'\''s first.%s\n' \
+    printf '  %strusts them. Import your own freely. Read the files of others first.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     if [ -z "$trusted" ]; then
         dr_confirm "Import $n file(s) from $source_dir into $DRAUGR_SANDBOX?" \
             || dr_die "cancelled"
     fi
 
-    # The same packed tree the export produced, travelling the other way. Its
-    # name has to match the mound staging directory's, because sbx cp places the
-    # source INSIDE the destination rather than renaming it.
+    # The same packed tree that the export made, in the other direction. Its
+    # name must be the name of the staging directory in the mound. sbx cp puts
+    # the source INSIDE the destination, and does not rename it.
     stage_name=$(basename "$DR_MOUND_STAGE")
     dr_stage
     trap 'rm -rf "$DR_STAGE"' EXIT
     cp -a "$source_dir" "$DR_STAGE/$stage_name"
 
-    # The staging directory's parent must exist before cp will place anything
-    # inside it, and any leftover from an interrupted transfer must not be
-    # mistaken for part of this one.
+    # The parent of the staging directory must exist before cp puts anything in
+    # it. Files from a stopped transfer must not look like part of this one.
     mound_run 'mkdir -p "$(dirname "$1")"' "$DR_MOUND_STAGE" \
         || dr_die "could not create $DR_MOUND_STAGE in the mound"
     mound_sh 'sudo -n rm -rf "$1" || rm -rf "$1"' "$DR_MOUND_STAGE" || :
@@ -327,15 +328,15 @@ import)
     dr_sbx cp "$DR_STAGE_WIN\\$stage_name" "$DRAUGR_SANDBOX:$(dirname "$DR_MOUND_STAGE")/" \
         || dr_die "sbx cp failed" "Is the mound running?  dr-status"
 
-    # sbx cp lands files as root:root while the agent runs as uid 1000. Without
-    # this the agent can read the imported memories but never update them, and
-    # cannot create new ones in that directory either - which shows up as memory
-    # that mysteriously stops growing. Done to the staging copy rather than to
-    # the destination, so the module's own copy out of it is agent-owned from
-    # the start and no agent needs to know this about sbx.
+    # sbx cp writes files as root:root, but the agent runs as uid 1000. Without
+    # this, the agent can read the imported memories, but never update them. It
+    # also cannot create new ones in that directory. Then memory stops growing,
+    # and nobody knows why. The code does this to the staging copy, not to the
+    # destination. Thus the agent owns the copy of the module from the start,
+    # and no agent has to know this about sbx.
     mound_sh 'sudo -n chown -R agent:agent "$1" && sudo -n chmod -R u+rwX "$1"' \
         "$DR_MOUND_STAGE" \
-        || dr_warn "chown failed - the agent may be unable to update these memories"
+        || dr_warn "chown failed. The agent possibly cannot update these memories."
 
     dr_agent_mem_unpack "$DR_REPO" "$DR_MOUND_STAGE" \
         || dr_die "could not place the memory in $DRAUGR_SANDBOX"
@@ -347,16 +348,16 @@ import)
 # --- diff -------------------------------------------------------------------
 diff)
     require_mound
-    # A mound with no memory yet is not an error here: it compares as empty, and
-    # "everything is only in the store" is a useful thing to be told. The module
-    # still gets its say, because if it finds the mound laid out in a way it did
-    # not expect, that is the guess being wrong and you need to know.
+    # A mound with no memory is not an error here. It compares as empty, and
+    # "all is only in the store" is useful information. The module still runs.
+    # If it finds a layout in the mound that it did not expect, its guess is
+    # wrong, and you must know that.
     dr_agent_mem_present "$DR_REPO" || :
 
-    # Two name->hash maps, then three questions. An associative array beats
-    # sorting and comm here because it keeps whole lines intact: `read hash name`
-    # puts everything after the hash into $name, so a filename with a space in it
-    # survives, which a cut-on-space pipeline would not.
+    # Two name->hash maps, then three questions. An associative array is better
+    # than sort and comm here, because it keeps whole lines. `read hash name`
+    # puts all text after the hash into $name. Thus a file name with a space
+    # stays whole. A pipeline that cuts on spaces breaks it.
     declare -A in_mound=() in_store=()
     while read -r hash name; do
         [ -n "$name" ] && in_mound[$name]=$hash
@@ -366,8 +367,8 @@ diff)
     done <<< "$(list_local "$store_dir/memory")"
 
     only_mound=() only_store=() changed=()
-    # ${arr[$k]+set} is "set" only when that key exists - the test that works
-    # under set -u, and the reason an empty value is not mistaken for absence.
+    # ${arr[$k]+set} is "set" only for a key that exists. This test works under
+    # set -u, and does not mistake an empty value for a missing key.
     if [ ${#in_mound[@]} -gt 0 ]; then
         for name in "${!in_mound[@]}"; do
             if [ -z "${in_store[$name]+set}" ]; then
@@ -388,16 +389,16 @@ diff)
         exit 0
     fi
 
-    # Associative arrays have no order at all, so sort for a stable report.
+    # Associative arrays have no order, so sort for a stable report.
     show() {
         local label=$1; shift
         [ $# -gt 0 ] || return 0
         printf '%s\n' "$@" | sort | sed "s/^/  $label /"
     }
 
-    # ${arr[0]+"${arr[@]}"} expands to nothing at all when the array is empty,
-    # rather than to one empty string - so show() sees no arguments and returns
-    # instead of printing a blank line under a heading.
+    # For an empty array, ${arr[0]+"${arr[@]}"} expands to nothing, not to one
+    # empty string. Thus show() sees no arguments and returns. It does not print
+    # a blank line below a heading.
     heading "memory differences"
     show "only in mound:" ${only_mound[0]+"${only_mound[@]}"}
     show "only in store:" ${only_store[0]+"${only_store[@]}"}
@@ -407,26 +408,26 @@ diff)
 
 # --- check ------------------------------------------------------------------
 #
-# The question dr-rm needs answered before destroying a mound, and only that
-# question: is there memory in there that no export has captured? Asymmetric on
-# purpose - a store holding files the mound lacks is not a reason to refuse,
-# because destroying the mound does not touch the store.
+# The question of dr-rm before it destroys a mound, and only that question: is
+# there memory in it that no export captured? It is not symmetric, on purpose.
+# The store can have files that the mound does not have. That is no reason to
+# refuse, because the destruction of the mound does not touch the store.
 check)
     dr_sandbox_exists "$DRAUGR_SANDBOX" || exit 0
 
-    # Unreachable is not the same as safe, and must not be reported as either.
+    # Not reachable is not the same as safe. Do not report it as safe or unsafe.
     if ! mound_list=$(list_mound); then exit 2; fi
     [ -n "$mound_list" ] || exit 0
 
-    # The store as a lookup table, so the mound can be walked once against it.
+    # The store as a lookup table, so that one pass over the mound is enough.
     declare -A in_store=()
     while read -r hash name; do
         [ -n "$name" ] && in_store[$name]=$hash
     done <<< "$(list_local "$store_dir/memory")"
 
-    # One miss is enough to answer the question, so this exits on the first
-    # rather than counting. A herestring loop runs in this shell, not a
-    # subshell, which is what makes that exit the command's exit.
+    # One miss answers the question, so this exits on the first one, and does
+    # not count. A herestring loop runs in this shell, not in a subshell. Thus
+    # that exit is the exit of the command.
     while read -r hash name; do
         [ -n "$name" ] || continue
         [ -n "${in_store[$name]+set}" ] || exit 1

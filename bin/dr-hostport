@@ -1,43 +1,43 @@
 #!/usr/bin/env bash
-# dr-hostport - let the mound reach a service running on THIS machine.
+# dr-hostport: let the mound connect to a service that runs on THIS machine.
 #
-# The mirror image of dr-ports. That publishes a port the mound listens on so a
-# browser on Windows can reach in; this opens a port the HOST listens on so the
-# agent can call out - a local Ollama on your GPU being the case it was written
-# for.
+# The opposite of dr-ports. dr-ports publishes a port that the mound listens on,
+# so that a browser on Windows can connect in. This opens a port that the HOST
+# listens on, so that the agent can connect out. The first case was a local
+# Ollama on your GPU.
 #
 #   dr-hostport                 what this mound can reach on the host
-#   dr-hostport 11434           open host port 11434, at the address it has today
+#   dr-hostport 11434           open host port 11434, at its current address
 #   dr-hostport --close 11434   close it again
 #
-# Only the PORT is ever named, never the address, and that is the whole point.
-# WSL's address is handed out per boot and cannot be pinned, so a rule written
-# with a literal IP is right until the next reboot and then fails CLOSED and
-# SILENTLY - the connection is accepted by the sandbox's interception layer and
-# dropped with no error to read. This resolves the address every time it runs and
-# removes the rules it wrote for addresses this machine no longer has.
+# You name only the PORT, never the address. That is the purpose. WSL gets a new
+# address at each boot, and you cannot pin it. A rule with a literal IP is
+# correct until the next reboot. Then it fails CLOSED and SILENTLY. The
+# interception layer of the sandbox accepts the connection, and drops it with
+# no error. This command finds the address at each run, and removes its rules
+# for addresses that this machine no longer has.
 #
-# Put the port in DRAUGR_HOST_PORTS and dr-up does this on every start, which is
-# what makes it survive a reboot without you remembering anything.
+# If you put the port in DRAUGR_HOST_PORTS, dr-up does this at each start. Thus
+# it works after a reboot, and you do not have to remember anything.
 #
-# The address is also written into the mound, at ~/.draugr/host.env, because
-# nothing in there can work it out. Nothing sources it for you: a project that
-# wants the value says so in its own run script or kit startup command.
+# The address also goes into the mound, at ~/.draugr/host.env, because nothing
+# in there can find it. Nothing sources it for you. A project that wants the
+# value reads it in its own run script or kit startup command.
 #
-# This is a hole from the sandbox to your machine, and the more serious of the
-# two directions: on the other side is a process outside the mound. dr-policy
-# --allow is the ad-hoc equivalent and says the same thing more loudly.
+# This is a hole from the sandbox to your machine. It is the more dangerous of
+# the two directions, because a process outside the mound is on the other side.
+# dr-policy --allow does the same for one case, and warns more clearly.
 set -euo pipefail
 
 DR_PROG=dr-hostport
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# A bare argument is a port to open; --close takes one to shut.
+# An argument without a dash is a port to open. --close takes a port to close.
 close=()
 open=()
 while [ $# -gt 0 ]; do
@@ -55,10 +55,9 @@ dr_context
 dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
     "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
 
-# A port number and nothing else. Checked early because the value is interpolated
-# into a jq regex and handed to sbx, and because "11434/tcp" would be accepted by
-# sbx as a hostname, match nothing, and look exactly like a rule that was never
-# added.
+# Only a port number. Test it early, because the value goes into a jq regex and
+# to sbx. sbx accepts "11434/tcp" as a hostname. It matches nothing, and looks
+# like a rule that was never added.
 _check_port() {
     case "$1" in
         ''|*[!0-9]*) dr_die "not a port number: $1" "Usage:  dr-hostport 11434" ;;
@@ -68,11 +67,11 @@ _check_port() {
     fi
 }
 
-# A hole to a port nothing is listening on is not an error - you may be about to
-# start the service. A port bound only to LOOPBACK is different: it is the
-# mistake this command sits next to, and it is invisible from inside the mound,
-# where 127.0.0.1 is the mound's own loopback and the failure looks identical to
-# a policy denial.
+# A hole to a port where nothing listens is not an error, because you can
+# start the service next. A port bound only to LOOPBACK is different. It is the
+# usual error with this command, and you cannot see it from inside the mound.
+# There, 127.0.0.1 is the loopback of the mound, and the failure looks like a
+# policy denial.
 _warn_if_loopback_only() {
     local port=$1 bound
     command -v ss >/dev/null 2>&1 || return 0
@@ -81,15 +80,15 @@ _warn_if_loopback_only() {
     case "$bound" in
         *"0.0.0.0:$port"*|*"[::]:$port"*|*"*:$port"*) return 0 ;;
     esac
-    dr_warn "port $port is listening on loopback only ($bound)"
-    printf '  %sFrom inside the mound 127.0.0.1 is the MOUND, so this will not%s\n' \
+    dr_warn "port $port listens only on loopback ($bound)"
+    printf '  %sInside the mound, 127.0.0.1 is the MOUND, so this does not%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sconnect however the rule reads. Bind the service to 0.0.0.0.%s\n' \
+    printf '  %sconnect, whatever the rule says. Bind the service to 0.0.0.0.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
 }
 
-# Every address:port this mound has been given, whoever wrote it. Bare IPv4 only
-# - a rule naming a domain is somebody else's and is not listed as a host port.
+# Each address:port of this mound, from all writers. Only plain IPv4. A rule
+# that names a domain is from somebody else, and is not a host port.
 _all_rules() {
     dr_sbx policy ls "$DRAUGR_SANDBOX" --wide --json 2>/dev/null |
         jq -r --arg s "sandbox:$DRAUGR_SANDBOX" '
@@ -101,40 +100,40 @@ _all_rules() {
             2>/dev/null | sort -u
 }
 
-# _write_host_env - tell the mound this host's address, in a file.
+# _write_host_env: tell the mound the address of this host, in a file.
 #
-# The mound cannot work it out for itself. There is no `ip` command in the
-# image, and host.docker.internal resolves to the mound's OWN gateway rather
-# than to this machine - measured. So the one process that already knows has to
-# write it in, and that is this one, on every dr-up.
+# The mound cannot find it. The image has no `ip` command, and
+# host.docker.internal resolves to the OWN gateway of the mound, not to this
+# machine (a test showed this). Thus the process that knows must write it, and
+# that is this one, at each dr-up.
 #
-# A FILE, and nothing more. Draugr does not touch the agent's dotfiles, so
-# nothing sources this for you: a project that wants the value says so itself,
-# in its run script or in a kit startup command. That keeps an automatic,
-# invisible environment change out of a sandbox whose whole point is that you
-# can see what is in it.
+# A FILE, and nothing more. Draugr does not touch the dotfiles of the agent, so
+# nothing sources this for you. A project that wants the value reads it itself,
+# in its run script or in a kit startup command. Thus the sandbox gets no
+# automatic, hidden change of the environment. You must be able to see what is
+# in the sandbox.
 #
-# The port list is read back from the rules actually in force rather than from
-# DRAUGR_HOST_PORTS, so the file describes what is true rather than what was
-# asked for - and a --close is reflected without special-casing.
+# The port list comes from the rules in force, not from DRAUGR_HOST_PORTS. Thus
+# the file tells what is true, not what was asked for, and a --close needs no
+# special case.
 _write_host_env() {
     local ip ports
 
-    # Only into a mound that is already up. Starting one just to write a file
-    # would turn `dr-hostport --close` on a stopped sandbox into a boot.
+    # Only into a mound that already runs. A start only to write a file makes
+    # `dr-hostport --close` on a stopped sandbox into a boot.
     [ "$(dr_sandbox_state "$DRAUGR_SANDBOX")" = running ] || return 0
     ip=$(dr_host_ip) || return 0
 
     ports=$(_all_rules | awk -F: -v ip="$ip" '$1 == ip { print $2 }' | sort -un | tr '\n' ' ')
     ports=${ports% }
 
-    # Single-quoted lines, so the $ and " inside them reach the file literally.
-    # Nothing here contains an apostrophe, which is the one character that shape
-    # cannot carry.
+    # Single-quoted lines, so that the $ and " in them go into the file without
+    # change. Nothing here has an apostrophe. That is the one character that
+    # this form cannot hold.
     dr_sbx exec "$DRAUGR_SANDBOX" sh -c \
         "mkdir -p \"\$HOME/.draugr\" && printf '%s\n' \
-         '# Written by dr-hostport at every dr-up. Do not edit - it is overwritten.' \
-         '# Nothing sources this for you. Use it from your own script, for example:' \
+         '# dr-hostport writes this file at each dr-up. Do not edit it. It is overwritten.' \
+         '# Nothing sources this for you. Use it in your own script, for example:' \
          '#   . \"\$HOME/.draugr/host.env\"' \
          '#   OLLAMA_URL=\"http://\$DRAUGR_HOST_ADDR:11435\"' \
          '# The address is valid only for this boot of the host.' \
@@ -144,16 +143,16 @@ _write_host_env() {
         || dr_warn "could not write the host address into $DRAUGR_SANDBOX"
 }
 
-# No arguments is a query, which is the common case and must not change anything.
+# No arguments is a query. That is the usual case, and it must change nothing.
 if [ ${#open[@]} -eq 0 ] && [ ${#close[@]} -eq 0 ]; then
     ip=$(dr_host_ip) || ip=
     rules=$(_all_rules)
 
-    # Nothing open at all. Both ways of opening one are named, because the
-    # config key is the answer for anything you will want again tomorrow and
-    # is the half of this that is easy not to find.
+    # Nothing is open. The code names both ways to open one. The configuration
+    # key is the answer for a port that you want again tomorrow, and people do
+    # not easily find it.
     if [ -z "$rules" ]; then
-        dr_info "$DRAUGR_SANDBOX can reach no host ports"
+        dr_info "$DRAUGR_SANDBOX can connect to no host ports"
         printf '  %sOpen one with:  dr-hostport <port>%s\n' "$_DR_DIM" "$_DR_OFF" >&2
         printf '  %sOr declare it once:  DRAUGR_HOST_PORTS="11434"%s\n' "$_DR_DIM" "$_DR_OFF" >&2
         exit 0
@@ -161,30 +160,28 @@ if [ ${#open[@]} -eq 0 ] && [ ${#close[@]} -eq 0 ]; then
 
     dr_heading "host ports open to $DRAUGR_SANDBOX:"
     while IFS= read -r r; do
-        # A rule for an address this machine no longer has is dead weight, and
-        # saying so is most of why this listing exists: it is the state you are
-        # left in by a reboot, and it is otherwise indistinguishable from a
-        # working rule.
+        # A rule for an address that this machine no longer has is useless. This
+        # list exists mostly to say that. A reboot leaves this state, and
+        # otherwise it looks the same as a working rule.
         if [ -n "$ip" ] && [ "${r%:*}" != "$ip" ]; then
-            printf '  %-24s %sstale - this host is now %s%s\n' "$r" "$_DR_DIM" "$ip" "$_DR_OFF"
+            printf '  %-24s %sold. This host is now %s%s\n' "$r" "$_DR_DIM" "$ip" "$_DR_OFF"
         else
             printf '  %s\n' "$r"
         fi
     done <<< "$rules"
 
-    # Said on every listing rather than only the first: the direction of this
-    # hole is the thing worth being reminded of.
-    printf '\n  %sThese are holes from the sandbox to your machine. Refresh them%s\n' \
+    # In each list, not only the first, because you must remember the direction
+    # of this hole.
+    printf '\n  %sThese are holes from the sandbox to your machine. To refresh them%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %son every start by setting DRAUGR_HOST_PORTS in .draugr.conf.%s\n' \
+    printf '  %sat each start, set DRAUGR_HOST_PORTS in .draugr.conf.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     exit 0
 fi
 
-# Closing removes every rule this command wrote for the port, not just the
-# one matching today's address: the stale ones are exactly what you are trying
-# to be rid of, and leaving them would make a "closed" port still reachable
-# from an address the machine may be handed again.
+# A close removes each rule that this command wrote for the port, not only the
+# rule for the current address. You want to remove the old ones. If they stay,
+# a "closed" port still works from an address that the machine can get again.
 for port in "${close[@]+"${close[@]}"}"; do
     _check_port "$port"
     n=0
@@ -205,46 +202,45 @@ for port in "${open[@]+"${open[@]}"}"; do
     _check_port "$port"
 
     ip=$(dr_host_ip) || dr_die \
-        "could not work out this host's address" \
-        "dr-hostport needs the address a mound would reach this machine at." \
-        "Check it by hand with:  ip -4 route get 1.1.1.1"
+        "could not find the address of this host" \
+        "dr-hostport needs the address where a mound connects to this machine." \
+        "Look at it yourself with:  ip -4 route get 1.1.1.1"
     want="$ip:$port"
 
-    # Already exactly right, so do nothing and be quiet about it. This runs on
-    # every dr-up, and a command that rewrites machine state at every start is
-    # one whose output you stop reading.
+    # Already correct, so do nothing, and say little. This runs at each dr-up.
+    # You stop reading the output of a command that changes the machine at each
+    # start.
     if [ "$(dr_hostport_open "$port")" = "$want" ]; then
         dr_info "host port $port already open at $want"
         _warn_if_loopback_only "$port"
         continue
     fi
 
-    # Everything this command wrote for this port goes, before the new rule is
-    # added rather than after: the address being removed may be the one this
-    # machine has just been handed again, and the other order would then delete
-    # the rule that had just been written.
+    # Remove all that this command wrote for this port, before the new rule, not
+    # after it. The removed address can be the address that this machine just
+    # got again. The other order then deletes the new rule.
     stale=0
     while IFS= read -r id; do
         [ -n "$id" ] || continue
         stale=$((stale + 1))
         dr_sbx policy rm network --sandbox "$DRAUGR_SANDBOX" --id "$id" >/dev/null \
-            || dr_warn "could not remove stale rule $id"
+            || dr_warn "could not remove old rule $id"
     done < <(dr_hostport_rules "$port")
 
     dr_sbx policy allow network --sandbox "$DRAUGR_SANDBOX" "$want" >/dev/null \
         || dr_die "could not open host port $port" \
-                  "Check what is in force with:  dr-policy"
+                  "See the rules in force with:  dr-policy"
 
-    # The count is reported because a replacement is the interesting case: it
-    # means the address moved, which is the thing this command exists to
-    # absorb quietly but not silently.
+    # The code reports the count, because a replacement is the important case.
+    # It means that the address changed. This command handles that with few
+    # words, but not silently.
     if [ "$stale" -gt 0 ]; then
-        dr_ok "host port $port -> $want (replaced $stale stale rule(s))"
+        dr_ok "host port $port -> $want (replaced $stale old rule(s))"
     else
         dr_ok "host port $port -> $want"
     fi
     _warn_if_loopback_only "$port"
 done
 
-# Both loops end here, so the file is written once however many ports moved.
+# Both loops end here, so the file is written once, for any number of ports.
 _write_host_env

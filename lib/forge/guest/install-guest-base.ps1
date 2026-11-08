@@ -1,41 +1,45 @@
-# install-guest-base.ps1 - the Windows settings a forge guest needs before anything else.
+# install-guest-base.ps1: the Windows configuration that a forge guest needs
+# first.
 #
-# Run this IN THE GUEST, elevated, once. An ssh session is already elevated (sshd hands
-# out a full token), so driving it over ssh is enough. It is idempotent: every step checks
-# the current state first, so re-running it changes nothing and still prints the state.
+# Run this IN THE GUEST, elevated, once. An ssh session is already elevated
+# (sshd gives a full token), so a run through ssh is enough. It is idempotent.
+# Each step tests the current state first. Thus a second run changes nothing,
+# and still prints the state.
 #
-# This is the layer under the toolchain: with none of it, MSYS2 cannot download, Visual
-# Studio's revocation check fails, the vault cannot be mounted, and Windows reboots in the
-# middle of a build. Everything here is one of the base image's decided contents
-# (Draugr docs/FORGE.md, "What the base image must contain").
+# This is the layer below the toolchain. Without it, MSYS2 cannot download.
+# Also, the revocation test of Visual Studio fails, nobody can mount the vault,
+# and Windows reboots in the middle of a build. Each item here is a decided part
+# of the base image (Draugr docs/FORGE.md, "What the base image must contain").
 #
-#   1. Proxy, three ways.       Windows client stacks do not share one setting.
-#   2. Windows Update off.      It patches through the gateway and reboots on its own.
-#   3. LanmanServer disabled.   Frees guest 445 so the vault tunnel can own it.
-#   4. A loopback adapter.      Without ANY adapter, CryptoAPI will not even attempt a
+#   1. Proxy, three ways.       The Windows client stacks do not share one value.
+#   2. Windows Update off.      It patches through the gateway, and reboots by itself.
+#   3. LanmanServer disabled.   Frees guest port 445, so that the vault tunnel can own it.
+#   4. A loopback adapter.      Without ANY adapter, CryptoAPI does not even try a
 #                               revocation fetch, and strict clients fail.
-#   5. sshd key-only.           Off by default: see -HardenSshd.
-#   6. One visible TEMP.        Two obscure ones by default, neither ever emptied.
-#   7. Explorer tells the truth. Hidden files, system files and EXTENSIONS shown.
+#   5. sshd key-only.           Off by default. See -HardenSshd.
+#   6. One visible TEMP.        By default, two hidden ones, and nothing ever empties them.
+#   7. Explorer tells the truth. Shows hidden files, system files, and EXTENSIONS.
 #   8. A still, quiet desktop.  Animations, transparency, toasts, the screen saver.
-#   9. Long paths.              Unreal trees are deep enough to hit MAX_PATH.
+#   9. Long paths.              Unreal trees are deep enough to reach MAX_PATH.
 #  10. No crash dialogs, no indexer.
 #
-# WHY 6-10 EXIST AT ALL. Everything above line 5 is about the VM reaching the world;
-# everything below is about a *machine an agent drives* rather than one a person watches.
-# An animation is a half-drawn screenshot. A toast covers the button being clicked. A
-# 400 ms menu delay is a race. A modal crash dialog stops an unattended run dead, and the
-# only symptom is a timeout. Hidden file extensions mean a screenshot cannot distinguish
-# `setup.txt` from `setup.exe`. None of this is tidiness; each one removes a way for the
-# agent to be wrong about what it is looking at.
+# WHY 6 TO 10 EXIST. Items 1 to 5 are about the connection of the VM to the
+# world. The items below are about a *machine that an agent drives*, not one
+# that a person watches. An animation is a half-drawn screenshot. A toast covers
+# the button to click. A menu delay of 400 ms is a race. A modal crash dialog
+# stops an unattended run, and the only symptom is a timeout. With hidden file
+# extensions, a screenshot cannot show the difference between `setup.txt` and
+# `setup.exe`. None of this is tidiness. Each item removes a way for the agent
+# to be wrong about what it sees.
 #
-# Measured in this guest, before any of it was applied: extensions hidden,
-# hidden files hidden, a screen saver ACTIVE, MenuShowDelay 400 ms, long paths off, search
-# indexing running over what becomes a 100 GB tree, and codepage 1252.
+# A test in this guest, before any of it applied, found: extensions hidden,
+# hidden files hidden, a screen saver ACTIVE, MenuShowDelay 400 ms, long paths
+# off, search indexing on a tree that becomes 100 GB, and codepage 1252.
 #
-# HKCU values are written from an ssh session in session 0, but sshd runs them as the same
-# user, so they land in the same hive the desktop session reads. Explorer caches some of
-# them: those take effect at the next logon, which a base image gets anyway.
+# An ssh session in session 0 writes the HKCU values, but sshd runs them as the
+# same user. Thus they go into the same hive that the desktop session reads.
+# Explorer caches some of them. Those apply at the next logon, and a base image
+# gets one anyway.
 #
 #   powershell -ExecutionPolicy Bypass -File .\install-guest-base.ps1
 #   powershell -ExecutionPolicy Bypass -File .\install-guest-base.ps1 -VerifyOnly
@@ -43,26 +47,29 @@
 param(
     [string]$Proxy = '127.0.0.1:3128',
     [string]$TempDir = 'C:\temp',      # '' leaves TEMP where Windows put it
-    [int]$CursorSize = 48,             # 0 leaves the cursor alone; 32 is the default
-    # THE GUEST'S CLOCK IS RIGHT AND ITS TIMEZONE IS NOT. Measured on a fresh
-    # unattended install: guest UTC matched the host's to the second (the hypervisor keeps it
-    # so, and w32time is Stopped/Manual because an adapterless guest could never sync), but
-    # the zone was Pacific Standard Time - Windows' default when setup is not told otherwise.
-    # Every LOCAL timestamp the agent then writes is hours away from the wall clock of the
-    # person reading it: build logs, git commit times, the manifest's own header.
+    [int]$CursorSize = 48,             # 0 does not touch the cursor. 32 is the default
+    # THE CLOCK OF THE GUEST IS CORRECT, AND ITS TIME ZONE IS NOT. A test on a
+    # new unattended install showed this. The UTC of the guest was the same as
+    # the UTC of the host, to the second. The hypervisor keeps it so. w32time is
+    # Stopped/Manual, because a guest with no adapter can never sync. But the
+    # zone was Pacific Standard Time. Without another value from setup, Windows
+    # uses that default. Each LOCAL time stamp that the agent writes is then
+    # hours away from the clock of the person who reads it: build logs, git
+    # commit times, the header of the manifest.
     #
-    # It belongs in the base because the base is what every layer INHERITS. Not because a
-    # frozen parent makes it permanent - it does not: the guest sees one writable C: and any
-    # child can set its own timezone whenever it likes. The argument is that the default
-    # should be right once, here, rather than wrong in every child until someone notices.
-    # lib/forge/provision.ps1 passes the HOST's zone,
-    # which is what someone looking at the VNC window expects to see. '' leaves it alone, and
-    # 'UTC' is the defensible other answer if you would rather every layer and log agree
-    # regardless of who is watching.
+    # It belongs in the base, because each layer INHERITS the base. Not because
+    # a frozen parent makes it permanent. It does not. The guest sees one
+    # writable C:, and each child can set its own time zone at any time. The
+    # reason is that the default must be correct once, here, and not wrong in
+    # each child until somebody sees it. lib/forge/provision.ps1 gives the zone
+    # of the HOST. That is what a person at the VNC window expects to see. ''
+    # does not touch it. 'UTC' is the other good answer. With it, each layer and
+    # log agree, for all people who watch.
     [string]$TimeZone = '',
-    # The NCSI fiction's address and MAC, used ONLY to tell a deliberate dead-end route
-    # apart from a real way out. Same defaults as guest/write-manifest.ps1 and
-    # guest/install-windows-online.ps1; change them in all three or in none.
+    # The address and MAC of the NCSI fiction. ONLY to tell a deliberate
+    # dead-end route from a real way out. The same defaults as
+    # guest/write-manifest.ps1 and guest/install-windows-online.ps1. Change them
+    # in all three, or in none.
     [string]$NcsiGateway = '192.168.63.1',
     [string]$NcsiGatewayMac = '02-00-00-00-63-01',
     [switch]$SkipProxy,
@@ -72,14 +79,15 @@ param(
     [switch]$SkipExplorer,
     [switch]$SkipQuietDesktop,
     [switch]$SkipLongPaths,
-    # Opt-out, because section 9b is the one setting here that RELAXES something rather
-    # than tidying it: it lets an unelevated process use a network connection an elevated
-    # one established. Read 9b before passing this - without it the vault is unusable
-    # from Explorer, which is how a person looks at a mounted drive.
+    # A way to opt out, because section 9b is the one item here that RELAXES
+    # something, and does not only tidy. It lets a process that is not elevated
+    # use a network connection that an elevated one made. Read 9b before you
+    # give this. Without it, Explorer cannot use the vault, and a person looks
+    # at a mounted drive with Explorer.
     [switch]$SkipLinkedConnections,
     [switch]$SkipIndexing,
     [switch]$HardenSshd,
-    [switch]$Utf8,                     # opt-in: still labelled beta by Microsoft
+    [switch]$Utf8,                     # only on request. Microsoft still calls it beta
     [switch]$VerifyOnly
 )
 
@@ -94,7 +102,7 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
 
 $changed = @()
 
-# Named once: section 9b writes it and the verification block below reads it back.
+# Named once. Section 9b writes it, and the test block below reads it.
 $linkedPolicy = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
 
 function Set-RegValue($path, $name, $value, $type) {
@@ -105,21 +113,22 @@ function Set-RegValue($path, $name, $value, $type) {
     return $true
 }
 
-# --- 1. the proxy, three times over -------------------------------------------------
-# Measured (README, "Which client honours which proxy setting"): curl takes the
-# environment, WinHTTP takes only netsh, and .NET/PowerShell take only the per-user
-# WinINet setting. Setting one of the three and calling it done is the classic way to get
-# a guest where some tools reach the internet and others do not.
+# --- 1. the proxy, three times -------------------------------------------------------
+# A test showed this (README, "Which client honours which proxy setting"). curl
+# takes the environment, WinHTTP takes only netsh, and .NET and PowerShell take
+# only the WinINet value of the user. If you set only one of the three, some
+# tools reach the internet, and others do not.
 if (-not $VerifyOnly -and -not $SkipProxy) {
     $inet = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
     if (Set-RegValue $inet 'ProxyServer' $Proxy 'String')     { $changed += 'WinINet server' }
     if (Set-RegValue $inet 'ProxyEnable' 1 'DWord')           { $changed += 'WinINet enable' }
     if (Set-RegValue $inet 'ProxyOverride' '<local>' 'String'){ $changed += 'WinINet bypass' }
 
-    # -join first. `netsh winhttp show proxy` returns several lines, and `-notmatch` on an
-    # ARRAY filters it rather than answering a question: the result is every line that does
-    # not match, which is never empty, so the test was always true and WinHTTP was re-set
-    # on every run. One string, one boolean.
+    # -join first. `netsh winhttp show proxy` returns several lines. `-notmatch`
+    # on an ARRAY filters it, and does not answer a question. The result is each
+    # line that does not match, and that is never empty. Thus the test was
+    # always true, and the code set WinHTTP again at each run. One string, one
+    # boolean.
     if (((netsh winhttp show proxy) -join ' ') -notmatch [regex]::Escape($Proxy)) {
         netsh winhttp set proxy proxy-server="$Proxy" bypass-list="<local>" | Out-Null
         $changed += 'WinHTTP'
@@ -132,9 +141,9 @@ if (-not $VerifyOnly -and -not $SkipProxy) {
     }
 }
 
-# --- 2. Windows Update decides nothing for itself -----------------------------------
-# That updates work at all through the gateway is a good property. Updates choosing their
-# own moment to reboot is not, and a build is hours long.
+# --- 2. Windows Update decides nothing by itself -------------------------------------
+# Updates through the gateway work, and that is good. Updates that choose their
+# own time to reboot are not good, and a build takes hours.
 if (-not $VerifyOnly -and -not $SkipWindowsUpdate) {
     $au = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
     if (Set-RegValue $au 'NoAutoUpdate' 1 'DWord')                  { $changed += 'NoAutoUpdate' }
@@ -144,9 +153,10 @@ if (-not $VerifyOnly -and -not $SkipWindowsUpdate) {
 }
 
 # --- 3. LanmanServer out of the way -------------------------------------------------
-# The vault arrives over SMB, and the Windows SMB *client* will dial nothing but port 445,
-# so the tunnel has to own 445 in the guest. The guest's own file server is what would
-# hold it. Nothing here shares files outwards, so it has no other job.
+# The vault arrives through SMB, and the Windows SMB *client* connects only to
+# port 445. Thus the tunnel must own 445 in the guest. The own file server of
+# the guest holds it otherwise. Nothing here shares files to the outside, so it
+# has no other job.
 if (-not $VerifyOnly -and -not $SkipLanmanServer) {
     $srv = Get-Service LanmanServer -EA SilentlyContinue
     if ($srv) {
@@ -159,12 +169,14 @@ if (-not $VerifyOnly -and -not $SkipLanmanServer) {
 }
 
 # --- 4. one adapter, with no way out ------------------------------------------------
-# Measured: with NO adapter at all, CryptoAPI does not even try - certutil fails every URL
-# with ERROR_NOT_CONNECTED and the chain ends CRYPT_E_REVOCATION_OFFLINE, with nothing in
-# the gateway log because no request was made. A KM-TEST loopback adapter gets a
-# link-local address and NO default route, so Windows reports a network and CryptoAPI
-# starts fetching - through the proxy, like everything else. netcfg cannot install it on
-# Windows 11 any more (protocols, services and clients only), so this is what devcon does.
+# A test showed this. With NO adapter, CryptoAPI does not even try. certutil
+# fails each URL with ERROR_NOT_CONNECTED, the chain ends with
+# CRYPT_E_REVOCATION_OFFLINE, and the gateway log has nothing, because there was
+# no request. A KM-TEST loopback adapter gets a link-local address and NO
+# default route. Thus Windows reports a network, and CryptoAPI starts to fetch,
+# through the proxy, as all else does. On Windows 11, netcfg cannot install it
+# now (only protocols, services, and clients). Thus this code does what devcon
+# does.
 $loopbackName = 'Microsoft KM-TEST Loopback Adapter'
 if (-not $VerifyOnly -and -not $SkipLoopback) {
     $have = Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.InterfaceDescription -eq $loopbackName }
@@ -205,12 +217,13 @@ public static class DevInst {
     }
 }
 
-# --- 5. key-only ssh, deliberately opt-in -------------------------------------------
-# Restarting sshd from inside an ssh session kills that session, and a half-applied sshd
-# restart is how a VM with no other way in becomes unreachable. So the restart is handed
-# to a one-shot scheduled task a few seconds out, after this session has gone, and the
-# caller re-tests the key afterwards. The VM has no adapter, so password auth is not the
-# boundary here anyway - this is a tidying step, not the thing keeping anyone out.
+# --- 5. key-only ssh, only on request ----------------------------------------------
+# A restart of sshd from inside an ssh session kills that session. A
+# half-applied restart of sshd makes a VM with no other way in unreachable. Thus
+# a one-shot scheduled task does the restart a few seconds later, after this
+# session is gone. After that, the caller tests the key again. The VM has no
+# adapter, so password authentication is not the boundary here. This is a tidy
+# step, not the protection.
 if (-not $VerifyOnly -and $HardenSshd) {
     $cfg = Join-Path $env:ProgramData 'ssh\sshd_config'
     $txt = Get-Content $cfg -Raw
@@ -229,10 +242,11 @@ if (-not $VerifyOnly -and $HardenSshd) {
     }
 }
 
-# --- 6. one TEMP, where you will actually look at it ---------------------------------
-# Windows ships two, both buried: %LOCALAPPDATA%\Temp for the user and C:\Windows\TEMP
-# for services. Neither is anywhere you think to empty, which matters here because this
-# disk gets flattened into a base image and whatever is in temp goes with it.
+# --- 6. one TEMP, where you really look at it ----------------------------------------
+# Windows ships two, both hidden deep: %LOCALAPPDATA%\Temp for the user, and
+# C:\Windows\TEMP for services. You do not think to empty either one. That is
+# important here, because this disk becomes a flattened base image, and the
+# contents of temp go with it.
 if (-not $VerifyOnly -and $TempDir) {
     if (-not (Test-Path $TempDir)) { New-Item -ItemType Directory -Force -Path $TempDir | Out-Null }
     foreach ($scope in 'User', 'Machine') {
@@ -245,18 +259,19 @@ if (-not $VerifyOnly -and $TempDir) {
     }
 }
 
-# --- 7. Explorer, telling the truth --------------------------------------------------
-# HideFileExt is the one that matters to an agent: with extensions hidden, a screenshot
-# of a folder cannot tell an installer from a text file, and neither can a human checking
-# the agent's work. Hidden=1 shows hidden files; 2 means do not.
+# --- 7. Explorer tells the truth -----------------------------------------------------
+# HideFileExt is the important one for an agent. With hidden extensions, a
+# screenshot of a folder cannot show the difference between an installer and a
+# text file. A person who reviews the work of the agent cannot see it either.
+# Hidden=1 shows hidden files, and 2 does not.
 $adv = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
 if (-not $VerifyOnly -and -not $SkipExplorer) {
     if (Set-RegValue $adv 'Hidden' 1 'DWord')          { $changed += 'show hidden' }
     if (Set-RegValue $adv 'ShowSuperHidden' 1 'DWord') { $changed += 'show system files' }
     if (Set-RegValue $adv 'HideFileExt' 0 'DWord')     { $changed += 'show extensions' }
     if ($CursorSize -gt 0) {
-        # Bigger pointer: for a human over VNC, and so a vision pass can find the cursor
-        # in a screenshot at all.
+        # A larger pointer: for a person through VNC, and so that a vision pass
+        # can find the cursor in a screenshot.
         if (Set-RegValue 'HKCU:\Control Panel\Cursors' 'CursorBaseSize' $CursorSize 'DWord') {
             $changed += "cursor $CursorSize"
         }
@@ -266,22 +281,26 @@ if (-not $VerifyOnly -and -not $SkipExplorer) {
 # --- 8. a still, quiet desktop -------------------------------------------------------
 if (-not $VerifyOnly -and -not $SkipQuietDesktop) {
     $desk = 'HKCU:\Control Panel\Desktop'
-    # 2 = "adjust for best performance": every animation and fade off in one value.
+    # 2 = "adjust for best performance": all animations and fades off, in one
+    # value.
     if (Set-RegValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' `
                      'VisualFXSetting' 2 'DWord')                    { $changed += 'visual effects' }
     if (Set-RegValue $desk 'MenuShowDelay' '0' 'String')             { $changed += 'menu delay' }
     if (Set-RegValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' `
                      'EnableTransparency' 0 'DWord')                 { $changed += 'transparency' }
-    # A screen saver on a machine an agent drives turns a screenshot into a puzzle.
+    # A screen saver on a machine that an agent drives makes a screenshot a
+    # puzzle.
     if (Set-RegValue $desk 'ScreenSaveActive' '0' 'String')          { $changed += 'screen saver' }
     if (Set-RegValue $desk 'ScreenSaverIsSecure' '0' 'String')       { $changed += 'saver lock' }
-    # A toast appears OVER what is being clicked, and takes focus with it.
+    # A toast appears OVER the item that the agent clicks, and takes the focus.
     if (Set-RegValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications' `
                      'ToastEnabled' 0 'DWord')                       { $changed += 'toasts' }
-    # Snap Assist's suggestion overlay intercepts the next click after a window moves.
+    # The suggestion overlay of Snap Assist catches the next click after a
+    # window moves.
     if (Set-RegValue $adv 'SnapAssist' 0 'DWord')                    { $changed += 'snap assist' }
     if (Set-RegValue $adv 'WindowArrangementActive' '0' 'String')    { $changed += 'window arranging' }
-    # "Let's finish setting up your device" and friends: they pop up and take focus.
+    # "Let's finish setting up your device" and similar messages: they appear,
+    # and take the focus.
     $cdm = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
     foreach ($n in 'SubscribedContent-310093Enabled', 'SubscribedContent-338389Enabled',
                    'SubscribedContent-338388Enabled', 'SystemPaneSuggestionsEnabled') {
@@ -291,63 +310,69 @@ if (-not $VerifyOnly -and -not $SkipQuietDesktop) {
                      'NoAutoRebootWithLoggedOnUsers' 1 'DWord') { $changed += 'no auto-reboot' }
 }
 
-# --- 8b. the timezone, so local times mean what they look like -----------------------
-# Set-TimeZone needs elevation, which this session has (see the header: ssh in is a full
-# token). It does NOT touch the clock - UTC is unchanged and stays the hypervisor's - so
-# this is a display and arithmetic fix, not a sync.
+# --- 8b. the time zone, so that local times mean what they show -----------------------
+# Set-TimeZone needs elevation, and this session has it (see the header: ssh
+# gives a full token). It does NOT touch the clock. UTC does not change, and
+# stays with the hypervisor. Thus this fixes the display and the arithmetic, and
+# is not a sync.
 #
-# GATED ON $VerifyOnly like every other apply section here. Set-RegValue does not check it
-# itself - the sections do - and a read-only run that changes a setting is a bug this
-# codebase has already paid for once.
+# $VerifyOnly is the gate, as for each other apply section here. Set-RegValue
+# does not test it. The sections do. A read-only run that changes a value is a
+# bug that this code already had once.
 if (-not $VerifyOnly -and $TimeZone) {
     $tzNow = (Get-TimeZone).Id
     if ($tzNow -ne $TimeZone) {
-        # Validate before setting: Set-TimeZone on an unknown id throws, and the message
-        # ("The time zone ID was not found") does not tell you what WOULD have been accepted.
+        # Make sure that the id is valid before the set. Set-TimeZone throws on
+        # an unknown id, and the message ("The time zone ID was not found") does
+        # not tell you which values it accepts.
         if (Get-TimeZone -ListAvailable | Where-Object { $_.Id -eq $TimeZone }) {
             Set-TimeZone -Id $TimeZone
             $changed += "timezone $TimeZone"
         } else {
-            # Said here and not added to $script:soft: that list is initialised further down,
-            # AFTER this point, so anything appended here is thrown away. The report's own
-            # Show 'timezone' compares what is in force against $TimeZone and files the
-            # mismatch itself, which is the right place for it anyway.
-            Write-Host "  timezone '$TimeZone' is not a known id - left alone (see Get-TimeZone -ListAvailable)" -ForegroundColor Yellow
+            # Said here, and not added to $script:soft. The code sets up that
+            # list below, AFTER this point, so an append here is lost. The Show
+            # 'timezone' of the report compares the value in force with
+            # $TimeZone, and records the difference itself. That is the correct
+            # place.
+            Write-Host "  timezone '$TimeZone' is not a known id. Not changed (see Get-TimeZone -ListAvailable)" -ForegroundColor Yellow
         }
     }
 }
 
 # --- 9. long paths -------------------------------------------------------------------
-# Unreal project and engine trees are deep, and a MAX_PATH failure does not say so: it
-# surfaces as a missing file or an unexplained build error much further along.
+# Unreal project and engine trees are deep, and a MAX_PATH failure does not say
+# so. It shows as a missing file, or as a strange build error, much later.
 if (-not $VerifyOnly -and -not $SkipLongPaths) {
     if (Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' `
                      'LongPathsEnabled' 1 'DWord') { $changed += 'long paths' }
 }
 
-# --- 9b. mapped drives the desktop can actually see ----------------------------------
-# A mapped network drive belongs to ONE ACCESS TOKEN. An administrator's logon has two -
-# the filtered one Explorer runs under and the elevated one - and by default a drive mapped
-# in either is invisible to the other, with nothing anywhere saying so: the drive simply is
-# not there. EnableLinkedConnections makes Windows copy the mapping to the linked token.
+# --- 9b. mapped drives that the desktop can see -------------------------------------
+# A mapped network drive belongs to ONE ACCESS TOKEN. The logon of an
+# administrator has two: the filtered one of Explorer, and the elevated one. By
+# default, a drive mapped in one is not visible in the other, and nothing says
+# so. The drive is not there. EnableLinkedConnections makes Windows copy the
+# mapping to the linked token.
 #
-# WHY IT HAS TO BE IN THE BASE. The vault's password file is readable only by SYSTEM and
-# Administrators (lib/forge/vault-access.ps1 sets that), so mount-vault.ps1 can only
-# be run elevated - and the drive it maps is then invisible to the unelevated Explorer,
-# which is how a person looks at a drive, and to the unelevated Epic Games Launcher. The
-# alternative is to loosen the ACL on a plaintext password instead, which trades the same
-# boundary the other way round AND still leaves elevated installers without V:.
+# WHY IT MUST BE IN THE BASE. Only SYSTEM and Administrators can read the
+# password file of the vault (lib/forge/vault-access.ps1 sets that). Thus
+# mount-vault.ps1 can only run elevated. Then Explorer, which is not elevated,
+# cannot see the drive, and a person looks at a drive with Explorer. The Epic
+# Games Launcher, also not elevated, cannot see it either. The alternative is a
+# weaker ACL on a plaintext password. That moves the same boundary in the other
+# direction, AND still leaves elevated installers without V:.
 #
-# MEASURED on layer-1, after this was missing from the base: with the value set
-# and the guest rebooted, mounts made in one token were visible in the other. It needs a
-# REBOOT (or at least a new logon) - a base image gets one anyway, and vault-access.ps1
-# restarts the guest for its own reasons right before anyone would mount anything.
+# A TEST on layer-1 showed this, after it was missing from the base. With the
+# value set and the guest rebooted, mounts in one token were visible in the
+# other. It needs a REBOOT (or at least a new logon). A base image gets one
+# anyway, and vault-access.ps1 restarts the guest for its own reasons, directly
+# before somebody mounts something.
 #
-# What it costs, stated plainly: an unelevated process can use a connection established by
-# an elevated one. In this guest that boundary is already thin - one account, a local
-# administrator, and the agent's own session is elevated - and the credential behind it is
-# worth read-only on the vault and write on the scratch share. -SkipLinkedConnections
-# leaves it alone if you disagree.
+# The cost, said clearly: a process that is not elevated can use a connection
+# that an elevated one made. In this guest, that boundary is already thin: one
+# account, a local administrator, and the session of the agent is elevated. The
+# credential behind it gives read-only on the vault and write on the scratch
+# share. If you disagree, -SkipLinkedConnections does not touch it.
 if (-not $VerifyOnly -and -not $SkipLinkedConnections) {
     if (Set-RegValue $linkedPolicy 'EnableLinkedConnections' 1 'DWord') {
         $changed += 'linked connections'
@@ -356,17 +381,18 @@ if (-not $VerifyOnly -and -not $SkipLinkedConnections) {
 
 # --- 10. no crash dialogs, no indexer ------------------------------------------------
 if (-not $VerifyOnly) {
-    # WER's default is a MODAL dialog. Unattended, that is a hang with no message.
-    # Reports still get written; only the window is suppressed.
+    # The default of WER is a MODAL dialog. Unattended, that is a hang with no
+    # message. WER still writes reports. Only the window is hidden.
     if (Set-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' `
                      'DontShowUI' 1 'DWord') { $changed += 'WER dialog' }
-    # The Program Compatibility Assistant puts up its own dialog AFTER an installer exits.
+    # The Program Compatibility Assistant shows its own dialog AFTER an
+    # installer exits.
     if (Set-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppCompat' `
                      'DisablePCA' 1 'DWord') { $changed += 'PCA dialog' }
 }
 if (-not $VerifyOnly -and -not $SkipIndexing) {
-    # Indexing a 100+ GB engine and asset tree buys nothing when the tools are ripgrep
-    # and fd, and costs I/O on the disk the build is using.
+    # The tools are ripgrep and fd. Thus an index of an engine and asset tree of
+    # 100+ GB gives nothing. It costs I/O on the disk of the build.
     $ws = Get-Service WSearch -EA SilentlyContinue
     if ($ws) {
         if ($ws.Status -ne 'Stopped') { Stop-Service WSearch -Force; $changed += 'indexer stopped' }
@@ -376,19 +402,20 @@ if (-not $VerifyOnly -and -not $SkipIndexing) {
     }
 }
 
-# --- 11. UTF-8, opt-in ---------------------------------------------------------------
-# windows-mcp ships a workaround for UnicodeEncodeError on a cp1252 console; this removes
-# the whole class. Microsoft still labels it beta and some legacy programs mis-handle it,
-# so it is a switch rather than a default, and it needs a reboot to take effect.
+# --- 11. UTF-8, only on request -------------------------------------------------------
+# windows-mcp ships a workaround for UnicodeEncodeError on a cp1252 console.
+# This removes the whole class of errors. Microsoft still calls it beta, and
+# some old programs handle it wrongly. Thus it is a switch, not a default, and
+# it needs a reboot to apply.
 if (-not $VerifyOnly -and $Utf8) {
     $nls = 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage'
     foreach ($n in 'ACP', 'OEMCP', 'MACCP') {
         if (Set-RegValue $nls $n '65001' 'String') { $changed += "$n=65001" }
     }
-    Write-Host '  UTF-8 set; it takes effect after a reboot' -ForegroundColor Yellow
+    Write-Host '  UTF-8 set. It applies after a reboot' -ForegroundColor Yellow
 }
 
-# --- verification: read back what is in force, not what was written ------------------
+# --- test: read what is in force, not what was written ------------------------------
 Write-Host ''
 Write-Host '--- guest base ---'
 $bad = @()
@@ -417,37 +444,38 @@ if ($srv) { Write-Host "  LanmanServer  $($srv.Status)/$((Get-Service LanmanServ
 
 $ad = Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.InterfaceDescription -eq $loopbackName }
 if ($ad) { Write-Host "  loopback      $($ad.Name) ($($ad.Status))" }
-else { Write-Host '  loopback      MISSING - revocation checking will fail' -ForegroundColor Red; $bad += 'loopback' }
+else { Write-Host '  loopback      MISSING. Revocation tests fail' -ForegroundColor Red; $bad += 'loopback' }
 
-# A default route would normally mean a way out that the gateway does not control, and
-# that is still the check that matters more than the adapter's presence. But it cannot be
-# "is there a route" any more: install-windows-online.ps1 WRITES one, on purpose, to a next
-# hop that does not exist, because NCSI refuses to call an interface "Internet" without one
-# and "IPv4=Internet" is what the identity broker consults. The real question is whether the
-# route LEADS anywhere.
+# A default route usually means a way out that the gateway does not control.
+# That is still a more important test than the presence of the adapter. But it
+# can no longer be "is there a route?". install-windows-online.ps1 WRITES one,
+# on purpose, to a next hop that does not exist. Without one, NCSI refuses to
+# call an interface "Internet", and the identity broker reads "IPv4=Internet".
+# The real question is whether the route GOES somewhere.
 #
-# The fiction is identifiable and cannot be faked by accident: the next hop is the NCSI
-# address AND its neighbour entry is Permanent with the MAC we wrote by hand. Nothing ever
-# resolved it, so it never goes Reachable - a real gateway's entry would.
+# You can identify the fiction, and nothing can fake it by accident. The next
+# hop is the NCSI address, AND its neighbor entry is Permanent, with the MAC
+# that we wrote. Nothing ever resolved it, so it never becomes Reachable. The
+# entry of a real gateway does.
 #
-# This is deliberately the SAME test write-manifest.ps1 applies. The two must agree:
-# MEASURED, a correctly built guest was reported "default route PRESENT" and
-# FAILED (1) here while the manifest in the same run called the identical route EXPECTED.
-# Contradicting yourself in one run is worse than either verdict, because what it actually
-# teaches is to stop reading the red lines.
+# This is the SAME test as in write-manifest.ps1, on purpose. The two must
+# agree. A TEST SHOWED THIS: a correctly built guest got "default route PRESENT"
+# and FAILED (1) here, while the manifest in the same run called the same route
+# EXPECTED. A contradiction in one run is worse than either result, because it
+# teaches people to stop reading the red lines.
 $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -EA SilentlyContinue | Select-Object -First 1
 if (-not $route) {
     Write-Host '  default route none, as it must be'
 } else {
     $nb = Get-NetNeighbor -IPAddress $route.NextHop -EA SilentlyContinue | Select-Object -First 1
-    # -replace strips the separator so 02-00-.. and 02:00:.. compare equal; -eq on strings
-    # is case-insensitive in PowerShell, which is what a MAC wants.
+    # -replace removes the separator, so that 02-00-.. and 02:00:.. are equal.
+    # In PowerShell, -eq on strings ignores case, and a MAC needs that.
     $isFiction = ($route.NextHop -eq $NcsiGateway -and $null -ne $nb -and $nb.State -eq 'Permanent' -and
                   ($nb.LinkLayerAddress -replace '[:-]', '') -eq ($NcsiGatewayMac -replace '[:-]', ''))
     if ($isFiction) {
-        Write-Host "  default route via $($route.NextHop) - the NCSI fiction, not a way out"
+        Write-Host "  default route via $($route.NextHop): the NCSI fiction, not a way out"
     } else {
-        Write-Host "  default route PRESENT via $($route.NextHop) - the guest has egress the gateway does not see" -ForegroundColor Red
+        Write-Host "  default route PRESENT via $($route.NextHop). The guest has egress that the gateway does not see" -ForegroundColor Red
         $bad += 'route'
     }
 }
@@ -456,12 +484,13 @@ $sshd = Get-Content (Join-Path $env:ProgramData 'ssh\sshd_config') -EA SilentlyC
 if ($sshd -match '(?m)^\s*PasswordAuthentication\s+no') { Write-Host '  sshd          key-only' }
 else { Write-Host '  sshd          password auth still allowed (-HardenSshd to change)' }
 
-# --- the agent-facing half -----------------------------------------------------------
-# Get-Reg, not R: `R` is the built-in ALIAS for Invoke-History, and an alias wins over a
-# function in PowerShell's command resolution. A helper called R silently becomes a
-# different command. It must also always emit exactly one value: emitting nothing shifts
-# the caller's arguments by one, and the -f that follows then throws on a missing
-# placeholder - which, under SilentlyContinue, deletes the line instead of reporting it.
+# --- the half for the agent ----------------------------------------------------------
+# Get-Reg, not R. `R` is the built-in ALIAS for Invoke-History, and in the
+# command resolution of PowerShell, an alias wins over a function. A helper
+# called R silently becomes a different command. It must also always give
+# exactly one value. With no value, the arguments of the caller move by one, and
+# the -f after it throws on a missing placeholder. Under SilentlyContinue, that
+# deletes the line, and does not report it.
 function Get-Reg([string]$p, [string]$n) {
     $v = (Get-ItemProperty -Path $p -Name $n -EA SilentlyContinue).$n
     if ($null -eq $v -or "$v" -eq '') { return '(not set)' }
@@ -491,18 +520,20 @@ Show 'WER dialog'    (Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Re
 $ws = Get-Service WSearch -EA SilentlyContinue
 Show 'indexer'       $(if ($ws) { "$($ws.Status)/$((Get-Service WSearch).StartType)" } else { 'absent' }) 'Stopped/Disabled'
 Show 'codepage'      (Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage' 'ACP') $(if ($Utf8) { '65001' } else { (Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage' 'ACP') })
-# Both halves, because they fail separately: a wrong ZONE is a cosmetic surprise, a wrong
-# UTC is a broken TLS handshake and a build that cannot be dated. The offset is printed so
-# the pair can be checked against the host without doing the arithmetic by hand.
+# Both halves, because they fail separately. A wrong ZONE is a surprise for the
+# eye. A wrong UTC is a broken TLS handshake, and a build with no valid date.
+# The code prints the offset, so that you can compare the pair with the host
+# without arithmetic.
 Show 'timezone'      ("{0} (UTC{1})" -f (Get-TimeZone).Id, (Get-TimeZone).BaseUtcOffset) `
                      $(if ($TimeZone) { "$TimeZone (UTC$((Get-TimeZone -Id $TimeZone -EA SilentlyContinue).BaseUtcOffset))" } else { ("{0} (UTC{1})" -f (Get-TimeZone).Id, (Get-TimeZone).BaseUtcOffset) })
 Show 'clock (UTC)'   ((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm')) ((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm'))
 
 Write-Host ''
 if ($changed.Count) { Write-Host "changed: $($changed -join ', ')" } else { Write-Host 'nothing to change.' }
-# $soft is reported, not failed: several of these are deliberate (codepage without -Utf8)
-# or simply not visible yet (Explorer caches its own settings until the next logon).
-# $bad is the half the VM cannot work without, and that does fail.
+# The code reports $soft, and does not fail on it. Some of these are on purpose
+# (codepage without -Utf8), or not visible yet (Explorer caches its own
+# configuration until the next logon). $bad is the half that the VM needs to
+# work, and that fails.
 if ($script:soft.Count) { Write-Host "not as wanted (see above): $($script:soft -join ', ')" -ForegroundColor Yellow }
 if ($bad.Count) { Write-Host "INCOMPLETE: $($bad -join ', ')" -ForegroundColor Red; exit 1 }
 Write-Host 'guest base OK.' -ForegroundColor Green

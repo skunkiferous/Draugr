@@ -1,62 +1,67 @@
-# preflight.ps1 - refuse to start a long job when the VM has no way out.
+# preflight.ps1: refuse to start a long job on a VM with no way out.
 #
-# ==> RUN BY lib/forge/provision.ps1, IN THE GUEST. Can also be run by hand. <==
+# ==> lib/forge/provision.ps1 RUNS IT, IN THE GUEST. You can also run it yourself. <==
 #
-# Run it before Unreal, Visual Studio or a build. The VM has no adapter of its own: every
-# request leaves through 127.0.0.1:3128, which is the reverse tunnel lib/forge/tunnel.ps1
-# holds open into the gateway mound. When that path is down the tools do not fail
-# fast - the launcher sits on a spinner, a build fetches half a dependency and stops - so one
-# request first is much cheaper than finding out an hour in.
+# Run it before Unreal, Visual Studio, or a build. The VM has no own adapter.
+# Each request leaves through 127.0.0.1:3128, the reverse tunnel that
+# lib/forge/tunnel.ps1 holds open into the gateway mound. When that path is
+# down, the tools do not fail fast. The launcher shows a spinner, and a build
+# fetches half a dependency and stops. Thus one request first is much cheaper
+# than a discovery after an hour.
 #
-# What the codes mean (measured):
-#   000  curl got no answer at all: no tunnel, or no tinyproxy behind it
-#   500  tinyproxy answered and refused: the gateway is up, but its policy or DNS said no
-#   any other code, 403 included, means the request reached the site and the path works
+# The meaning of the codes (from tests):
+#   000  curl got no answer: no tunnel, or no tinyproxy behind it
+#   500  tinyproxy answered and refused: the gateway runs, but its policy or DNS said no
+#   each other code, also 403, means that the request reached the site, and the path works
 #
-# EXIT CODES: 0 egress proved, 1 no egress, 3 the probe itself is broken so egress is
-# UNPROVED - a distinction that matters, because 3 is this project's fault and 1 is not.
+# EXIT CODES: 0 egress proved, 1 no egress, 3 the probe is broken, so egress is
+# NOT PROVED. The difference is important, because 3 is a fault of this project,
+# and 1 is not.
 #
 #   powershell -ExecutionPolicy Bypass -File .\preflight.ps1 [-Url https://www.unrealengine.com/] [-Proxy 127.0.0.1:3128]
 
 param([string]$Url = 'https://www.unrealengine.com/',
       [string]$Proxy = '127.0.0.1:3128')
 
-# WINDOWS' OWN CURL, BY ABSOLUTE PATH. MEASURED, in a guest with the base tools
-# installed, both curls given the same -w '%{http_code}' against the same URL:
+# THE OWN CURL OF WINDOWS, WITH AN ABSOLUTE PATH. A TEST in a guest with the
+# base tools installed, both curls with the same -w '%{http_code}' and the same
+# URL:
 #
 #   C:\Windows\System32\curl.exe   (Windows 8.18.0)  ->  500      a real code
 #   C:\msys64\usr\bin\curl.exe      (Cygwin 8.22.0)   ->  %http_code
 #
-# The Cygwin build eats the BRACES out of the format string, because Cygwin does its own
-# argv processing before main() sees it. And bare `curl.exe` resolves to that build, because
-# install-base-tools.ps1 puts C:\msys64\usr\bin on the machine PATH just before System32 -
-# a decision whose own comment reasons carefully about find, sort, link and ssh, and does
-# not mention curl.
+# The Cygwin build removes the BRACES from the format string, because Cygwin
+# processes argv before main() sees it. A bare `curl.exe` resolves to that
+# build, because install-base-tools.ps1 puts C:\msys64\usr\bin on the machine
+# PATH directly before System32. The comment of that decision is careful about
+# find, sort, link, and ssh, and does not name curl.
 #
-# WHAT THAT COST, and it is the reason this is spelled out at length: $code was the literal
-# string '%http_code', which is neither '000' nor '500', so the test below could never
-# match and this script reported EGRESS OK WHATEVER HAPPENED - including against a proxy on
-# port 9. provision.ps1's phase 6 exits 5 when this fails, to stop an hour of downloads
-# before they start; that guard was dead from the moment MSYS2 reached the PATH.
+# THE COST, and the reason for this long text: $code was the literal string
+# '%http_code'. That is not '000' and not '500', so the test below never
+# matched. Thus this script always reported EGRESS OK, also with port 9 as the
+# proxy. If this fails, phase 6 of provision.ps1 exits 5, to stop an hour of
+# downloads before they start. That guard was dead from the time that MSYS2 came
+# on the PATH.
 #
-# -o NUL is a second reason to be explicit: to Cygwin, NUL is an ordinary filename, so the
-# Cygwin build would quietly write a file called NUL into the working directory.
+# -o NUL is a second reason for the explicit path. For Cygwin, NUL is an
+# ordinary file name. Thus the Cygwin build silently writes a file called NUL
+# into the working directory.
 $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
 if (-not (Test-Path $curl)) {
-    Write-Host "preflight: no curl at $curl, so egress cannot be proved here." -ForegroundColor Red
-    Write-Host '  Windows 11 ships it; a guest without it is not one this script can check.'
+    Write-Host "preflight: no curl at $curl, so this script cannot prove egress here." -ForegroundColor Red
+    Write-Host '  Windows 11 ships it. This script cannot test a guest without it.'
     exit 3
 }
 $code = & $curl -s -x "http://$Proxy" -o NUL -w '%{http_code}' --max-time 25 $Url
 
-# THE ANSWER IS CHECKED FOR SHAPE BEFORE IT IS BELIEVED. Three digits or the probe itself
-# is broken - which is a different thing from no egress, and must not be reported as one.
-# Without this, any future change that stops -w producing a code goes back to passing
-# silently, which is exactly how this script spent its whole life so far.
+# THE CODE TESTS THE FORM OF THE ANSWER BEFORE IT BELIEVES IT. Three digits, or
+# the probe is broken. That is different from no egress, and must not be
+# reported as no egress. Without this, a future change that stops the code from
+# -w passes silently again. That is exactly how this script lived until now.
 if ($code -notmatch '^[0-9]{3}$') {
-    Write-Host "preflight: THE PROBE IS BROKEN, so egress is unproved." -ForegroundColor Red
-    Write-Host "  curl was asked for %{http_code} and answered '$code', which is not a status code."
-    Write-Host "  That is this script's fault, not the gateway's. $curl"
+    Write-Host "preflight: THE PROBE IS BROKEN, so egress is not proved." -ForegroundColor Red
+    Write-Host "  curl got a request for %{http_code}, and answered '$code'. That is not a status code."
+    Write-Host "  That is a fault of this script, not of the gateway. $curl"
     exit 3
 }
 
@@ -64,7 +69,7 @@ if ($code -eq '000' -or $code -eq '500') {
     Write-Host "preflight: NO EGRESS ($Url through $Proxy returned $code)" -ForegroundColor Red
     Write-Host "  on the host, from the project that names this forge:"
     Write-Host "    dr-forge up        # the gateway mound, the VM, then the tunnel, in order"
-    Write-Host "  or, to see which link is down without starting anything:"
+    Write-Host "  or, to see which link is down, and start nothing:"
     Write-Host "    dr-forge doctor"
     exit 1
 }

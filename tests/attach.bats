@@ -1,15 +1,15 @@
 #!/usr/bin/env bats
 # How Draugr gets a terminal inside the mound, and why it is ssh.
 #
-# The short version: `sbx run` and `sbx exec` reach the sandbox through sbx.exe,
-# a Windows binary running under WSL interop, and Ctrl-Z suspends that relay
-# rather than anything in the sandbox. The session then stops responding and
-# dies with "inspect exec: context deadline exceeded". Over ssh the far end is a
-# real pty doing its own job control, so Ctrl-Z stops the agent and hands you the
-# mound's shell. Both measured against sbx 0.37.1.
+# In short: `sbx run` and `sbx exec` reach the sandbox through sbx.exe, a
+# Windows binary under WSL interop. Ctrl-Z suspends that relay, not something in
+# the sandbox. The session then stops responding, and dies with "inspect exec:
+# context deadline exceeded". Over ssh, the far end is a real pty with its own
+# job control. Thus Ctrl-Z stops the agent, and gives you the shell of the
+# mound. Tests on sbx 0.37.1 showed both.
 #
-# tests/mocks/ssh records the remote command instead of connecting, so what is
-# asserted here is the string that would reach the mound's shell.
+# tests/mocks/ssh records the remote command, and does not connect. Thus these
+# tests assert the string that reaches the shell of the mound.
 
 load helper
 
@@ -20,9 +20,9 @@ setup() {
     SANDBOX="draugr-$(basename "$REPO")"
     export DR_MOCK_NAME="$SANDBOX"
 
-    # These are about attaching, so nothing else may use the transport. git
-    # fetches over ssh:// too, and with the mock first on PATH an auto-sync would
-    # land its own lines in the same log.
+    # These tests are about the attach, so nothing else can use the transport.
+    # git also fetches over ssh://. With the mock first on PATH, an auto-sync
+    # puts its own lines in the same log.
     export DRAUGR_AUTO_SYNC=false DRAUGR_MEM_SYNC=off
 }
 
@@ -30,14 +30,14 @@ teardown() { dr_test_teardown; }
 
 calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 
-# The rcfile as the mound's bash will see it: decoded back out of the remote
-# command, rather than trusted from the side that wrote it. head -1 because the
-# attach is always the first connection of a session.
+# The rcfile as the bash of the mound sees it: decoded from the remote command,
+# not trusted from the side that wrote it. head -1, because the attach is always
+# the first connection of a session.
 decode_rc() {
     calls ssh | head -1 | sed 's/.*printf %s //; s/ | base64.*//' | base64 -d
 }
 
-# dr-go will not attach without a terminal, so these go through a pty.
+# dr-go does not attach without a terminal, so these go through a pty.
 go_pty() {
     DR_MOCK_STATE=running script -qec "dr-go $*" /dev/null >/dev/null 2>&1 || true
 }
@@ -52,7 +52,8 @@ go_pty() {
 
 @test "dr_shquote: an argument with spaces survives the crossing" {
     dr_load_common
-    # Quoted by bash here, unquoted by bash there. Any other pairing is a guess.
+    # Bash quotes it here, and bash unquotes it there. Each other pair is a
+    # guess.
     out=$(dr_shquote claude --model "two words")
     [ "$(bash -c "printf '[%s]' $out")" = "[claude][--model][two words]" ]
 }
@@ -60,9 +61,9 @@ go_pty() {
 @test "dr_attach_rc: the agent starts from PROMPT_COMMAND, not from the rcfile" {
     dr_load_common
     out=$(dr_attach_rc claude)
-    # Straight from the rcfile it would hang: bash has not enabled job control
-    # while it is still running its startup files, so the first Ctrl-Z would
-    # suspend something nothing could resume. Measured, the hard way.
+    # Directly from the rcfile, it hangs. While bash still runs its startup
+    # files, job control is not on yet. Thus the first Ctrl-Z suspends something
+    # that nothing can resume. A painful test showed this.
     [[ "$out" == *"PROMPT_COMMAND="* ]]
     [[ "$out" != *$'\nclaude'* ]]
 }
@@ -70,9 +71,9 @@ go_pty() {
 @test "dr_attach_rc: 148 is what keeps suspending apart from exiting" {
     dr_load_common
     out=$(dr_attach_rc claude)
-    # 128 + SIGTSTP. Without the guard, a suspended job does not abandon the rest
-    # of its command list, so the trailing exit would run on Ctrl-Z too and the
-    # session would end at the exact moment you asked for a shell.
+    # 128 + SIGTSTP. Without the guard, a suspended job continues the rest of
+    # its command list. Thus the exit at the end also runs on Ctrl-Z, and the
+    # session ends at the moment that you ask for a shell.
     [[ "$out" == *"-eq 148"* ]]
     [[ "$out" == *"|| exit"* ]]
 }
@@ -84,8 +85,7 @@ go_pty() {
 
 @test "dr_attach_rc: a PROMPT_COMMAND of yours is put back, not eaten" {
     dr_load_common
-    # It fires once, and the shell you are left with is the one you would have
-    # had anyway.
+    # It fires once. After that, you have the same shell as without it.
     [[ "$(dr_attach_rc claude)" == *'PROMPT_COMMAND=$_dr_pc'* ]]
 }
 
@@ -98,8 +98,8 @@ go_pty() {
 @test "dr_attach_remote: with a command it carries an rcfile, base64 encoded" {
     dr_load_common
     out=$(dr_attach_remote /c/Code/thing claude)
-    # base64 because the string passes through ssh into a remote shell, and every
-    # layer would otherwise want its own round of quoting.
+    # base64, because the string goes through ssh into a remote shell. Without
+    # it, each layer needs its own round of quotes.
     [[ "$out" == *"base64 -d"* ]]
     [[ "$out" == *"--rcfile"* ]]
     [[ "$out" == *"cd /c/Code/thing"* ]]
@@ -139,8 +139,8 @@ go_pty() {
 }
 
 @test "dr-go: asks ssh for a terminal" {
-    # Without -t there is no remote pty, because a remote command was given - and
-    # an agent with no terminal has nothing to draw on.
+    # Without -t, there is no remote pty, because a remote command was given. An
+    # agent with no terminal has nothing to draw on.
     go_pty
     [[ "$(calls ssh)" == "ssh -t "* ]]
 }
@@ -148,7 +148,7 @@ go_pty() {
 @test "dr-go: lands in the clone, not in the mound's home directory" {
     go_pty
     # ssh logs you into ~/workspace, which is empty. The work is at the mirrored
-    # path, and dr-sync's URL points at the same place.
+    # path, and the URL of dr-sync points to the same place.
     [[ "$(decode_rc)" != "" ]]
     [[ "$(calls ssh)" == *"cd /c/"* ]]
 }
@@ -159,7 +159,7 @@ go_pty() {
 }
 
 @test "dr-go: DRAUGR_AGENT=shell attaches with no rcfile at all" {
-    # There is no agent to start, so there is nothing for PROMPT_COMMAND to do.
+    # There is no agent to start, so PROMPT_COMMAND has nothing to do.
     export DRAUGR_AGENT=shell
     go_pty
     [[ "$(calls ssh)" == *"exec bash -i"* ]]
@@ -167,9 +167,9 @@ go_pty() {
 }
 
 @test "dr-go: an agent argument is quoted, not pasted into a shell line" {
-    # The rcfile is shell, so an argument containing a metacharacter would
-    # otherwise stop being an argument. dr_shquote is what stands between the
-    # two, and this is the case that would prove it missing.
+    # The rcfile is shell. Thus, without a guard, an argument with a
+    # metacharacter stops being an argument. dr_shquote is the guard, and this
+    # case proves that it is there.
     export DRAUGR_AGENT_ARGS='--flag;whoami'
     go_pty
     [[ "$(decode_rc)" == *'--flag\;whoami'* ]]
@@ -177,8 +177,8 @@ go_pty() {
 }
 
 @test "dr-go: the far side's exit status is dr-go's" {
-    # The rcfile ends with `exit $_dr_s`, so what ssh returns is the agent's own
-    # status. dr-go has always propagated it and still does.
+    # The rcfile ends with `exit $_dr_s`, so ssh returns the status of the
+    # agent. dr-go always passed it on, and still does.
     export DR_MOCK_SSH_RC=7
     rc=0
     DR_MOCK_STATE=running script -qec "dr-go" /dev/null >/dev/null 2>&1 || rc=$?
@@ -228,15 +228,15 @@ go_pty() {
 }
 
 @test "dr-shell --root: sudo, because ssh authenticates as the agent" {
-    # sbx has -u root; ssh does not, and the agent is in the sudo group with no
-    # password. Verified against sbx 0.37.1.
+    # sbx has -u root. ssh does not, and the agent is in the sudo group with no
+    # password. Tested on sbx 0.37.1.
     DR_MOCK_STATE=running run dr-shell --root -- id
     [[ "$(calls ssh)" == *"sudo id"* ]]
 }
 
 @test "dr-shell --root: interactive keeps the working directory" {
-    # sudo -s rather than -i: a login shell would move you to /root, and the
-    # reason to be root here is to fix something in the clone.
+    # sudo -s, not -i. A login shell moves you to /root, and you are root here
+    # to fix something in the clone.
     DR_MOCK_STATE=running script -qec "dr-shell --root" /dev/null >/dev/null 2>&1 || true
     [[ "$(calls ssh)" == *"exec sudo -s"* ]]
     [[ "$(calls ssh)" != *"sudo -i"* ]]

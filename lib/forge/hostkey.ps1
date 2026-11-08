@@ -1,25 +1,28 @@
-# lib/forge/hostkey.ps1 - the known_hosts entry a forge VM leaves behind.
+# lib/forge/hostkey.ps1: the known_hosts entry that a forge VM leaves.
 #
-# ==> NOT MEANT TO BE TYPED. Dot-sourced by lib/forge/rm.ps1 and lib/forge/layer.ps1. <==
+# ==> YOU DO NOT TYPE THIS. lib/forge/rm.ps1 and lib/forge/layer.ps1 dot-source it. <==
 #
-# WHY THERE IS ANYTHING TO CLEAN UP. Every guest dial in vm.ps1 carries
-# `-o HostKeyAlias=draugr-<vm>`, so the guest's key is filed under the VM's NAME instead of
-# under `[127.0.0.1]:<port>`. That is what stopped a second guest on the pinned port looking
-# like a man in the middle - but it also makes the entry outlive the VM, because a name is not
-# a socket and nothing reclaims it.
+# WHY THERE IS SOMETHING TO CLEAN. Each connection to a guest in vm.ps1 has `-o
+# HostKeyAlias=draugr-<vm>`. Thus ssh files the key of the guest under the NAME
+# of the VM, not under `[127.0.0.1]:<port>`. Because of that, a second guest on
+# the pinned port no longer looks like a man in the middle. But the entry also
+# lives longer than the VM, because a name is not a socket, and nothing removes
+# it.
 #
-# The failure it causes is not theoretical. Delete a VM, create another with the same name,
-# and `accept-new` correctly refuses a CHANGED key for a name it has seen before - which is
-# exactly the refusal that cost a morning, in a different disguise. Names here
-# are LAYER names, and layer names get reused.
+# The failure is real. Delete a VM, and create another with the same name.
+# `accept-new` then correctly refuses a CHANGED key for a name that it saw
+# before. That is exactly the refusal that cost a morning, in a different form.
+# Names here are LAYER names, and people use layer names again.
 #
-# MEASURED, after the temporary VMs were deleted with the proper verbs: three
-# aliases still sat in %USERPROFILE%\.ssh\known_hosts - draugr-forge-0, draugr-old-layer-test
-# and draugr-f0-boot-test - with nothing left on the machine that could ever answer for them.
+# A TEST, after the delete of the temporary VMs with the correct verbs: three
+# aliases were still in %USERPROFILE%\.ssh\known_hosts (draugr-forge-0,
+# draugr-old-layer-test, and draugr-f0-boot-test), and nothing on the machine
+# could ever answer for them.
 #
-# WHICH FILE, AND WHY NOT ONE OF DRAUGR'S OWN. vm.ps1 passes no -o UserKnownHostsFile, so ssh
-# uses the Windows user's default. This has to match that choice rather than make its own, and
-# it is the HOST's file: the WSL-side known_hosts is a different file and holds none of these.
+# WHICH FILE, AND WHY NOT A FILE OF DRAUGR. vm.ps1 gives no -o
+# UserKnownHostsFile, so ssh uses the default of the Windows user. This code
+# must use the same file. It is the file of the HOST. The known_hosts on the WSL
+# side is a different file, and holds none of these.
 
 function Clear-ForgeHostKey([string]$Vm) {
     if (-not $Vm) { return $null }
@@ -27,21 +30,22 @@ function Clear-ForgeHostKey([string]$Vm) {
     if (-not (Test-Path $kh)) { return $null }
     $alias = "draugr-$Vm"
 
-    # ssh-keygen -R rather than a line filter, for two reasons it alone handles: a HASHED
-    # known_hosts has no readable name to match on, and it writes known_hosts.old itself. A
-    # grep would quietly do nothing on a hashed file and leave no way back on a plain one.
+    # ssh-keygen -R, not a line filter, for two reasons. A HASHED known_hosts
+    # has no readable name to match, and ssh-keygen writes known_hosts.old
+    # itself. A grep silently does nothing on a hashed file, and leaves no way
+    # back on a plain one.
     if (-not (Get-Command ssh-keygen.exe -ErrorAction SilentlyContinue)) { return $null }
 
-    # LINE COUNTS DECIDE, not the exit code and not the text. `ssh-keygen -R` exits 0 whether
-    # it removed anything or not, so its status cannot answer "was there one?" - and a count
-    # works for a hashed file, where no pattern would match.
+    # LINE COUNTS DECIDE, not the exit code and not the text. `ssh-keygen -R`
+    # always exits 0, so its status cannot answer "was there one?". A count also
+    # works for a hashed file, where no pattern matches.
     $before = @(Get-Content $kh -ErrorAction SilentlyContinue).Count
 
-    # REDIRECTED NATIVE STDERR, AND THE PREFERENCE DROPPED FOR THE LENGTH OF THE CALL.
-    # ssh-keygen reports what it removed on stderr, and layer.ps1 runs under
-    # $ErrorActionPreference = 'Stop', which turns a redirected native stderr line into a
-    # terminating NativeCommandError - so a SUCCESSFUL removal would kill the caller.
-    # docs/HACKING.md, rule 11.
+    # REDIRECTED NATIVE STDERR, AND NO PREFERENCE FOR THE TIME OF THE CALL.
+    # ssh-keygen reports what it removed on stderr. layer.ps1 runs under
+    # $ErrorActionPreference = 'Stop', and that makes a redirected native stderr
+    # line a terminating NativeCommandError. Thus a SUCCESSFUL removal kills the
+    # caller. See docs/HACKING.md, rule 11.
     $eapWas = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try { $null = & ssh-keygen.exe -R $alias -f $kh 2>&1 }

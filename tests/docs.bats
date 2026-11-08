@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
-# The documentation, checked against the code rather than against good intentions.
+# The documentation, tested against the code, not against good intentions.
 #
-# Docs rot silently: nothing fails when a key gains a meaning nobody wrote down,
-# or when the README promises a command that was never built. These turn both
-# into a red build. They check that things are *mentioned*, which is the most a
-# test can do - accuracy still needs a reader.
+# Docs decay silently. Nothing fails when a key gets a meaning that nobody wrote
+# down, or when the README promises a command that nobody built. These tests
+# make both a red build. They test that things are *mentioned*. A test cannot do
+# more. Accuracy still needs a reader.
 
 load helper
 
@@ -31,8 +31,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "docs: every DRAUGR_* key in DR_KEYS appears in share/config.example" {
-    # The example file is what a new user copies and edits, so a key missing
-    # there is invisible to exactly the people most likely to need it.
+    # A new user copies and edits the example file. Thus a key that is missing
+    # there is invisible to the people who most need it.
     local missing=()
     for key in "${DR_KEYS[@]}"; do
         grep -qF "$key" "$DR_ROOT/share/config.example" || missing+=("$key")
@@ -46,8 +46,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "docs: config.example invents no key the code does not have" {
-    # The other direction: a key that was renamed leaves a plausible-looking
-    # setting behind that silently does nothing.
+    # The other direction: a renamed key leaves behind a value that looks
+    # correct, but silently does nothing.
     local key strays=()
     while read -r key; do
         [ -n "$key" ] || continue
@@ -66,11 +66,11 @@ teardown() { dr_test_teardown; }
 }
 
 @test "docs: project.example invents no key the code does not have" {
-    # project.example is a curated SUBSET and should stay one - it is the file a
-    # project commits, so it lists what a project plausibly sets rather than
-    # everything. Hence one direction only: this cannot notice a key that ought
-    # to be here and is not, which stays a judgement call, but it does catch the
-    # rename that leaves a plausible-looking dead setting in every repo's copy.
+    # project.example is a chosen SUBSET, and must stay one. A project commits
+    # it, so it lists what a project usually sets, not all keys. Thus only one
+    # direction. This cannot see a key that must be here and is not. That stays
+    # a decision for a person. But it catches the rename that leaves a dead
+    # value that looks correct in the copy of each repo.
     local key strays=()
     while read -r key; do
         [ -n "$key" ] || continue
@@ -88,11 +88,11 @@ teardown() { dr_test_teardown; }
     fi
 }
 
-# --- every command the docs promise actually exists ---------------------------
+# --- each command that the docs promise really exists ------------------------
 
-# Was advisory while the README described commands that were not written yet.
-# The last one, dr-code, shipped in 0.1.0, so it is blocking now: the README is
-# the specification, and a specification nobody implemented is a lie.
+# This was advisory while the README described commands that did not exist yet.
+# The last one, dr-code, shipped in 0.1.0, so now it blocks. The README is the
+# specification, and a specification that nobody implemented is a lie.
 @test "docs: every dr-* named in the README exists in bin/" {
     local cmd missing=()
     while read -r cmd; do
@@ -108,9 +108,10 @@ teardown() { dr_test_teardown; }
 }
 
 @test "docs: every dr-* named in the user-facing docs exists in bin/" {
-    # HACKING.md is excluded deliberately: it is for people writing commands, not
-    # using them, and its skeleton template is called dr-thing. Naming a command
-    # in a template is not a promise that it exists; naming one in SETUP.md is.
+    # HACKING.md is excluded, on purpose. It is for people who write commands,
+    # not for people who use them, and its skeleton template is called dr-thing.
+    # A command name in a template does not promise that it exists. A name in
+    # SETUP.md does.
     local cmd missing=()
     while read -r cmd; do
         [ -n "$cmd" ] || continue
@@ -130,8 +131,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "docs: every command in bin/ is mentioned in the README" {
-    # The reverse, so a command cannot ship undocumented. dr is the dispatcher
-    # and is described rather than listed as a verb.
+    # The reverse, so that a command cannot ship with no documentation. dr is
+    # the dispatcher. The docs describe it, and do not list it as a verb.
     local f cmd missing=()
     for f in "$DR_ROOT"/bin/dr-*; do
         cmd=${f##*/}
@@ -152,24 +153,25 @@ teardown() { dr_test_teardown; }
 }
 
 @test "docs: no unimplemented-command markers are left in the README" {
-    # The hourglass meant "specified but not built". Nothing should carry one
-    # once a release is tagged.
+    # The hourglass meant "specified but not built". After a release tag,
+    # nothing must have one.
     ! grep -q '⏳' "$DR_ROOT/README.md"
 }
 
 # --- --help is the header comment, and only that -----------------------------
 #
-# Every command's help used to be `sed -n '2,Np' "$0"` with N counted by hand.
-# N had gone stale in 17 of 27 commands, each ending its --help with a stray
-# `set -euo pipefail`; dr-status had drifted the other way and truncated its own
-# help mid-sentence. dr_help removed the counting, and these keep it removed.
+# Before, the help of each command was `sed -n '2,Np' "$0"`, with N counted by
+# hand. N was wrong in 17 of 27 commands. Each ended its --help with a stray
+# `set -euo pipefail`. dr-status was wrong the other way, and cut its own help
+# in the middle of a sentence. dr_help removed the count, and these tests keep
+# it removed.
 
 @test "dr_help: prints the header and stops at the code" {
     printf '#!/usr/bin/env bash\n# tool - does a thing.\n#\n#   tool --flag\nset -euo pipefail\necho hi\n' \
         > "$DR_TMP/tool"
-    # Compared as one string, not through $lines: bats builds that array with
-    # IFS=newline, and newline is IFS *whitespace*, so runs of them collapse and
-    # a blank line simply disappears from the array.
+    # Compared as one string, not through $lines. bats builds that array with
+    # IFS=newline, and newline is IFS *whitespace*. Thus a run of them
+    # collapses, and a blank line disappears from the array.
     run dr_help "$DR_TMP/tool"
     [ "$output" = "tool - does a thing.
 
@@ -183,8 +185,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_help: a shellcheck directive ends the block" {
-    # A file-wide disable has to sit above the first command to apply at all, so
-    # it lives in the header - but it is metadata, not something --help asked for.
+    # A file-wide disable must be above the first command, or it does not apply.
+    # Thus it is in the header. But it is metadata, not part of --help.
     printf '#!/usr/bin/env bash\n# tool - x\n#\n# shellcheck disable=SC2016\n# because reasons\nset -e\n' \
         > "$DR_TMP/tool"
     run dr_help "$DR_TMP/tool"
@@ -198,8 +200,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_help: blank lines inside the block are kept" {
-    # Only the TRAILING ones are dropped. A header's internal spacing is what
-    # makes usage readable, so losing it would be a different bug.
+    # Only the TRAILING ones are dropped. The internal spacing of a header makes
+    # the usage readable, so a loss of it is a different bug.
     printf '#!/usr/bin/env bash\n# a\n#\n# b\nset -e\n' > "$DR_TMP/tool"
     run dr_help "$DR_TMP/tool"
     [ "$output" = "a
@@ -208,8 +210,8 @@ b" ]
 }
 
 @test "every command's --help contains no line of code" {
-    # The regression this whole change exists for. Checked across every command
-    # at once, because the failure mode was 17 of them at the same time.
+    # The regression that this full change is for. Tested across all commands
+    # at once, because the failure was 17 of them at the same time.
     local bad=()
     for f in "$DR_ROOT"/bin/* "$DR_ROOT/install.sh"; do
         out=$("$f" --help 2>&1) || true
@@ -224,16 +226,16 @@ b" ]
 }
 
 @test "every command's --help opens with a description line" {
-    # Cheap proof the block was found at all: an empty or truncated help would
-    # not open with "<something> - <description>". Matched on the dash rather
-    # than the command name because `dr`, the dispatcher, opens with
-    # "Draugr <version> - ..." and is right to.
+    # A cheap proof that the block was found. An empty or cut help does not
+    # open with "<something>: <description>". Matched on the colon, not on the
+    # command name, because `dr`, the dispatcher, opens with "Draugr <version>:
+    # ...", and that is correct.
     local bad=()
     for f in "$DR_ROOT"/bin/*; do
         name=${f##*/}
         out=$("$f" --help 2>&1) || true
         case "${out%%$'\n'*}" in
-            *" - "*) ;;
+            *": "*) ;;
             *) bad+=("$name") ;;
         esac
     done

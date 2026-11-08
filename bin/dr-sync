@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# dr-sync - fetch the agent's commits out of the mound onto draugr/<branch>.
+# dr-sync: fetch the commits of the agent from the mound onto draugr/<branch>.
 #
-# This is the direction that matters: the sandbox never pushes to you, you pull
-# from it. Nothing is merged and nothing on your branch moves - after this you
-# have a remote-tracking branch to review with dr-log and dr-diff, and dr-merge
-# accepts it when you are happy.
+# This is the important direction. The sandbox never pushes to you. You pull
+# from it. Nothing merges, and nothing on your branch moves. After this, you
+# have a remote-tracking branch to review with dr-log and dr-diff. When you
+# accept it, use dr-merge.
 #
 #   dr-sync              fetch and report
-#   dr-sync --no-fetch   report on what you already fetched, contacting nothing
-#   dr-sync --quiet      say nothing unless something is new
-#   dr-sync --check-only do not fetch; exit 0 nothing to lose, 1 unfetched
-#                        commits exist, 2 could not tell (used by dr-rm)
+#   dr-sync --no-fetch   report on what you already fetched, and contact nothing
+#   dr-sync --quiet      say something only if something is new
+#   dr-sync --check-only do not fetch. Exit 0: nothing to lose. 1: unfetched
+#                        commits exist. 2: unknown (dr-rm uses it)
 set -euo pipefail
 
 DR_PROG=dr-sync
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# --check-only is what dr-rm uses before destroying a mound, so it must not
-# change anything: it asks the sandbox what it has and compares, without fetching.
+# dr-rm uses --check-only before it destroys a mound, so it must change nothing.
+# It asks the sandbox what it has, and compares, with no fetch.
 fetch=1
 check_only=
 quiet=
@@ -39,19 +39,19 @@ done
 
 dr_context
 
-# No $branch here any more: --check-only used to ask the mound about one named
-# branch, and now asks about all of them.
+# No $branch here now. Before, --check-only asked the mound about one named
+# branch. Now it asks about all of them.
 tracking=$(dr_tracking_ref)
 
-# --- check-only: would destroying the mound lose work? ----------------------
+# --- check-only: does the destruction of the mound lose work? ---------------
 #
-# The honest test is not "have I merged it" but "do I have the objects at all",
-# because once fetched they live in the host repo and survive dr-rm. ls-remote
-# asks the sandbox directly rather than trusting a possibly stale tracking ref.
+# The correct test is not "did I merge it?", but "do I have the objects?". After
+# a fetch, they are in the host repo, and stay after dr-rm. ls-remote asks the
+# sandbox directly, and does not trust a tracking ref that can be old.
 #
-# Three outcomes, not two: "I could not reach the mound" must not be reported as
-# "nothing to lose", which would fail open on the one command that destroys work.
-# dr-rm turns a 2 into a warning and a prompt rather than silent permission.
+# Three results, not two. Do not report "I could not connect to the mound" as
+# "nothing to lose". That opens the gate on the one command that destroys work.
+# dr-rm changes a 2 into a warning and a question, not a silent permission.
 if [ -n "$check_only" ]; then
     if ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
         exit 0
@@ -59,18 +59,18 @@ if [ -n "$check_only" ]; then
 
     url=$(dr_sandbox_url)
 
-    # ls-remote reaches the mound over ssh, which will start it if stopped. The
-    # timeout is a backstop so an unreachable host fails rather than hanging;
-    # `timeout` is coreutils and may be absent, hence the two branches running
-    # otherwise-identical commands.
+    # ls-remote connects to the mound through ssh, and that starts a stopped
+    # mound. The timeout is a safety net, so that a host with no connection
+    # fails and does not hang. `timeout` is in coreutils and can be missing.
+    # Thus there are two branches with the same commands.
     #
-    # Capturing the status needs the assignment to BE the tested command. Writing
-    # `out=$(…) || out=` and then reading $? would report on the fallback
-    # assignment, which always succeeds - and unreachable would look like success.
-    # EVERY branch, not just the tracked one. Asking only about refs/heads/$branch
-    # meant an agent that committed on a branch of its own was reported as
-    # "nothing to lose" - and dr-rm believes this answer before destroying the
-    # mound. The guard had a hole exactly where agents actually behave.
+    # To capture the status, the assignment must BE the tested command. With
+    # `out=$(…) || out=` and then $?, the status is from the fallback
+    # assignment. That always works, and no connection looks like a success.
+    # EACH branch, not only the tracked one. Before, the code asked only about
+    # refs/heads/$branch. Then an agent that committed on its own branch got
+    # "nothing to lose", and dr-rm trusts this answer before it destroys the
+    # mound. The guard had a hole exactly where agents really work.
     rc=0
     if command -v timeout >/dev/null 2>&1; then
         out=$(timeout 60 git -C "$DR_REPO" ls-remote --heads "$url" 2>/dev/null) || rc=$?
@@ -78,16 +78,16 @@ if [ -n "$check_only" ]; then
         out=$(git -C "$DR_REPO" ls-remote --heads "$url" 2>/dev/null) || rc=$?
     fi
 
-    # Distinguish "answered, and there is nothing there" from "never answered".
-    # ls-remote succeeds with empty output for a mound with no branches at all,
-    # which is a real answer and means the agent never committed anything.
+    # "Answered, and nothing is there" differs from "never answered". For a
+    # mound with no branches, ls-remote works and gives empty output. That is a
+    # real answer: the agent never committed anything.
     if [ -n "$out" ]; then
         while IFS= read -r line; do
             [ -n "$line" ] || continue
             tip=${line%%	*}
-            # ^{commit} forces the object to resolve as a commit; cat-file -e is a
-            # silent "do we already have this here" test. One missing tip on any
-            # branch is enough to answer "yes, this would lose work".
+            # ^{commit} forces the object to resolve as a commit. cat-file -e is
+            # a silent "do we already have this?" test. One missing tip on a
+            # branch is enough for the answer "yes, this loses work".
             git -C "$DR_REPO" cat-file -e "$tip^{commit}" 2>/dev/null || exit 1
         done <<< "$out"
         exit 0
@@ -98,13 +98,12 @@ fi
 
 # --- the normal path --------------------------------------------------------
 
-# Only fetching needs a mound. --no-fetch reports on refs that are already on
-# this disk, and refusing it without a sandbox made the one moment you most want
-# that report - after dr-rm, asking "what did I keep?" - the one moment it would
-# not answer.
+# Only a fetch needs a mound. --no-fetch reports on refs that are already on
+# this disk. Before, it refused without a sandbox. After dr-rm, you most want to
+# ask "what did I keep?", and exactly then it did not answer.
 if [ -n "$fetch" ] && ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
     dr_die "$DRAUGR_SANDBOX does not exist, so there is nothing to fetch" \
-           "Report on what you already fetched:  dr-sync --no-fetch" \
+           "To report on what you already fetched:  dr-sync --no-fetch" \
            "Create it with:  dr-up"
 fi
 
@@ -112,76 +111,76 @@ if [ -n "$fetch" ]; then
     url=$(dr_remote_ensure)
     [ -n "$quiet" ] || dr_info "fetching from $url"
 
-    # A stopped sandbox is started by the ssh connection itself, which takes a
-    # few seconds; that is why this can pause with no output.
+    # The ssh connection starts a stopped sandbox, and that takes a few seconds.
+    # Thus this can wait with no output.
     git -C "$DR_REPO" fetch --prune "$DRAUGR_REMOTE" || dr_die \
         "could not fetch from $DRAUGR_SANDBOX" \
-        "Check the mound is reachable:  dr-status" \
-        "And that WSL's ssh knows about *.sbx hosts:  dr-doctor"
+        "Make sure that the mound is reachable:  dr-status" \
+        "And that the ssh of WSL knows about *.sbx hosts:  dr-doctor"
 fi
 
 dr_require_tracking_ref
 
 # --- report -----------------------------------------------------------------
 #
-# Two counts, because they answer different questions: what the agent did that
-# you have not seen, and what you have that it has not been given (dr-send).
+# Two counts, because they answer different questions. What did the agent do
+# that you did not see? What do you have that it did not get (dr-send)?
 ahead=$(git -C "$DR_REPO" rev-list --count "HEAD..$tracking" 2>/dev/null || printf 0)
 behind=$(git -C "$DR_REPO" rev-list --count "$tracking..HEAD" 2>/dev/null || printf 0)
 
-# When there is something new, list it and name the next two commands: this is
-# the moment in the loop where you decide whether to look closer or just accept.
+# For new work, list it, and name the next two commands. At this step of the
+# loop, you decide to look more closely, or to accept.
 if [ "$ahead" -eq 0 ]; then
-    [ -n "$quiet" ] || dr_ok "nothing new in the mound - $tracking matches your branch"
+    [ -n "$quiet" ] || dr_ok "nothing new in the mound. $tracking is the same as your branch."
 else
     dr_ok "$ahead new commit(s) on $tracking"
     git -C "$DR_REPO" log --oneline --no-decorate "HEAD..$tracking" | sed 's/^/  /'
     printf '\n  %sReview:  dr-diff        Accept:  dr-merge%s\n' "$_DR_DIM" "$_DR_OFF" >&2
 fi
 
-# Worth saying, because the agent is working from a clone that predates these and
-# will conflict with them sooner or later.
+# Say it, because the agent works from a clone that is older than these, and
+# sooner or later the two conflict.
 #
-# Which advice depends on where the commits have got to. dr-send leaves them on
-# refs/remotes/host/<branch> inside the mound and does NOT move the agent's
-# branch, so draugr/<branch> stays behind afterwards - and this used to answer
-# "send them with dr-send" every time, including immediately after a dr-send that
-# had worked. Re-sending changed nothing, so the loop had no exit.
+# The advice depends on where the commits are. dr-send leaves them on
+# refs/remotes/host/<branch> inside the mound, and does NOT move the branch of
+# the agent. Thus draugr/<branch> stays behind. Before, this always said "send
+# them with dr-send", also directly after a dr-send that worked. A second send
+# changed nothing, so the loop had no exit.
 if [ "$behind" -gt 0 ] && [ -z "$quiet" ]; then
     if [ "$(dr_send_state)" = unmerged ]; then
         dr_info "the mound has your $behind commit(s) on host/$DRAUGR_BRANCH, not merged"
         printf '  %sThe agent decides when to take them:  git merge host/%s%s\n' \
             "$_DR_DIM" "$DRAUGR_BRANCH" "$_DR_OFF" >&2
-        printf '  %sOr do it for it:  dr-send --merge%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sOr do it for the agent:  dr-send --merge%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     else
-        dr_info "you have $behind commit(s) the mound does not - send them with:  dr-send"
+        dr_info "you have $behind commit(s) that the mound does not have. Send them with:  dr-send"
     fi
 fi
 
 # --- the branches nobody was looking at -------------------------------------
 #
-# Reported unconditionally, including under --quiet, because this is the case
-# that used to be silent: the fetch brought these down, and every command then
-# claimed there was nothing new. An agent inventing its own branch name is
-# ordinary behaviour, not an error - so this informs rather than warns, except
-# when the tracked branch is empty and these are the only work there is.
+# Always reported, also with --quiet, because this case was silent before. The
+# fetch got these, and then each command said that there was nothing new. An
+# agent that makes its own branch name is normal, not an error. Thus this
+# informs, and does not warn. The exception: the tracked branch is empty, and
+# these are the only work.
 mapfile -t _others < <(dr_other_branches)
 if [ ${#_others[@]} -gt 0 ]; then
     if [ "$ahead" -eq 0 ]; then
-        dr_warn "the agent worked on ${#_others[@]} branch(es) you are NOT tracking:"
+        dr_warn "the agent worked on ${#_others[@]} branch(es) that you do NOT track:"
     else
-        dr_info "the agent also worked on ${#_others[@]} branch(es) you are not tracking:"
+        dr_info "the agent also worked on ${#_others[@]} branch(es) that you do not track:"
     fi
     for _entry in "${_others[@]}"; do
         printf '    %-44s %s commit(s)\n' "${_entry% *}" "${_entry##* }" >&2
     done
 
-    # DRAUGR_BRANCH is an ordinary config key, so the environment overrides it
-    # for one command. No new flag is needed to review one of these.
+    # DRAUGR_BRANCH is an ordinary configuration key, so the environment can
+    # change it for one command. A review of one of these needs no new flag.
     _first=${_others[0]%% *}
     printf '  %sReview one with:  DRAUGR_BRANCH=%s dr-diff%s\n' \
         "$_DR_DIM" "${_first#"$DRAUGR_REMOTE"/}" "$_DR_OFF" >&2
-    printf '  %sThese are already fetched - they are on your disk, not only the mound.%s\n' \
+    printf '  %sThese are already fetched. They are on your disk, not only in the mound.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
 fi
 

@@ -1,22 +1,24 @@
-# write-manifest.ps1 - what this guest actually has, written where anyone can find it.
+# write-manifest.ps1: what this guest really has, written where everybody can
+# find it.
 #
-# Run it IN THE GUEST, any time. Apart from the two files it writes it is read-only, so it
-# is also the fastest answer to "what is on this VM" - for a human opening it, and for the
-# agent, which parses the JSON instead of probing fifteen things itself.
+# Run it IN THE GUEST, at any time. Except for the two files that it writes, it
+# is read-only. Thus it is also the fastest answer to "what is on this VM?", for
+# a person who opens it, and for the agent, which parses the JSON, and does not
+# probe fifteen things itself.
 #
-# IT INSPECTS; IT DOES NOT TRUST. Nothing is reported because an installer said it
-# installed something: every line is read back from the running system - versions by
-# running the binary, services by their state, settings out of the registry. A manifest
-# assembled from install-time claims drifts the first time someone changes something by
-# hand, and then it lies with confidence. This one can be stale, but it cannot be wrong:
-# re-run it and it is current.
+# IT INSPECTS, AND DOES NOT TRUST. It reports nothing only because an installer
+# said that it installed something. Each line comes from the running system:
+# versions from a run of the binary, services from their state, values from the
+# registry. A manifest from claims at install time drifts at the first manual
+# change, and then it lies with confidence. This one can be old, but it cannot
+# be wrong. Run it again, and it is current.
 #
-# Two files, same content, because there are two readers:
+# Two files, with the same content, because there are two readers:
 #   manifest.json  the agent parses this
-#   MANIFEST.txt   a human opens this
+#   MANIFEST.txt   a person opens this
 #
-# C:\Draugr rather than somewhere under ProgramData, for the same reason TEMP moves to
-# C:\temp: a path you can see is a path you remember to look at.
+# C:\Draugr, not a place under ProgramData, for the same reason that TEMP moves
+# to C:\temp. You remember to look at a path that you can see.
 #
 #   powershell -ExecutionPolicy Bypass -File .\write-manifest.ps1
 #   powershell -ExecutionPolicy Bypass -File .\write-manifest.ps1 -Print
@@ -25,10 +27,10 @@ param(
     [string]$Msys = 'C:\msys64',
     [string]$AhkDir = 'C:\Tools\AutoHotkey',
     [int]$McpPort = 8765,
-    # The NCSI fiction that install-windows-online.ps1 installs. Named here so the
-    # two scripts cannot drift apart silently: if that script's defaults move and
-    # these do not, this one stops recognising the route and says so loudly, which
-    # is the right failure. Keep them equal.
+    # The NCSI fiction that install-windows-online.ps1 installs. Named here, so
+    # that the two scripts cannot become different silently. If the defaults of
+    # that script change and these do not, this one stops to recognize the
+    # route, and says so clearly. That is the correct failure. Keep them equal.
     [string]$NcsiGateway = '192.168.63.1',
     [string]$NcsiGatewayMac = '02-00-00-00-63-01',
     [switch]$Print
@@ -37,10 +39,11 @@ param(
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 
-# Get-Reg, never R: `R` is the built-in alias for Invoke-History, and an alias beats a
-# function in PowerShell's resolution order - a helper called R silently becomes a
-# different command. It also always returns exactly one value, because returning nothing
-# shifts the caller's arguments and turns the next format string into a swallowed error.
+# Get-Reg, never R. `R` is the built-in alias for Invoke-History, and in the
+# resolution order of PowerShell, an alias wins over a function. A helper called
+# R silently becomes a different command. It also always returns exactly one
+# value. With no value, the arguments of the caller move, and the next format
+# string becomes a hidden error.
 function Get-Reg([string]$p, [string]$n) {
     $v = (Get-ItemProperty -Path $p -Name $n -EA SilentlyContinue).$n
     if ($null -eq $v -or "$v" -eq '') { return $null }
@@ -50,21 +53,21 @@ function Get-Reg([string]$p, [string]$n) {
 $bash = Join-Path $Msys 'usr\bin\bash.exe'
 function Invoke-Msys([string]$cmd) {
     if (-not (Test-Path $bash)) { return @() }
-    # Subshell + </dev/null: over ssh there is no terminal, and the redirect must wrap the
-    # WHOLE pipeline or it applies only to its last stage.
+    # Subshell + </dev/null. Through ssh, there is no terminal. The redirect
+    # must be around the WHOLE pipeline, or it applies only to its last stage.
     & $bash -lc "( $cmd ) < /dev/null" 2>$null
 }
-# Summing Length over a directory tree counts every ENTRY, so a hard-linked file is
-# counted once per link and the answer is too big. Fine for trees without hard links
-# (uv, AutoHotkey); wrong for MSYS2, which has 162 of them - measured:
-# Get-ChildItem says 1027 MB, `du -sm` says 487 MB, `du --count-links` says 1069 MB.
-# The disk only holds 487.
+# A sum of Length over a directory tree counts each ENTRY. Thus it counts a
+# hard-linked file once for each link, and the answer is too large. That is good
+# for trees without hard links (uv, AutoHotkey), but wrong for MSYS2, which has
+# 162 of them. A test showed this: Get-ChildItem says 1027 MB, `du -sm` says 487
+# MB, `du --count-links` says 1069 MB. The disk holds only 487.
 function Get-Mb([string]$p) {
     if (-not (Test-Path $p)) { return 0 }
     [math]::Round((Get-ChildItem $p -Recurse -File -Force -EA SilentlyContinue |
         Measure-Object Length -Sum).Sum / 1MB, 1)
 }
-# For anything that may contain hard links, ask du, which counts each inode once.
+# For each tree that can have hard links, ask du, which counts each inode once.
 function Get-MbOnDisk([string]$winPath) {
     $u = ($winPath -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
     $u = $u -replace '^/([A-Za-z])', '/$1'
@@ -85,13 +88,14 @@ foreach ($line in (Invoke-Msys 'pacman -Q 2>/dev/null')) {
     $p = "$line".Trim() -split '\s+'
     if ($p.Count -ge 2) { $pkgCount++; $pkgList += "$($p[0]) $($p[1])" }
 }
-# Only the mirrorlists pacman.conf actually Includes. Globbing mirrorlist.* instead picks
-# up .orig and .pacnew copies that pacman never reads, and reports a guest pinned to one
-# host as pinned to 31 - measured, and it is the same trap install-msys2.ps1 documents.
+# Only the mirrorlists that pacman.conf Includes. A glob of mirrorlist.* also
+# finds .orig and .pacnew copies that pacman never reads. Then it reports a
+# guest pinned to one host as pinned to 31. A test showed this, and
+# install-msys2.ps1 documents the same trap.
 #
-# Read in PowerShell rather than through a shell pipeline: an awk/xargs version of this
-# returned nothing at all, because the quoting has to survive PowerShell, bash -lc and awk
-# in turn. Get-Content has no such gauntlet.
+# Read in PowerShell, not through a shell pipeline. An awk/xargs version of this
+# returned nothing, because the quotes must survive PowerShell, bash -lc, and
+# awk, one after the other. Get-Content has no such problem.
 $mirrors = @()
 $pacConf = Join-Path $Msys 'etc\pacman.conf'
 foreach ($l in (Get-Content $pacConf -EA SilentlyContinue)) {
@@ -126,22 +130,25 @@ $listening = @(Get-NetTCPConnection -State Listen -EA SilentlyContinue |
 schtasks /query /tn 'windows-mcp-server' 2>$null | Out-Null
 $mcpTask = $(if ($LASTEXITCODE -eq 0) { 'registered' } else { 'absent' })
 
-# A default route is not by itself a way out, and since install-windows-online.ps1 this
-# guest HAS one on purpose: Windows will not judge an interface online unless it can see a
-# route through it, so the route points at an address with a hand-written permanent
-# neighbour and nothing behind it.
+# A default route alone is not a way out. Since install-windows-online.ps1, this
+# guest HAS one, on purpose. Windows judges an interface online only if it can
+# see a route through it. Thus the route points to an address with a manually
+# written permanent neighbor, and nothing behind it.
 #
-# MEASURED on a guest configured that way: a direct connection to 1.1.1.1 still
-# returns 000 - after 21.07 s of trying to reach that gateway, where an unconfigured guest
-# fails in 0 ms. The route changes how long the failure takes, not whether it fails.
+# A TEST on a guest with that configuration: a direct connection to 1.1.1.1
+# still returns 000, after 21.07 s of attempts to reach that gateway. A guest
+# without the configuration fails in 0 ms. The route changes the time of the
+# failure, not the failure.
 #
-# So this reports the route instead of counting it, and judges the one thing that matters:
-# is the next hop that fiction, or something that might really forward? A gateway that
-# exists answers ARP and its neighbour goes Reachable. The fiction stays Permanent, because
-# nothing ever resolved it - it was written there by hand.
+# Thus this reports the route, and does not count it. It judges the one
+# important thing: is the next hop that fiction, or something that can really
+# forward? A gateway that exists answers ARP, and its neighbor becomes
+# Reachable. The fiction stays Permanent, because nothing ever resolved it.
+# Somebody wrote it there by hand.
 #
-# Before this, a correctly built guest's manifest read "default route present: True
-# (must be False)", which is a file whose whole purpose is to be believed crying wolf.
+# Before this, the manifest of a correctly built guest said "default route
+# present: True (must be False)". People must believe this file, and it gave a
+# false alarm.
 $dr = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -EA SilentlyContinue | Select-Object -First 1
 $routeVia = $null
 $routeNeighbour = $null
@@ -150,8 +157,8 @@ if ($dr) {
     $routeVia = $dr.NextHop
     $nb = Get-NetNeighbor -IPAddress $dr.NextHop -EA SilentlyContinue | Select-Object -First 1
     if ($nb) { $routeNeighbour = "$($nb.State) $($nb.LinkLayerAddress)" }
-    # -replace strips the separator so 02-00-.. and 02:00:.. compare equal; -eq on strings
-    # is case-insensitive in PowerShell, which is what a MAC wants.
+    # -replace removes the separator, so that 02-00-.. and 02:00:.. are equal.
+    # In PowerShell, -eq on strings ignores case, and a MAC needs that.
     $routeIsFiction = ($routeVia -eq $NcsiGateway -and $null -ne $nb -and
                        $nb.State -eq 'Permanent' -and
                        ($nb.LinkLayerAddress -replace '[:-]', '') -eq ($NcsiGatewayMac -replace '[:-]', ''))
@@ -188,7 +195,8 @@ $m = [ordered]@{
         }
         python = [ordered]@{
             uv          = $uvVer
-            # uv keeps a .temp scratch directory beside the interpreters; it is not one.
+            # uv keeps a .temp scratch directory next to the interpreters. It is
+            # not one.
             interpreter = @(Get-ChildItem "$env:APPDATA\uv\python" -Directory -EA SilentlyContinue |
                             Where-Object { $_.Name -notlike '.*' } | ForEach-Object { $_.Name })
             tools       = $pyTools
@@ -214,15 +222,16 @@ $m = [ordered]@{
     }
     settings = [ordered]@{
         temp           = [Environment]::GetEnvironmentVariable('TEMP', 'Machine')
-        # THREE OF THESE REGISTRY VALUES MEAN THE OPPOSITE OF WHAT A FIELD NAMED AFTER THEM
-        # WOULD SUGGEST, so they are rendered as words rather than printed raw. A manifest
-        # exists to be read at a glance, and a line that reads as its own opposite is worse
-        # than no line at all - `windowsUpdate 1` for NoAutoUpdate=1 was doing exactly that.
-        #   Hidden:       1 = show, 2 = hide          (not a boolean, and 2 reads as "more")
+        # THREE OF THESE REGISTRY VALUES MEAN THE OPPOSITE OF THEIR FIELD NAMES.
+        # Thus they show as words, not as raw values. People read a manifest
+        # quickly. A line that looks like its own opposite is worse than no
+        # line. `windowsUpdate 1` for NoAutoUpdate=1 did exactly that.
+        #   Hidden:       1 = show, 2 = hide          (not a boolean, and 2 looks like "more")
         #   DontShowUI:   1 = the WER dialog is gone
         #   NoAutoUpdate: 1 = automatic updates are off
-        # showExtensions was already done this way, from HideFileExt inverted; the rest of
-        # the fields are named positively and print their raw value, which is honest.
+        # showExtensions already worked this way, from HideFileExt inverted. The
+        # other fields have positive names, and print their raw value. That is
+        # correct.
         showHidden     = $(if ((Get-Reg $adv 'Hidden') -eq '1') { 'yes' } else { 'no' })
         showExtensions = $(if ((Get-Reg $adv 'HideFileExt') -eq '0') { 'yes' } else { 'no' })
         cursorSize     = (Get-Reg 'HKCU:\Control Panel\Cursors' 'CursorBaseSize')
@@ -231,19 +240,21 @@ $m = [ordered]@{
         screenSaver    = (Get-Reg $desk 'ScreenSaveActive')
         toasts         = (Get-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications' 'ToastEnabled')
         longPaths      = (Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' 'LongPathsEnabled')
-        # Whether a mounted vault is visible to Explorer, which is how a person looks at
-        # one. '(not set)' here means mount-vault's drives exist only for whichever
-        # elevation level mapped them. See install-guest-base.ps1 section 9b.
+        # Whether Explorer can see a mounted vault. A person looks at a vault
+        # with Explorer. '(not set)' here means that the drives of mount-vault
+        # exist only for the elevation level that mapped them. See
+        # install-guest-base.ps1 section 9b.
         linkedDrives   = (Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'EnableLinkedConnections')
         werDialog      = $(if ((Get-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' 'DontShowUI') -eq '1') { 'suppressed' } else { 'shown' })
         codepage       = (Get-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage' 'ACP')
         autoUpdate     = $(if ((Get-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' 'NoAutoUpdate') -eq '1') { 'blocked' } else { 'automatic' })
-        # BOTH HALVES, because they fail separately and for different reasons. The zone is a
-        # deliberate base setting that a frozen parent hands down and no child can change, so
-        # the record of it belongs here. The UTC clock is the half that must agree with the
-        # host: together they make a timestamp that looks wrong diagnosable, where either
-        # alone just looks odd. An adapterless guest never runs w32time, so UTC is the
-        # hypervisor's and a drift here means something is wrong with the host, not the VM.
+        # BOTH HALVES, because they fail separately, for different reasons. The
+        # zone is a deliberate base value that a frozen parent gives down, so
+        # its record belongs here. The UTC clock is the half that must agree
+        # with the host. Together, they let you diagnose a time stamp that looks
+        # wrong. Each one alone only looks strange. A guest without an adapter
+        # never runs w32time. Thus UTC comes from the hypervisor, and a drift
+        # here means a problem with the host, not with the VM.
         timezone       = ("{0} (UTC{1})" -f (Get-TimeZone).Id, (Get-TimeZone).BaseUtcOffset)
         clockUtc       = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm')
     }
@@ -256,35 +267,36 @@ if (-not (Test-Path $Dir)) { New-Item -ItemType Directory -Force -Path $Dir | Ou
 # --- the human half ------------------------------------------------------------------
 $t = New-Object Text.StringBuilder
 function Add-Line($s) { [void]$t.AppendLine("$s") }
-Add-Line 'Draugr forge guest - what is on this machine'
+Add-Line 'Draugr forge guest: what is on this machine'
 Add-Line "generated $($m.generated) by $($m.generator)"
 Add-Line ''
 Add-Line "MACHINE   $($m.machine.name)  $($m.machine.os)  edition $($m.machine.edition)"
 Add-Line "          $($m.machine.cpus) cpus, $($m.machine.ramGb) GB RAM, $($m.machine.diskFreeGb) of $($m.machine.diskTotalGb) GB free"
 Add-Line ''
-Add-Line 'EGRESS    this VM has no adapter of its own; everything leaves through the proxy'
+Add-Line 'EGRESS    this VM has no own adapter. All traffic leaves through the proxy'
 Add-Line "          proxy       $($m.egress.proxyWinInet)"
 Add-Line "          adapters    $($m.egress.adapters -join ', ')"
 if (-not $m.egress.defaultRoute) {
     Add-Line "          default route  none"
 } elseif ($m.egress.defaultRouteIsFiction) {
-    Add-Line "          default route  via $($m.egress.defaultRouteVia), neighbour $($m.egress.defaultRouteNeighbour)"
+    Add-Line "          default route  via $($m.egress.defaultRouteVia), neighbor $($m.egress.defaultRouteNeighbour)"
     Add-Line "                         EXPECTED. That address is the NCSI fiction, not a way out:"
-    Add-Line "                         a hand-written neighbour with nothing behind it, there only so"
-    Add-Line "                         that Windows will judge this interface online. Egress is still"
-    Add-Line "                         the proxy and nothing else."
+    Add-Line "                         a manually written neighbor with nothing behind it. It exists"
+    Add-Line "                         only so that Windows judges this interface online. Egress is"
+    Add-Line "                         still only the proxy."
 } else {
-    Add-Line "          default route  via $($m.egress.defaultRouteVia), neighbour $($m.egress.defaultRouteNeighbour)"
-    Add-Line "                         *** NOT the NCSI fiction. This VM may have a real way out."
-    Add-Line "                         *** Check that before trusting anything else in this file."
+    Add-Line "          default route  via $($m.egress.defaultRouteVia), neighbor $($m.egress.defaultRouteNeighbour)"
+    Add-Line "                         *** NOT the NCSI fiction. This VM possibly has a real way out."
+    Add-Line "                         *** Look at that before you trust anything else in this file."
 }
 Add-Line ''
 Add-Line 'SOFTWARE'
 if ($m.software.msys2.root) {
     Add-Line "          MSYS2       $($m.software.msys2.packages) packages, $($m.software.msys2.sizeMb) MB, pinned to $($m.software.msys2.pinnedTo -join ', ')"
 } else {
-    # Without this the line read "0 packages, 0 MB, pinned to" and stopped there,
-    # which reads as a broken script rather than as an absent package manager.
+    # Without this, the line said "0 packages, 0 MB, pinned to", and stopped
+    # there. That looks like a broken script, not like a missing package
+    # manager.
     Add-Line "          MSYS2       not installed"
 }
 Add-Line "          Python      $($m.software.python.uv), $($m.software.python.interpreter -join ', '), $($m.software.python.sizeMb) MB (cache $($m.software.python.cacheMb) MB)"
@@ -297,20 +309,21 @@ Add-Line "          listening on loopback: $($m.services.listeningLoopback -join
 Add-Line "          UIA MCP server on port $($m.services.mcpPort), login task $($m.services.mcpTask)"
 Add-Line "          LanmanServer $($m.services.lanmanServer), search indexer $($m.services.searchIndexer)"
 Add-Line ''
-Add-Line 'SETTINGS  (these exist for the agent rather than for a person)'
-# An unset registry value renders as an empty column, which reads as "zero" rather than
-# "never configured" - and those mean opposite things for most of these.
+Add-Line 'SETTINGS  (these exist for the agent, not for a person)'
+# An unset registry value shows as an empty column. That looks like "zero", not
+# like "never configured", and for most of these, the two have opposite
+# meanings.
 foreach ($k in $m.settings.Keys) {
     $v = $m.settings[$k]
     if ($null -eq $v -or "$v" -eq '') { $v = '(not set)' }
     Add-Line ("          {0,-15} {1}" -f $k, $v)
 }
 Add-Line ''
-Add-Line 'NOT HERE, DELIBERATELY: the Epic account, the engine versions and Visual Studio are'
+Add-Line 'NOT HERE, ON PURPOSE: the Epic account, the engine versions, and Visual Studio are'
 Add-Line 'layers on top of this base, not part of it. The full package list is in manifest.json.'
 Add-Line ''
-Add-Line 'Re-run guest\write-manifest.ps1 to refresh. It reads the machine; it does not trust'
-Add-Line 'any installer to have told the truth.'
+Add-Line 'To refresh, run guest\write-manifest.ps1 again. It reads the machine. It does not'
+Add-Line 'trust that an installer told the truth.'
 
 [IO.File]::WriteAllText((Join-Path $Dir 'MANIFEST.txt'), $t.ToString())
 Write-Host "manifest written: $Dir\manifest.json and $Dir\MANIFEST.txt"

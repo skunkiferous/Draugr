@@ -1,11 +1,10 @@
 # >>> draugr (managed) >>>
-# WSL has its own ~/.ssh/config. `sbx setup ssh` configures the Windows client
-# only, so without this block neither `ssh <name>.sbx` nor git's ssh:// transport
-# works from WSL - which is where Draugr runs. dr-setup writes it.
+# WSL has its own ~/.ssh/config. `sbx setup ssh` configures only the Windows
+# client. Thus without this block, `ssh <name>.sbx` and the ssh:// transport of
+# git do not work from WSL, where Draugr runs. dr-setup writes it.
 #
-# ProxyCommand shells out to sbx.exe exactly the way an interactive login does,
-# so there is no TCP port involved, nothing to elevate, and a stopped sandbox is
-# started automatically.
+# ProxyCommand calls sbx.exe exactly as an interactive login does. Thus it uses
+# no TCP port, needs no elevation, and starts a stopped sandbox automatically.
 Host *.sbx
     User _default_user_
     ProxyCommand "@SBX_EXE@" ssh proxy %n
@@ -16,11 +15,11 @@ Host *.sbx
     ControlPath none
     UserKnownHostsFile "@KNOWN_HOSTS@"
     StrictHostKeyChecking accept-new
-    # An allowlist, never "SendEnv *". Measured against sbx 0.37.1: the proxy
-    # honours no AcceptEnv at all, so nothing crosses today - not even LANG.
-    # That made the wildcard pure downside. It forwarded nothing, while standing
-    # ready to forward every variable in the WSL environment - AWS_SECRET_ACCESS_KEY
-    # and friends included - the day a future sbx starts accepting them. Locale is
-    # the only thing worth sending to a sandbox, and it cannot grow into a leak.
+    # An allowlist, never "SendEnv *". A test on sbx 0.37.1 showed that the
+    # proxy honors no AcceptEnv. Thus nothing crosses today, not even LANG. The
+    # wildcard only had a cost. It forwarded nothing, but it was ready to forward
+    # each variable in the WSL environment, AWS_SECRET_ACCESS_KEY included, on
+    # the day that a future sbx accepts them. Locale is the only useful thing to
+    # send to a sandbox, and it cannot grow into a leak.
     SendEnv LANG LC_*
 # <<< draugr (managed) <<<

@@ -1,13 +1,13 @@
 #!/usr/bin/env bats
 # Run-state dependencies: claims, the optional lock, and the counted stop.
 #
-# The premise is one rule, and every test here is a consequence of it: a claim
-# counts only while its claimant is real - that repository's mound running, or
-# the claim younger than DR_DEP_GRACE. Nothing is cleaned up, so a reboot, a
-# crash and a dr-stop all release claims by the same mechanism.
+# The premise is one rule, and each test here comes from it. A claim counts only
+# while its claimant is real: the mound of that repository runs, or the claim is
+# younger than DR_DEP_GRACE. Nothing gets cleaned up. Thus a reboot, a crash,
+# and a dr-stop all release claims by the same mechanism.
 #
-# The grace is set to 0 in most tests, because a grace that covers everything
-# would make every claim valid and the suite would pass for the wrong reason.
+# Most tests set the grace to 0. A grace that covers all makes each claim valid,
+# and then the suite passes for the wrong reason.
 
 load helper
 
@@ -16,8 +16,8 @@ setup() {
     REPO=$(dr_make_win_repo app) || skip "no writable path under /mnt/<drive> on this machine"
     GW=$(dr_make_win_repo gw) || skip "no writable path under /mnt/<drive> on this machine"
 
-    # The gateway repo is a dependency, so it needs a config of its own and that
-    # config has to be trusted - which is the point of dr_dep_trusted.
+    # The gateway repo is a dependency. Thus it needs its own configuration, and
+    # that configuration must be trusted. That is the purpose of dr_dep_trusted.
     printf 'DRAUGR_SANDBOX=gwmound\nDRAUGR_AGENT=shell\n' > "$GW/.draugr.conf"
     printf 'DRAUGR_REQUIRES=%s\n' "$GW" > "$REPO/.draugr.conf"
     git -C "$GW" add -A && git -C "$GW" commit -qm conf
@@ -30,16 +30,16 @@ setup() {
     dr_fake_sbx_root
     dr_load_common
 
-    # Both configs accepted once, the way a person would with dr-trust, so that
-    # the tests exercise the mechanism rather than the refusal.
+    # Both configurations are accepted once, as a person does with dr-trust.
+    # Thus the tests exercise the mechanism, not the refusal.
     dr_trust_add "$REPO/.draugr.conf"
     dr_trust_add "$GW/.draugr.conf"
 }
 
-# Wardens outlive the command that starts them - that is their job - so a test
-# that starts one has to stop it, or a suite run leaves a poll loop per test
-# behind. By pid file rather than by pkill pattern: this kills the ones THIS
-# test started and nothing that happens to look like them.
+# Wardens stay after the command that starts them. That is their job. Thus a
+# test that starts one must stop it. If not, a suite run leaves one poll loop
+# for each test. By pid file, not by a pkill pattern. This kills only the ones
+# that THIS test started, and nothing that only looks like them.
 teardown() {
     local pidfile pid
     for pidfile in "$DR_RUN_DIR"/*/warden.pid; do
@@ -52,7 +52,7 @@ teardown() {
 
 calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 
-# --- resolving what a repo requires -------------------------------------------
+# --- what a repo requires ----------------------------------------------------
 
 @test "dr_dep_requires: an absolute path is itself" {
     DR_REPO=$REPO DRAUGR_REQUIRES=$GW run dr_dep_requires "$REPO"
@@ -218,7 +218,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     printf 'DRAUGR_SANDBOX=gwmound\n# changed\n' > "$GW/.draugr.conf"
     run dr-dep up
     [ "$status" -ne 0 ]
-    [[ "$output" == *untrusted* ]]
+    [[ "$output" == *"not trusted"* ]]
     [[ "$output" == *dr-trust* ]]
 }
 
@@ -241,8 +241,8 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 
 # --- the warden ---------------------------------------------------------------
 #
-# Driven one tick at a time with --once, so nothing here sleeps and no test
-# depends on wall-clock timing.
+# One tick at a time, with --once. Thus nothing here sleeps, and no test depends
+# on wall-clock time.
 
 @test "warden: holds the mound while somebody is using it" {
     dr_dep_claim gwmound "$REPO" draugr-app false
@@ -327,11 +327,11 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     [[ "$output" == *cycle* ]]
 }
 
-# --- the dependency's own config is the authority ------------------------------
+# --- the own configuration of the dependency is the authority ---------------
 
 @test "a dependency is started under ITS name, even with ours in the environment" {
-    # dr_hook exports every DRAUGR_* before running a hook, and they stay
-    # exported for the rest of the process - so this is not a hypothetical.
+    # dr_hook exports each DRAUGR_* before it runs a hook, and they stay
+    # exported for the rest of the process. Thus this is a real case.
     DRAUGR_SANDBOX=draugr-app run env DRAUGR_SANDBOX=draugr-app dr-dep up
     [ "$status" -eq 0 ]
     [ -n "$(dr_dep_claims gwmound)" ]

@@ -1,10 +1,9 @@
 #!/usr/bin/env bats
 # What the agent can reach, and what can reach the host back.
 #
-# Two questions a user asked that turned out to have measurable answers: are git
-# stashes visible inside the mound, and can the agent weaken Draugr's own
-# configuration? Both are pinned here so a future change cannot quietly reverse
-# them.
+# A user asked two questions, and tests can answer both. Are git stashes visible
+# in the mound? Can the agent weaken the own configuration of Draugr? Both are
+# pinned here, so that a future change cannot silently reverse them.
 
 load helper
 
@@ -26,8 +25,8 @@ teardown() { dr_test_teardown; }
 
     git clone -q "$repo" "$DR_TMP/clone"
     run git -C "$DR_TMP/clone" stash list
-    # Genuinely absent from the clone - which is the half people assume is the
-    # whole story.
+    # Really absent from the clone. People think that this half is the full
+    # story.
     [ -z "$output" ]
 }
 
@@ -37,8 +36,8 @@ teardown() { dr_test_teardown; }
     git -C "$repo" add -A
     git -C "$repo" stash -q
 
-    # .git is inside the read-only mount, so this is what the agent can do. If
-    # this ever stops working, SECURITY.md needs revisiting - not celebrating.
+    # .git is in the read-only mount, so the agent can do this. If this stops
+    # working, read SECURITY.md again. Do not celebrate.
     run git --git-dir="$repo/.git" stash show -p
     [[ "$output" == *"hunter2"* ]]
 }
@@ -62,8 +61,8 @@ teardown() { dr_test_teardown; }
     git -C "$repo" add -A
     git -C "$repo" stash -q
 
-    # A stash is not evidence of a secret; blocking on one would train people to
-    # pass --force. Only credential hits block.
+    # A stash does not prove a secret. A block on one teaches people to give
+    # --force. Only credential hits block.
     run dr-scan
     [ "$status" -eq 0 ]
 }
@@ -86,9 +85,9 @@ teardown() { dr_test_teardown; }
     git -C "$repo" add -A
     git -C "$repo" stash -q
 
-    # Documenting the gap rather than pretending it is closed: the file is gone
-    # from the working tree, so the scan cannot see it - while it stays readable
-    # through the mount. The stash warning above is what stands in for it.
+    # This documents the gap, and does not act as if it is closed. The file is
+    # gone from the working tree, so the scan cannot see it. But it stays
+    # readable through the mount. The stash warning above replaces the scan.
     run dr-scan
     [[ "$output" != *"secrets.env"* ]]
     [[ "$output" == *"stash"* ]]
@@ -101,11 +100,11 @@ teardown() { dr_test_teardown; }
     cd "$repo"
     dr-init >/dev/null 2>&1
 
-    # Exactly what a merged, agent-authored change would look like.
+    # Exactly like a merged change that the agent wrote.
     printf '\nDRAUGR_SCAN=false\nDRAUGR_CLONE=false\n' >> "$repo/.draugr.conf"
 
     run dr-config
-    [[ "$output" == *"untrusted"* ]]
+    [[ "$output" == *"not trusted"* ]]
 }
 
 @test "config: the weakened settings do not take effect" {
@@ -114,7 +113,7 @@ teardown() { dr_test_teardown; }
     dr-init >/dev/null 2>&1
     printf '\nDRAUGR_SCAN=false\n' >> "$repo/.draugr.conf"
 
-    # Refusing to source is only useful if the refusal means the old value wins.
+    # A refusal to source is useful only if the old value then wins.
     run dr-config
     [[ "$output" == *"DRAUGR_SCAN"*"true"* ]]
 }
@@ -129,8 +128,8 @@ teardown() { dr_test_teardown; }
 
     DR_MOCK_STATE=running run dr-up
     [ "$status" -ne 0 ]
-    [[ "$output" == *"untrusted hook"* ]]
-    # The point: it did not execute on the host before being refused.
+    [[ "$output" == *"a hook that is not trusted"* ]]
+    # The purpose: it did not execute on the host before the refusal.
     [ ! -f "$DR_TMP/HOOK-RAN" ]
 }
 
@@ -157,8 +156,8 @@ teardown() { dr_test_teardown; }
     chmod +x "$repo/.draugr/hooks/pre-up"
     dr-trust "$repo/.draugr/hooks/pre-up" --yes >/dev/null 2>&1
 
-    # Trust is per content, so a later change has to be accepted again - which is
-    # what makes this useful against a merge rather than only a first clone.
+    # Trust is for each content, so a later change must be accepted again. Thus
+    # this is useful against a merge, not only on a first clone.
     printf '#!/bin/sh\ntouch "%s/HOOK-RAN"\n' "$DR_TMP" > "$repo/.draugr/hooks/pre-up"
 
     DR_MOCK_STATE=running run dr-up
@@ -167,15 +166,15 @@ teardown() { dr_test_teardown; }
 }
 
 @test "hook: a non-executable hook is ignored, not refused" {
-    # dr_hook directly, in $DR_TMP rather than a repo on a Windows drive: files
-    # on /mnt/c are mode 777 and chmod -x does nothing there, so this could not
-    # test what it claims to. $DR_TMP is an ordinary Linux filesystem.
+    # dr_hook directly, in $DR_TMP, not in a repo on a Windows drive. Files on
+    # /mnt/c are mode 777, and chmod -x does nothing there. Thus there, this
+    # cannot test its claim. $DR_TMP is a normal Linux filesystem.
     mkdir -p "$DR_TMP/repo/.draugr/hooks"
     printf '#!/bin/sh\ntouch "%s/HOOK-RAN"\n' "$DR_TMP" > "$DR_TMP/repo/.draugr/hooks/pre-up"
     chmod -x "$DR_TMP/repo/.draugr/hooks/pre-up"
 
-    # Hooks are opt-in, so an unexecutable one is nothing at all - demanding
-    # trust for it would be asking about a file nothing is going to read.
+    # Hooks are opt-in, so a hook that is not executable is nothing. A trust
+    # question for it asks about a file that nothing reads.
     run dr_hook pre-up "$DR_TMP/repo"
     [ "$status" -eq 0 ]
     [ ! -f "$DR_TMP/HOOK-RAN" ]
@@ -186,7 +185,7 @@ teardown() { dr_test_teardown; }
     printf '#!/bin/sh\ntouch "%s/HOOK-RAN"\n' "$DR_TMP" > "$DR_TMP/repo/.draugr/hooks/pre-up"
     chmod +x "$DR_TMP/repo/.draugr/hooks/pre-up"
 
-    # The guard lives in dr_hook, not in any one command, so every caller gets it.
+    # The guard is in dr_hook, not in one command, so each caller gets it.
     run dr_hook pre-up "$DR_TMP/repo"
     [ "$status" -ne 0 ]
     [ ! -f "$DR_TMP/HOOK-RAN" ]
@@ -209,8 +208,8 @@ teardown() { dr_test_teardown; }
     cd "$repo"
     dr-init >/dev/null 2>&1
 
-    # It is gitignored, which is what makes it the right place for anything you
-    # do not want a repository able to influence.
+    # It is gitignored. Thus it is the right place for all that a repository
+    # must not change.
     run git -C "$repo" check-ignore .draugr.local.conf
     [ "$status" -eq 0 ]
 }
@@ -218,18 +217,18 @@ teardown() { dr_test_teardown; }
 # --- what leaves the host on the ssh transport --------------------------------
 
 @test "ssh snippet: no wildcard SendEnv" {
-    # "SendEnv *" would offer every variable in the WSL environment to the
-    # sandbox. Measured against sbx 0.37.1 the proxy accepts none of them, so it
-    # leaked nothing - but that is a property of today's sbx, not of the config,
-    # and the config is the half this project controls.
+    # "SendEnv *" offers each variable in the WSL environment to the sandbox. A
+    # test on sbx 0.37.1 showed that the proxy accepts none of them, so nothing
+    # leaked. But that is a property of the current sbx, not of the
+    # configuration. This project controls the configuration.
     run grep -E "^[[:space:]]*SendEnv" "$BATS_TEST_DIRNAME/../share/ssh-config.snippet"
     [ "$status" -eq 0 ]
     [[ "$output" != *"SendEnv *"* ]]
 }
 
 @test "ssh snippet: SendEnv is an explicit allowlist" {
-    # Locale is the only thing worth forwarding to a sandbox, and an allowlist
-    # cannot quietly grow into a credential leak the way a wildcard can.
+    # Locale is the only useful thing to forward to a sandbox. An allowlist
+    # cannot silently grow into a credential leak, as a wildcard can.
     run grep -E "^[[:space:]]*SendEnv[[:space:]]+LANG[[:space:]]+LC_\*[[:space:]]*$" \
         "$BATS_TEST_DIRNAME/../share/ssh-config.snippet"
     [ "$status" -eq 0 ]

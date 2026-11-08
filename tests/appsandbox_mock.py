@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
-"""A stand-in for the AppSandbox daemon, so the forge's PowerShell can be RUN rather than read.
+"""A stand-in for the AppSandbox daemon, so that the forge PowerShell can RUN, not only be read.
 
-==> STARTED BY tests/forge-api.bats. Not meant to be run by hand. <==
+==> tests/forge-api.bats STARTS IT. Do not run it by hand. <==
 
 WHY THIS EXISTS. Most of the forge suite greps the scripts for strings: 64 assertions of the
-form "this file contains this call". Those catch a verb being changed but not logic being
-broken - `dr-forge rollback` could discard the wrong branch and every one of them would still
-pass. The scripts reach AppSandbox through about ten HTTP endpoints and nothing else, so a
-server speaking those is enough to execute them for real.
+form "this file contains this call". Those catch a changed verb, but not broken logic.
+`dr-forge rollback` can discard the wrong branch, and each of them still passes. The scripts
+reach AppSandbox only through about ten HTTP endpoints. Thus a server for those is enough to
+really execute them.
 
-WHAT IT RECORDS. Every authenticated request is appended to the log as "METHOD /path", which is
-what lets a test assert the ORDER of calls a script made - that `stop` asks `/shutdown` before
-`/stop`, or that `rollback` deletes the old branch before starting the new one. That ordering is
-forced by the API and is exactly the kind of thing a grep cannot see.
+WHAT IT RECORDS. It appends each authenticated request to the log as "METHOD /path". Thus a
+test can assert the ORDER of the calls of a script: that `stop` asks `/shutdown` before
+`/stop`, or that `rollback` deletes the old branch before it starts the new one. The API forces
+that order, and a grep cannot see it.
 
-WHAT IT DELIBERATELY MODELS. The refusals that shape the callers:
-  - a snapshot of a running VM is 409, as the real daemon does
-  - `/shutdown` is graceful and `/stop` is the plug, and a test can make the graceful one do
-    nothing (--ignore-shutdown) to exercise the grace period and the fallback
+WHAT IT MODELS, ON PURPOSE. The refusals that shape the callers:
+  - a snapshot of a running VM is 409, as with the real daemon
+  - `/shutdown` is a clean stop and `/stop` is the plug. A test can make the clean one do
+    nothing (--ignore-shutdown), to exercise the grace period and the fallback
   - an unknown VM is 404, and a bad bearer token is 401
 
-It is NOT a simulator. It has no timing, no state machine beyond running/stopped, and it makes
-no attempt to reproduce the snapshot bug - the callers are written for the bug's behaviour and
-the test's job is to check the caller, not to re-enact the daemon's defect.
+It is NOT a simulator. It has no timing, no state machine except running/stopped, and it does
+not reproduce the snapshot bug. The callers are written for the behavior of the bug. The test
+checks the caller, and does not act out the defect of the daemon.
 
     python3 tests/appsandbox_mock.py --port N --state FILE [--log FILE] [--ignore-shutdown]
 
-The state file is JSON, read at startup and rewritten after every mutation so a test can assert
-on it afterwards:
+The state file is JSON. The mock reads it at startup, and writes it again after each change,
+so that a test can assert on it later:
 
     {"token": "...", "vms": {"test": {"running": false, "diskDirectory": "C:\\\\ForgeLayers",
      "ramMb": 8192, "snapshots": [], "current": {"snapIndex": -1, "branchIndex": -1}}}}
@@ -67,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, *a):
-        pass  # the real log is ours, written by note()
+        pass  # our own log is the real one. note() writes it
 
     def authed(self):
         want = "Bearer " + STATE["token"]
@@ -83,8 +83,8 @@ class Handler(BaseHTTPRequestHandler):
         return v
 
     # --- routing ----------------------------------------------------------------------
-    # Matched longest-first by hand rather than with a framework: ten routes do not earn a
-    # dependency, and the exact shapes are the point of the file.
+    # Matched longest first, by hand, not with a framework. Ten routes do not need a
+    # dependency, and the exact shapes are the purpose of the file.
     def do_GET(self):
         if not self.authed():
             return
@@ -140,9 +140,9 @@ class Handler(BaseHTTPRequestHandler):
                 if v is None:
                     return
                 if verb == "start":
-                    # A BRANCH IS CREATED BY STARTING. There is no other call for it, which is
-                    # what forces rollback to discard the old branch before it can make a new
-                    # one - the ordering this mock exists to let a test observe.
+                    # A START CREATES A BRANCH. No other call does it. Thus rollback must
+                    # discard the old branch before it can make a new one. This mock lets a
+                    # test see that order.
                     if body.get("branchName") is not None:
                         si = int(body.get("snapIndex", -1))
                         snap = next((s for s in v.get("snapshots", []) if s["index"] == si), None)
@@ -155,8 +155,8 @@ class Handler(BaseHTTPRequestHandler):
                         v["current"] = {"snapIndex": si, "branchIndex": bi}
                     v["running"] = True
                 elif verb == "shutdown":
-                    # Graceful. --ignore-shutdown accepts it and does nothing, which is how a
-                    # test reaches the grace period and whatever the caller does after it.
+                    # Clean stop. --ignore-shutdown accepts it and does nothing. Thus a test
+                    # reaches the grace period, and the next action of the caller.
                     if not ARGS.ignore_shutdown:
                         v["running"] = False
                 elif verb == "stop":
@@ -173,8 +173,8 @@ class Handler(BaseHTTPRequestHandler):
                 v = self.vm(m.group(1))
                 if v is None:
                     return
-                # THE VM MUST BE STOPPED, and 409 is the real daemon's answer. The caller stops
-                # it first; this is what catches a caller that forgets to.
+                # THE VM MUST BE STOPPED, and 409 is the answer of the real daemon. The caller
+                # stops it first. This catches a caller that forgets.
                 if v["running"]:
                     return self.reply(409, {"errorCode": "vm_running"})
                 snaps = v.setdefault("snapshots", [])
@@ -182,8 +182,8 @@ class Handler(BaseHTTPRequestHandler):
                 snaps.append({"index": idx, "name": body.get("name") or "snapshot",
                               "branchCount": 1,
                               "branches": [{"index": 0, "name": "Default Branch"}]})
-                # Taking a snapshot switches the VM onto a fresh branch of it - measured on the
-                # real daemon, and the state `rollback` is written for.
+                # A snapshot moves the VM to a new branch of it. A test on the real daemon
+                # showed this. `rollback` is written for that state.
                 v["current"] = {"snapIndex": idx, "branchIndex": 0}
                 save()
                 return self.reply(202, {"accepted": True})

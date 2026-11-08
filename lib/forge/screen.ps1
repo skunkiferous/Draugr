@@ -1,31 +1,34 @@
-# screen.ps1 - put the forge VM's screen in front of a human, and clean up afterwards.
+# screen.ps1: show the screen of the forge VM to a person, and clean up after.
 #
-# ==> STARTED DETACHED BY lib/forge/vm.ps1 -Mode screen. Outlives the command that asked. <==
+# ==> lib/forge/vm.ps1 -Mode screen STARTS IT DETACHED. It stays after that command ends. <==
 #
-# WHY A FORWARD AT ALL, when both the viewer and AppSandbox run on this same host: the guest has
-# NO NETWORK ADAPTER (networkMode=0, docs/FORGE.md). It therefore has no address for anything to
-# dial - which is the same reason its egress has to be a reverse tunnel. The only channel in or
-# out is AppSandbox's ssh relay over Hyper-V sockets, so reaching a TCP port inside the guest
-# means forwarding through it. There is no shorter path to shorten.
+# WHY A FORWARD? The viewer and AppSandbox run on the same host, but the guest
+# has NO NETWORK ADAPTER (networkMode=0, docs/FORGE.md). Thus it has no address
+# to connect to. For the same reason, its egress must be a reverse tunnel. The
+# only channel in or out is the ssh relay of AppSandbox over Hyper-V sockets.
+# Thus, to reach a TCP port in the guest, you forward through it. No shorter
+# path exists.
 #
-# AND NOT THROUGH THE DAEMON'S OWN DISPLAY. open_display crashes the daemon for a GPU-PV VM -
-# measured on 0.1.4 and 0.1.8 both, returning 200 and then dying about 30 s later, taking the VM
-# with it. docs/FORGE.md: never call it on a gpuMode=1 VM. That crash is why there is a VNC
-# server inside the guest in the first place.
+# AND NOT THROUGH THE DISPLAY OF THE DAEMON. open_display crashes the daemon for
+# a GPU-PV VM. Tests on 0.1.4 and 0.1.8 showed this. It returns 200, then dies
+# about 30 s later, and takes the VM with it. docs/FORGE.md: never call it on a
+# gpuMode=1 VM. That crash is the reason for the VNC server in the guest.
 #
-# WHY THIS IS DETACHED, AND WHY IT IS A FILE. The viewer stays open as long as someone is
-# looking, and `dr-forge up --screen` must not block for that - showing the screen is the last
-# thing it does, so there is nothing left to wait for. But the forward still has to be torn down
-# when the viewer closes, so something has to outlive the command and watch: this. A detached
-# PowerShell needs a script to run, which is why it is its own file rather than a mode.
+# WHY THIS IS DETACHED, AND WHY IT IS A FILE. The viewer stays open while
+# somebody looks. `dr-forge up --screen` must not block for that. The screen is
+# its last step, so it has nothing left to wait for. But when the viewer closes,
+# the forward must close. Thus something must stay after the command, and watch.
+# This script does that. A detached PowerShell needs a script, so it is its own
+# file, not a mode.
 #
-# IT LOGS, because it has no console. Nobody is watching a hidden window, and a failure that
-# only appears there is a failure nobody sees.
+# IT LOGS, because it has no console. Nobody watches a hidden window, and nobody
+# sees a failure that appears only there.
 #
-# THE FORWARD IS TEMPORARY, AND ON THE ADMIN KEY. Not added to lib/forge/tunnel.ps1's permanent
-# set, for two reasons: the restricted tunnel key would need another permitopen - a real
-# widening of a deliberately narrow key - and a VNC port on host loopback would then stand open
-# whether or not anyone is looking. This way it exists exactly as long as the viewer does.
+# THE FORWARD IS TEMPORARY, AND ON THE ADMIN KEY. It is not in the permanent set
+# of lib/forge/tunnel.ps1, for two reasons. The restricted tunnel key then needs
+# another permitopen, which makes a narrow key wider. Also, a VNC port on host
+# loopback then stays open all the time. Here, it exists only as long
+# as the viewer.
 param(
     [string]$Vm        = '',
     [string]$AdminKey  = "$env:USERPROFILE\.ssh\draugr_admin_ed25519",
@@ -37,9 +40,10 @@ param(
     [int]   $MaxLogKb  = 256
 )
 
-# No [Parameter()] attribute anywhere: one makes this cmdlet-bound, and $PSScriptRoot is then
-# empty while the defaults are evaluated. A Mandatory parameter would also PROMPT, and a hidden
-# detached process prompting is a process that hangs for ever with nothing to show why.
+# No [Parameter()] attribute. One makes this cmdlet-bound, and then
+# $PSScriptRoot is empty while PowerShell evaluates the defaults. A Mandatory
+# parameter also PROMPTS. A hidden, detached process that prompts hangs forever,
+# and nothing shows why.
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -57,8 +61,9 @@ Write-Log "screen asked for vm '$Vm' (pid $PID)"
 
 if (-not (Test-Path $AdminKey)) { Write-Log "no admin key at $AdminKey"; exit 13 }
 
-# The relay port, from the daemon rather than from vms.cfg - that file is undocumented and was
-# measured stale (it said 57351 while the guest was on 54501).
+# The relay port comes from the daemon, not from vms.cfg. That file has no
+# documentation, and a test showed it was old (it said 57351, but the guest was
+# on 54501).
 $hostJson = Join-Path $env:ProgramData 'AppSandbox\host.json'
 if (-not (Test-Path $hostJson)) { Write-Log 'the AppSandbox daemon is not running'; exit 10 }
 try {
@@ -66,7 +71,7 @@ try {
     $si = Invoke-RestMethod -Uri "$($h.endpoint)/v1/vms/$Vm/sshInfo" -TimeoutSec 20 `
               -Headers @{ Authorization = "Bearer $($h.token)" }
 } catch {
-    Write-Log "the daemon would not say which port serves '$Vm': $($_.Exception.Message)"
+    Write-Log "the daemon did not tell which port serves '$Vm': $($_.Exception.Message)"
     exit 10
 }
 if (-not $si.port) { Write-Log "the daemon reports no ssh port for '$Vm'"; exit 11 }
@@ -80,25 +85,27 @@ function Test-TcpPort([int]$Port) {
 }
 
 if (Test-TcpPort $LocalPort) {
-    Write-Log "127.0.0.1:$LocalPort is already in use - another screen is open, or pass -LocalPort"
+    Write-Log "127.0.0.1:$LocalPort is already in use. Another screen is open, or give -LocalPort"
     exit 12
 }
 
-# A LOCAL LISTENER PROVES NOTHING: ssh -L opens it whether or not the far side answers, so a
-# guest with no screen server looks identical to a working one until the viewer gets an instant
-# disconnect (measured, after the VM was repointed onto a base predating the VNC
-# install). Returns 'alive' when the guest end sent a greeting, 'refused' on an immediate EOF -
-# which is ssh closing the channel because nothing listened - and 'unknown' on a timeout,
-# because a protocol where the client speaks first is entitled to say nothing yet.
+# A LOCAL LISTENER PROVES NOTHING. ssh -L opens it, and does not wait for an
+# answer from the far side. Thus a guest with no screen server looks the same as
+# a working one, until the viewer gets an instant disconnect. A test showed
+# this, after the VM moved to a base older than the VNC install. The result is
+# 'alive' for a greeting from the guest end. Returns 'refused' on an immediate
+# EOF, which is ssh that closes the channel because nothing listened. Returns
+# 'unknown' on a timeout, because in a protocol where the client speaks first,
+# the server can stay silent.
 $script:Greeting = ''
 function Test-ForwardReachesGuest([int]$Port) {
     $c = New-Object Net.Sockets.TcpClient
     try {
         $c.Connect('127.0.0.1', $Port)
         $s = $c.GetStream()
-        # Measured through this exact relay: a live server greets in 0.50 s, a refused forward
-        # EOFs at 2.01 s. 6 s clears that comfortably and costs the healthy path nothing,
-        # because it returns as soon as bytes arrive.
+        # Tested through this relay: a live server greets in 0.50 s, and a
+        # refused forward gets EOF at 2.01 s. 6 s is more than enough. It costs
+        # the healthy path nothing, because it returns at the first bytes.
         $s.ReadTimeout = 6000
         $buf = New-Object byte[] 16
         try {
@@ -114,15 +121,17 @@ function Test-ForwardReachesGuest([int]$Port) {
 }
 
 $errLog = Join-Path $env:TEMP "draugr-screen-ssh-$PID.log"
-# ONE QUOTED STRING, NOT AN ARRAY. Start-Process -ArgumentList joins an array with spaces and
-# does NOT quote the parts, so a key under "C:\Users\First Last\" splits in two and ssh reads
-# the remainder as a hostname ("hostname contains invalid characters"). This host's own profile
-# has a space in it, so that is not a hypothetical.
+# ONE QUOTED STRING, NOT AN ARRAY. Start-Process -ArgumentList joins an array
+# with spaces, and does NOT quote the parts. Thus a key under "C:\Users\First
+# Last\" splits in two, and ssh reads the rest as a hostname ("hostname contains
+# invalid characters"). The profile on this host has a space in it, so this is a
+# real case.
 $sshArgs = @(
     '-N', '-i', "`"$AdminKey`"", '-p', $si.port,
     '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
     '-o', 'StrictHostKeyChecking=accept-new',
-    # The key belongs to the VM, not to a port several guests take turns on. docs/FORGE.md.
+    # The key belongs to the VM, not to a port that guests use in turn.
+    # docs/FORGE.md.
     '-o', "HostKeyAlias=draugr-$Vm",
     '-o', 'ExitOnForwardFailure=yes',
     '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
@@ -141,11 +150,12 @@ try {
     if (-not (Test-TcpPort $LocalPort)) {
         $why = '(nothing)'
         if (Test-Path $errLog) { $t = (Get-Content $errLog -Raw).Trim(); if ($t) { $why = $t } }
-        # "Permission denied" is a DIFFERENT failure from "connected, but nothing is listening",
-        # and conflating them is how a wrong key came to read as a missing screen server.
+        # "Permission denied" is a DIFFERENT failure from "connected, but
+        # nothing listens". A mix of the two once made a wrong key look like a
+        # missing screen server.
         if ($why -match 'Permission denied') {
-            Write-Log "ssh was REFUSED by the guest, so no forward was attempted: $why"
-            Write-Log "  That is AUTHENTICATION, not the screen server - which may well be fine."
+            Write-Log "the guest REFUSED ssh, so no forward was tried: $why"
+            Write-Log "  That is AUTHENTICATION, not the screen server. The screen server can be fine."
             Write-Log "  The key offered was $AdminKey"
             Write-Log "  Ask the guest which keys it accepts:  dr-forge exec type C:\ProgramData\ssh\administrators_authorized_keys"
             exit 13
@@ -158,15 +168,15 @@ try {
         'alive'   { Write-Log "the guest answered: $script:Greeting" }
         'refused' {
             Write-Log "the forward is open here, but NOTHING IS LISTENING on 127.0.0.1:$GuestPort inside the guest."
-            Write-Log '  The viewer would just disconnect. The usual cause is a guest that predates the'
-            Write-Log '  screen server - a restore or a repoint onto an older base. Check it with:'
+            Write-Log '  The viewer only disconnects. Usually, the guest is older than the screen'
+            Write-Log '  server: a restore, or a move to an older base. Make sure with:'
             Write-Log "    dr-forge exec Get-Service tvnserver"
-            Write-Log '  And install it into a guest that has none, which takes a minute and needs'
-            Write-Log '  only the admin key (it is phase 10 of a provisioning run):'
+            Write-Log '  If the guest has none, install it. That takes a minute, and needs only the'
+            Write-Log '  admin key (it is phase 10 of a provisioning run):'
             Write-Log '    powershell -ExecutionPolicy Bypass -File .\lib\forge\screen-access.ps1 -Vm <vm> -AdminKey <key>'
             exit 12
         }
-        default   { Write-Log 'the guest said nothing yet, which is normal for a client-speaks-first protocol' }
+        default   { Write-Log 'the guest said nothing yet. That is normal for a protocol where the client speaks first' }
     }
 
     if (-not $Viewer) {
@@ -178,11 +188,12 @@ try {
         ) | Where-Object { Test-Path $_ } | Select-Object -First 1
     }
     if (-not $Viewer) {
-        Write-Log 'no VNC viewer found on this host. Install one (TightVNC''s installer carries both'
-        Write-Log "  halves), or pass -Viewer. The forward is up meanwhile, so any viewer pointed at"
-        Write-Log "  127.0.0.1:$LocalPort will do."
-        # The forward is deliberately LEFT UP in this one case: it works, and the only thing
-        # missing is on this side, so tearing it down would take away the usable half.
+        Write-Log 'no VNC viewer on this host. Install one (the TightVNC installer has both'
+        Write-Log "  halves), or give -Viewer. The forward stays up, so each viewer that points"
+        Write-Log "  to 127.0.0.1:$LocalPort works."
+        # Only in this case, the forward STAYS UP on purpose. It works, and the
+        # missing part is on this side. A close of the forward removes the half
+        # that works.
         $KeepForward = $true
         exit 14
     }
@@ -204,6 +215,6 @@ finally {
         Write-Log 'forward closed'
     }
     Remove-Item $errLog -Force -ErrorAction SilentlyContinue
-    # The VM is deliberately left running: the whole point is that looking at the screen
-    # disturbs nothing, and the agent keeps the API throughout.
+    # The VM continues to run, on purpose. A look at the screen must change
+    # nothing, and the agent keeps the API all the time.
 }

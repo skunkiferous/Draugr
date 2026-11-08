@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
-# dr-ports - publish a port from the running mound, without rebuilding it.
+# dr-ports: publish a port from the running mound, without a rebuild.
 #
-# Ports declared in the kit are applied when the sandbox is created, and changing
-# the kit recreates the container. That is the wrong trade for "I just want to
-# look at the dev server for a minute", which is what this is for.
+# sbx applies the ports of the kit at the creation of the sandbox, and a change
+# of the kit recreates the container. That cost is too high for "I only want to
+# look at the dev server for a minute". This command is for that case.
 #
-# Published ports land on WINDOWS loopback, not WSL's - so reach them from a
-# Windows browser at 127.0.0.1:<port>. From inside WSL that address is the WSL
-# VM's own loopback and will not connect; the same NAT boundary that makes
-# dr-sync use ssh applies here.
+# Published ports go on the WINDOWS loopback, not on the loopback of WSL. Thus
+# connect to them from a Windows browser at 127.0.0.1:<port>. Inside WSL, that
+# address is the loopback of the WSL VM, and does not connect. The same NAT
+# boundary applies here that makes dr-sync use ssh.
 #
 #   dr-ports                 what is published now
-#   dr-ports 5173            publish 5173 to an ephemeral host port
+#   dr-ports 5173            publish 5173 to a temporary host port
 #   dr-ports 8080:80         publish container 80 as host 8080
-#   dr-ports --close 8080:80 unpublish it again
+#   dr-ports --close 8080:80 unpublish it
 set -euo pipefail
 
 DR_PROG=dr-ports
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# A bare argument is a port spec to open; --close takes one to shut.
+# An argument without a dash is a port to open. --close takes a port to close.
 close=()
 open=()
 while [ $# -gt 0 ]; do
@@ -42,17 +42,17 @@ dr_context
 dr_sandbox_exists "$DRAUGR_SANDBOX" || dr_die \
     "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
 
-# No arguments is a query, which is the common case and must not change anything.
+# No arguments is a query. That is the usual case, and it must change nothing.
 if [ ${#open[@]} -eq 0 ] && [ ${#close[@]} -eq 0 ]; then
     dr_sbx ports "$DRAUGR_SANDBOX"
-    printf '\n  %sThese are on WINDOWS loopback - open them in a Windows browser,%s\n' \
+    printf '\n  %sThese are on the WINDOWS loopback. Open them in a Windows browser,%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %snot with curl from WSL.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
     exit 0
 fi
 
-# sbx takes --publish/--unpublish repeatably, so both lists go in one call and
-# the whole change is applied together.
+# sbx accepts --publish and --unpublish many times. Thus both lists go in one
+# call, and the whole change applies together.
 args=(ports "$DRAUGR_SANDBOX")
 for p in "${open[@]+"${open[@]}"}";  do args+=(--publish "$p"); done
 for p in "${close[@]+"${close[@]}"}"; do args+=(--unpublish "$p"); done
@@ -60,7 +60,7 @@ for p in "${close[@]+"${close[@]}"}"; do args+=(--unpublish "$p"); done
 dr_sbx "${args[@]}" || dr_die \
     "could not change published ports" \
     "Format:  [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTOCOL]" \
-    "See what is published now with:  dr-ports"
+    "See the published ports with:  dr-ports"
 
 dr_ok "ports updated"
-printf '  %sReach them from Windows at 127.0.0.1:<host port>%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+printf '  %sConnect to them from Windows at 127.0.0.1:<host port>%s\n' "$_DR_DIM" "$_DR_OFF" >&2

@@ -1,28 +1,32 @@
-# lib/forge/vmscfg.ps1 - everything that knows the shape of AppSandbox's vms.cfg.
+# lib/forge/vmscfg.ps1: all code that knows the shape of the vms.cfg of
+# AppSandbox.
 #
-# ==> NOT MEANT TO BE TYPED. Dot-sourced by lib/forge/layer.ps1. <==
+# ==> DO NOT TYPE IT. lib/forge/layer.ps1 dot-sources it. <==
 #
-# THIS FILE IS THE WORKAROUND, kept by itself on purpose (docs/FORGE.md, "The layer mechanism as
-# a command"). Layers exist by editing this file because AppSandbox offers no other route: there
-# is no promote-a-VM-to-a-template call, and the snapshot bug rules out the other road. The
-# format is undocumented and was measured stale in one field. If PR #199 ever lands, the fix is
-# deleting this file rather than untangling it from the orchestration.
+# THIS FILE IS THE WORKAROUND, alone on purpose (docs/FORGE.md, "The layer
+# mechanism as a command"). Layers come from edits of this file, because
+# AppSandbox gives no other way. It has no call to promote a VM to a template,
+# and the snapshot bug blocks the other way. The format has no documentation,
+# and a test showed one field was old. If PR #199 is merged, the fix is to
+# delete this file. Nobody must untangle it from the orchestration.
 #
-# THE DAEMON MUST BE DOWN before anything here writes. It rewrites vms.cfg whenever anything
-# changes, so an edit made underneath it is simply lost - which is layer.ps1's precondition, not
-# this file's job to check.
+# THE DAEMON MUST BE DOWN before a write here. It rewrites vms.cfg at each
+# change, so it loses an edit made under it. layer.ps1 has that precondition.
+# This file does not test it.
 
 $cfgPath = Join-Path $env:ProgramData 'AppSandbox\vms.cfg'
 
-# The settings a child must inherit, and the only keys carried between a layer and its children.
-# GpuMode, GpuName and NetworkMode above all: a layer that differs from its parent in those
-# behaves differently from the thing it was built on.
+# The configuration that a child must inherit. These are the only keys that go
+# from a layer to its children. GpuMode, GpuName, and NetworkMode most of all. A
+# layer that is different from its parent in those works differently from its
+# base.
 $script:carried = @('OsType', 'ImagePath', 'RamMB', 'CpuCores', 'GpuMode', 'GpuName',
                     'NetworkMode', 'AdminUser')
 
 # ------------------------------------------------------------------------ vms.cfg, safely
-# Each block is kept as its RAW lines. Only blocks this script adds or removes are ever
-# regenerated, so a key it has never heard of survives a round trip untouched.
+# Each block stays as its RAW lines. This script generates again only the blocks
+# that it adds or removes. Thus an unknown key goes through a round trip with no
+# change.
 function Read-Cfg {
     if (-not (Test-Path $cfgPath)) { Fail "no vms.cfg at $cfgPath"; exit 21 }
     $blocks = @()
@@ -36,8 +40,9 @@ function Read-Cfg {
         }
     }
     if ($cur) { $blocks += $cur }
-    # The caller wraps this in @() and must keep doing so: a single block returned from
-    # here arrives as a scalar, not as an array of one. See the comment at `$cfg = @(...)`.
+    # The caller wraps this in @(), and must continue to do so. A single block
+    # from here arrives as a scalar, not as an array of one. See the comment at
+    # `$cfg = @(...)`.
     $blocks
 }
 function Get-Val($block, [string]$key) {
@@ -45,12 +50,13 @@ function Get-Val($block, [string]$key) {
     $null
 }
 function Write-Cfg($blocks) {
-    # Same unrolling hazard as Read-Cfg, from the other side: a caller that hands over one
-    # block would otherwise iterate its PROPERTIES rather than the block. Cheap insurance.
+    # The same unrolling hazard as Read-Cfg, from the other side. If a caller
+    # gives one block, this then iterates its PROPERTIES, not the block. A cheap
+    # guard.
     $blocks = @($blocks)
-    # UTF-8 WITH a BOM and CRLF endings, because that is what AppSandbox wrote (measured:
-    # the file starts ef bb bf). Writing it back as plain UTF-8 or with LF endings is the
-    # kind of difference that works until it does not.
+    # UTF-8 WITH a BOM and CRLF endings, because AppSandbox wrote that (a test
+    # showed that the file starts with ef bb bf). Plain UTF-8 or LF endings can
+    # work for a time, and then fail.
     $sb = New-Object Text.StringBuilder
     foreach ($b in $blocks) {
         [void]$sb.Append("[$($b.Header)]`r`n")
@@ -61,11 +67,11 @@ function Write-Cfg($blocks) {
     if ($WhatIfOnly) { Note "would back up to $backup and rewrite vms.cfg"; return }
     Copy-Item $cfgPath $backup
     [IO.File]::WriteAllText($cfgPath, $sb.ToString(), (New-Object Text.UTF8Encoding($true)))
-    Note "vms.cfg written; previous kept as $(Split-Path $backup -Leaf)"
+    Note "vms.cfg written. The previous one is kept as $(Split-Path $backup -Leaf)"
 }
 
-# Shaped as a cfg block so Get-Val works on it unchanged. Two accessors for the same settings
-# would have to stay in step with each other, and sooner or later they would not.
+# Shaped as a cfg block, so that Get-Val works on it with no change. Two
+# accessors for the same values must stay the same, and one day they do not.
 function ConvertTo-CfgBlock($info, [string]$label) {
     $lines = @("Name=$label")
     foreach ($k in $script:carried) {
@@ -74,11 +80,12 @@ function ConvertTo-CfgBlock($info, [string]$label) {
     [pscustomobject]@{ Header = 'VM'; Lines = $lines }
 }
 
-# The VM block `new` and `thaw` both write, in one place because they must not drift: a diff of
-# vms.cfg between a created layer and a thawed one should show only the values that really
-# differ. SshEnabled and InstallComplete are constants here - a layer with neither is a layer
-# nothing can reach, and without InstallComplete AppSandbox offers to install Windows over a
-# disk that already has it.
+# The VM block that `new` and `thaw` both write. It is in one place, because the
+# two must stay the same. A diff of vms.cfg between a created layer and a thawed
+# one must show only the values that are really different. SshEnabled and
+# InstallComplete are constants here. Nothing can reach a layer with neither.
+# Without InstallComplete, AppSandbox offers to install Windows on a disk that
+# already has it.
 function New-VmBlock([string]$Name, $Src, [string]$VhdxPath, [int]$HddGb, [int]$SshPort) {
     $lines = @(
         "Name=$Name"
@@ -99,8 +106,8 @@ function New-VmBlock([string]$Name, $Src, [string]$VhdxPath, [int]$HddGb, [int]$
     [pscustomobject]@{ Header = 'VM'; Lines = $lines }
 }
 
-# The next free ssh port, or a refusal if the one asked for is taken. 57350 is where AppSandbox
-# itself starts; one above the highest in use is what the daemon would have picked.
+# The next free ssh port. If the requested port is in use, a refusal. AppSandbox
+# itself starts at 57350. The daemon picks one above the highest port in use.
 function Resolve-SshPort([int]$Want, $VmBlocks) {
     if (-not $Want) {
         $used = @($VmBlocks | ForEach-Object { [int](Get-Val $_ 'SshPort') } | Where-Object { $_ })

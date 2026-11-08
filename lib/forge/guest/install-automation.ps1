@@ -1,70 +1,75 @@
-# install-automation.ps1 - the default base image's GUI automation: a UIA MCP server
-# and AutoHotkey.
+# install-automation.ps1: the GUI automation of the default base image, a UIA
+# MCP server and AutoHotkey.
 #
-# Run this IN THE GUEST over ssh, with the tunnel up. Everything it downloads comes from
-# hosts kits/base allows (**.astral.sh, pypi.org, files.pythonhosted.org, github.com,
-# **.autohotkey.com), so it needs no policy change of its own.
+# Run this IN THE GUEST through ssh, with the tunnel up. All its downloads come
+# from hosts that kits/base allows (**.astral.sh, pypi.org,
+# files.pythonhosted.org, github.com, **.autohotkey.com), so it needs no policy
+# change.
 #
-# WHY THESE TWO. An agent driving a Windows UI has a ladder of doors (docs/FORGE.md):
-# the MCP server is the rung that reads a window's actual controls, by name, with
-# coordinates - not pixels, not guesses. AutoHotkey is the rung below it, for windows
-# that have no tree at all (Slate, CEF: the Unreal Editor and the Epic launcher measure
-# 0 elements), where a path found once is replayed without a model in the loop.
+# WHY THESE TWO. An agent that drives a Windows UI has a ladder of doors
+# (docs/FORGE.md). The MCP server is the step that reads the real controls of a
+# window, by name, with coordinates, not pixels or guesses. AutoHotkey is the
+# step below it, for windows that have no tree (Slate, CEF: a test of the Unreal
+# Editor and the Epic launcher found 0 elements). There, a path that the agent
+# found once replays without a model.
 #
-# THE SESSION IS THE WHOLE PROBLEM, and it is why this script installs a scheduled task
-# rather than just starting a server. An ssh session lands in **session 0**, which has
-# no desktop: measured, AutoHotkey launched from ssh reports "Target window
-# not found" for the active window and WinGetList() returns nothing at all, and UI
-# Automation is equally blind. The same script, run through the MCP server - which this
-# task starts in **session 1**, the autologin desktop a human sees over VNC - enumerates
-# every window. `windows-mcp install` registers that task itself; do not replace it with
-# a plain `serve`.
+# THE SESSION IS THE MAIN PROBLEM. That is why this script installs a scheduled
+# task, and does not only start a server. An ssh session arrives in **session
+# 0**, which has no desktop. A TEST SHOWED THIS: AutoHotkey started from ssh
+# reports "Target window not found" for the active window, WinGetList() returns
+# nothing, and UI Automation sees nothing either. The same script, run through
+# the MCP server, lists each window. This task starts the server in **session
+# 1**, the autologin desktop that a person sees through VNC. `windows-mcp
+# install` registers that task. Do not replace it with a plain `serve`.
 #
-# Measured traps, each of which cost time:
-#   - Invoke-WebRequest -UseBasicParsing hands back .Content as a **Byte[]** when the
-#     response carries no charset, and Invoke-Expression refuses a Byte[]. Decode it.
-#   - `windows-mcp auth` defaults to **host 0.0.0.0**. Always pass 127.0.0.1: the guest
-#     has no adapter today, but a server that would bind every interface is not something
-#     to leave to a default.
-#   - the endpoint is **/mcp**, not /mcp/ - the trailing slash answers 307, which a client
-#     that does not re-POST on redirect reports as a failure.
-#   - the auth key lands in the guest's ~/.windows-mcp/config.toml. It stays in the guest.
+# Traps that tests found, and each one cost time:
+#   - When the response has no charset, Invoke-WebRequest -UseBasicParsing gives .Content as
+#     a **Byte[]**, and Invoke-Expression refuses a Byte[]. Decode it.
+#   - The default host of `windows-mcp auth` is **0.0.0.0**. Always give 127.0.0.1. The guest
+#     has no adapter now, but do not leave the bind of all interfaces to a default.
+#   - The endpoint is **/mcp**, not /mcp/. The trailing slash answers 307, and a client that
+#     does not POST again after a redirect reports a failure.
+#   - The auth key goes into the ~/.windows-mcp/config.toml of the guest. It stays in the guest.
 #
-# Measured cost: uv 41 MB, CPython 3.14 60 MB, the server's venv 153 MB,
-# AutoHotkey 4.3 MB - about 260 MB, plus a 151 MB wheel cache. `uv cache prune` reclaims
-# NOTHING of that cache (measured: 150.7 MB before and after), because every entry is
-# still referenced by the tool's own environment - prune only drops unused ones. So
-# -CleanCache runs `uv cache clean`, which is what a base image wants: the cache is a
-# download accelerator, and a later install simply fetches again.
+# Measured cost: uv 41 MB, CPython 3.14 60 MB, the venv of the server 153 MB,
+# AutoHotkey 4.3 MB. That is about 260 MB, plus a wheel cache of 151 MB. `uv
+# cache prune` frees NOTHING of that cache (a test showed 150.7 MB before and
+# after). The environment of the tool still uses each entry, and prune removes
+# only unused ones. Thus -CleanCache runs `uv cache clean`, and that is what a
+# base image needs. The cache makes downloads faster, and a later install
+# fetches again.
 #
 #   powershell -ExecutionPolicy Bypass -File .\install-automation.ps1
 #   powershell -ExecutionPolicy Bypass -File .\install-automation.ps1 -VerifyOnly
 #   powershell -ExecutionPolicy Bypass -File .\install-automation.ps1 -CleanCache
-# 8765, not the server's own default of 8000: UE 5.8's built-in Unreal MCP plugin serves
-# http://127.0.0.1:8000/mcp inside the editor process, and two servers on one port is a
-# fight decided by whoever started first. 8000 stays reserved for the editor.
+# 8765, not the default of the server, 8000. The built-in Unreal MCP plugin of
+# UE 5.8 serves http://127.0.0.1:8000/mcp inside the editor process. With two
+# servers on one port, the first to start wins. 8000 stays reserved for the
+# editor.
 param(
     [int]$Port = 8765,
     [string]$AhkDir = 'C:\Tools\AutoHotkey',
-    # PINNED, AND IT HAS TO BE. uv with no version request installs the NEWEST CPython,
-    # which is always the one the ecosystem has had least time to build wheels for.
-    # MEASURED, on a guest built from nothing: unpinned gave 3.15.2, and
-    # `uv tool install windows-mcp` then resolved pyyaml==6.0.3, found no cp315 wheel,
-    # tried to BUILD it, and stopped on "Microsoft Visual C++ 14.0 or greater is required"
-    # - in a guest whose whole point is that it has no compiler. PyPI the same day: pyyaml
-    # 6.0.3 ships cp313 and cp314 Windows wheels and no cp315. The comments further down
-    # record 3.14.8 working, so nothing here changed: 3.15 shipped, and that
-    # was enough to break it.
+    # PINNED, AND IT MUST BE. uv with no version request installs the NEWEST
+    # CPython. The ecosystem always had the least time to build wheels for that
+    # one. A TEST on a new guest showed this. Without a pin, uv gave 3.15.2.
+    # Then `uv tool install windows-mcp` resolved pyyaml==6.0.3, and found no
+    # cp315 wheel. It tried to BUILD it, and stopped on "Microsoft Visual C++
+    # 14.0 or greater is required". This guest has no compiler, on purpose. On
+    # PyPI that day, pyyaml 6.0.3 had cp313 and cp314 Windows wheels, and no
+    # cp315. The comments below record that 3.14.8 works. Thus nothing here
+    # changed. 3.15 came out, and that was enough to break it.
     #
-    # A PIN IS A THING TO REVISIT, not a thing to forget. Raise it once the dependency tree
-    # has wheels for the next one; it is a parameter so that can be tried without an edit.
+    # LOOK AT A PIN AGAIN LATER. Do not forget it. After the dependency tree has
+    # wheels for the next version, raise it. It is a parameter, so that you can
+    # try that without an edit.
     [string]$PythonVersion = '3.14',
-    # What to do about the server's console window. It is not cosmetic-only: the agent's
-    # own window list and every screenshot it takes include this window, so a permanent
-    # empty console is noise in the agent's view of the desktop as well as the human's.
-    #   Normal     leave it on screen, but titled and coloured so it is identifiable
-    #   Minimized  out of the way; still titled, still enumerable
-    #   Hidden     no window at all - see Set-McpWindow for what that costs
+    # What to do with the console window of the server. It is not only for
+    # looks. The window list of the agent and each screenshot that it takes
+    # include this window. Thus a permanent empty console is noise in the view
+    # of the desktop, for the agent and the person.
+    #   Normal     keep it on the screen, with a title and a color, so that you know it
+    #   Minimized  out of the way. Still with a title, still in the window list
+    #   Hidden     no window. See Set-McpWindow for the cost
     [ValidateSet('Normal', 'Minimized', 'Hidden')]
     [string]$McpWindow = 'Minimized',
     [switch]$VerifyOnly,
@@ -73,55 +78,58 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'   # progress records become CLIXML noise over ssh
+$ProgressPreference = 'SilentlyContinue'   # through ssh, progress records become CLIXML noise
 
 $uvBin = "$env:USERPROFILE\.local\bin"
 $uv    = Join-Path $uvBin 'uv.exe'
 $wmcp  = Join-Path $uvBin 'windows-mcp.exe'
 $cfg   = "$env:USERPROFILE\.windows-mcp\config.toml"
 
-# Set-McpWindow - title, colour and window state for the server's console.
+# Set-McpWindow: the title, the color, and the window state of the console of
+# the server.
 #
-# MUST be called AFTER `windows-mcp install`, which rewrites start-server.cmd from its own
-# template every time --force is passed. An edit applied before it, or by hand in the
-# guest, is simply gone on the next provisioning run.
+# Call it AFTER `windows-mcp install`. With --force, that command rewrites
+# start-server.cmd from its own template each time. An edit before it, or a
+# manual edit in the guest, is gone at the next provisioning run.
 #
-# THE WINDOW IS CMD'S, NOT PYTHON'S, and that distinction cost a wrong fix.
-# The first attempt swapped python.exe for pythonw.exe, reasoning that cmd would not wait
-# for a GUI-subsystem child and would exit, taking its console with it. That rule is
-# POWERSHELL'S, not cmd's: `cmd /c` waits for any child whatever its subsystem. Measured
-# after the change - cmd.exe still running `/c ""...start-server.cmd""`, window still on
-# screen, two pythonw.exe behind it. Swapping the interpreter changes nothing about the
-# console, because the console was never python's to begin with: Task Scheduler gives it
-# to cmd, for being a console program with an InteractiveToken.
+# THE WINDOW BELONGS TO CMD, NOT TO PYTHON. That difference cost a wrong fix.
+# The first attempt replaced python.exe with pythonw.exe. The idea was that cmd
+# does not wait for a GUI-subsystem child, and exits, and its console goes with
+# it. That rule is for POWERSHELL, not for cmd. `cmd /c` waits for each child,
+# for each subsystem. A test after the change showed this: cmd.exe still ran `/c
+# ""...start-server.cmd""`, the window was still on the screen, and two
+# pythonw.exe were behind it. A new interpreter changes nothing about the
+# console, because the console never belonged to python. Task Scheduler gives it
+# to cmd, because cmd is a console program with an InteractiveToken.
 #
-# So the launcher must not be a console program at all. wscript.exe is GUI-subsystem, so
-# the task creates no console for it; the VBScript then starts the .cmd with an explicit
-# show-command, and THAT is what decides whether a window appears. Hidden=0, minimised
-# without stealing focus=7, normal=1. Redirection still works because cmd still performs
-# it - only its window is suppressed.
+# Thus the launcher must not be a console program. wscript.exe is GUI-subsystem,
+# so the task creates no console for it. The VBScript then starts the .cmd with
+# an explicit show-command, and THAT decides whether a window appears. Hidden=0,
+# minimized without the focus=7, normal=1. Redirection still works, because cmd
+# still does it. Only its window is hidden.
 #
-# ALSO MEASURED, and it invalidated the other half of the first attempt: Windows Terminal
-# 1.18.10301.0 IS installed here (WindowsTerminal.exe and OpenConsole.exe -Embedding are
-# both running in session 1). An earlier `where wt.exe` said otherwise, but that probe ran
-# over ssh in session 0 where the app-execution alias does not resolve - a false negative,
-# not an absent terminal. Hence a show-command passed at creation rather than `start /min`,
-# whose handling depends on which terminal is hosting.
+# ANOTHER TEST showed that the other half of the first attempt was wrong.
+# Windows Terminal 1.18.10301.0 IS installed here (WindowsTerminal.exe and
+# OpenConsole.exe -Embedding both run in session 1). An earlier `where wt.exe`
+# said the opposite. But that probe ran through ssh in session 0, where the
+# app-execution alias does not resolve. That was a false negative, not a missing
+# terminal. Thus a show-command at creation, not `start /min`, whose effect
+# depends on the terminal that hosts it.
 #
-# A window cannot be observed from here: session 0 has its own window station, so
-# MainWindowTitle comes back empty for everything in session 1. Whether this looks right
-# is a question only someone at the VNC screen can answer.
+# This code cannot see a window. Session 0 has its own window station, so
+# MainWindowTitle is empty for each window in session 1. Only a person at the
+# VNC screen can say whether this looks correct.
 function Set-McpWindow([string]$StartCmd, [string]$Mode, [string]$Title) {
     if (-not (Test-Path $StartCmd)) {
-        Write-Host "  no $StartCmd - leaving the window alone"
+        Write-Host "  no $StartCmd. The window does not change."
         return
     }
     $txt = Get-Content $StartCmd -Raw
 
     if ($Mode -ne 'Hidden' -and $txt -notmatch '(?m)^title ') {
-        # Injected once, straight after @echo off. colour 1F is bright white ON BLUE:
-        # distinctive enough to recognise at a glance in a VNC window, and nothing else
-        # on this desktop is blue.
+        # Added once, directly after @echo off. color 1F is bright white ON
+        # BLUE. You see it quickly in a VNC window, and nothing else on this
+        # desktop is blue.
         $txt = $txt -replace '(?m)^@echo off\r?\n', "@echo off`r`ntitle $Title`r`ncolor 1F`r`n"
         Set-Content $StartCmd $txt -Encoding ASCII
         Write-Host "  window      titled '$Title', blue"
@@ -129,21 +137,23 @@ function Set-McpWindow([string]$StartCmd, [string]$Mode, [string]$Title) {
         Write-Host '  window      already titled'
     }
 
-    # The show-command the VBScript passes to WScript.Shell.Run. These are the documented
-    # SW_* values: 0 hides, 7 minimises without taking focus, 1 shows normally.
+    # The show-command that the VBScript gives to WScript.Shell.Run. These are
+    # the documented SW_* values: 0 hides, 7 minimizes without the focus, 1
+    # shows normally.
     $show = @{ 'Hidden' = 0; 'Minimized' = 7; 'Normal' = 1 }[$Mode]
     $vbs = Join-Path (Split-Path $StartCmd -Parent) 'run-server.vbs'
-    # Rewritten every run rather than created once, so that changing -McpWindow actually
-    # changes something on a guest that already has the file.
+    # Written again at each run, not created once. Thus a change of -McpWindow
+    # really changes something on a guest that already has the file.
     @(
-        "' Generated by Draugr's lib/forge/guest/install-automation.ps1 - do not edit.",
-        "' wscript.exe is GUI-subsystem, so Task Scheduler gives this no console; the",
-        "' show-command below decides whether the server's own console is visible.",
+        "' Draugr made this with lib/forge/guest/install-automation.ps1. Do not edit it.",
+        "' wscript.exe is GUI-subsystem, so Task Scheduler gives this no console. The",
+        "' show-command below decides whether the console of the server is visible.",
         "CreateObject(""WScript.Shell"").Run """"""$StartCmd"""""", $show, False"
     ) | Set-Content $vbs -Encoding ASCII
 
     $act = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vbs`""
-    # Cosmetic, so a failure here warns rather than taking the provisioning run with it.
+    # Only for looks, so a failure here warns, and does not stop the
+    # provisioning run.
     try {
         Set-ScheduledTask -TaskName 'windows-mcp-server' -Action $act -EA Stop | Out-Null
         Write-Host "  task action $Mode"
@@ -156,39 +166,45 @@ function Get-Text([string]$url) {
     $r = Invoke-WebRequest -UseBasicParsing $url
     if ($r.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($r.Content) } else { $r.Content }
 }
-# Add-ToMachinePath - put a directory on the MACHINE PATH, once, JUST BEFORE System32.
+# Add-ToMachinePath: put a directory on the MACHINE PATH, once, JUST BEFORE
+# System32.
 #
-# Not appended and not prepended: positioned. MSYS2 ships find.exe and sort.exe that
-# shadow the Windows ones, which is the POINT - the GNU versions are what anyone wants -
-# and link.exe, which shadows MSVC's linker and is the one that could hurt.
+# Not at the end and not at the start, but at an exact position. MSYS2 ships
+# find.exe and sort.exe that hide the Windows ones. That is the PURPOSE, because
+# people want the GNU versions. It also ships link.exe, which hides the linker
+# of MSVC. That one can cause damage.
 #
-# MEASURED, which is why prepending is safe: with C:\msys64\usr\bin placed
-# FIRST and then vcvars64.bat run, `where link` answers
+# A TEST SHOWED THIS, and it is why the start of PATH is safe. With
+# C:\msys64\usr\bin FIRST, and then a run of vcvars64.bat, `where link` answers
 #   C:\...\MSVC\14.38.33130\bin\Hostx64\x64\link.exe      <- MSVC, first
 #   C:\msys64\usr\bin\link.exe
-# because vcvars PREPENDS the toolchain directory itself. UnrealBuildTool is safe either
-# way: it resolves the toolchain by absolute path. The residual case is a bare `link`
-# outside a developer prompt, where nothing should expect MSVC anyway.
+# because vcvars PUTS the toolchain directory at the START. UnrealBuildTool is
+# safe in both cases, because it resolves the toolchain with an absolute path.
+# The other case is a bare `link` outside a developer prompt, and there nothing
+# expects MSVC.
 #
-# BUT NOT AT THE VERY FRONT, because MSYS2 also ships ssh.exe, scp.exe and ssh-keygen.exe.
-# MEASURED: prepending made `ssh` resolve to C:\msys64\usr\bin\ssh.exe instead
-# of the Windows OpenSSH client, and MSYS2's client reads key paths, HOME and known_hosts
-# with POSIX semantics. Everything else in this project - the host tunnel, the guest's own
-# sshd, every script here - is Windows OpenSSH, and one ssh behaving differently from the
-# others inside the guest is a trap laid for later.
+# BUT NOT AT THE VERY START, because MSYS2 also ships ssh.exe, scp.exe, and
+# ssh-keygen.exe. A TEST SHOWED THIS. At the start, `ssh` resolved to
+# C:\msys64\usr\bin\ssh.exe, not to the Windows OpenSSH client. The MSYS2 client
+# reads key paths, HOME, and known_hosts with POSIX semantics. All else in this
+# project (the host tunnel, the own sshd of the guest, each script here) is
+# Windows OpenSSH. One ssh that works differently from the others inside the
+# guest is a trap for later.
 #
-# So: insert immediately BEFORE the System32 entry. MSYS2 still outranks Windows for find
-# and sort, and anything deliberately placed ahead of System32 - which is where the
-# OpenSSH directory sits - keeps winning. If System32 is not on PATH at all, something is
-# already very wrong, and prepending is the harmless fallback.
+# Thus: insert directly BEFORE the System32 entry. MSYS2 still wins over Windows
+# for find and sort. All entries that are on purpose before System32 still win,
+# and the OpenSSH directory is there. If System32 is not on PATH, something is
+# already very wrong, and the start of PATH is the safe fallback.
 #
-# Windows composes PATH as MACHINE then USER, so anything added here also precedes the
-# per-user entries - including %USERPROFILE%\.local\bin. MSYS2 ships no python.exe, so it
-# cannot shadow the interpreter install-automation.ps1 puts there.
+# Windows builds PATH as MACHINE, then USER. Thus all that this adds also comes
+# before the entries of the user, also %USERPROFILE%\.local\bin. MSYS2 ships no
+# python.exe, so it cannot hide the interpreter that install-automation.ps1 puts
+# there.
 #
-# IDENTICAL TO THE COPY IN install-base-tools.ps1, DELIBERATELY. Every guest script here
-# is copied into the guest alone and run alone, so a shared helper file would make "copy
-# one file, run it" false - and this one is needed by both. Change one, change both.
+# THE SAME AS THE COPY IN install-base-tools.ps1, ON PURPOSE. Each guest script
+# here goes into the guest alone, and runs alone. A shared helper file makes
+# "copy one file, run it" false, and both need this one. If you change one,
+# change both.
 function Add-ToMachinePath([string]$Dir, [string]$Before = "$env:SystemRoot\system32") {
     $cur = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $parts = @($cur -split ';' | Where-Object { $_ })
@@ -216,7 +232,7 @@ function Get-Mb([string]$p) {
 }
 
 if (-not $VerifyOnly) {
-    # --- uv: a Python for one program, without a system-wide Python -------------------
+    # --- uv: a Python for one program, without a Python for the whole system -----------
     if (Test-Path $uv) {
         Write-Host "uv already present: $(& $uv --version)"
     } else {
@@ -228,42 +244,47 @@ if (-not $VerifyOnly) {
     }
 
     # --- a Python that answers to `python` ---------------------------------------------
-    # uv installs interpreters under %APPDATA%\uv\python and, by default, leaves NO entry
-    # point anywhere on PATH. `uv run python` works; `python` does not - and on a stock
-    # Windows 11 `python` is not absent but WORSE than absent: it resolves to the Microsoft
-    # Store app-execution-alias stub in %LOCALAPPDATA%\Microsoft\WindowsApps, which on a
-    # guest with no Store answers "Python was not found; run without arguments to install
-    # from the Microsoft Store". That reads as a broken Python rather than as no Python.
+    # uv installs interpreters under %APPDATA%\uv\python, and by default puts NO
+    # entry point on PATH. `uv run python` works, and `python` does not. On a
+    # default Windows 11, `python` is not missing, but WORSE than missing. It
+    # resolves to the app-execution-alias stub of the Microsoft Store in
+    # %LOCALAPPDATA%\Microsoft\WindowsApps. On a guest with no Store, that stub
+    # answers "Python was not found; run without arguments to install from the
+    # Microsoft Store". That looks like a broken Python, not like no Python.
     #
-    # --default writes real python.exe / python3.exe shims into uv's bin directory, which
-    # is %USERPROFILE%\.local\bin - already ahead of WindowsApps on the user PATH, so the
-    # stub stops winning. MEASURED: `python -V` -> Python 3.14.8, with
-    # sys.executable pointing into %APPDATA%\uv\python. It cost 46 ms, because the
-    # interpreter was already on disk; only the entry point was missing.
+    # --default writes real python.exe and python3.exe shims into the bin
+    # directory of uv, %USERPROFILE%\.local\bin. That is already before
+    # WindowsApps on the PATH of the user, so the stub stops winning. A TEST
+    # SHOWED THIS: `python -V` -> Python 3.14.8, with sys.executable in
+    # %APPDATA%\uv\python. It cost 46 ms, because the interpreter was already on
+    # the disk. Only the entry point was missing.
     #
-    # EXPERIMENTAL, and said out loud because it is load-bearing: uv warns that --default
-    # "may change without warning". --preview-features silences the warning without
-    # changing the behaviour. If a future uv drops the flag, the fallback is a shim that
-    # calls `uv run python`, which is uglier but stable.
+    # EXPERIMENTAL, and said clearly, because this code needs it. uv warns that
+    # --default "may change without warning". --preview-features stops the
+    # warning, and does not change the behavior. If a future uv removes the
+    # flag, the fallback is a shim that calls `uv run python`. That is uglier,
+    # but stable.
     #
-    # RE-RUN SAFETY, and it is two separate problems. (1) On a guest that already has it,
-    # uv writes "Python is already installed. Use `uv python install <request>` to install
-    # another version." to STDERR - which is uv reporting NOTHING TO DO. With
-    # $ErrorActionPreference = 'Stop' above and the 2>&1 this call needs to log uv's
-    # output, PowerShell 5.1 turns that line into a terminating NativeCommandError and the
-    # whole provisioning run dies at this phase, before cleanup and the manifest.
-    # MEASURED on the second run of an already-complete guest. (2) Even guarded,
-    # shelling out to be told there is nothing to do is not idempotence, so the question is
-    # asked here first and cheaply.
+    # SAFE TO RUN AGAIN. That is two separate problems. (1) On a guest that
+    # already has it, uv writes "Python is already installed. Use `uv python
+    # install <request>` to install another version." to STDERR. That means
+    # NOTHING TO DO. With $ErrorActionPreference = 'Stop' above, and the 2>&1
+    # that this call needs for the log of uv, PowerShell 5.1 makes that line a
+    # terminating NativeCommandError. Then the whole provisioning run dies at
+    # this phase, before the clean-up and the manifest. A TEST on the second run
+    # of a complete guest showed this. (2) Also with a guard, a call only to
+    # hear "nothing to do" is not idempotence. Thus the code asks the question
+    # here first, at low cost.
     #
-    # THE QUESTION IS THE VERSION, NOT THE SHIM'S PRESENCE, and that changed when the pin
-    # above arrived. "A python.exe is there" was the honest test while any python would do;
-    # once one version is required, presence is a test that passes on the wrong interpreter.
-    # This guest is the proof: the run that failed left a 3.15.2 shim behind, so a presence
-    # test would have let the re-run keep exactly the interpreter it was meant to replace.
+    # THE QUESTION IS THE VERSION, NOT THE PRESENCE OF THE SHIM. That changed
+    # with the pin above. "A python.exe is there" was the correct test while
+    # each python was good. When one version is required, a presence test
+    # passes on the wrong interpreter. This guest is the proof. The failed run
+    # left a 3.15.2 shim. A presence test then lets the next run keep exactly
+    # the interpreter that it must replace.
     #
-    # -V and a regex, not `-c 'import sys; ...'`: an argument carrying embedded quotes is
-    # the one thing not to hand through PowerShell to a native exe. docs/FORGE.md.
+    # -V and a regex, not `-c 'import sys; ...'`. Never give an argument with
+    # quotes inside it through PowerShell to a native exe. See docs/FORGE.md.
     $pyShim = Join-Path $uvBin 'python.exe'
     $shimVer = ''
     if (Test-Path $pyShim) {
@@ -273,7 +294,7 @@ if (-not $VerifyOnly) {
         Write-Host "python $shimVer already reachable: $pyShim"
     } else {
         if ($shimVer) {
-            Write-Host "python $shimVer is reachable, but $PythonVersion is the pin - installing that"
+            Write-Host "python $shimVer is reachable, but the pin is $PythonVersion. Installing that."
         } else {
             Write-Host 'making python reachable as `python`...'
         }
@@ -283,10 +304,10 @@ if (-not $VerifyOnly) {
             & $uv python install $PythonVersion --default --preview-features python-install-default 2>&1 |
                 ForEach-Object { Write-Host "  $_" }
         } finally { $ErrorActionPreference = $eapWas }
-        # The shim is the thing this block exists to produce, so its absence IS a failure -
-        # unlike uv's chatter, which is not. The VERSION is checked for the same reason: a
-        # shim pointing at the wrong interpreter is what this block was just asked to fix,
-        # and "it exists" would report success on the state that got us here.
+        # This block exists to make the shim, so a missing shim IS a failure.
+        # The extra output of uv is not. The code tests the VERSION for the same
+        # reason. A shim for the wrong interpreter is what this block must fix.
+        # "It exists" reports success on the state that caused the problem.
         if (-not (Test-Path $pyShim)) { throw "uv did not create $pyShim" }
         $after = ''
         if ("$(& $pyShim -V)" -match '(\d+\.\d+)') { $after = $Matches[1] }
@@ -295,24 +316,26 @@ if (-not $VerifyOnly) {
         }
     }
 
-    # uv and windows-mcp both write UTF-8 to stdout, and PowerShell decodes a native
-    # program's output with [Console]::OutputEncoding - which on this guest is codepage
-    # 1252, because install-guest-base sets it. An en dash then arrives as a stray
-    # accented letter: "Scheduled task installed ù server is starting now." MEASURED
-    #. Nothing is broken by it, but a provisioning log that renders its own
-    # tools' output as rubbish is one more thing a reader has to learn to ignore.
+    # uv and windows-mcp both write UTF-8 to stdout. PowerShell decodes the
+    # output of a native program with [Console]::OutputEncoding. On this guest,
+    # that is codepage 1252, because install-guest-base sets it. Then an en dash
+    # arrives as a wrong accented letter: "Scheduled task installed ù server is
+    # starting now." A TEST SHOWED THIS. It breaks nothing. But a provisioning
+    # log that shows the output of its own tools as garbage is one more thing
+    # that a reader must learn to ignore.
     #
-    # Not restored afterwards, deliberately: this is a console attribute of THIS
-    # process, which exits at the end of the script. The guest's own codepage is a
-    # system setting and is untouched.
+    # Not restored after, on purpose. This is a console attribute of THIS
+    # process, which exits at the end of the script. The codepage of the guest
+    # is a system configuration, and does not change.
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
     # --- the MCP server: one tool install, on the pinned interpreter ------------------
-    # --python, EXPLICITLY. Without it uv chooses an interpreter for the tool's own venv
-    # independently of the shim installed above, and what it chooses is the newest it can
-    # find - which is how this phase came to build its dependencies against 3.15 while the
-    # file's own comments said 3.14. Naming it keeps the tool's venv and `python` the same
-    # vintage, which is also the only way the pin above means anything here.
+    # --python, EXPLICITLY. Without it, uv selects an interpreter for the venv
+    # of the tool, independently of the shim above. It selects the newest that
+    # it can find. That is how this phase built its dependencies against 3.15,
+    # while the comments of the file said 3.14. With the name, the venv of the
+    # tool and `python` have the same version. Only that gives the pin above a
+    # meaning here.
     Write-Host "installing windows-mcp on python $PythonVersion..."
     & $uv tool install --quiet --python $PythonVersion windows-mcp
     if (-not (Test-Path $wmcp)) { throw "windows-mcp did not appear at $wmcp" }
@@ -324,16 +347,16 @@ if (-not $VerifyOnly) {
         Write-Host 'generating the auth key...'
         & $wmcp auth --transport streamable-http --host 127.0.0.1 --port $Port --force | Out-Null
     }
-    # Stop any server already running, by its path, BEFORE installing the task. The tool's
-    # own `uninstall` prints "Stopped the running server" and leaves it alive (measured
-    #), and a surviving server holds append handles on server.log and
-    # server.error.log - so the new start-server.cmd cannot open its redirects, cmd exits
-    # 1, and nothing is written anywhere saying why. A silent failure with a stale server
-    # still answering on the old port is the worst shape this can take.
-    # 'python', 'pythonw' - the second because the first attempt at hiding this window
-    # left some guests running pythonw.exe, and a probe that misses it leaves the old
-    # server alive holding append handles on the logs, which is the silent failure the
-    # comment above is about.
+    # Stop each running server, by its path, BEFORE the install of the task. The
+    # own `uninstall` of the tool prints "Stopped the running server", but the
+    # server still runs (a test showed this). A server that survives holds
+    # append handles on server.log and server.error.log. Then the new
+    # start-server.cmd cannot open its redirects, cmd exits 1, and nothing
+    # records why. A silent failure, with an old server that still answers on
+    # the old port, is the worst result. 'python' and 'pythonw': the second,
+    # because the first attempt to hide this window left pythonw.exe running on
+    # some guests. A probe that misses it leaves the old server alive, with
+    # append handles on the logs. That is the silent failure above.
     Get-Process python, pythonw -EA SilentlyContinue | Where-Object { $_.Path -like '*\uv\tools\windows-mcp\*' } |
         ForEach-Object { Write-Host "  stopping the running server (pid $($_.Id))"; Stop-Process -Id $_.Id -Force }
 
@@ -341,15 +364,15 @@ if (-not $VerifyOnly) {
     & $wmcp install --transport streamable-http --host 127.0.0.1 --port $Port --force |
         ForEach-Object { "  $_" }
 
-    # AFTER the install, always - see Set-McpWindow's header. With -McpWindow Minimized or
-    # Hidden the task completes as soon as cmd exits, so `schtasks /query` reports Ready
-    # rather than Running. That is the expected shape, not a regression: the server is
-    # detached by then, and the verification below asks the PORT, which is the only
-    # answer that was ever worth having.
+    # Always AFTER the install. See the header of Set-McpWindow. With -McpWindow
+    # Minimized or Hidden, the task ends at the exit of cmd. Thus `schtasks
+    # /query` reports Ready, not Running. That is expected, not a regression.
+    # The server is detached then, and the test below asks the PORT. Only that
+    # answer is useful.
     Set-McpWindow -StartCmd "$env:USERPROFILE\.windows-mcp\start-server.cmd" `
-                  -Mode $McpWindow -Title 'Draugr - UIA MCP server (leave running)'
+                  -Mode $McpWindow -Title 'Draugr: UIA MCP server (leave it running)'
 
-    # --- AutoHotkey v2 from the zip: no installer, no elevation, no file association --
+    # --- AutoHotkey v2 from the zip: no installer, no elevation, no file association ---
     $v = (Get-Text 'https://www.autohotkey.com/download/2.0/version.txt').Trim()
     $exe = Join-Path $AhkDir 'AutoHotkey64.exe'
     if ((Test-Path $exe) -and (Get-Item $exe).VersionInfo.ProductVersion -eq $v) {
@@ -363,9 +386,9 @@ if (-not $VerifyOnly) {
         Remove-Item $zip -Force
     }
 
-    # The whole point of AutoHotkey here is running a .ahk from the command line, so a
-    # directory nothing can find makes it ornamental. MEASURED: AutoHotkey64
-    # did not resolve as a command on a finished base image.
+    # AutoHotkey is here to run a .ahk from the command line. In a directory
+    # that nothing can find, it is useless. A TEST SHOWED THIS: AutoHotkey64 did
+    # not resolve as a command on a finished base image.
     Write-Host ''
     Write-Host 'PATH'
     [void](Add-ToMachinePath $AhkDir)
@@ -382,14 +405,15 @@ Write-Host ''
 Write-Host '--- verification ---'
 $bad = @()
 
-# The task's own state says little - it launches a detached server and goes back to
-# "Ready" - so it is reported, not judged. The listener below is the real test.
-# Get-ScheduledTask, NOT `schtasks /query ... 2>$null`. With Stop in force a redirected
-# native stderr line is a terminating error, and schtasks writes one for a task that is not
-# there - so this verification would have thrown on precisely the guest it exists to report
-# on. The same defect killed install-shot.ps1 outright; here it was simply never reached,
-# because the install above it failed first. This file already carried the explanation, two
-# hundred lines up, next to the one call it had guarded. MEASURED. docs/FORGE.md.
+# The state of the task tells little. It starts a detached server, and goes back
+# to "Ready". Thus the code reports it, and does not judge it. The listener
+# below is the real test. Get-ScheduledTask, NOT `schtasks /query ... 2>$null`.
+# With Stop in force, a redirected native stderr line is a terminating error,
+# and schtasks writes one for a missing task. Thus this test threw on exactly
+# the guest that it must report on. The same defect stopped install-shot.ps1.
+# Here, the code never got there, because the install above failed first. This
+# file already had the explanation, two hundred lines above, next to the one
+# call with a guard. A TEST SHOWED THIS. See docs/FORGE.md.
 $state = Get-ScheduledTask -TaskName 'windows-mcp-server' -ErrorAction SilentlyContinue
 if ($state) {
     Write-Host "  task        registered (state: $($state.State))"
@@ -397,11 +421,13 @@ if ($state) {
     Write-Host '  task        MISSING' -ForegroundColor Red; $bad += 'task'
 }
 
-# The listener must be in session 1. Started in session 0 the server runs, answers, and
-# sees nothing - the exact failure this design exists to avoid, and it is silent.
+# The listener must be in session 1. In session 0, the server runs, answers,
+# and sees nothing. This design exists to prevent exactly that failure, and it
+# is silent.
 #
-# Wait for it: the server takes about 4 s to bind after the task starts (measured), so
-# checking immediately after `install` reports a failure that is only impatience.
+# Wait for it. After the task starts, the server takes about 4 s to bind (a test
+# showed this). A test directly after `install` reports a failure that is only
+# impatience.
 $c = $null
 for ($i = 0; $i -lt 25; $i++) {
     $c = Get-NetTCPConnection -LocalPort $Port -State Listen -EA SilentlyContinue |
@@ -414,23 +440,24 @@ if ($c) {
     if ($sess -ge 1) {
         Write-Host "  listener    127.0.0.1:$Port in session $sess"
     } else {
-        Write-Host "  listener    127.0.0.1:$Port in SESSION $sess - UIA will be blind" -ForegroundColor Red
+        Write-Host "  listener    127.0.0.1:$Port in SESSION $sess. UIA sees nothing" -ForegroundColor Red
         $bad += 'session'
     }
 } else {
     Write-Host "  listener    NOTHING ON $Port" -ForegroundColor Red; $bad += 'listener'
 }
 
-# An unauthenticated request must be refused: with the forward in place, the token is
-# what stands between the desktop and anything else that can reach the port.
+# The server must refuse a request without authentication. With the forward in
+# place, only the token protects the desktop from all else that can reach the
+# port.
 try {
     $r = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "http://127.0.0.1:$Port/mcp" `
          -ContentType 'application/json' -Body '{}' -TimeoutSec 10
-    Write-Host "  no-token    ANSWERED $($r.StatusCode) - the server is not asking for a token" -ForegroundColor Red
+    Write-Host "  no-token    ANSWERED $($r.StatusCode). The server does not ask for a token" -ForegroundColor Red
     $bad += 'auth'
 } catch {
     $code = [int]$_.Exception.Response.StatusCode
-    if ($code -eq 401) { Write-Host '  no-token    401, as it should be' }
+    if ($code -eq 401) { Write-Host '  no-token    401, as expected' }
     else { Write-Host "  no-token    $code (expected 401)" -ForegroundColor Yellow }
 }
 
@@ -441,33 +468,36 @@ if (Test-Path $exe) {
     Write-Host '  autohotkey  MISSING' -ForegroundColor Red; $bad += 'autohotkey'
 }
 
-# REPORTED, NOT JUDGED. A PATH change reaches new processes only, so this session can
-# legitimately disagree with the machine - failing the run over that would be wrong.
+# REPORTED, NOT JUDGED. A PATH change reaches only new processes, so this
+# session can correctly disagree with the machine. A failure of the run for that
+# is wrong.
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';'
 $ahkOnPath = $machinePath | Where-Object { $_.TrimEnd('') -ieq $AhkDir.TrimEnd('') }
 Write-Host ("  PATH        AutoHotkey {0}" -f $(if ($ahkOnPath) { 'on the machine PATH' }
                                                 else { 'NOT on the machine PATH' }))
 $pyExe = Join-Path $uvBin 'python.exe'
 if (Test-Path $pyExe) {
-    # NO 2>&1 HERE. Under Stop a redirected native stderr line is terminating, so a broken
-    # interpreter would have thrown inside the very block whose job is to report that it is
-    # broken. Unredirected, python's own complaint reaches the console and the verification
-    # carries on - which is what a verification is for. tests/lint-native-stderr.sh.
+    # NO 2>&1 HERE. Under Stop, a redirected native stderr line is terminating.
+    # Thus a broken interpreter throws inside exactly the block that must report
+    # it. Without the redirect, the complaint of python goes to the console, and
+    # the test continues. That is the purpose of a test. See
+    # tests/lint-native-stderr.sh.
     #
-    # AND THE VERSION IS JUDGED, not just printed: the pin is why this phase installs at all
-    # (see -PythonVersion), so an interpreter that is not the pinned one is a finding and not
-    # a detail. A guest left over from a failed run is exactly where this shows up.
+    # THE CODE ALSO JUDGES THE VERSION, and does not only print it. The pin is
+    # the reason for this phase (see -PythonVersion). Thus an interpreter that
+    # is not the pinned one is a finding, not a detail. A guest from a failed
+    # run shows exactly that.
     $pyV = "$(& $pyExe -V)"
     $pyMinor = ''
     if ($pyV -match '(\d+\.\d+)') { $pyMinor = $Matches[1] }
     if ($pyMinor -eq $PythonVersion) {
         Write-Host "  python      $pyV  ($pyExe)"
     } else {
-        Write-Host "  python      $pyV  ($pyExe) - NOT the pinned $PythonVersion" -ForegroundColor Red
+        Write-Host "  python      $pyV  ($pyExe). NOT the pinned $PythonVersion" -ForegroundColor Red
         $bad += 'python version'
     }
 } else {
-    Write-Host '  python      no python.exe in uv bin - bare `python` hits the Store stub' -ForegroundColor Yellow
+    Write-Host '  python      no python.exe in uv bin. A bare `python` finds the Store stub' -ForegroundColor Yellow
 }
 
 Write-Host ("  footprint   uv {0} MB, python {1} MB, venv {2} MB, ahk {3} MB, cache {4} MB" -f `
@@ -479,7 +509,7 @@ if ($ShowKey -and (Test-Path $cfg)) {
     Get-Content $cfg | Where-Object { $_ -match 'auth_key' } | ForEach-Object { "  $_" }
 } else {
     Write-Host "The bearer token is in $cfg (-ShowKey prints it). It belongs to this"
-    Write-Host 'guest; do not copy it into the repository.'
+    Write-Host 'guest. Do not copy it into the repository.'
 }
 if ($bad.Count) { Write-Host "FAILED: $($bad -join ', ')" -ForegroundColor Red; exit 1 }
 Write-Host 'automation ready.' -ForegroundColor Green

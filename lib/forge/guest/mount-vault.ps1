@@ -1,29 +1,31 @@
-# mount-vault.ps1 - map the gateway's shares inside the forge VM.
+# mount-vault.ps1: map the shares of the gateway inside the forge VM.
 #
-# Run this IN THE GUEST, once per session. The shares arrive over the same tunnel
-# as the proxy: the host forwards the gateway mound's SMB port to this machine's
-# 127.0.0.1:445, and Windows' own SMB client does the rest. Nothing is installed
-# in the guest for this.
+# Run this IN THE GUEST, once for each session. The shares arrive through the
+# same tunnel as the proxy. The host forwards the SMB port of the gateway mound
+# to 127.0.0.1:445 of this machine, and the own SMB client of Windows does the
+# rest. Nothing is installed in the guest for this.
 #
 #   \\127.0.0.1\vault     the Fab vault, read-only
 #   \\127.0.0.1\scratch   scratch, writable both ways
 #
-# What each side enforces, and why saying it twice is deliberate:
-#   - the mound bind-mounts the vault `ro`, so the KERNEL refuses a write there,
-#     whatever Samba or this script believes;
-#   - Samba marks the share read only as well, so a refusal is reported rather
-#     than attempted.
+# What each side enforces, and why both do, on purpose:
+#   - The mound bind-mounts the vault `ro`. Thus the KERNEL refuses a write there,
+#     whatever Samba or this script believes.
+#   - Samba also marks the share read-only. Thus a refusal is reported, and not
+#     attempted.
 #
-# Measured, against the sshfs route this replaced: listing 1,516 asset
-# folders 0.6 s, a 73.7 MB asset copied at 46.7 MB/s, and - the reason for the
-# change - a refused delete is REFUSED rather than reported as a success.
+# A test, compared with the sshfs route that this replaced: a list of 1,516
+# asset folders took 0.6 s. An asset of 73.7 MB copied at 46.7 MB/s. And a
+# refused delete is REFUSED, not reported as a success. That was the reason for
+# the change.
 #
-# Per session, by design. Drive letters and stored credentials both belong to a
-# logon session, and an agent's ssh commands each get a new one (session 0, where
-# cmdkey also refuses to save anything). Mapping costs no process and no wait, so
-# calling this at the start of a session is cheaper than keeping anything alive.
+# Once for each session, by design. Drive letters and stored credentials both
+# belong to a logon session. Each ssh command of an agent gets a new one
+# (session 0, where cmdkey also refuses to save anything). A map costs no
+# process and no wait. Thus a call at the start of a session is cheaper than to
+# keep something alive.
 #
-# RUN IT ON THE DESKTOP, not over ssh, and see the two guards below for why.
+# RUN IT ON THE DESKTOP, not through ssh. The two guards below tell why.
 #
 #   powershell -ExecutionPolicy Bypass -File .\mount-vault.ps1              map V: (vault) and S: (scratch)
 #   powershell -ExecutionPolicy Bypass -File .\mount-vault.ps1 -Unmap       drop them
@@ -39,13 +41,14 @@ $ErrorActionPreference = 'Stop'
 if ($Unmap) {
     foreach ($d in $VaultDrive, $ScratchDrive) {
         Get-PSDrive -Name $d -ErrorAction SilentlyContinue | Remove-PSDrive -Force -ErrorAction SilentlyContinue
-        # EAP RELAXED around this one call. `net use X: /delete` writes "The network
-        # connection could not be found." to stderr when X: is not mapped, and under
-        # $ErrorActionPreference = 'Stop' native stderr redirected by 2>&1 becomes an
-        # ErrorRecord that terminates the script - so unmapping a drive that was never
-        # mapped would abort before the second drive was even tried. Unmapping something
-        # already absent is the expected case here, not a failure. Same trap as Invoke-Msys
-        # in install-msys2.ps1 and Invoke-Native in lib/forge/provision.ps1.
+        # EAP RELAXED for this one call. When X: is not mapped, `net use X:
+        # /delete` writes "The network connection could not be found." to
+        # stderr. Under $ErrorActionPreference = 'Stop', native stderr
+        # redirected by 2>&1 becomes an ErrorRecord that stops the script. Thus
+        # an unmap of a drive that was never mapped stops before the code tries
+        # the second drive. Here, an unmap of a missing drive is the expected
+        # case, not a failure. The same trap as Invoke-Msys in install-msys2.ps1
+        # and Invoke-Native in lib/forge/provision.ps1.
         $old = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try { & net use "${d}:" /delete /y 2>&1 | Out-Null }
@@ -56,41 +59,43 @@ if ($Unmap) {
 }
 
 if (-not (Test-Path $PassFile)) {
-    throw ("missing: $PassFile - the vault phase of a provisioning run puts it there. " +
+    throw ("missing: $PassFile. The vault phase of a provisioning run puts it there. " +
            "From the host: dr-layer provision <vm>, or lib/forge/vault-access.ps1 alone.")
 }
 
-# TWO WAYS A SUCCESSFUL MOUNT IS STILL INVISIBLE WHERE YOU WANT IT, both measured, both
-# silent. Checked here rather than documented, because by the time you are reading docs you
-# have already lost the hour.
+# TWO WAYS THAT A SUCCESSFUL MOUNT IS STILL NOT VISIBLE WHERE YOU WANT IT. Tests
+# showed both, and both are silent. The code tests them here, and does not only
+# document them. At the time that you read the docs, you already lost the hour.
 #
-# 1. A mapped drive belongs to a LOGON SESSION. One made from an ssh session never reaches
-#    the interactive desktop - different logons, not two tokens of one, so
-#    EnableLinkedConnections cannot help. MEASURED: this script printed
-#    `V: -> \\127.0.0.1\vault` and `vault entries: 1516` over ssh, and `dir V:` on the
+# 1. A mapped drive belongs to a LOGON SESSION. A drive mapped from an ssh
+# session never
+#    reaches the interactive desktop. These are different logons, not two tokens of one,
+#    so EnableLinkedConnections cannot help. A TEST SHOWED THIS: this script printed
+#    `V: -> \\127.0.0.1\vault` and `vault entries: 1516` through ssh, and `dir V:` on the
 #    desktop answered "A drive with the name 'V' does not exist".
 if ((Get-Process -Id $PID).SessionId -eq 0) {
-    Write-Warning ('this is session 0 - an ssh or service session, not the desktop. The ' +
-        'drives will be mapped for THIS logon only and the interactive desktop will not ' +
-        'see them, however it is reached. Run this ON the desktop (over VNC) instead.')
+    Write-Warning ('this is session 0, an ssh or service session, not the desktop. The ' +
+        'drives are mapped only for THIS logon, and the interactive desktop does not ' +
+        'see them, for each way to reach it. Run this ON the desktop (through VNC).')
 }
-# 2. Within one logon it is per ELEVATION TOKEN. Without EnableLinkedConnections, a drive
-#    mapped from an elevated prompt is invisible to Explorer and to anything else
-#    unelevated - and this script can only BE run elevated, because the password file is
-#    readable only by Administrators. install-guest-base.ps1 sets the value (section 9b);
-#    a guest built before it did needs it once, plus a reboot.
+# 2. Within one logon, it is for each ELEVATION TOKEN. Without
+# EnableLinkedConnections, a
+#    drive mapped from an elevated prompt is not visible to Explorer, or to each other
+#    program that is not elevated. This script can only run elevated, because only
+#    Administrators can read the password file. install-guest-base.ps1 sets the value
+#    (section 9b). A guest that is older than that needs it once, and a reboot.
 $elc = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' `
         -Name EnableLinkedConnections -ErrorAction SilentlyContinue).EnableLinkedConnections
 if ($elc -ne 1) {
-    Write-Warning ('EnableLinkedConnections is not set, so these drives will be visible ' +
-        'ONLY at this elevation level - not in Explorer if you are elevated now. Set it ' +
-        'once and reboot:' + "`n" +
+    Write-Warning ('EnableLinkedConnections is not set, so these drives are visible ' +
+        'ONLY at this elevation level, not in Explorer if you are elevated now. Set it ' +
+        'once, and reboot:' + "`n" +
         "    New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' " +
         "-Name EnableLinkedConnections -PropertyType DWord -Value 1 -Force")
 }
 
-# Read it here and build the credential in process: the password never reaches a
-# command line, where another process could read it out of the process list.
+# Read it here, and build the credential in the process. The password never goes
+# on a command line, where another process can read it from the process list.
 $secret = ConvertTo-SecureString (Get-Content $PassFile -Raw).Trim() -AsPlainText -Force
 $cred = New-Object System.Management.Automation.PSCredential($User, $secret)
 
@@ -100,21 +105,24 @@ foreach ($m in @(@{ d = $VaultDrive; share = 'vault' }, @{ d = $ScratchDrive; sh
         Write-Host "${drive}: already mapped"
         continue
     }
-    # -Persist IS WHAT MAKES THE DRIVE OUTLIVE THIS PROCESS. -Scope Global is global within
-    # this POWERSHELL, not within the logon session, so without -Persist the mapping dies
-    # when the script exits - and the documented way to run this,
-    # `powershell -ExecutionPolicy Bypass -File mount-vault.ps1`, is a CHILD process.
+    # -Persist MAKES THE DRIVE LIVE LONGER THAN THIS PROCESS. -Scope Global is
+    # global in this POWERSHELL, not in the logon session. Without -Persist, the
+    # mapping dies at the exit of the script. The documented way to run this,
+    # `powershell -ExecutionPolicy Bypass -File mount-vault.ps1`, is a CHILD
+    # process.
     #
-    # MEASURED: it printed `V: -> \\127.0.0.1\vault` and `vault entries: 1516`,
-    # proving the share, the password and the tunnel were all fine - and `dir V:` in the
-    # calling shell then answered "A drive with the name 'V' does not exist". It had worked
-    # before only because it used to be run IN the caller's own shell, where that process IS
-    # the session. -Persist calls WNetAddConnection2 instead: a real Windows mapped drive,
-    # visible to Explorer, to other processes, and to an installer started from anywhere.
+    # A TEST SHOWED THIS. It printed `V: -> \\127.0.0.1\vault` and `vault
+    # entries: 1516`. That proved that the share, the password, and the tunnel
+    # all worked. Then `dir V:` in the calling shell answered "A drive with the
+    # name 'V' does not exist". It worked before only because it ran IN the own
+    # shell of the caller, where that process IS the session. -Persist calls
+    # WNetAddConnection2. That is a real Windows mapped drive, visible to
+    # Explorer, to other processes, and to an installer from any place.
     #
-    # One consequence worth knowing: a persisted drive belongs to the ELEVATION LEVEL that
-    # mapped it. Map it elevated and a non-elevated Explorer will not see it, and the other
-    # way round, unless EnableLinkedConnections is set. Map it where you intend to use it.
+    # One result to know: a persisted drive belongs to the ELEVATION LEVEL that
+    # mapped it. If you map it elevated, an Explorer that is not elevated does
+    # not see it, and the reverse, unless EnableLinkedConnections is set. Map it
+    # where you want to use it.
     New-PSDrive -Name $drive -PSProvider FileSystem -Root "\\$Server\$($m.share)" `
         -Credential $cred -Scope Global -Persist -ErrorAction Stop | Out-Null
     Write-Host "${drive}: -> \\$Server\$($m.share)"

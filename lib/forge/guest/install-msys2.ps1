@@ -1,59 +1,64 @@
-# install-msys2.ps1 - MSYS2 in the guest, pinned to one host, before anything uses it.
+# install-msys2.ps1: MSYS2 in the guest, pinned to one host, before something
+# uses it.
 #
-# Run this IN THE GUEST over ssh, after install-guest-base.ps1 has set the proxy and with
-# the tunnel up. It needs NO new allowlist entry, which is the nice part: the installer
-# itself lives on repo.msys2.org, the one host kits/base already allows for pacman. A
-# guest with no adapter can therefore bootstrap its whole Unix layer through the gateway
-# without widening anything.
+# Run this IN THE GUEST through ssh, after install-guest-base.ps1 set the proxy,
+# and with the tunnel up. It needs NO new allowlist entry, and that is the good
+# part. The installer is on repo.msys2.org, the one host that kits/base already
+# allows for pacman. Thus a guest with no adapter can set up its whole Unix
+# layer through the gateway, and nothing becomes wider.
 #
-# THE PINNING IS THE POINT, and it has to happen before the first sync. MSYS2 ships a
-# rotating mirrorlist of about 21 third-party mirrors (university mirrors, CDNs), and
-# pacman will happily dial one the policy has never heard of - which surfaces as a refusal
-# naming a host nobody chose. Every /etc/pacman.d/mirrorlist.* keeps its repo.msys2.org
-# line and loses the rest; then pacman dials that name and nothing else. Measured
-# by watching the refusals name only this host.
+# THE PIN IS THE PURPOSE, and it must happen before the first sync. MSYS2 ships
+# a rotating mirrorlist of about 21 third-party mirrors (university mirrors,
+# CDNs). pacman connects to one that the policy does not know. That shows as a
+# refusal that names a host that nobody selected. Each
+# /etc/pacman.d/mirrorlist.* keeps its repo.msys2.org line, and loses the rest.
+# Then pacman connects to that name, and to nothing else. A test showed this:
+# the refusals named only this host.
 #
-# Traps, measured:
-#   - pacman needs stdin closed over ssh. There is no terminal, so any prompt --noconfirm
-#     does not cover blocks forever with no output. Every call here goes through a
-#     subshell with < /dev/null (see install-base-tools.ps1 for why the subshell).
-#   - the first `pacman -Syu` can update pacman itself and stop, asking to be re-run. It
-#     is run twice for that reason, which is harmless when once was enough.
-#   - pacman's ORDINARY CHATTER GOES TO STDERR, and under $ErrorActionPreference = 'Stop' a
-#     native command's stderr redirected by 2>&1 arrives as an ErrorRecord that terminates
-#     the script. MEASURED: "warning: terminate other MSYS2 programs before
-#     proceeding" - a warning, mid-sync, with nothing wrong - aborted this script after
-#     MSYS2 was installed and the mirrorlists were pinned, so pass 2 and the whole
-#     verification below were skipped and the phase reported FAILED (1) on a correct guest.
-#     Invoke-Msys relaxes the preference for exactly the length of each call.
-#   - the installer's own post-install step refreshes the pacman keyring from
-#     hkps://keyserver.ubuntu.com, which this guest has no route to. It prints a dozen
-#     "keyserver refresh failed: Try again later" and "ERROR: Could not update key" lines
-#     and then carries on - the keyring is already populated locally from msys2.gpg, which
-#     is why package signatures verify regardless. Measured. Nothing to fix here:
-#     allowing that host would widen the policy for a refresh the guest does not need.
+# Traps that tests found:
+#   - Through ssh, pacman needs a closed stdin. There is no terminal, so each question that
+#     --noconfirm does not cover blocks forever, with no output. Each call here goes through
+#     a subshell with < /dev/null (see install-base-tools.ps1 for the reason of the subshell).
+#   - The first `pacman -Syu` can update pacman, stop, and ask for a second run. Thus the
+#     code runs it twice. If once was enough, the second run does no damage.
+#   - THE ORDINARY OUTPUT OF pacman GOES TO STDERR. Under $ErrorActionPreference = 'Stop', the
+#     stderr of a native command, redirected by 2>&1, arrives as an ErrorRecord that stops
+#     the script. A TEST SHOWED THIS. "warning: terminate other MSYS2 programs before
+#     proceeding" is a warning, in the middle of the sync, with nothing wrong. It stopped
+#     this script after the install of MSYS2 and the pin of the mirrorlists. Thus pass 2 and
+#     the whole test below were skipped, and the phase reported FAILED (1) on a correct
+#     guest. Invoke-Msys relaxes the preference for exactly the time of each call.
+#   - The post-install step of the installer refreshes the pacman keyring from
+#     hkps://keyserver.ubuntu.com, and this guest has no route to it. It prints a dozen
+#     "keyserver refresh failed: Try again later" and "ERROR: Could not update key" lines,
+#     and then continues. The keyring is already full, locally, from msys2.gpg. That is why
+#     package signatures still pass. A test showed this. Nothing to fix here. An allow for
+#     that host makes the policy wider for a refresh that the guest does not need.
 #
-# THE INSTALLER IS PINNED BY DATE AND HASH, and that is not belt-and-braces: it is the only
-# integrity check available here. MSYS2 publishes NO .sha256 for its installers - only a GPG
-# .sig, for `latest` and for every dated build alike - and GPG is unusable at this point by
-# construction, since gpg arrives WITH MSYS2. MEASURED: asking for
-# msys2-x86_64-latest.exe.sha256 returns 404 from repo.msys2.org, which is what took down a
-# whole provisioning run (the .exe beside it returns 200, so egress was never the problem).
+# THE INSTALLER IS PINNED BY DATE AND HASH. That is not extra caution. It is the
+# only integrity test here. MSYS2 publishes NO .sha256 for its installers, only
+# a GPG .sig, for `latest` and for each dated build. GPG cannot work at this
+# time, because gpg comes WITH MSYS2. A TEST SHOWED THIS: a request for
+# msys2-x86_64-latest.exe.sha256 returns 404 from repo.msys2.org. That stopped a
+# whole provisioning run (the .exe next to it returns 200, so egress was never
+# the problem).
 #
-# A dated build is also the right thing for a base layer: `latest` means the disk you build
-# today and the disk you rebuild next month differ in a way nothing records. The vintage
-# costs little, because the first `pacman -Syu` below updates everything anyway.
+# A dated build is also correct for a base layer. With `latest`, the disk that
+# you build today and the disk that you build next month differ, and nothing
+# records how. The older version costs little, because the first `pacman -Syu`
+# below updates everything anyway.
 #
-# To move to a newer installer, pass -Version and -Sha256 TOGETHER, or change both here.
-# Dated builds are listed at https://repo.msys2.org/distrib/x86_64/ and the hash is whatever
-# `Get-FileHash -Algorithm SHA256` says about the file you fetched.
+# For a newer installer, give -Version and -Sha256 TOGETHER, or change both
+# here. The list of dated builds is at https://repo.msys2.org/distrib/x86_64/.
+# The hash is the output of `Get-FileHash -Algorithm SHA256` for the file that
+# you fetched.
 #
 #   powershell -ExecutionPolicy Bypass -File .\install-msys2.ps1
 #   powershell -ExecutionPolicy Bypass -File .\install-msys2.ps1 -VerifyOnly
 param(
     [string]$Msys = 'C:\msys64',
     [string]$Mirror = 'repo.msys2.org',
-    # Measured: 85,046,168 bytes, Content-Length confirmed against the server.
+    # Measured: 85,046,168 bytes. The Content-Length of the server is the same.
     [string]$Version = '20260927',
     [string]$Sha256 = '416d506c839a2da4bc184eeec8cbaaf1055ee698618228c62dfc4232a6970f0e',
     [switch]$VerifyOnly
@@ -65,14 +70,15 @@ $ProgressPreference = 'SilentlyContinue'
 $bash = Join-Path $Msys 'usr\bin\bash.exe'
 $base = "https://$Mirror/distrib"
 
-# Always a subshell, always < /dev/null: appending the redirect to a PIPELINE would
-# redirect only its last stage, which is how a verification run once reported every tool
-# missing when all of them were present.
+# Always a subshell, always < /dev/null. A redirect at the end of a PIPELINE
+# applies only to its last stage. That is how a test run once reported each tool
+# as missing, but all were present.
 #
-# And always with the error preference relaxed: see the trap list above. The 2>&1 is wanted -
-# pacman says what went wrong on stderr and that is worth reading - but wanting to READ
-# stderr and wanting it to be fatal are different things, and 'Stop' cannot tell them apart.
-# Restored in `finally` so a genuine throw inside the call does not leave it relaxed.
+# Also always with the relaxed error preference. See the list of traps above.
+# The 2>&1 is wanted, because pacman tells the problem on stderr, and that is
+# useful. But a READ of stderr and a fatal stderr are different things, and
+# 'Stop' cannot see the difference. The `finally` restores it, so that a real
+# throw inside the call does not leave it relaxed.
 function Invoke-Msys([string]$cmd) {
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -80,9 +86,10 @@ function Invoke-Msys([string]$cmd) {
     finally { $ErrorActionPreference = $old }
 }
 
-# The mirrorlists pacman actually reads, and only those. Globbing etc/pacman.d/mirrorlist.*
-# also finds .orig and .pacnew copies that nothing loads, so pinning would rewrite files
-# with no effect and verification would report a pinned guest as unpinned.
+# Only the mirrorlists that pacman really reads. A glob of
+# etc/pacman.d/mirrorlist.* also finds .orig and .pacnew copies that nothing
+# loads. Then the pin rewrites files with no effect, and the test reports a
+# pinned guest as not pinned.
 function Get-IncludedMirrorlist {
     $out = @()
     foreach ($l in (Get-Content (Join-Path $Msys 'etc\pacman.conf') -EA SilentlyContinue)) {
@@ -103,21 +110,22 @@ if (-not $VerifyOnly -and -not (Test-Path $bash)) {
 
     $got = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
     if ($Sha256 -and $got -ne $Sha256.ToLower()) {
-        # Delete it. A rejected installer left in TEMP is one careless double-click away
-        # from being run by hand, which is the whole thing the check exists to prevent.
+        # Delete it. A refused installer in TEMP is one careless double-click
+        # from a run. The test exists to prevent exactly that.
         Remove-Item $exe -Force -EA SilentlyContinue
         throw ("MSYS2 installer hash mismatch for $Version" +
                "`n  expected $($Sha256.ToLower())" +
                "`n  got      $got" +
-               "`n  Nothing was installed and the download was deleted. Either the pin is" +
-               " stale - pass -Version and -Sha256 together to move it - or this is not the" +
-               " file it claims to be.")
+               "`n  Nothing was installed, and the download was deleted. The pin is old" +
+               " (to move it, give -Version and -Sha256 together), or this is not the" +
+               " file that it claims to be.")
     }
-    Write-Host "  $Version, sha256 matches the pin ($([math]::Round((Get-Item $exe).Length/1MB,1)) MB)"
+    Write-Host "  $Version, the sha256 is the same as the pin ($([math]::Round((Get-Item $exe).Length/1MB,1)) MB)"
 
     # --- install headlessly ----------------------------------------------------------
-    # The installer is a Qt Installer Framework binary; `in` is its non-interactive
-    # install verb. Start-Process -Wait because it returns before finishing otherwise.
+    # The installer is a Qt Installer Framework binary. `in` is its
+    # non-interactive install verb. Start-Process -Wait, because otherwise it
+    # returns before the end.
     Write-Host "installing to $Msys..."
     $p = Start-Process -FilePath $exe -ArgumentList @('in', '--confirm-command',
             '--accept-messages', '--root', $Msys) -Wait -PassThru -NoNewWindow
@@ -128,14 +136,15 @@ if (-not $VerifyOnly -and -not (Test-Path $bash)) {
 
 if (-not (Test-Path $bash)) { throw "MSYS2 is not installed at $Msys (run without -VerifyOnly)" }
 
-# --- pin every mirrorlist, before the first sync --------------------------------------
+# --- pin each mirrorlist, before the first sync ---------------------------------------
 $pinned = @()
 if (-not $VerifyOnly) {
     foreach ($p in Get-IncludedMirrorlist) {
         $lines = Get-Content $p
         $out = foreach ($l in $lines) {
             if ($l -match '^\s*Server\s*=' -and $l -notmatch [regex]::Escape($Mirror)) {
-                # Commented rather than deleted, so what was dropped is still readable.
+                # A comment, not a delete, so that you can still read what was
+                # removed.
                 "#draugr-pinned# $l"
             } else { $l }
         }
@@ -147,7 +156,7 @@ if (-not $VerifyOnly) {
     }
     if ($pinned.Count) { Write-Host "pinned to ${Mirror}: $($pinned -join ', ')" }
 
-    Write-Host 'first sync (twice: the first can update pacman itself and stop)...'
+    Write-Host 'first sync (twice, because the first can update pacman and stop)...'
     foreach ($pass in 1, 2) {
         $out = Invoke-Msys 'timeout 900 pacman -Syu --noconfirm --disable-download-timeout'
         $out | Where-Object { $_ -match 'error|warning: config file|target not found' } |
@@ -164,16 +173,18 @@ $bad = @()
 $ver = Invoke-Msys 'uname -srm' | Where-Object { $_ } | Select-Object -First 1
 if ($ver) { Write-Host "  bash          $ver" } else { Write-Host '  bash          NOT RUNNABLE' -ForegroundColor Red; $bad += 'bash' }
 
-# Every Server line that survived must name the pinned host. One that does not is a mirror
-# pacman may dial that the policy will refuse, at some later and less obvious moment.
+# Each Server line that stays must name the pinned host. Each other line is a
+# mirror that pacman can connect to, and the policy refuses it later, at a less
+# clear time.
 #
-# Only the files pacman.conf actually Includes are checked. Globbing mirrorlist.* instead
-# picks up .orig and .pacnew copies that pacman never reads, and reports a pinned guest as
-# unpinned - 58 stray mirrors, all of them in backups nothing loads. What is enforced is
-# what is Included; that is the list worth checking.
+# The code tests only the files that pacman.conf Includes. A glob of
+# mirrorlist.* also finds .orig and .pacnew copies that pacman never reads, and
+# reports a pinned guest as not pinned: 58 extra mirrors, all in backups that
+# nothing loads. Only the Included files are enforced, so only that list needs a
+# test.
 $stray = @()
 $included = @(Get-IncludedMirrorlist)
-if (-not $included.Count) { $stray += 'pacman.conf Includes no mirrorlist at all' }
+if (-not $included.Count) { $stray += 'pacman.conf Includes no mirrorlist' }
 foreach ($p in $included) {
     foreach ($l in (Get-Content $p)) {
         if ($l -match '^\s*Server\s*=' -and $l -notmatch [regex]::Escape($Mirror)) {

@@ -1,58 +1,57 @@
-# .draugr.conf - Draugr settings for this project. Commit this file.
+# .draugr.conf: the Draugr configuration of this project. Commit this file.
 #
-# It is shell, and Draugr sources it, which means running it. Draugr therefore
-# records its hash the first time you accept it and refuses to source a version
-# it has not seen before. After editing, run:  dr-trust
+# It is shell, and Draugr sources it, so Draugr runs it. Thus Draugr records its
+# hash when you first accept it, and refuses to source a version that it did not
+# see before. After an edit, run:  dr-trust
 #
-# Put anything personal in .draugr.local.conf instead (gitignored, sourced after
-# this file, so it wins).
+# Put personal values in .draugr.local.conf (gitignored, and sourced after this
+# file, so it wins).
 
-# The agent this project expects. Changing it later means dr-up --recreate: sbx
-# freezes the agent into the sandbox spec when the mound is built.
+# The agent that this project expects. To change it later, run dr-up --recreate.
+# sbx freezes the agent into the sandbox spec when it builds the mound.
 #DRAUGR_AGENT=claude
 
-# Arguments for the agent, in the agent's own spelling - "--continue" for Claude
-# Code, "resume --last" for Codex. Set this here only if the PROJECT needs them;
-# a habit like resuming by default is yours rather than the repo's, so it belongs
-# in ~/.config/draugr/config (or .draugr.local.conf) instead of a committed file.
+# Arguments for the agent, in the spelling of the agent: "--continue" for Claude
+# Code, "resume --last" for Codex. Set this here only if the PROJECT needs them.
+# A habit such as a resume by default belongs to you, not to the repo. Thus it
+# goes in ~/.config/draugr/config (or .draugr.local.conf), not a committed file.
 #DRAUGR_AGENT_ARGS=
 
-# Network rules and setup commands live in the kit, not here:
+# Network rules and setup commands are in the kit, not here:
 #   .draugr/kit/spec.yaml
 # See https://docs.docker.com/ai/sandboxes/customize/kits/
 #DRAUGR_KIT=.draugr/kit
 
-# Ports this project's dev server needs.
+# Ports for the dev server of this project.
 #DRAUGR_PORTS="5173:5173"
 
-# A service on your own machine the agent may call - a local Ollama, say. Bare
-# port numbers; the address is worked out at every dr-up.
+# A service on your own machine that the agent can call, for example a local
+# Ollama. Bare port numbers. Draugr finds the address at each dr-up.
 #DRAUGR_HOST_PORTS="11434"
 
-# Run the AGENT itself on a model you host, rather than on its vendor's cloud.
-# Commit this only if the PROJECT requires it: code that cannot leave the
-# building is a property of the repository, but the model NAME is a property of
-# whoever's machine is running it, and a teammate who has not pulled that model
-# gets a failure at their first prompt. A preference rather than a requirement
-# belongs in .draugr.local.conf.
+# Run the AGENT itself on a model that you host, not on the cloud of its vendor.
+# Commit this only if the PROJECT requires it. Code that must stay in the
+# building belongs to the repository. But the model NAME belongs to the machine
+# that runs it. A teammate who did not pull that model gets a failure at the
+# first prompt. A preference, not a requirement, goes in .draugr.local.conf.
 #DRAUGR_MODEL="qwen3.8:27b"
 
 # Where that model is served. A bare port must ALSO be in DRAUGR_HOST_PORTS
-# above, and dr-go refuses to start when it is not. Note 11435 rather than the
-# 11434 in the example above: that is the query-only proxy in
-# share/ollama-proxy, and 11434 serves DELETE /api/delete as well as inference.
+# above. If not, dr-go refuses to start. This is 11435, not the 11434 of the
+# example above. 11435 is the query-only proxy in share/ollama-proxy. 11434
+# serves DELETE /api/delete, and also inference.
 #DRAUGR_MODEL_URL="11435"
 
 # Extra environment for the agent, as space-separated NAME=value pairs. Commit
-# this only for something the PROJECT needs; a limit that follows your GPU
-# rather than the repository belongs in .draugr.local.conf.
+# this only for something that the PROJECT needs. A limit that depends on your
+# GPU, not on the repository, goes in .draugr.local.conf.
 #DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1"
 
-# Reference material the agent should be able to read but never change.
+# Reference material that the agent can read, but never change.
 #DRAUGR_MOUNTS="/mnt/c/Docs/api:ro"
 
-# Data files that are worked on but not committed until they are valid.
-# These are exempt from the clean-tree check.
+# Data files in work, not committed until they are valid.
+# The clean-tree test does not apply to them.
 #DRAUGR_DATA="tmp/** *.parquet"
 #DRAUGR_DATA_PUSH=auto
 #DRAUGR_DATA_PULL=manual

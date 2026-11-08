@@ -1,28 +1,29 @@
 #!/usr/bin/env bash
-# dr-shell - a shell inside the mound, alongside whatever the agent is doing.
+# dr-shell: a shell inside the mound, next to the work of the agent.
 #
-# Useful for looking at what the agent actually produced without disturbing it.
-# You land in the clone, not in your working tree, so nothing you type here can
-# touch the host.
+# Use it to look at the results of the agent, and not disturb it. You arrive in
+# the clone, not in your working tree. Thus nothing that you type here can touch
+# the host.
 #
-# To get a shell without a second window, press Ctrl-Z inside the agent instead:
-# it suspends the agent and leaves you here, and fg goes back.
+# For a shell without a second window, press Ctrl-Z inside the agent. It
+# suspends the agent and puts you here, and fg goes back.
 #
 #   dr-shell                 interactive shell
 #   dr-shell -- npm test     run one command and come back (no terminal needed)
-#   dr-shell --root          as root, for installing something you forgot
+#   dr-shell --root          as root, to install something that you forgot
 set -euo pipefail
 
 DR_PROG=dr-shell
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# Anything after "--" is the command to run, so dr-shell can be both the
-# interactive door into the mound and a way to run one thing from a script.
+# All arguments after "--" are the command to run. Thus dr-shell is the
+# interactive door into the mound, and also a way to run one command from a
+# script.
 as_root=
 cmd=()
 while [ $# -gt 0 ]; do
@@ -30,7 +31,7 @@ while [ $# -gt 0 ]; do
         --root)    as_root=1 ;;
         -h|--help) dr_help "$0"; exit 0 ;;
         --) shift; cmd=("$@"); break ;;
-        *) dr_die "unknown option: $1" "A command to run goes after --, e.g. dr-shell -- ls" ;;
+        *) dr_die "unknown option: $1" "A command to run goes after --, for example dr-shell -- ls" ;;
     esac
     shift
 done
@@ -38,34 +39,36 @@ done
 dr_context
 dr_attach_check
 
-# sbx exec starts a stopped sandbox by itself, but it cannot conjure one that was
-# never created - and "no such sandbox" is a worse message than this.
+# sbx exec starts a stopped sandbox, but it cannot make one that nobody created.
+# Also, "no such sandbox" is a worse message than this one.
 if ! dr_sandbox_exists "$DRAUGR_SANDBOX"; then
     dr_die "$DRAUGR_SANDBOX does not exist" "Create it with:  dr-up"
 fi
 
 if [ "$DRAUGR_ATTACH" = ssh ]; then
-    # ssh lands in the mound's home directory; the clone is where the work is.
+    # ssh arrives in the home directory of the mound, but the work is in the
+    # clone.
     mound=$(dr_path_mound "$DR_REPO") || dr_die \
         "$DR_REPO is not on a Windows drive, so it has no path inside the mound"
 
-    # sudo rather than sbx's -u root: ssh authenticates as the agent, and the
-    # agent is in the sudo group with no password. Verified against sbx 0.37.1.
+    # sudo, not the -u root of sbx. ssh authenticates as the agent, and the
+    # agent is in the sudo group with no password. A test with sbx 0.37.1 showed
+    # this.
     prefix=
     [ -n "$as_root" ] && prefix="sudo "
 
     if [ ${#cmd[@]} -gt 0 ]; then
-        # No pty and no -t, so dr-shell stays usable from a script and its output
-        # stays pipeable. The command line is built here and quoted for the far
-        # side by dr_shquote, which is what SC2029 is asking about.
+        # No pty and no -t, so that dr-shell works from a script, and you can
+        # pipe its output. The code builds the command line here, and dr_shquote
+        # quotes it for the far side. SC2029 asks about that.
         # shellcheck disable=SC2029
         ssh "$(dr_ssh_host)" "cd $(printf '%q' "$mound") && $prefix$(dr_shquote "${cmd[@]}")"
     else
         dr_require_tty dr-shell
-        dr_info "opening a shell in $DRAUGR_SANDBOX (exit or Ctrl-D to leave)"
+        dr_info "opening a shell in $DRAUGR_SANDBOX (to leave: exit or Ctrl-D)"
         if [ -n "$as_root" ]; then
-            # -s rather than -i: a login shell would move you to /root, and the
-            # reason to be root here is to fix something in the clone.
+            # -s, not -i. A login shell moves you to /root, but you are root
+            # here to fix something in the clone.
             ssh -t "$(dr_ssh_host)" "cd $(printf '%q' "$mound") && exec sudo -s"
         else
             dr_ssh_attach "$mound"
@@ -75,14 +78,14 @@ else
     exec_args=(exec)
     [ -n "$as_root" ] && exec_args+=(-u root)
 
-    # -i keeps stdin open, -t allocates a terminal; together they are what makes a
-    # shell usable. Both are wrong for a piped command, hence the split: with a
-    # command we stay non-interactive so dr-shell works from a script.
+    # -i keeps stdin open, and -t gives a terminal. Together they make a shell
+    # usable. Both are wrong for a piped command. Thus, with a command, the code
+    # stays non-interactive, so that dr-shell works from a script.
     if [ ${#cmd[@]} -gt 0 ]; then
         dr_sbx "${exec_args[@]}" "$DRAUGR_SANDBOX" "${cmd[@]}"
     else
         dr_require_tty dr-shell
-        dr_info "opening a shell in $DRAUGR_SANDBOX (exit or Ctrl-D to leave)"
+        dr_info "opening a shell in $DRAUGR_SANDBOX (to leave: exit or Ctrl-D)"
         dr_sbx "${exec_args[@]}" -it "$DRAUGR_SANDBOX" bash
     fi
 fi

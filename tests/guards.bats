@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 # The guards: dr-scan, dr-kit, dr-policy, dr-ports.
 #
-# dr-scan is the one with real logic and is tested against real files in a real
-# git repo. The other three are thin wrappers over sbx, so what is tested there
-# is the command line they build and the refusals they make first.
+# dr-scan has real logic, so its tests use real files in a real git repo. The
+# other three are thin wrappers over sbx. Thus their tests are about the command
+# line that they build, and the refusals that they make first.
 
 load helper
 
@@ -26,7 +26,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 @test "dr-scan: a clean repo passes" {
     run dr-scan
     [ "$status" -eq 0 ]
-    [[ "$output" == *"no credential-shaped files"* ]]
+    [[ "$output" == *"no files that look like credentials"* ]]
 }
 
 @test "dr-scan: finds an untracked .env" {
@@ -43,7 +43,8 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     run dr-scan
     [ "$status" -ne 0 ]
     [[ "$output" == *"secrets.env"* ]]
-    # The message must explain the mechanism, or the reply is "but it is ignored".
+    # The message must explain the mechanism. If not, the reply is "but it is
+    # ignored".
     [[ "$output" == *"/run/sandbox/source"* ]]
 }
 
@@ -88,12 +89,12 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     mkdir -p "$SKILLS/mystery-skill"
     run dr-scan
     [[ "$output" == *"mystery-skill"* ]]
-    [[ "$output" == *"survives sbx rm"* ]]
+    [[ "$output" == *"it stays after sbx rm"* ]]
 }
 
 @test "dr-scan: a skill alone does not fail the scan" {
-    # Only credentials gate the exit status; a skill you installed deliberately
-    # is not a failure, so this is informational.
+    # Only credentials change the exit status. A skill that you installed on
+    # purpose is not a failure, so this is only information.
     mkdir -p "$SKILLS/deliberate"
     run dr-scan
     [ "$status" -eq 0 ]
@@ -106,11 +107,11 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     [[ "$output" != *".env"* ]]
 }
 
-# --- dr-go's use of it -------------------------------------------------------
+# --- how dr-go uses it ------------------------------------------------------
 
-# A gitignored secret, not a plain untracked one: an untracked file makes the
-# tree dirty, so dr-go would refuse for that reason instead and the test would
-# pass without the scan ever running.
+# A gitignored secret, not a plain untracked one. An untracked file makes the
+# tree dirty. Then dr-go refuses for that reason, and the test passes without a
+# run of the scan.
 @test "dr-go: a credential blocks it before the mound is created" {
     dr_add_ignored_secret "$REPO"
     run dr-go
@@ -122,7 +123,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 @test "dr-go: DRAUGR_SCAN=false skips the check entirely" {
     dr_add_ignored_secret "$REPO"
     DRAUGR_SCAN=false run dr-go
-    # Gets past the scan and fails on the terminal check instead.
+    # Passes the scan, and fails on the terminal test.
     [[ "$output" != *"credential-shaped"* ]]
     [[ "$output" == *"needs a terminal"* ]]
 }
@@ -167,7 +168,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     printf 'displayName: changed\n' >> "$REPO/.draugr/kit/spec.yaml"
     run dr-kit drift
     [ "$status" -eq 1 ]
-    [[ "$output" == *"has changed"* ]]
+    [[ "$output" == *"changed after"* ]]
 }
 
 @test "dr-kit: a new file in the kit counts as drift, not just spec.yaml" {
@@ -186,7 +187,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     printf 'displayName: changed\n' >> "$REPO/.draugr/kit/spec.yaml"
     run dr-up
     [ "$status" -eq 0 ]
-    [[ "$output" == *"kit has changed"* ]]
+    [[ "$output" == *"kit changed after"* ]]
 }
 
 # --- dr-policy and dr-ports --------------------------------------------------

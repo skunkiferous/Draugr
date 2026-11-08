@@ -1,14 +1,14 @@
 #!/usr/bin/env bats
 # dr-plugin: the library it reads, the switch it writes, and what it refuses.
 #
-# The three verbs that need a mound are only partly testable here - the mock does
-# not run a plugin CLI - so what is asserted is the argv Draugr BUILT and the
-# file movement around it. The parts that are entirely host-side (status, list,
-# enable, disable, clean, rollback) are tested for real.
+# The three verbs that need a mound are only partly testable here, because the
+# mock does not run a plugin CLI. Thus the tests assert on the argv that Draugr
+# BUILT, and the file moves around it. The parts that are fully on the host
+# (status, list, enable, disable, clean, rollback) are tested for real.
 #
-# The one thing worth knowing when reading these: dr-plugin refuses a store that
-# is not on a Windows drive, so the fixtures live under the same scratch root as
-# dr_make_win_repo and are cleaned up by the same teardown.
+# Know this when you read these tests: dr-plugin refuses a store that is not on
+# a Windows drive. Thus the fixtures are under the same scratch root as
+# dr_make_win_repo, and the same teardown removes them.
 
 load helper
 
@@ -19,13 +19,13 @@ setup() {
 
 teardown() { dr_test_teardown; }
 
-# A repo to stand in, and a library beside it holding one marketplace with one
-# plugin. dr-plugin calls dr_context, so the repo is not optional even though
-# the library is machine-wide.
+# A stand-in repo, and a library beside it with one marketplace and one plugin.
+# dr-plugin calls dr_context, so the repo is necessary, but the library is for
+# the full machine.
 #
-# STORE is derived rather than remembered: dr_make_win_repo runs in a command
-# substitution, so the DR_WIN_TMP it exports never reaches us. Teardown finds the
-# same directory the same way.
+# STORE is computed, not stored. dr_make_win_repo runs in a command
+# substitution, so the DR_WIN_TMP that it exports never reaches us. Teardown
+# finds the same directory in the same way.
 setup_store() {
     REPO=$(dr_make_win_repo) || return 1
     cd "$REPO" || return 1
@@ -53,16 +53,16 @@ JSON
     run dr-plugin
     [ "$status" -ne 0 ]
     [[ "$output" == *"DRAUGR_PLUGIN_STORE"* ]]
-    # The refusal has to carry the line to add, because the whole feature is off
-    # until it is there and nothing else would say so.
+    # The refusal must contain the line to add. Until it is there, the feature
+    # is off, and nothing else says so.
     [[ "$output" == *"DRAUGR_PLUGIN_STORE=\"/mnt/c/"* ]]
 }
 
 @test "dr-plugin: refuses a library that sbx could never mount" {
     REPO=$(dr_make_win_repo) || skip "no writable Windows drive path"
     cd "$REPO"
-    # Under $TMPDIR, i.e. WSL's own filesystem: a real path, and one no sandbox
-    # workspace can be made from.
+    # Under $TMPDIR, that is, the own filesystem of WSL. A real path, but no
+    # sandbox workspace can use it.
     export DRAUGR_PLUGIN_STORE="$DR_TMP/store"
 
     run dr-plugin
@@ -77,7 +77,7 @@ JSON
     run dr-plugin
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not know how"* ]]
-    # Naming what IS known is the difference between a refusal and a dead end.
+    # A refusal that names what IS known is not a dead end.
     [[ "$output" == *"claude"* ]]
 }
 
@@ -96,8 +96,8 @@ JSON
 @test "dr-plugin status: installed and enabled are two different questions" {
     setup_store || skip "no writable Windows drive path"
 
-    # No settings file at all: the plugin is in the library and switched off, and
-    # saying "installed" alone would be the misleading half of the answer.
+    # No configuration file: the plugin is in the library, and switched off.
+    # Only "installed" is the half of the answer that misleads.
     run dr-plugin status
     [[ "$output" == *"INSTALLED, NOT ENABLED"* ]]
 
@@ -112,11 +112,11 @@ JSON
 
     run dr-plugin status
     [ "$status" -eq 0 ]
-    [[ "$output" == *"not wired up"* ]]
+    [[ "$output" == *"not connected"* ]]
     [[ "$output" == *"DRAUGR_MOUNTS="* ]]
     [[ "$output" == *"CLAUDE_CODE_PLUGIN_SEED_DIR"* ]]
-    # The per-agent key, which is the one nobody guesses: a generic
-    # DRAUGR_AGENT_ARGS here would be handed to every codex mound as well.
+    # The key for one agent, which nobody guesses. A generic DRAUGR_AGENT_ARGS
+    # here also goes to each codex mound.
     [[ "$output" == *"DRAUGR_AGENT_ARGS_CLAUDE="* ]]
 }
 
@@ -129,7 +129,7 @@ JSON
 
     run dr-plugin status
     [ "$status" -eq 0 ]
-    [[ "$output" == *"all three settings point at this library"* ]]
+    [[ "$output" == *"all three keys point to this library"* ]]
 }
 
 @test "dr-plugin list: one plugin a line, with version and switch" {
@@ -154,8 +154,8 @@ JSON
     [ "$status" -eq 0 ]
     [ "$(jq -r '.enabledPlugins["plug-a@mkt-a"]' "$STORE/settings.json")" = false ]
 
-    # Neither one is worth a sandbox, and a test that let one start would hide a
-    # regression that cost a minute per call.
+    # Neither one needs a sandbox. A test that lets one start hides a regression
+    # that costs a minute for each call.
     [ ! -s "$DR_MOCK_LOG" ] || ! grep -q '^create' "$DR_MOCK_LOG"
 }
 
@@ -173,8 +173,8 @@ JSON
 
 @test "dr-plugin clean: drops a superseded version and keeps the live one" {
     setup_store || skip "no writable Windows drive path"
-    # Measured against the real CLI: update, prune and list all leave a stale
-    # version directory exactly where it is, and list never mentions it.
+    # A test on the real CLI showed this. update, prune and list all leave an
+    # old version directory where it is, and list never names it.
     mkdir -p "$STORE/seed/cache/mkt-a/plug-a/0.9.0"
 
     run dr-plugin clean
@@ -185,15 +185,15 @@ JSON
 
 @test "dr-plugin clean: removes the empty parents an uninstall leaves behind" {
     setup_store || skip "no writable Windows drive path"
-    # cache/<marketplace>/<plugin>/ with no version inside it, which is what
-    # `claude plugin uninstall` leaves - harmless, but it makes a find in the
-    # library name plugins that are gone.
+    # cache/<marketplace>/<plugin>/ with no version inside it. `claude plugin
+    # uninstall` leaves that. It is harmless, but a find in the library then
+    # names plugins that are gone.
     mkdir -p "$STORE/seed/cache/ghost-mkt/ghost-plug"
 
     run dr-plugin clean
     [ "$status" -eq 0 ]
-    # Both levels: emptying the plugin directory is what makes its marketplace
-    # empty, so one pass would have walked past the parent already.
+    # Both levels. The empty plugin directory makes its marketplace empty. Thus
+    # one pass already went past the parent.
     [ ! -d "$STORE/seed/cache/ghost-mkt/ghost-plug" ]
     [ ! -d "$STORE/seed/cache/ghost-mkt" ]
 }
@@ -228,16 +228,16 @@ JSON
 @test "dr-plugin add: the build mound's workspace is the build directory" {
     setup_store || skip "no writable Windows drive path"
 
-    # A plugin named explicitly, so nothing has to be discovered from a
-    # marketplace the mock never actually cloned.
+    # A plugin with an explicit name. Thus nothing comes from a marketplace that
+    # the mock never cloned.
     run dr-plugin add owner/repo plug-b@mkt-b
     [ "$status" -eq 0 ]
 
     line=$(grep '^create ' "$DR_MOCK_LOG" | tail -1)
     [[ "$line" == *"--name draugr-plugin-build"* ]]
     # The WINDOWS spelling of the build directory, because sbx.exe does not
-    # translate paths, and .build rather than the library itself - a bad install
-    # must not be able to reach what the mounds are reading.
+    # translate paths. And .build, not the library itself. A bad install must
+    # not reach the files that the mounds read.
     [[ "$line" == *'\store\.build'* ]]
     [[ "$line" != *'\store\seed '* ]]
 }
@@ -249,8 +249,8 @@ JSON
     [ "$status" -eq 0 ]
 
     line=$(grep 'claude plugin install' "$DR_MOCK_LOG" | tail -1)
-    # CACHE_DIR is the writable library; SEED_DIR is read-only and is what the
-    # mounds use. Confusing the two builds nothing and reports success.
+    # CACHE_DIR is the writable library. SEED_DIR is read-only, and the mounds
+    # use it. A mix-up of the two builds nothing and reports success.
     [[ "$line" == *"CLAUDE_CODE_PLUGIN_CACHE_DIR=/home/agent/seed"* ]]
     [[ "$line" != *"SEED_DIR"* ]]
     [[ "$line" == *"install plug-b@mkt-b -y"* ]]
@@ -261,9 +261,9 @@ JSON
 
     run dr-plugin add owner/repo plug-b@mkt-b
     [ "$status" -eq 0 ]
-    # A Windows-backed workspace cannot rename a git clone - measured - and
-    # `marketplace add` clones to a temporary name and renames it into place. So
-    # the library is staged into the rootfs and copied back afterwards.
+    # A workspace on a Windows drive cannot rename a git clone. A test showed
+    # this. `marketplace add` clones to a temporary name, then renames it. Thus
+    # the library goes into the rootfs, and later comes back.
     grep -q 'cp -a' "$DR_MOCK_LOG"
     [[ "$(grep 'claude plugin' "$DR_MOCK_LOG" | tail -1)" == *"/home/agent/seed"* ]]
 }
@@ -276,8 +276,8 @@ JSON
     [ "$status" -eq 0 ]
     [ -d "$STORE/seed.old" ]
     [ -f "$STORE/seed.old/marker" ]
-    # And the scratch directory does not survive a success: leaving it would put
-    # a stale half-library where the next run copies from.
+    # And after a success, the scratch directory is gone. If not, an old half
+    # library stays where the next run copies from.
     [ ! -d "$STORE/.build" ]
 }
 
@@ -286,9 +286,9 @@ JSON
 
     run dr-plugin add owner/repo plug-b@mkt-b
     [ "$status" -eq 0 ]
-    # The fixture's installPath points at /somewhere/stale. Every entry records
-    # an ABSOLUTE path, so a library copied anywhere else names directories that
-    # do not exist until this rewrite happens.
+    # The installPath of the fixture points at /somewhere/stale. Each entry
+    # records an ABSOLUTE path. Thus a library copied to another place names
+    # directories that do not exist until this rewrite.
     run jq -r '.plugins["plug-a@mkt-a"][0].installPath' "$STORE/seed/installed_plugins.json"
     [ "$output" = "/home/agent/seed/cache/mkt-a/plug-a/1.0.0" ]
 }
@@ -298,8 +298,8 @@ JSON
 
     run dr-plugin add owner/repo plug-b@mkt-b
     [ "$status" -eq 0 ]
-    # The marketplace step is part of add, not something to do first: the CLI is
-    # asked to register the repository before anything is installed from it.
+    # The marketplace step is part of add, not a step to do first. The CLI
+    # registers the repository before it installs anything from it.
     add_line=$(grep -n 'marketplace add owner/repo' "$DR_MOCK_LOG" | cut -d: -f1 | head -1)
     inst_line=$(grep -n 'plugin install plug-b@mkt-b' "$DR_MOCK_LOG" | cut -d: -f1 | head -1)
     [ -n "$add_line" ]
@@ -310,15 +310,15 @@ JSON
 @test "dr-plugin add: installs every plugin named after the marketplace" {
     setup_store || skip "no writable Windows drive path"
 
-    # The signature is <owner>/<repo> followed by any number of plugins, which
-    # three separate places used to disagree about.
+    # The signature is <owner>/<repo>, then any number of plugins. Three places
+    # did not agree about this before.
     run dr-plugin add owner/repo one@mkt-b two@mkt-b three@mkt-b
     [ "$status" -eq 0 ]
     [ "$(grep -c 'plugin install one@mkt-b'   "$DR_MOCK_LOG")" -eq 1 ]
     [ "$(grep -c 'plugin install two@mkt-b'   "$DR_MOCK_LOG")" -eq 1 ]
     [ "$(grep -c 'plugin install three@mkt-b' "$DR_MOCK_LOG")" -eq 1 ]
 
-    # And each one is switched on, not merely installed.
+    # And each one is switched on, not only installed.
     for id in one two three; do
         [ "$(jq -r ".enabledPlugins[\"$id@mkt-b\"]" "$STORE/settings.json")" = true ]
     done
@@ -327,22 +327,22 @@ JSON
 @test "dr-plugin add: a bare plugin name refuses rather than guessing a marketplace" {
     setup_store || skip "no writable Windows drive path"
 
-    # Two routes to the name and neither can supply it: the mock registers
-    # nothing, so discovery sees no arrival, and setup_store's fixture leaves
-    # .source.repo absent, so the registry does not name owner/repo either.
-    # Guessing would install nothing and report success.
+    # Two ways to get the name, and neither can give it. The mock registers
+    # nothing, so discovery sees nothing new. The fixture of setup_store has no
+    # .source.repo, so the registry does not name owner/repo either. A guess
+    # installs nothing and reports success.
     run dr-plugin add owner/repo plug-b
     [ "$status" -ne 0 ]
-    [[ "$output" == *"cannot tell which marketplace"* ]]
+    [[ "$output" == *"cannot tell the marketplace of"* ]]
     [[ "$output" == *"no registered marketplace"* ]]
     [[ "$output" == *"<plugin>@<marketplace>"* ]]
 }
 
-# A source the registry already knows about. setup_store's fixture deliberately
-# leaves .source.repo absent, so the tests that need one say so themselves. What
-# the four below are about is the marketplace being ALREADY registered for the
-# source named - which is what a second `dr-plugin add` of the same repo hits,
-# and what used to be reported as a failure with advice that could not work.
+# A source that the registry already knows. The fixture of setup_store has no
+# .source.repo, on purpose, so the tests that need one add it. The four tests
+# below are about a marketplace that is ALREADY registered for the named source.
+# A second `dr-plugin add` of the same repo gets that. Before, it was reported
+# as a failure, with advice that did not work.
 register_source() {
     printf '{"mkt-a": {"source": {"source": "github", "repo": "%s"}}}\n' "$1" \
         > "$STORE/seed/known_marketplaces.json"
@@ -356,21 +356,21 @@ register_source() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"already registered, as mkt-a"* ]]
 
-    # The state the old message never mentioned: installed, at which version,
-    # and which side of the switch it is on.
+    # The state that the old message never gave: installed, at which version,
+    # and on which side of the switch.
     [[ "$output" == *"plug-a@mkt-a 1.0.0 disabled"* ]]
     [[ "$output" == *"dr-plugin update <plugin>@mkt-a"* ]]
 
-    # And it must not hand back the advice that cannot work - a bare <plugin>,
-    # which the bare-name branch then refuses for want of the very same name.
+    # And it must not give the advice that cannot work: a bare <plugin>. The
+    # bare-name branch refuses that, because it needs the same name.
     [[ "$output" != *"Name the plugin instead"* ]]
 }
 
 @test "dr-plugin add: already registered with nothing installed asks for a plugin" {
     setup_store || skip "no writable Windows drive path"
     register_source owner/repo
-    # The marketplace is known but the library holds nothing from it, so there is
-    # no state to report - only the one id that would work.
+    # The marketplace is known, but the library has nothing from it. Thus there
+    # is no state to report, only the one id that works.
     printf '{"version": 2, "plugins": {}}\n' > "$STORE/seed/installed_plugins.json"
 
     run dr-plugin add owner/repo
@@ -384,9 +384,9 @@ register_source() {
     setup_store || skip "no writable Windows drive path"
     register_source owner/repo
 
-    # Discovery finds nothing, but the registry names what owner/repo is already
-    # registered as - so the bare name completes, where before it refused. This
-    # is the behaviour change the message fix carries with it.
+    # Discovery finds nothing, but the registry names the registration of
+    # owner/repo. Thus the bare name now completes, and before it refused. The
+    # message fix brings this change of behavior.
     run dr-plugin add owner/repo plug-b
     [ "$status" -eq 0 ]
     [ "$(grep -c 'plugin install plug-b@mkt-a' "$DR_MOCK_LOG")" -eq 1 ]
@@ -397,8 +397,8 @@ register_source() {
     setup_store || skip "no writable Windows drive path"
     register_source owner/other
 
-    # The registry names a marketplace for owner/other, not for owner/repo, so
-    # neither route can name one here and the refusal stands.
+    # The registry names a marketplace for owner/other, not for owner/repo. Thus
+    # neither way can name one here, and the refusal stays.
     run dr-plugin add owner/repo
     [ "$status" -ne 0 ]
     [[ "$output" == *"registered no new marketplace"* ]]
@@ -408,8 +408,8 @@ register_source() {
 
 @test "dr-plugin: refuses to start on top of a crashed run's build mound" {
     setup_store || skip "no writable Windows drive path"
-    # The mock reports whatever DR_MOCK_NAMES lists, so this is a build mound
-    # left behind rather than one this run created.
+    # The mock reports the names in DR_MOCK_NAMES. Thus this is an old build
+    # mound, not one that this run created.
     export DR_MOCK_NAMES=draugr-plugin-build
 
     run dr-plugin add owner/repo plug-b@mkt-b
@@ -420,8 +420,8 @@ register_source() {
 
 # --- the skills a plugin ships, and the kit that installs it ------------------
 
-# A skill inside the installed plugin. The directory name and the front matter's
-# `name:` differ on purpose: one test below is about which of the two is used.
+# A skill in the installed plugin. The directory name and the `name:` of the
+# front matter are different, on purpose. A test below finds which one is used.
 make_plugin_skill() {
     local dir="$STORE/seed/cache/mkt-a/plug-a/1.0.0/skills/$1"
     mkdir -p "$dir"
@@ -435,7 +435,7 @@ make_plugin_skill() {
     run dr-plugin skills
     [ "$status" -eq 0 ]
     [[ "$output" == *"alpha-skill"* ]]
-    # And the plugin it came from, because that is the thing you have to install.
+    # And the plugin that it came from, because you must install that.
     [[ "$output" == *"plug-a@mkt-a"* ]]
 }
 
@@ -443,8 +443,8 @@ make_plugin_skill() {
     setup_store || skip "no writable Windows drive path"
     make_plugin_skill alpha alpha-skill
 
-    # A substring test cannot tell these apart, since "alpha-skill" contains
-    # "alpha" - so the first field is compared outright.
+    # A substring test cannot tell these apart, because "alpha-skill" contains
+    # "alpha". Thus the test compares the full first field.
     run dr-plugin skills
     [ "$(printf '%s\n' "$output" | awk 'NR == 1 {print $1}')" = alpha-skill ]
 }
@@ -454,7 +454,7 @@ make_plugin_skill() {
     make_plugin_skill alpha
     mkdir -p "$STORE/seed/cache/mkt-a/plug-a/1.0.0/skills/notaskill"
 
-    # The agent ignores one too, so reporting it would invent a skill.
+    # The agent also ignores one, so a report of it makes up a skill.
     run dr-plugin skills
     [ "$status" -eq 0 ]
     [[ "$output" == *"alpha"* ]]
@@ -463,9 +463,9 @@ make_plugin_skill() {
 
 @test "dr-plugin skills: a skill under a version that is not installed is ignored" {
     setup_store || skip "no writable Windows drive path"
-    # installed_plugins.json says 1.0.0. A skill cached under another version is
-    # a superseded copy - what dr-plugin clean reaps - and naming it would
-    # advertise a skill no mound is going to load.
+    # installed_plugins.json says 1.0.0. A skill in the cache under another
+    # version is an old copy, and dr-plugin clean removes it. A report of it
+    # names a skill that no mound loads.
     mkdir -p "$STORE/seed/cache/mkt-a/plug-a/2.0.0/skills/ghost"
     printf -- '---\nname: ghost\n---\n' \
         > "$STORE/seed/cache/mkt-a/plug-a/2.0.0/skills/ghost/SKILL.md"
@@ -477,11 +477,11 @@ make_plugin_skill() {
 
 @test "dr-plugin skills: says so when no plugin ships one" {
     setup_store || skip "no writable Windows drive path"
-    # Plenty of plugins carry only commands or hooks, so this is an answer and
-    # not a failure - commit-commands is one of them.
+    # Many plugins have only commands or hooks, so this is an answer, not a
+    # failure. commit-commands is one of them.
     run dr-plugin skills
     [ "$status" -eq 0 ]
-    [[ "$output" == *"no installed plugin ships a skill"* ]]
+    [[ "$output" == *"no installed plugin has a skill"* ]]
 }
 
 @test "dr-plugin kit: writes a mixin that installs the plugin, pinning no version" {
@@ -495,12 +495,12 @@ make_plugin_skill() {
     grep -q '^kind: mixin' "$spec"
     grep -q 'claude plugin install plug-a@mkt-a -y' "$spec"
 
-    # The seed has to be named the way the MOUND spells it, not the host.
+    # The seed name must use the spelling of the MOUND, not of the host.
     grep -q 'CLAUDE_CODE_PLUGIN_SEED_DIR=/c/' "$spec"
 
-    # And the version must be absent. A pinned kit would need editing on every
-    # dr-plugin update, and an edited kit cannot be applied to a running mound -
-    # so pinning would turn each plugin update into a rebuild of every mound.
+    # And the version must be absent. You must edit a pinned kit on each
+    # dr-plugin update, and an edited kit cannot apply to a running mound. Thus
+    # with a pin, each plugin update needs a rebuild of each mound.
     ! grep -q '1\.0\.0' "$spec"
 }
 
@@ -508,8 +508,8 @@ make_plugin_skill() {
     setup_store || skip "no writable Windows drive path"
     export DRAUGR_KIT_STORE="$DR_TMP/kits"
 
-    # A kit can only install what the seed holds, so this would generate a file
-    # whose one job fails inside every mound built from it.
+    # A kit can install only what the seed holds. Thus this makes a file whose
+    # one job fails in each mound built from it.
     run dr-plugin kit nope@mkt-a
     [ "$status" -ne 0 ]
     [[ "$output" == *"not installed"* ]]
@@ -522,8 +522,8 @@ make_plugin_skill() {
     run dr-plugin kit -y
     [ "$status" -eq 0 ]
 
-    # A library kit may have been edited by hand since it was generated, so the
-    # second run asks - and with no terminal, asking means refusing.
+    # Somebody can edit a library kit by hand after Draugr made it. Thus the
+    # second run asks. With no terminal, a question means a refusal.
     printf 'sentinel\n' >> "$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml"
     run dr-plugin kit
     [ "$status" -ne 0 ]
@@ -537,9 +537,9 @@ make_plugin_skill() {
     run dr-plugin kit -y
     [ "$status" -eq 0 ]
 
-    # The plugin leaves the seed and the kit stays, still naming it - so a mound
-    # built from that kit would go to the network for it, or fail. Reported and
-    # NOT deleted: the kit is yours, and may have been edited since.
+    # The plugin leaves the seed, but the kit stays, and still names it. A mound
+    # built from that kit then gets it from the network, or fails. Reported, and
+    # NOT deleted. The kit is yours, and you can edit it.
     run dr-plugin remove plug-a@mkt-a
     [[ "$output" == *"still installs plug-a@mkt-a"* ]]
     [ -f "$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml" ]
@@ -550,32 +550,32 @@ make_plugin_skill() {
 @test "dr-plugin add: redirects github to HTTPS for the plugin CLI" {
     setup_store || skip "no writable Windows drive path"
 
-    # A mound has no SSH key and must not be given one, but `claude plugin
-    # install` clones a github plugin SOURCE over SSH and does not fall back the
-    # way `marketplace add` does. Measured against iha2/superlite: the
-    # marketplace cloned over HTTPS and the install then died with "Connection
-    # closed by 140.82.121.4 port 22" - GitHub refusing an unauthenticated SSH
-    # client. Egress was never the problem.
+    # A mound has no SSH key and must not get one. But `claude plugin install`
+    # clones a github plugin SOURCE over SSH, with no fallback, as `marketplace
+    # add` has. A test on iha2/superlite showed this. The marketplace cloned
+    # over HTTPS, and the install then died with "Connection closed by
+    # 140.82.121.4 port 22". GitHub refused an SSH client with no
+    # authentication. Egress was never the problem.
     run dr-plugin add owner/repo plug-b@mkt-b
     [ "$status" -eq 0 ]
     grep -qF 'GIT_CONFIG_COUNT=2' "$DR_MOCK_LOG"
     grep -qF 'GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf' "$DR_MOCK_LOG"
     grep -qF 'GIT_CONFIG_VALUE_0=git@github.com:' "$DR_MOCK_LOG"
 
-    # Both spellings, because git uses either and insteadOf is multi-valued.
+    # Both spellings, because git uses either one, and insteadOf can have many
+    # values.
     grep -qF 'GIT_CONFIG_VALUE_1=ssh://git@github.com/' "$DR_MOCK_LOG"
 }
 
 @test "dr-plugin add: names each slow step while it is running" {
     setup_store || skip "no writable Windows drive path"
 
-    # Three slow steps used to run silently - a tens-of-MB copy on a Windows
-    # drive, a microVM create, and the staging copy into its rootfs - so the
-    # command said nothing at all until the CLI spoke, and there was no way to
-    # tell which of them was being waited on.
+    # Before, three slow steps ran silently: a copy of tens of MB on a Windows
+    # drive, a microVM create, and the copy into its rootfs. The command said
+    # nothing until the CLI spoke. You did not know which step you waited for.
     run dr-plugin add owner/repo plug-b@mkt-b
     [ "$status" -eq 0 ]
     [[ "$output" == *"copying the library"* ]]
     [[ "$output" == *"creating the build mound"* ]]
-    [[ "$output" == *"staging the library"* ]]
+    [[ "$output" == *"copying the library into the rootfs"* ]]
 }

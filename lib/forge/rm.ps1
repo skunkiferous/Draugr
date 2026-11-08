@@ -1,27 +1,29 @@
-# rm.ps1 - delete a forge VM, after showing exactly what goes with it.
+# rm.ps1: delete a forge VM, after it shows all that goes with it.
 #
-# ==> RUN BY bin/dr-forge, ON THE WINDOWS SIDE. Not meant to be typed. <==
+# ==> bin/dr-forge RUNS THIS, ON THE WINDOWS SIDE. Do not type it. <==
 #
-# THE HAZARD THIS EXISTS FOR. `asb_vm_delete` calls `remove_dir_recursive` on the folder
-# DERIVED from the VM's disk path - strip the filename, and strip a trailing `\snapshots` when
-# the file is named `branch_*` or `snapshot_*` - and that recursion is guarded only against a
-# drive root (docs/FORGE-DISKS.md, "The VM's folder is derived from the disk path"). A VM
-# pointed at `D:\Archive\base.vhdx` therefore has `D:\Archive\` in its blast radius, and the
-# layer store is exactly the kind of folder people point a VM near: MEASURED, every
-# VM on this machine reports `diskDirectory: C:\ForgeLayers`, which is the store holding every
-# frozen layer. It is safe there only because each VM gets a subfolder of its own.
+# THE HAZARD. `asb_vm_delete` calls `remove_dir_recursive` on the folder that it
+# DERIVES from the disk path of the VM. It removes the filename. If the file is
+# named `branch_*` or `snapshot_*`, it also removes a trailing `\snapshots`. The
+# only guard on that recursion is against a drive root (docs/FORGE-DISKS.md,
+# "The VM's folder is derived from the disk path"). Thus, for a VM on
+# `D:\Archive\base.vhdx`, a delete can remove `D:\Archive\`. People often put a
+# VM near the layer store. A test showed that each VM on this machine reports
+# `diskDirectory: C:\ForgeLayers`, the store of all frozen layers. It is safe
+# only because each VM gets its own subfolder.
 #
-# So this does not ask the daemon to delete and hope. It works out the folder that will be
-# removed, refuses outright when that folder holds something no VM should take with it, and
-# otherwise reports the contents and the size so the caller can show them before asking.
+# Thus this script does not tell the daemon to delete and then hope. It finds
+# the folder that the delete removes. If that folder holds something that no VM
+# must take with it, it refuses. If not, it reports the contents and the size,
+# so that the caller can show them before it asks.
 #
-# TWO MODES, because the inspection has to happen BEFORE the confirmation and the deletion
-# after it:
+# TWO MODES, because the inspection must happen BEFORE the confirmation, and the
+# delete after it:
 #   inspect   read-only. key=value lines, the shape bin/dr-forge can read without a parser.
-#   delete    stop the VM if it is running, then delete it.
+#   delete    stop the VM if it runs, then delete it.
 #
 # EXIT CODES:
-#   0 fine   2 misuse   10 no daemon   11 no such VM   12 the folder is not safe to remove
+#   0 fine   2 misuse   10 no daemon   11 no such VM   12 a removal of the folder is not safe
 #   13 the delete failed
 param(
     [string]$Mode = 'inspect',
@@ -36,8 +38,8 @@ if ($Mode -notin @('inspect', 'delete')) {
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
-# The host key a deleted VM leaves behind, shared with layer.ps1 because `drop` and `adopt`
-# strand exactly the same entry.
+# The host key that a deleted VM leaves behind. layer.ps1 shares this, because
+# `drop` and `adopt` leave the same entry.
 . (Join-Path $PSScriptRoot 'hostkey.ps1')
 
 function Fail([int]$code, [string]$m) {
@@ -56,16 +58,17 @@ function Asb([string]$Method, [string]$Path) {
     Invoke-RestMethod @a
 }
 try { $null = Asb GET '/version' } catch {
-    Fail 10 'host.json is there but nothing answers - the last daemon died rather than exited.'
+    Fail 10 'host.json exists, but nothing answers. The last daemon died, and did not exit.'
 }
 
 try { $st = Asb GET "/vms/$Vm" } catch { Fail 11 "the daemon knows no VM called '$Vm'." }
 
 # --- which folder would be removed --------------------------------------------------------
-# The API reports `diskDirectory` rather than the disk's full path, so the folder is derived
-# and then CONFIRMED by finding a disk in it - never assumed from the name alone. If the
-# expected subfolder holds no disk but the store itself does, the VM is pointed straight at
-# the store and deleting it would take everything in there.
+# The API reports `diskDirectory`, not the full path of the disk. Thus this
+# script derives the folder, and then PROVES it with a disk in it. It never
+# trusts only the name. If the expected subfolder holds no disk, but the store
+# does, the VM points directly at the store. Then a delete takes all that is in
+# it.
 $store = "$($st.diskDirectory)"
 $folder = ''
 $why = ''
@@ -80,29 +83,31 @@ if ($store -and (Test-Path (Join-Path (Join-Path $store $Vm) 'disk.vhdx'))) {
 }
 
 # --- is that folder safe to remove? -------------------------------------------------------
-# A FROZEN LAYER IN THE BLAST RADIUS IS AN OUTRIGHT REFUSAL. Frozen means the disk file is
-# read-only, which is how the layer mechanism marks a parent that children depend on; any
-# change to it invalidates every child, and removal is the largest change there is. Siblings
-# are fine - the store holding layers BESIDE this VM's folder is the normal arrangement.
+# A FROZEN LAYER IN THE AREA OF THE DELETE IS A REFUSAL. Frozen means that the
+# disk file is read-only. That is how the layer mechanism marks a parent that
+# children need. Each change to it breaks each child, and a removal is the
+# largest change. Siblings are fine. Layers BESIDE the folder of this VM in the
+# store are the normal layout.
 $unsafe = @()
 if ($why) { $unsafe += $why }
 
 if (Test-Path $folder) {
-    # -Force so hidden entries count: something that would be removed and not reported is the
-    # one thing this inspection must not do.
+    # -Force, so that hidden entries count. This inspection must never remove
+    # something and not report it.
     $all = @(Get-ChildItem -LiteralPath $folder -Force -Recurse -ErrorAction SilentlyContinue)
     $bytes = 0
     $all | Where-Object { -not $_.PSIsContainer } | ForEach-Object { $bytes += $_.Length }
 
-    # A read-only .vhdx anywhere under here is a frozen layer, and this VM's own disk is not
-    # one: a registered VM's disk is writable by definition.
+    # A read-only .vhdx below here is a frozen layer. The disk of this VM is not
+    # one, because the disk of a registered VM is always writable.
     $frozen = @($all | Where-Object {
         -not $_.PSIsContainer -and $_.Extension -eq '.vhdx' -and $_.IsReadOnly
     })
     foreach ($f in $frozen) { $unsafe += "a frozen layer is inside it: $($f.FullName)" }
 
-    # Another VM's folder under this one would go too. layer.json beside a disk is how both
-    # layers and VMs are marked, so a subfolder carrying one is somebody else's home.
+    # The folder of another VM below this one goes too. A layer.json beside a
+    # disk marks both layers and VMs. Thus a subfolder with one belongs to
+    # something else.
     $nested = @(Get-ChildItem -LiteralPath $folder -Directory -Force -ErrorAction SilentlyContinue |
         Where-Object { Test-Path (Join-Path $_.FullName 'disk.vhdx') })
     foreach ($n in $nested) { $unsafe += "another disk lives under it: $($n.FullName)" }
@@ -128,16 +133,16 @@ if ($Mode -eq 'inspect') {
 }
 
 # --- delete -------------------------------------------------------------------------------
-# The refusal is repeated on this side rather than trusted to the caller: inspect and delete
-# are two crossings of the boundary, and anything could have changed in between. This is the
-# check that actually governs, and it is the one the exit code comes from.
+# This side repeats the refusal, and does not trust the caller. Inspect and
+# delete are two crossings of the boundary, and all can change between them.
+# This test is the one that decides, and the exit code comes from it.
 if ($unsafe.Count -gt 0) {
     Fail 12 "refusing to delete '$Vm': $($unsafe -join '; ')"
 }
 
-# Stopped first, and through the API because the guest is going away anyway: a graceful
-# shutdown is what `dr-forge down` is for, and waiting for one here would only delay a disk
-# that is about to be removed. The daemon refuses to delete a running VM.
+# Stop first, through the API, because the guest goes away anyway. `dr-forge
+# down` does a clean shutdown. Here, a wait for one only delays the removal of
+# the disk. The daemon refuses to delete a VM that runs.
 if ($st.running) {
     Write-Output 'phase=stopping'
     try { $null = Asb POST "/vms/$Vm/stop" } catch { }
@@ -146,51 +151,54 @@ if ($st.running) {
         Start-Sleep -Seconds 3
         try { $st = Asb GET "/vms/$Vm" } catch { break }
     } while ($st.running -and ((Get-Date) - $t0).TotalSeconds -lt 120)
-    if ($st.running) { Fail 13 "'$Vm' would not stop, so it was not deleted." }
+    if ($st.running) { Fail 13 "'$Vm' did not stop, so it was not deleted." }
 }
 
 # POST /vms/<name>/delete, which is the same shape as /start and /stop.
 #
-# IT IS NOT `DELETE /vms/<name>`. That was this script's first guess and the daemon answered
-# **405 Method Not Allowed** - the route exists, the verb does not - with no Allow header to say
-# which verb would work, and a 404 for every probe of a /delete sub-route, because this server
-# answers method mismatches on sub-routes with 404 rather than 405. So probing cannot find it.
+# IT IS NOT `DELETE /vms/<name>`. That was the first guess of this script. The
+# daemon answered **405 Method Not Allowed**: the route exists, but the verb
+# does not. No Allow header told which verb works. Each probe of a /delete
+# sub-route got a 404, because this server answers a wrong method on a sub-route
+# with 404, not 405. Thus a probe cannot find it.
 #
-# The authority is the client AppSandbox ships, at C:\AppSandbox\headless-api\asb.py:
+# The authority is the client that AppSandbox ships, at
+# C:\AppSandbox\headless-api\asb.py:
 #
 #     def delete_vm(self, name): return self._req("POST", "/vms/%s/delete" % name)
 #
-# with the README beside it documenting `delete_vm(name)` as "remove the VM and its disk
-# (refused 409 while building)". Read it before adding another call rather than guessing from
-# the shape of the ones already here.
+# The README beside it documents `delete_vm(name)` as "remove the VM and its
+# disk (refused 409 while building)". Before you add another call, read it. Do
+# not guess from the shape of the calls here.
 Write-Output 'phase=deleting'
 try {
     $null = Invoke-RestMethod -Uri "$($h.endpoint)/v1/vms/$Vm/delete" -Method POST `
         -Body '{}' -ContentType 'application/json' -TimeoutSec 300 `
         -Headers @{ Authorization = "Bearer $($h.token)" }
 } catch {
-    # 409 is a STATE conflict rather than a refusal of the request, and the one that happens is
-    # a VM still building - which is worth saying, because the answer is to wait rather than to
-    # go looking for what is wrong.
+    # 409 is a STATE conflict, not a refusal of the request. The usual one is a
+    # VM that is still building. Say so, because the fix is to wait, not to look
+    # for a fault.
     $code = 0
     if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
     if ($code -eq 409) {
-        Fail 13 "'$Vm' cannot be deleted yet: the daemon reports a state conflict (409), which for a delete means it is still building. Wait for it to finish, then re-run."
+        Fail 13 "'$Vm' cannot be deleted yet. The daemon reports a state conflict (409). For a delete, that means that it is still building. Wait until it is complete, then run again."
     }
     Fail 13 "the daemon refused to delete '$Vm': $($_.Exception.Message)"
 }
 
-# Verified by effect: a 200 from a young API is not the same as a VM that is gone.
+# Proved by effect. A 200 from a young API is not the same as a VM that is gone.
 Start-Sleep -Seconds 2
 $still = $true
 try { $null = Asb GET "/vms/$Vm" } catch { $still = $false }
 if ($still) { Fail 13 "the daemon still reports '$Vm' after the delete." }
 Write-Output 'phase=gone'
 
-# THE HOST KEY GOES WITH THE VM. It is filed under the VM's NAME, so it outlives the machine
-# and poisons the next VM given that name - see hostkey.ps1. Last, and never fatal: the VM is
-# already gone by here, and a leftover line in known_hosts is not a reason to report a delete
-# as failed. Said only when there was one, because "hostkey=" alone says nothing.
+# THE HOST KEY GOES WITH THE VM. It is filed under the NAME of the VM. Thus it
+# stays after the machine, and breaks the next VM with that name (see
+# hostkey.ps1). Last, and never fatal. The VM is already gone here, and an old
+# line in known_hosts does not make the delete a failure. With no key, it says
+# nothing, because "hostkey=" alone tells nothing.
 $cleared = Clear-ForgeHostKey $Vm
 if ($cleared) { Write-Output "hostkey=$cleared" }
 exit 0

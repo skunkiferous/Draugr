@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# dr-status - what is true about this repo right now.
+# dr-status: the current facts about this repo.
 #
-# One screen: which mound, what state, what the host tree looks like, what is
-# waiting to be reviewed, and what the config decided.
+# One screen: the mound, its state, the state of the host tree, the work to
+# review, and the decisions of the configuration.
 #
-# Nothing here starts a stopped mound. Anything that would have to ask the
-# sandbox is either read from local state instead, or reported only when the
-# mound is already running - a command people run to decide whether to do
-# something must not itself be the thing that does something.
+# Nothing here starts a stopped mound. A value that needs a question to the
+# sandbox comes from local state. Or, if the mound already runs, the code asks
+# it. People run this command to decide what to do. Thus the command
+# itself must not do something.
 #
 #   dr-status
 set -euo pipefail
 
 DR_PROG=dr-status
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
@@ -27,13 +27,14 @@ esac
 
 dr_context
 
-# A two-column layout, so the labels line up and the values are scannable.
+# A layout in two columns, so that the labels line up and the values are easy to
+# read.
 row() { printf '  %-14s %s\n' "$1" "$2"; }
 
-# dr-status is a report: all of it is content, so all of it belongs on stdout.
-# dr_heading writes to stderr - correct for the prompts it was written for, wrong
-# here, because the two streams are buffered independently and the headings came
-# out in the wrong places the moment the output was piped anywhere.
+# dr-status is a report. All of it is content, so all of it goes to stdout.
+# dr_heading writes to stderr. That is correct for questions, but wrong here.
+# The two streams have separate buffers, and in a pipe the headings came out in
+# the wrong places.
 heading() { printf '\n%s%s%s\n' "$_DR_BOLD" "$*" "$_DR_OFF"; }
 
 heading "repository"
@@ -41,13 +42,13 @@ row repo "$DR_REPO"
 row windows "$DR_REPO_WIN"
 row branch "$(dr_repo_branch "$DR_REPO")"
 
-# The dirty-tree line is the one people actually act on, so it says what the
-# consequence is rather than just counting files.
+# People act on the dirty-tree line, so it tells the result, and does not only
+# count files.
 #
-# DRAUGR_DATA files are counted apart from the rest, because "the clone will not
-# have them" is FALSE for those: they travel by rsync instead of git and arrive
-# before the agent starts. Counting them together told a repo whose content IS
-# data that it had sixteen problems, every one of which was already handled.
+# The code counts DRAUGR_DATA files separately. For those, "the clone does not
+# have them" is FALSE. They go through rsync, not git, and arrive before the
+# agent starts. One count for both told a repo of data that it had sixteen
+# problems, and the code already handled each one.
 if dr_repo_is_clean "$DR_REPO"; then
     row tree "${_DR_GREEN}clean${_DR_OFF}"
 else
@@ -55,73 +56,74 @@ else
     blocking=$(dr_data_dirty_blockers "$DR_REPO" | wc -l | tr -d ' ')
 
     if [ "$blocking" -gt 0 ]; then
-        row tree "${_DR_YELLOW}$blocking uncommitted change(s)${_DR_OFF} - the clone will not have them"
+        row tree "${_DR_YELLOW}$blocking uncommitted change(s)${_DR_OFF}. The clone does not have them."
     else
-        row tree "${_DR_GREEN}clean${_DR_OFF} apart from data"
+        row tree "${_DR_GREEN}clean${_DR_OFF} except data"
     fi
 
-    # Named with its transport, because the answer to "why is that not blocking
-    # me" and the answer to "how does it get there" are the same answer.
+    # Named with its transport. "Why does that not block me?" and "how does it
+    # get there?" have the same answer.
     if [ "$((total - blocking))" -gt 0 ]; then
-        row data "$((total - blocking)) changed - carried by dr-data push ($DRAUGR_DATA_PUSH), not git"
+        row data "$((total - blocking)) changed. dr-data push moves them ($DRAUGR_DATA_PUSH), not git."
     fi
 fi
 
-# Each state names the command that changes it, so the status screen doubles as
-# the prompt for whatever you were about to look up.
+# Each state names the command that changes it. Thus the status screen also
+# tells you the next command.
 heading "mound"
 state=$(dr_sandbox_state "$DRAUGR_SANDBOX")
 case "$state" in
     running) row state "${_DR_GREEN}running${_DR_OFF}" ;;
-    stopped) row state "${_DR_DIM}stopped${_DR_OFF} - dr-go starts it" ;;
-    absent)  row state "${_DR_DIM}does not exist${_DR_OFF} - dr-up creates it" ;;
+    stopped) row state "${_DR_DIM}stopped${_DR_OFF}. dr-go starts it." ;;
+    absent)  row state "${_DR_DIM}does not exist${_DR_OFF}. dr-up creates it." ;;
     *)       row state "${_DR_YELLOW}$state${_DR_OFF}" ;;
 esac
 row name "$DRAUGR_SANDBOX"
 row agent "$DRAUGR_AGENT"
 
-# What dr-sync last brought back. Deliberately read from local refs only: asking
-# the mound would start a stopped one, and a status command should not have side
-# effects. So this is "as of your last dr-sync", and says so when it is empty.
+# What dr-sync brought back last time. Only from local refs, on purpose. A
+# question to the mound starts a stopped one, and a status command must have no
+# side effects. Thus this is "at your last dr-sync". If it is empty, it
+# says so.
 tracking=$(dr_tracking_ref)
 if git -C "$DR_REPO" rev-parse --verify --quiet "$tracking" >/dev/null; then
     ahead=$(git -C "$DR_REPO" rev-list --count "HEAD..$tracking")
     behind=$(git -C "$DR_REPO" rev-list --count "$tracking..HEAD")
     if [ "$ahead" -gt 0 ]; then
-        row unmerged "${_DR_YELLOW}$ahead commit(s)${_DR_OFF} on $tracking - dr-diff, then dr-merge"
+        row unmerged "${_DR_YELLOW}$ahead commit(s)${_DR_OFF} on $tracking. Use dr-diff, then dr-merge."
     else
-        row unmerged "${_DR_GREEN}none${_DR_OFF} as of your last dr-sync"
+        row unmerged "${_DR_GREEN}none${_DR_OFF} at your last dr-sync"
     fi
-    # Commits the agent may be working without - and the two reasons it might be,
-    # which look identical from the tracking ref alone. dr-send drops them on
-    # host/<branch> inside the mound without moving the agent's branch, so
-    # "not in draugr/main - dr-send" was the standing answer even once they were
-    # delivered, and following it did nothing.
+    # Commits that the agent possibly works without, and the two reasons for it.
+    # From the tracking ref alone, the two look the same. dr-send puts them on
+    # host/<branch> inside the mound, and does not move the branch of the agent.
+    # Thus "not in draugr/main - dr-send" stayed the answer also after delivery,
+    # and the advice did nothing.
     if [ "$behind" -gt 0 ]; then
-        # With no mound these commits are not stranded, and dr-send cannot help:
-        # it delivers INTO a mound, so with none it refuses, and the count is
-        # unchanged afterwards. Following the advice twice and seeing the same
-        # screen is how this was found. The tracking ref here is a fossil of a
-        # mound that has been removed - and a fresh one is cloned from HEAD, so
-        # dr-up brings these in from the start rather than needing a send.
+        # With no mound, these commits are not lost, and dr-send cannot help. It
+        # delivers INTO a mound, so with no mound it refuses, and the count does
+        # not change. A user followed the advice twice, saw the same screen, and
+        # so found this. The tracking ref here is from a removed mound. A new
+        # mound clones from HEAD. Thus dr-up brings these in from the start, and
+        # no send is necessary.
         if [ "$state" = absent ]; then
-            row unsent "${_DR_DIM}$behind commit(s) not in $tracking - dr-up clones them into the new mound${_DR_OFF}"
+            row unsent "${_DR_DIM}$behind commit(s) not in $tracking. dr-up clones them into the new mound.${_DR_OFF}"
         elif [ "$(dr_send_state)" = unmerged ]; then
-            row unsent "${_DR_DIM}$behind commit(s) delivered, not merged - dr-send --merge${_DR_OFF}"
+            row unsent "${_DR_DIM}$behind commit(s) delivered, not merged. Use dr-send --merge.${_DR_OFF}"
         else
-            row unsent "${_DR_DIM}$behind commit(s) not in $tracking - dr-send${_DR_OFF}"
+            row unsent "${_DR_DIM}$behind commit(s) not in $tracking. Use dr-send.${_DR_OFF}"
         fi
     fi
 else
-    row unmerged "${_DR_DIM}never synced${_DR_OFF} - dr-sync fetches the agent's commits"
+    row unmerged "${_DR_DIM}never synced${_DR_OFF}. dr-sync fetches the commits of the agent."
 fi
 
-# Branches other than the tracked one. dr-sync fetches every branch, but only the
-# tracked one was ever reported - so an agent working on a branch of its own was
-# invisible here too, and "unmerged: none" was actively misleading.
-# Each line is "<ref> <count>", so both halves are split off before use: taking
-# the branch name straight out of the whole line leaves the count inside the
-# suggested command, which then does not work when pasted.
+# Branches other than the tracked one. dr-sync fetches each branch, but before,
+# this screen reported only the tracked one. Thus an agent on its own branch was
+# not visible here, and "unmerged: none" was false. Each line is "<ref>
+# <count>", so the code splits both halves before use. A branch name taken from
+# the whole line keeps the count in the suggested command, and a paste of that
+# command does not work.
 mapfile -t other_branches < <(dr_other_branches)
 for entry in "${other_branches[@]+"${other_branches[@]}"}"; do
     ob_ref=${entry% *}
@@ -130,24 +132,23 @@ for entry in "${other_branches[@]+"${other_branches[@]}"}"; do
         "$ob_count commit(s) on $ob_ref - DRAUGR_BRANCH=${ob_ref#"$DRAUGR_REMOTE"/} dr-diff"
 done
 
-# Workspaces are worth showing because an extra read-only mount is easy to forget
-# and is the most likely answer to "why can the agent see that?".
+# Show the workspaces, because people easily forget an extra read-only mount. It
+# is the most usual answer to "why can the agent see that?".
 if [ "$state" != absent ]; then
     dr_sbx ls --json 2>/dev/null | jq -r --arg n "$DRAUGR_SANDBOX" \
         '(.sandboxes // [])[] | select(.name == $n) | (.workspaces // [])[]' \
         | while read -r w; do row workspace "$w"; done
 fi
 
-# Memory is the other thing a mound holds that exists nowhere else, so it gets
-# the same treatment as unfetched commits: say whether dr-rm would lose any.
-# Skipped entirely under DRAUGR_MEM_SYNC=off, which is what that value is for -
-# a section reporting on something you have said you do not use is just noise.
+# Memory is the other thing that exists only in a mound. Thus it gets the same
+# treatment as unfetched commits: say whether dr-rm loses some. With
+# DRAUGR_MEM_SYNC=off, the code skips it, because that is the purpose of that
+# value. A section about something that you do not use is only noise.
 if [ "$DRAUGR_MEM_SYNC" != off ]; then
     heading "memory"
-    # The store gained a per-agent level in 0.2.0. Migrating here as well as in
-    # dr-mem means the first command you run after upgrading moves it, whichever
-    # one that is - rather than reporting an empty store until you happen to run
-    # the other.
+    # In 0.2.0, the store got a level for each agent. The migration is here and
+    # in dr-mem. Thus the first command that you run after the upgrade moves it.
+    # Otherwise one command reports an empty store until you run the other.
     dr_mem_store_migrate "$DR_REPO"
     store_dir=$(dr_mem_store_dir "$DR_REPO")
     marker="$store_dir/.draugr-export"
@@ -162,74 +163,74 @@ if [ "$DRAUGR_MEM_SYNC" != off ]; then
         row store "${_DR_DIM}nothing exported yet${_DR_OFF}"
     fi
 
-    # Only when it is already up: dr-mem check runs a command inside the mound,
-    # and that would start a stopped one. Stopped is not "no memory", so it says
-    # which of the two it is rather than implying there is nothing to lose.
+    # Only for a mound that already runs. dr-mem check runs a command inside the
+    # mound, and that starts a stopped one. Stopped is not "no memory". Thus it
+    # tells which of the two, and does not imply that there is nothing to lose.
     case "$state" in
     running)
         mcheck=0
         "$_dr_bin/dr-mem" check >/dev/null 2>&1 || mcheck=$?
         case "$mcheck" in
             0) row mound "${_DR_GREEN}nothing unexported${_DR_OFF}" ;;
-            1) row mound "${_DR_YELLOW}has memory not in the store${_DR_OFF} - dr-mem export" ;;
+            1) row mound "${_DR_YELLOW}has memory that is not in the store${_DR_OFF}. Use dr-mem export." ;;
             *) row mound "${_DR_DIM}could not be read${_DR_OFF}" ;;
         esac
         ;;
-    stopped) row mound "${_DR_DIM}not checked${_DR_OFF} - would have to start the mound" ;;
+    stopped) row mound "${_DR_DIM}not tested${_DR_OFF}. The test must start the mound." ;;
     esac
 fi
 
-# Only the settings that change what the agent can reach. The rest are a
-# dr-config away, and a status screen nobody reads is worse than a short one.
-heading "settings"
+# Only the keys that change what the agent can reach. dr-config shows the rest.
+# A status screen that nobody reads is worse than a short one.
+heading "configuration"
 if dr_is_true "$DRAUGR_CLONE"; then
-    row clone "${_DR_GREEN}true${_DR_OFF} - the agent works on its own clone"
+    row clone "${_DR_GREEN}true${_DR_OFF}. The agent works on its own clone."
 else
-    row clone "${_DR_RED}false${_DR_OFF} - the agent has your real working tree, read-write"
+    row clone "${_DR_RED}false${_DR_OFF}. The agent has your real working tree, read-write."
 fi
 row kit "${DRAUGR_KIT:-${_DR_DIM}none${_DR_OFF}}"
 row remote "$DRAUGR_REMOTE"
 
-# A local model changes where every prompt goes, which is exactly what this
-# section is for. Shown only when set, so the screen stays short for everyone
-# else - and shown with its reachability, because a model that is not answering
-# looks identical to one that is until the agent's first prompt fails.
+# A local model changes where each prompt goes, and this section is for that.
+# Only a set value shows, so that the screen stays short for all others. It
+# shows with its state. A model that does not answer looks the same as one that
+# answers, until the first prompt of the agent fails.
 if [ -n "${DRAUGR_MODEL:-}" ]; then
     _surl=$(dr_model_url) || _surl=
     case ${_surl:+$(dr_model_probe "$_surl")} in
         proxy|alive) row model "$DRAUGR_MODEL at $_surl" ;;
-        bare)        row model "$DRAUGR_MODEL at $_surl ${_DR_YELLOW}- no proxy in front${_DR_OFF}" ;;
-        stalled)     row model "$DRAUGR_MODEL at $_surl ${_DR_RED}- proxy up, model server down${_DR_OFF}" ;;
-        dead)        row model "$DRAUGR_MODEL at $_surl ${_DR_RED}- not answering, dr-go will refuse${_DR_OFF}" ;;
+        bare)        row model "$DRAUGR_MODEL at $_surl ${_DR_YELLOW}(no proxy in front)${_DR_OFF}" ;;
+        stalled)     row model "$DRAUGR_MODEL at $_surl ${_DR_RED}(proxy up, model server down)${_DR_OFF}" ;;
+        dead)        row model "$DRAUGR_MODEL at $_surl ${_DR_RED}(no answer. dr-go refuses)${_DR_OFF}" ;;
         *)           row model "$DRAUGR_MODEL at ${_surl:-$DRAUGR_MODEL_URL}" ;;
     esac
 fi
 
-# What this repo needs running, and whether it is. One row each, because the
-# question behind them is always "can I start work" rather than "what is the
-# full state of the chain" - dr-dep answers that, and says who else holds what.
+# What this repo needs, and whether it runs. One row each, because the question
+# is always "can I start work?", not "what is the full state of the chain?".
+# dr-dep answers that, and tells who else holds what.
 if [ -n "${DRAUGR_REQUIRES:-}" ]; then
     while read -r _dep; do
         [ -n "$_dep" ] || continue
         _dname=$(dr_dep_config "$_dep" DRAUGR_SANDBOX)
         if [ -z "$_dname" ]; then
-            row requires "${_DR_RED}$_dep - cannot read its config${_DR_OFF}"
+            row requires "${_DR_RED}$_dep (cannot read its configuration)${_DR_OFF}"
         else
             row requires "$_dname ($(dr_sandbox_state "$_dname"))"
         fi
     done < <(dr_dep_requires "$DR_REPO")
 fi
 
-# Arbitrary environment is unbounded text and this screen is deliberately short,
-# so the COUNT is what earns a row: "something is being injected into the agent"
-# is the part worth knowing at a glance, and dr-config prints what. A malformed
-# value says so rather than reporting zero, which would read as "none set".
+# The environment is text with no limit, and this screen is short on purpose.
+# Thus only the COUNT gets a row. "Something goes into the agent" is the
+# important fact, and dr-config prints the values. A bad value says so, and does
+# not report zero, because zero looks like "none set".
 if [ -n "${DRAUGR_ENV:-}" ]; then
     if _envs=$(dr_env_pairs 2>/dev/null); then
-        row env "$(printf '%s\n' "$_envs" | grep -c .) variable(s) - dr-config to see them"
+        row env "$(printf '%s\n' "$_envs" | grep -c .) variable(s). To see them: dr-config"
     else
-        row env "${_DR_RED}malformed - dr-go will refuse${_DR_OFF}"
+        row env "${_DR_RED}bad value. dr-go refuses.${_DR_OFF}"
     fi
 fi
 
-printf '\n  %sWhy any of these:  dr-config --changed%s\n' "$_DR_DIM" "$_DR_OFF"
+printf '\n  %sThe reason for each value:  dr-config --changed%s\n' "$_DR_DIM" "$_DR_OFF"

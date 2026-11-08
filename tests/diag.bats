@@ -1,12 +1,11 @@
 #!/usr/bin/env bats
-# Reading sandboxd's log, which is how a create failure stops being a dead end.
+# A read of the sandboxd log. With it, a create failure is no longer a dead end.
 #
-# sbx reports a failed create as `500 Internal Server Error: failed to run
-# sandbox container` and nothing more, while its daemon has the failing command,
-# its exit code and its captured output. Draugr reads that log - an undocumented
-# file with an undocumented shape - so the tests below are as much about what
-# happens when the reading FAILS as about what happens when it works: every path
-# has to fall back to the advice dr-up printed before any of this existed.
+# sbx reports a failed create only as `500 Internal Server Error: failed to run
+# sandbox container`. But its daemon has the failed command, its exit code, and
+# its captured output. Draugr reads that log, a file with no documentation and
+# an undocumented shape. Thus the tests below are about a FAILED read as much as
+# a good one. Each path must fall back to the old advice of dr-up.
 
 load helper
 
@@ -23,8 +22,8 @@ setup() {
 
 teardown() { dr_test_teardown; }
 
-# Append one log entry. `stage` is what sandboxd attaches to a create failure,
-# and is what tells such an entry apart from ordinary error noise.
+# Append one log entry. sandboxd adds `stage` to a create failure. It tells such
+# an entry apart from normal error noise.
 entry() {
     local level=$1 err=$2 stage=${3:-}
     mkdir -p "$LOGDIR"
@@ -114,8 +113,8 @@ entry() {
     [ "$output" = "the real cause" ]
 }
 
-# The log is being written while it is read, so the last line is routinely half
-# there. One torn line must not throw away the entries before it.
+# The log gets written while it is read, so the last line is often only half
+# there. One torn line must not discard the entries before it.
 @test "dr_sbx_log_error: a torn final line does not lose the good ones" {
     dr_load_common
     mark=$(dr_sbx_log_mark)
@@ -126,7 +125,7 @@ entry() {
     [ "$output" = "the real cause" ]
 }
 
-# --- dr-up's use of it ------------------------------------------------------
+# --- how dr-up uses it ------------------------------------------------------
 
 @test "dr-up: a failed create reports what sandboxd recorded" {
     export DR_MOCK_STATE=absent DR_MOCK_FAIL=create
@@ -148,8 +147,8 @@ entry() {
     [[ "$output" == *"/run/sandbox/source"* ]]
 }
 
-# The install explanation is specific and would be misleading anywhere else, so
-# a failure that is not about install commands must not attract it.
+# The install explanation is specific, and misleads in all other places. Thus a
+# failure that is not about install commands must not get it.
 @test "dr-up: an unrelated failure gets the kit advice, not the install one" {
     mkdir -p "$REPO/.draugr/kit"
     printf 'schemaVersion: "2"\nkind: mixin\nname: k\n' > "$REPO/.draugr/kit/spec.yaml"
@@ -161,8 +160,8 @@ entry() {
     [[ "$output" != *"BEFORE your repository"* ]]
 }
 
-# With no log to read, every message must be exactly what it was before this
-# feature existed - the whole point of it being best-effort.
+# With no log to read, each message must be exactly as before this feature. That
+# is the purpose of best effort.
 @test "dr-up: with no daemon log, the advice is unchanged" {
     export DR_MOCK_STATE=absent DR_MOCK_FAIL=create
     run dr-up

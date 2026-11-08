@@ -1,84 +1,80 @@
 #!/usr/bin/env bash
-# dr-plugin - manage the plugin library every mound reads, without ever
-# installing a plugin on your host.
+# dr-plugin: manage the plugin library that each mound reads, and never install
+# a plugin on your host.
 #
-#   dr-plugin                          what the library holds, and whether it is wired up
+#   dr-plugin                          what the library holds, and if it is connected
 #   dr-plugin list                     the plugins in it, with versions
-#   dr-plugin skills                   the skills those plugins ship, and from which
-#   dr-plugin kit [<plugin>@<mkt>...]  write the per-mound install out as a kit
+#   dr-plugin skills                   the skills of those plugins, and their source
+#   dr-plugin kit [<plugin>@<mkt>...]  write the install for each mound as a kit
 #   dr-plugin add <owner>/<repo> [<plugin>...]  register the MARKETPLACE, install, enable
 #   dr-plugin update [<plugin>@<mkt>]  all of them, or one
-#   dr-plugin remove <plugin>@<mkt>    uninstall, deregister, disable
-#   dr-plugin enable <plugin>@<mkt>    the switch only - no mound, instant
-#   dr-plugin disable <plugin>@<mkt>   likewise
-#   dr-plugin clean                    drop superseded versions that nothing reaps
+#   dr-plugin remove <plugin>@<mkt>    uninstall, remove the registration, disable
+#   dr-plugin enable <plugin>@<mkt>    only the switch. No mound, instant
+#   dr-plugin disable <plugin>@<mkt>   the same
+#   dr-plugin clean                    remove old versions that nothing removes
 #   dr-plugin rollback                 put the previous library back
 #
-# `add` takes a MARKETPLACE, not a plugin. It registers the repository and then
-# installs what that marketplace lists - all of it, or only the plugins you name
-# after it - so there is no separate step for adding a marketplace. The name it
-# registers under is discovered rather than typed, because a repository decides
-# that for itself: obra/superpowers arrives as superpowers-marketplace. A plugin
-# you name may therefore be bare, and gets completed with whatever appeared - or,
-# on a REPEAT add, where nothing appears because the marketplace is registered
-# already, with the name the registry holds for that source.
+# `add` takes a MARKETPLACE, not a plugin. It registers the repository, and then
+# installs what that marketplace lists: all of it, or only the plugins that you
+# name after it. Thus a marketplace needs no separate step. The code finds the
+# name of the registration, and you do not type it, because a repository decides
+# it: obra/superpowers arrives as superpowers-marketplace. Thus a plugin that
+# you name can be bare. The code completes it with the new name. On a REPEAT
+# add, no new name appears, because the marketplace is already registered. Then
+# the code uses the name that the registry holds for that source.
 #
-# A plugin is code that runs - hooks fire on session start, MCP servers are
-# processes, bin/ lands on the Bash tool's PATH. So the rule is the one in
-# docs/CLAUDE_PLUGINS.md: your host STORES plugin bytes and never RUNS them.
-# Every install here happens inside a throwaway mound, and the host only ever
-# receives files.
+# A plugin is code that runs. Hooks run at session start, MCP servers are
+# processes, and bin/ goes on the PATH of the Bash tool. Thus the rule is the
+# one in docs/CLAUDE_PLUGINS.md: your host STORES plugin bytes, and never RUNS
+# them. Each install here happens inside a temporary mound, and the host only
+# gets files.
 #
-# The three verbs that need a mound build it fresh and destroy it afterwards.
-# They work on a copy at $DRAUGR_PLUGIN_STORE/.build and swap it into place at
-# the end, so the library your mounds are reading is never the one being edited,
-# a failed build changes nothing, and the previous one stays as seed.old.
+# The three verbs that need a mound build a new one and destroy it after. They
+# work on a copy at $DRAUGR_PLUGIN_STORE/.build, and swap it into place at the
+# end. Thus nobody edits the library that your mounds read, a failed build
+# changes nothing, and the previous library stays as seed.old.
 #
-# WHY A COPY AND A SWAP, rather than editing the library in place: sbx bind-mounts
-# a sandbox workspace read-write, so plugin install code would be writing into the
-# directory that is mounted into every mound on this machine. One bad install
-# could rewrite plugins you trust. Building beside it costs a copy and removes
-# that entirely.
+# WHY A COPY AND A SWAP, and not an edit in place: sbx bind-mounts a sandbox
+# workspace read-write. Then plugin install code writes into the directory that
+# each mound on this machine mounts. One bad install can rewrite plugins that
+# you trust. A build next to it costs a copy, and removes that risk.
 #
-# WHY THE WORK HAPPENS IN THE MOUND'S ROOTFS and not straight on that copy:
-# a Windows-backed workspace cannot rename a git clone. Measured, in a mound,
-# on the bind-mounted workspace:
+# WHY THE WORK HAPPENS IN THE ROOTFS OF THE MOUND, and not directly on that
+# copy: a workspace on a Windows drive cannot rename a git clone. A test in a
+# mound, on the bind-mounted workspace, showed this:
 #
 #   git clone -q https://github.com/… X   -> clone: OK
 #   mv X Y                                -> cannot move 'X' to 'Y': Permission denied
 #
-# while renaming a plain directory in the same place succeeds, and both succeed
-# in the rootfs. `claude plugin marketplace add` clones to a temporary name and
-# renames it into place, so it fails there and `remove`, which only deletes,
-# does not - the worst possible split. So the library is copied into
-# /home/agent/seed, worked on with full POSIX semantics, and copied back out
-# afterwards with cp -a, which only ever creates.
+# A rename of a plain directory in the same place works, and both work in the
+# rootfs. `claude plugin marketplace add` clones to a temporary name, and
+# renames it into place. Thus it fails there, but `remove` only deletes, and
+# works. That is the worst split. Thus the code copies the library into
+# /home/agent/seed, and works on it with full POSIX semantics. After that, it
+# copies it back out with cp -a, which only creates.
 #
-# Note what is still absent: dr-cp. `sbx cp` extracts a tar and therefore MERGES,
-# which is what makes a manual update accumulate versions for ever and a manual
-# removal reclaim nothing. Every copy here is cp -a onto a path that was just
-# deleted, so it is exact.
+# dr-cp is still not used. `sbx cp` extracts a tar, so it MERGES. Thus a manual
+# update collects versions forever, and a manual removal frees nothing. Each
+# copy here is cp -a onto a path that was just deleted, so it is exact.
 #
 # Set DRAUGR_PLUGIN_STORE to a directory on a Windows drive, then point your
-# mounds at it - `dr-plugin` with no arguments prints the three lines to add.
+# mounds at it. `dr-plugin` with no arguments prints the three lines to add.
 #
 # shellcheck disable=SC2016
-# Single-quoted "$1" appears in the copy helpers and is deliberate: those strings
-# are scripts for the MOUND's shell, and the whole point is that the host does
-# not expand them.
+# Single-quoted "$1" is in the copy helpers, on purpose. Those strings are
+# scripts for the shell of the MOUND, and the host must not expand them.
 set -euo pipefail
 
 DR_PROG=dr-plugin
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# status is the default because it is the only verb that moves nothing, and
-# "what have I actually got" is the question you have first. Same reasoning as
-# dr-mem.
+# status is the default, because it is the only verb that moves nothing, and
+# "what do I have?" is your first question. The same reason as in dr-mem.
 action=${1:-status}
 case "$action" in
     -h|--help) dr_help "$0"; exit 0 ;;
@@ -88,9 +84,9 @@ case "$action" in
               "disable, clean, rollback" ;;
 esac
 
-# Options are read once for every verb rather than per verb: rejecting --yes on
-# a verb that does not prompt would be noise, and the positional arguments differ
-# enough that a shared parser is simpler than eight of them.
+# One loop reads the options for all verbs. A refusal of --yes on a verb that
+# asks nothing is only noise. The positional arguments differ, so one shared
+# parser is simpler than eight.
 force=
 args=()
 while [ $# -gt 0 ]; do
@@ -106,59 +102,59 @@ done
 
 dr_context
 
-# The library layout is the agent's, not Draugr's, and only Claude Code's has
-# been measured. Refusing beats building a directory in a shape the agent will
-# never read - and unlike a wrong memory copy, a wrong plugin library would put
-# third-party code somewhere every mound on the machine mounts.
+# The agent owns the library layout, not Draugr, and only the layout of Claude
+# Code was tested. A refusal is better than a directory in a layout that the
+# agent never reads. A wrong plugin library is worse than a wrong memory copy.
+# It puts third-party code in a place that each mound on the machine mounts.
 dr_agent_plugin_supported || dr_die \
     "Draugr does not know how ${DRAUGR_AGENT:-this agent} keeps plugins" \
-    "Plugin layout is per-agent and only measured ones are offered." \
+    "Each agent has its own plugin layout, and Draugr offers only tested ones." \
     "Known: $(dr_agent_known). See docs/CLAUDE_PLUGINS.md."
 
-# Empty by default, so the feature is off until it is configured. There is no
-# sensible location to invent: it has to be mountable into a mound, and $HOME
-# under WSL is not on a Windows drive.
+# Empty by default, so the feature is off until you configure it. No default
+# location is correct. A mound must be able to mount it, and $HOME under WSL is
+# not on a Windows drive.
 [ -n "$DRAUGR_PLUGIN_STORE" ] || dr_die \
     "DRAUGR_PLUGIN_STORE is not set" \
-    "It names the directory holding the plugins every mound reads. Put it on a" \
-    "Windows drive so a mound can be pointed at it, then add this line to" \
+    "It names the directory with the plugins that each mound reads. Put it on a" \
+    "Windows drive, so that a mound can use it. Then add this line to" \
     "your ~/.config/draugr/config:" \
     '  DRAUGR_PLUGIN_STORE="/mnt/c/Code/claude-plugins"'
 
-# sbx.exe is a Windows binary and its workspaces are Windows paths, so a store on
-# WSL's own filesystem could never be mounted into a mound. Better to say so here
-# than to fail later inside sbx with a path nobody typed.
+# sbx.exe is a Windows binary, and its workspaces are Windows paths. Thus a
+# mound can never mount a store on the file system of WSL. A message here is
+# better than a later failure in sbx, with a path that nobody typed.
 dr_require_win_path "$DRAUGR_PLUGIN_STORE"
 
-# The layout, in one place. `seed` is the name Claude Code's own documentation
-# uses for a pre-built plugin library, and the mounds read it through
-# DRAUGR_MOUNTS, so it is a published name rather than an internal one.
+# The layout, in one place. The documentation of Claude Code uses `seed` for a
+# pre-built plugin library, and the mounds read it through DRAUGR_MOUNTS. Thus
+# it is a published name, not an internal one.
 STORE=$DRAUGR_PLUGIN_STORE
 SEED="$STORE/seed"
 PREV="$STORE/seed.old"
 BUILD="$STORE/.build"
 SETTINGS="$STORE/settings.json"
 BUILD_SANDBOX=draugr-plugin-build
-# Where the CLI actually works, inside the mound. Rootfs, so that a git clone can
-# be renamed - see the header.
+# Where the CLI works, inside the mound. Rootfs, so that a git clone can get a
+# new name. See the header.
 WORK=/home/agent/seed
 
-# Force github to HTTPS for every git the plugin CLI runs.
+# Force github to HTTPS for each git that the plugin CLI runs.
 #
-# WHY: a mound has no SSH key and must not be given one, but `claude plugin
-# install` clones a github plugin source over SSH and does NOT fall back -
-# unlike `claude plugin marketplace add`, which prints "SSH not configured,
-# cloning via HTTPS" and retries. Measured against iha2/superlite: the
-# marketplace cloned fine over HTTPS and the install then died with
-# "Connection closed by 140.82.121.4 port 22", which is what GitHub says to an
-# SSH client it cannot authenticate. Egress was never the problem.
+# WHY: a mound has no SSH key, and must not get one. But `claude plugin install`
+# clones a github plugin source through SSH, and does NOT try HTTPS after a
+# failure. `claude plugin marketplace add` does: it prints "SSH not configured,
+# cloning via HTTPS", and tries again. A test with iha2/superlite showed this.
+# The marketplace cloned through HTTPS, and then the install failed with
+# "Connection closed by 140.82.121.4 port 22". GitHub says that to an SSH client
+# that it cannot authenticate. Egress was never the problem.
 #
-# GIT_CONFIG_COUNT rather than `git config --global`: this rides on the env that
-# build_run is already setting, so nothing has to guess which HOME the CLI runs
-# under, no file is written into the mound, and the redirect reaches every git
-# the CLI spawns. insteadOf is multi-valued, so both spellings share one key.
+# GIT_CONFIG_COUNT, not `git config --global`. This goes in the env that
+# build_run already sets. Thus nothing must guess the HOME of the CLI, no file
+# goes into the mound, and the redirect reaches each git that the CLI starts.
+# insteadOf has many values, so both forms share one key.
 #
-# It can only widen what works: an SSH clone could never have succeeded in here.
+# It can only make more things work. An SSH clone never works in here.
 _DR_GIT_HTTPS=(
     GIT_CONFIG_COUNT=2
     "GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf"
@@ -167,69 +163,69 @@ _DR_GIT_HTTPS=(
     "GIT_CONFIG_VALUE_1=ssh://git@github.com/"
 )
 
-# Which variables redirect this agent's library. Both come from the agent module
-# because they are its private business - see lib/agents/claude.sh.
+# The variables that redirect the library of this agent. Both come from the
+# agent module, because they are its private details. See lib/agents/claude.sh.
 CACHE_VAR=$(dr_agent_plugin_cache_var)
 SEED_VAR=$(dr_agent_plugin_seed_var)
 
 # --- reading the library ------------------------------------------------------
 
-# The three files the library is made of. Absent is normal before the first add,
-# so every reader answers empty rather than failing.
+# The three files of the library. Before the first add, they do not exist, and
+# that is normal. Thus each reader answers empty, and does not fail.
 marketplaces() {
     [ -f "$SEED/known_marketplaces.json" ] || return 0
     jq -r '. // {} | keys[]' "$SEED/known_marketplaces.json" 2>/dev/null || true
 }
 
-# The same, against the copy being built, before any mound has touched it.
+# The same, for the copy in the build, before a mound touched it.
 build_marketplaces() {
     [ -f "$BUILD/seed/known_marketplaces.json" ] || return 0
     jq -r '. // {} | keys[]' "$BUILD/seed/known_marketplaces.json" 2>/dev/null || true
 }
 
-# work_cat <relative path> - one file out of the working copy INSIDE the mound.
+# work_cat <relative path>: one file from the working copy INSIDE the mound.
 #
-# The host's build directory is a snapshot from before the CLI ran, so anything
-# decided from what an operation actually did has to be read from here instead.
+# The build directory of the host is a snapshot from before the CLI ran. Thus a
+# decision about the result of an operation must read from here.
 work_cat() {
     dr_sbx exec "$BUILD_SANDBOX" cat "$WORK/$1" 2>/dev/null || true
 }
 
-# What the mound's copy has registered. `add` needs it to see what a marketplace
-# called itself, which is not derivable from the source: obra/superpowers
-# registers as superpowers-marketplace.
+# The registrations in the copy of the mound. `add` needs them to see the name
+# of a marketplace. The source does not tell it: obra/superpowers registers as
+# superpowers-marketplace.
 work_marketplaces() {
     work_cat known_marketplaces.json | jq -r '. // {} | keys[]' 2>/dev/null || true
 }
 
-# "<id> <version>" a line. The id is already <plugin>@<marketplace>, which is the
-# spelling every other command here takes.
+# "<id> <version>" on each line. The id is already <plugin>@<marketplace>, the
+# form that each other command here takes.
 installed() {
     [ -f "$SEED/installed_plugins.json" ] || return 0
     jq -r '.plugins // {} | to_entries[] | "\(.key) \(.value[0].version // "?")"' \
         "$SEED/installed_plugins.json" 2>/dev/null || true
 }
 
-# Enabled is a different question from installed - the seed carries content, the
-# settings file carries the decision - and dr-plugin reports both because a
+# Enabled is a different question from installed. The seed holds the content,
+# and the settings file holds the decision. dr-plugin reports both, because a
 # plugin that is one and not the other is the confusing case.
 #
-# Space separated on ONE line, because every caller tests membership with a
-# `case " $list " in *" $id "*` and a newline between two ids would defeat the
-# space either side of the pattern.
+# On ONE line, with spaces, because each caller tests membership with a
+# `case " $list " in *" $id "*`. A newline between two ids breaks the spaces
+# around the pattern.
 enabled_ids() {
     [ -f "$SETTINGS" ] || return 0
     jq -r '.enabledPlugins // {} | to_entries[] | select(.value) | .key' \
         "$SETTINGS" 2>/dev/null | tr '\n' ' ' || true
 }
 
-# marketplace_for_source <owner>/<repo> - the name that source is ALREADY
-# registered under, or empty.
+# marketplace_for_source <owner>/<repo>: the name of the registration that this
+# source ALREADY has, or empty.
 #
-# `add` discovers a marketplace's name by watching for one to APPEAR, which
-# answers nothing on a second add: the marketplace is already there, so nothing
-# appears - and that name is exactly what the refusal then needs in order to say
-# anything useful. The registry records each source, so it can simply be asked.
+# `add` finds the name of a marketplace from a new name that APPEARS. On a
+# second add, that gives nothing. The marketplace is already there, so nothing
+# appears. The refusal then needs that name to say something useful. The
+# registry records each source, so the code asks it.
 marketplace_for_source() {
     [ -f "$SEED/known_marketplaces.json" ] || return 0
     # shellcheck disable=SC2016  # $src is jq's variable, not the shell's
@@ -238,12 +234,12 @@ marketplace_for_source() {
         "$SEED/known_marketplaces.json" 2>/dev/null | head -1 || true
 }
 
-# installed_from <marketplace> - "<id> <version> enabled|disabled" a line, for
-# whatever the library already holds from that marketplace.
+# installed_from <marketplace>: "<id> <version> enabled|disabled" on each line,
+# for each plugin from that marketplace in the library.
 #
-# Both halves, because installed and enabled are different questions and a
-# plugin that is one but not the other is the confusing case - the same reason
-# `dr-plugin list` prints both.
+# Both halves, because installed and enabled are different questions. A plugin
+# that is one but not the other is the confusing case. `dr-plugin list` prints
+# both for the same reason.
 installed_from() {
     local mkt=$1 en id ver
     en=$(enabled_ids)
@@ -259,10 +255,10 @@ installed_from() {
 
 # --- the switch ---------------------------------------------------------------
 
-# settings_write <id> <true|false|drop> - the enable decision, host-side only.
+# settings_write <id> <true|false|drop>: the enable decision, only on the host.
 #
-# Written through a temporary file and moved into place: settings.json is read by
-# every mound at every attach, and a half-written one would take them all down.
+# The code writes a temporary file, and moves it into place. Each mound reads
+# settings.json at each attach, and a half-written one breaks all of them.
 settings_write() {
     local id=$1 how=$2 tmp filter
     [ -f "$SETTINGS" ] || printf '{\n  "enabledPlugins": {}\n}\n' > "$SETTINGS"
@@ -281,22 +277,22 @@ settings_write() {
 
 # --- the build transaction ----------------------------------------------------
 
-# build_begin - a fresh copy of the library to work on.
+# build_begin: a new copy of the library to work on.
 #
-# cp -a on the host rather than dr-cp through the mound. That is the whole reason
-# this command exists: `sbx cp` extracts a tar, so it MERGES directories and
-# replaces same-named files, which means a copy back over the library adds and
-# never removes. A host-side copy is exact, so an uninstall really uninstalls.
+# cp -a on the host, not dr-cp through the mound. That is the reason for this
+# command. `sbx cp` extracts a tar, so it MERGES directories, and replaces files
+# with the same name. Thus a copy back over the library adds, and never removes.
+# A copy on the host is exact, so an uninstall really removes the plugin.
 build_begin() {
     rm -rf "$BUILD"
     mkdir -p "$BUILD"
     if [ -d "$SEED" ]; then
-        # Announced because it is slow and was silent. A library of three plugins
-        # measures 43 MB over 4581 files, most of it the marketplaces' own git
-        # clones, and it is being copied on a WINDOWS drive. Before this the
-        # command printed nothing at all for the first several seconds, with
-        # nothing to say which of its three slow steps was running.
-        dr_info "copying the library aside to work on ($SEED)"
+        # A message, because it is slow and was silent. A library of three
+        # plugins is 43 MB in 4581 files, mostly the git clones of the
+        # marketplaces. The copy is on a WINDOWS drive. Before this, the
+        # command printed nothing for the first seconds. Nothing told which of
+        # its three slow steps ran.
+        dr_info "copying the library to a work copy ($SEED)"
         cp -a "$SEED" "$BUILD/seed"
     else
         mkdir -p "$BUILD/seed"
@@ -304,24 +300,24 @@ build_begin() {
     build_repath
 }
 
-# build_repath - point installed_plugins.json at where the library will be WORKED
-# ON, which is the rootfs path rather than either the store or the build copy.
+# build_repath: point installed_plugins.json to the place where the work on the
+# library HAPPENS. That is the rootfs path, not the store or the build copy.
 #
-# Every entry records an ABSOLUTE installPath - measured, e.g.
-# /home/agent/seed/cache/claude-code-plugins/commit-commands/1.0.0 - so a library
-# copied anywhere else carries paths that do not exist. Rewriting after every
-# copy makes the first migration from a hand-built seed and every later run the
-# same case, which is cheaper than having two.
+# Each entry records an ABSOLUTE installPath (a test showed this), for example
+# /home/agent/seed/cache/claude-code-plugins/commit-commands/1.0.0. Thus a
+# library copy in a different place has paths that do not exist. A rewrite after
+# each copy makes the first migration from a manual seed and each later run the
+# same case. One case costs less than two.
 #
-# Done on the host, where jq is known to exist, rather than inside the mound.
+# On the host, where jq exists for sure, not inside the mound.
 build_repath() {
     local f="$BUILD/seed/installed_plugins.json" mound tmp
     [ -f "$f" ] || return 0
     mound=$WORK
 
-    # Keep everything from /cache/ onwards and re-root it: that tail is the only
-    # part of the path the layout guarantees, so this works whatever directory
-    # the library was built in before.
+    # Keep all from /cache/ to the end, and give it a new root. The layout
+    # guarantees only that end of the path. Thus this works for each directory
+    # where the library was built before.
     # shellcheck disable=SC2016  # $root is jq's variable, not the shell's
     tmp=$(mktemp)
     jq --arg root "$mound" '
@@ -331,108 +327,110 @@ build_repath() {
     mv "$tmp" "$f"
 }
 
-# build_run <verb> [arg...] - one plugin CLI operation, inside a throwaway mound.
+# build_run <verb> [arg...]: one plugin CLI operation, inside a temporary mound.
 #
-# The mound's workspace IS the build directory, bind-mounted read-write, so the
-# CLI writes its results straight to the host and nothing has to be copied back.
-# The trap is what makes "throwaway" true even when the operation fails.
+# The workspace of the mound IS the build directory, bind-mounted read-write.
+# Thus the CLI writes its results directly to the host, and nothing must be
+# copied back. Because of the trap, "temporary" is true, also for a failed
+# operation.
 build_run() {
     local argv=() line
     while IFS= read -r line; do argv+=("$line"); done < <(dr_agent_plugin_cli "$@")
     [ ${#argv[@]} -gt 0 ] || dr_die "no command for plugin verb: $1"
 
-    # env rather than a quoted command line: dr_agent_plugin_cli hands back one
-    # word a line precisely so that nothing here has to re-split a string.
+    # env, not a quoted command line. dr_agent_plugin_cli gives one word on each
+    # line, so that nothing here must split a string again.
     build_mound_start
     dr_info "${argv[*]}"
-    # </dev/null because sbx exec CONSUMES STDIN. Without it, a caller looping
-    # over `installed()` has the rest of its list eaten by the first iteration -
-    # measured as an `update` that reported success having touched exactly one
-    # plugin of three, which is the worst way for this to be wrong.
+    # </dev/null, because sbx exec READS ALL OF STDIN. Without it, a caller with
+    # a loop over `installed()` loses the rest of its list in the first pass. A
+    # test showed this: an `update` reported success, but touched only one
+    # plugin of three. That is the worst way for this to be wrong.
     dr_sbx exec "$BUILD_SANDBOX" env "$CACHE_VAR=$WORK" "${_DR_GIT_HTTPS[@]}" \
         "${argv[@]}" </dev/null \
         || dr_die "plugin command failed: ${argv[*]}" \
-                  "The library was not changed - $SEED is untouched."
+                  "The library did not change. $SEED is as it was."
 }
 
-# build_harvest - the finished library, back onto the workspace and so onto the
-# host. rm then cp -a, never a merge: what comes out is exactly what is in the
-# mound, which is what makes an uninstall actually remove something.
+# build_harvest: the finished library, back onto the workspace, and thus onto
+# the host. rm, then cp -a, never a merge. What comes out is exactly what is in
+# the mound. Thus an uninstall really removes something.
 build_harvest() {
     local mount; mount=$(dr_path_mound "$BUILD/seed")
     dr_sbx exec "$BUILD_SANDBOX" sh -c \
         'rm -rf "$1" && cp -a "$2" "$1"' sh "$mount" "$WORK" \
-        || dr_die "could not carry the built library back out"
+        || dr_die "could not copy the built library back out"
 }
 
-# build_mound_start - create it once per run, and arrange for it to go away.
+# build_mound_start: create it once for each run, and make sure that it goes
+# away.
 #
-# A pre-existing one is a crashed run rather than something to reuse: its
-# workspace is a build directory this run has already deleted, so it would be
-# pointed at nothing. Refusing names --force instead of guessing.
+# A mound that already exists is from a crashed run, not one to use again. Its
+# workspace is a build directory that this run already deleted, so it points to
+# nothing. The refusal names --force, and does not guess.
 build_mound_start() {
     [ -z "${_dr_mound_up:-}" ] || return 0
 
-    # --force removes it rather than adopting it: adopting would run the install
-    # inside a mound whose workspace this run has already deleted.
+    # --force removes it, and does not adopt it. With an adopt, the install runs
+    # inside a mound whose workspace this run already deleted.
     if dr_sandbox_exists "$BUILD_SANDBOX"; then
         [ -n "$force" ] || dr_die \
             "$BUILD_SANDBOX already exists" \
-            "A previous dr-plugin run did not clean up, or one is running now." \
-            "If nothing else is running:  dr-plugin $action --force"
+            "A previous dr-plugin run did not clean up, or one runs now." \
+            "If nothing else runs:  dr-plugin $action --force"
         dr_sbx rm --force "$BUILD_SANDBOX" >/dev/null 2>&1 || :
     fi
 
-    # The trap goes on BEFORE the create, so a mound that comes up and then fails
-    # something later is still removed. No kit, no ports, no clone: this mound
-    # exists to run one CLI against one directory.
+    # The trap comes BEFORE the create. Thus the code still removes a mound that
+    # starts and then fails later. No kit, no ports, no clone: this mound is
+    # only for one CLI on one directory.
     trap build_mound_stop EXIT INT TERM
-    # Naming the step rather than just the sandbox: creating a microVM takes
-    # seconds and says nothing while it does.
+    # Name the step, not only the sandbox. The creation of a microVM takes
+    # seconds, and shows nothing during that time.
     dr_info "creating the build mound $BUILD_SANDBOX"
     dr_sbx create --name "$BUILD_SANDBOX" -q "$DRAUGR_AGENT" "$(dr_path_win "$BUILD")" \
         || dr_die "could not create the build mound" \
-                  "Check that sbx works:  dr-doctor"
+                  "Make sure that sbx works:  dr-doctor"
     _dr_mound_up=1
 
     # The working copy, in the rootfs, for the rename reason in the header. The
-    # third of the slow steps, and the third that used to be silent.
-    dr_info "staging the library into the mound's rootfs"
+    # third slow step, and the third that was silent before.
+    dr_info "copying the library into the rootfs of the mound"
     dr_sbx exec "$BUILD_SANDBOX" sh -c \
         'rm -rf "$1" && cp -a "$2" "$1"' sh "$WORK" "$(dr_path_mound "$BUILD/seed")" \
-        || dr_die "could not stage the library inside $BUILD_SANDBOX"
+        || dr_die "could not copy the library inside $BUILD_SANDBOX"
 }
 
-# A warning rather than a failure: by the time this runs the work is either
-# committed or abandoned, and exiting non-zero here would report the wrong thing.
+# A warning, not a failure. When this runs, the work is committed or stopped.
+# A non-zero exit here reports the wrong result.
 build_mound_stop() {
     [ -n "${_dr_mound_up:-}" ] || return 0
     _dr_mound_up=
     dr_sbx rm --force "$BUILD_SANDBOX" >/dev/null 2>&1 \
-        || dr_warn "could not remove $BUILD_SANDBOX - remove it with: dr-rm --force"
+        || dr_warn "could not remove $BUILD_SANDBOX. Remove it with: dr-rm --force"
 }
 
-# build_commit - the swap, which is the only moment the live library changes.
+# build_commit: the swap. Only at this time does the live library change.
 #
-# mv rather than a copy, so it is as close to atomic as a directory gets: a mound
-# reads the library at startup, and there is no window in which it would see half
-# of one. The previous library stays as seed.old for `dr-plugin rollback`.
+# mv, not a copy, so that it is almost atomic. A mound reads the library at its
+# start, and at no time can it see half of one. The previous library stays as
+# seed.old for `dr-plugin rollback`.
 build_commit() {
-    # Harvest first when a mound did the work; verbs that only touched the host
+    # If a mound did the work, harvest first. Verbs that only touched the host
     # copy have nothing to bring back.
     if [ -n "${_dr_mound_up:-}" ]; then
         build_harvest
     fi
     [ -d "$BUILD/seed" ] || dr_die "nothing was built"
     rm -rf "$PREV"
-    # An `if` rather than `[ ] && mv`, which under set -e would exit the script
-    # the first time there was no library to move aside - i.e. on the first add.
+    # An `if`, not `[ ] && mv`. Under set -e, that form exits the script the
+    # first time that there is no library to move, that is, on the first add.
     if [ -d "$SEED" ]; then
         mv "$SEED" "$PREV"
     fi
     mv "$BUILD/seed" "$SEED"
     rm -rf "$BUILD"
-    dr_ok "library updated - previous one kept as $PREV"
+    dr_ok "library updated. The previous one is in $PREV"
 }
 
 case "$action" in
@@ -442,17 +440,17 @@ status)
     dr_heading "library"
     printf '  %s\n' "$STORE" >&2
     if [ ! -d "$SEED" ]; then
-        printf '  %s\n' "empty - add one with:  dr-plugin add <owner>/<repo>" >&2
+        printf '  %s\n' "empty. Add one with:  dr-plugin add <owner>/<repo>" >&2
     fi
 
-    # Marketplaces and plugins are listed separately because the seed supplies
-    # the first and not the second: a marketplace with no plugin under it is the
-    # normal state after a manual `marketplace add`, not a fault.
+    # Separate lists for marketplaces and plugins, because the seed gives the
+    # first and not the second. A marketplace with no plugin is the normal state
+    # after a manual `marketplace add`, not a fault.
     _m=$(marketplaces)
     if [ -n "$_m" ]; then
         dr_heading "marketplaces"
-        # sed rather than printf: the list is one name a line, and printf would
-        # indent only the first of them.
+        # sed, not printf. The list has one name on each line, and printf
+        # indents only the first.
         printf '%s\n' "$_m" | sed 's/^/  /' >&2
     fi
 
@@ -461,8 +459,8 @@ status)
         dr_heading "plugins"
         while read -r _id _ver; do
             [ -n "$_id" ] || continue
-            # "enabled" is what the settings file says, and a plugin that is
-            # installed but not enabled does nothing at all - worth seeing.
+            # "enabled" comes from the settings file. A plugin that is installed
+            # but not enabled does nothing, and you must see that.
             case " $_enabled " in
                 *" $_id "*) _state="enabled" ;;
                 *)          _state="INSTALLED, NOT ENABLED" ;;
@@ -471,9 +469,9 @@ status)
         done < <(installed)
     fi
 
-    # The library is useless until the mounds are pointed at it, and that is
-    # three settings in a file this command does not own. Checking them here is
-    # the only place the two halves meet.
+    # The library is useless until the mounds point to it. That needs three keys
+    # in a file that this command does not own. Only here do the two halves
+    # meet.
     dr_heading "wiring"
     _seed_mound=$(dr_path_mound "$SEED")
     _set_mound=$(dr_path_mound "$SETTINGS")
@@ -484,17 +482,17 @@ status)
     case " $DRAUGR_ENV " in *"$SEED_VAR=$_seed_mound"*) ;; *) _missing+=(env) ;; esac
     case " ${!_args_key:-} " in *"--settings $_set_mound"*) ;; *) _missing+=(args) ;; esac
 
-    # Printing the exact lines rather than "see the docs": the last of the three
-    # is per-agent, and its name is one nobody guesses on the first try.
+    # Print the exact lines, not "see the docs". The last of the three is for
+    # one agent, and nobody guesses its name at the first try.
     if [ ${#_missing[@]} -eq 0 ]; then
-        printf '  %s\n' "all three settings point at this library" >&2
+        printf '  %s\n' "all three keys point to this library" >&2
     else
-        printf '  %s\n' "not wired up (${_missing[*]}). Add to ~/.config/draugr/config:" >&2
+        printf '  %s\n' "not connected (${_missing[*]}). Add to ~/.config/draugr/config:" >&2
         printf '    DRAUGR_MOUNTS="%s"\n'     "$_want_mount" >&2
         printf '    DRAUGR_ENV="%s=%s"\n'     "$SEED_VAR" "$_seed_mound" >&2
         printf '    %s="--settings %s"\n'     "$_args_key" "$_set_mound" >&2
-        printf '  %s\n' "DRAUGR_MOUNTS and DRAUGR_ENV are single strings that a project config" >&2
-        printf '  %s\n' "REPLACES rather than adds to. Append if you already set them." >&2
+        printf '  %s\n' "DRAUGR_MOUNTS and DRAUGR_ENV are single strings. A project configuration" >&2
+        printf '  %s\n' "REPLACES them, and does not add to them. If you set them, append." >&2
     fi
     ;;
 
@@ -513,15 +511,16 @@ list)
 
 # --- skills -------------------------------------------------------------------
 #
-# A plugin's skills are NOT in the shared skills store and never will be: they
-# load from the plugin itself. dr-skills reports the same list under a heading of
-# its own, and the walk they share is dr_plugin_skills in lib/common.sh.
+# The skills of a plugin are NOT in the shared skills store, and never will be.
+# They load from the plugin. dr-skills reports the same list under its own
+# heading. Both use the walk in dr_plugin_skills in lib/common.sh.
 skills)
     _rows=$(dr_plugin_skills "$STORE")
-    # Nothing is a normal answer, not a fault: plenty of plugins ship no skill.
-    [ -n "$_rows" ] || { dr_info "no installed plugin ships a skill"; exit 0; }
+    # Nothing is a normal answer, not a fault. Many plugins have no skill.
+    [ -n "$_rows" ] || { dr_info "no installed plugin has a skill"; exit 0; }
 
-    # Content on stdout, like `list`, so a pipe keeps it. See dr-status.
+    # Content goes to stdout, as in `list`, so that a pipe keeps it. See
+    # dr-status.
     printf '%s\n' "$_rows" | while read -r _s _id _v; do
         printf '%-32s %s %s\n' "$_s" "$_id" "$_v"
     done
@@ -530,28 +529,28 @@ skills)
 # --- kit ----------------------------------------------------------------------
 #
 # The seed removes the marketplace add and the network fetch. It does not remove
-# the INSTALL, which lands in each mound's own rootfs and dies with dr-rm - and
-# that one repeated step is what this writes out as a kit.
+# the INSTALL. The install goes into the own rootfs of each mound, and dies with
+# dr-rm. This verb writes that one repeated step as a kit.
 #
-# ONE KIT PER PLUGIN, because sbx can only ADD a kit to a running mound. A single
-# combined kit would have to be EDITED whenever a plugin was added, and an edited
-# kit needs dr-up --recreate; separate kits make adding a plugin an append, which
-# is the one change that applies in place.
+# ONE KIT FOR EACH PLUGIN, because sbx can only ADD a kit to a running mound. A
+# single combined kit needs an EDIT for each new plugin, and an edited kit needs
+# dr-up --recreate. With separate kits, a new plugin is an append, and that is
+# the one change that applies in place.
 #
-# NO VERSION IS PINNED. The install line names <plugin>@<marketplace> and nothing
-# more, so it resolves against whatever the seed holds when a mound is created.
-# That is what keeps `dr-plugin update` and this verb independent: after an update
-# the same kit installs the new version. See docs/CLAUDE_PLUGINS.md.
+# NO VERSION IS PINNED. The install line names only <plugin>@<marketplace>, so
+# it resolves against the seed at the creation of a mound. Thus `dr-plugin
+# update` and this verb are independent. After an update, the same kit installs
+# the new version. See docs/CLAUDE_PLUGINS.md.
 kit)
-    # The kit runs INSIDE a mound, so the seed has to be named in the mound's
-    # spelling - the same translation `status` checks the wiring against.
+    # The kit runs INSIDE a mound, so the seed needs its path in the mound. That
+    # is the same translation that `status` uses for its test.
     _seed_mound=$(dr_path_mound "$SEED") || dr_die \
-        "the seed is not on a Windows drive, so no mound could be pointed at it" \
+        "the seed is not on a Windows drive, so no mound can use it" \
         "  $SEED"
     _ks=$(dr_kit_store)
 
-    # With nothing named, every installed plugin - the same shape as `add`: all
-    # of it, or only the ones you name.
+    # If you name nothing, each installed plugin. The same form as `add`: all of
+    # them, or only the ones that you name.
     _want=()
     if [ ${#args[@]} -gt 0 ]; then
         _want=("${args[@]}")
@@ -566,30 +565,30 @@ kit)
     mkdir -p "$_ks"
     _made=()
     for _p in "${_want[@]}"; do
-        # Installed is the precondition, and the version is read only to prove
-        # it - nothing written below records a version.
+        # Installed is the precondition. The code reads the version only to
+        # prove it. Nothing below records a version.
         _ver=$(installed | awk -v id="$_p" '$1 == id {print $2; exit}')
         [ -n "$_ver" ] || dr_die "not installed: $_p" \
-            "A kit can only install what the seed holds, and the id is in full," \
-            "as <plugin>@<marketplace>. See what there is:  dr-plugin list"
+            "A kit can only install what the seed holds. Give the full id," \
+            "as <plugin>@<marketplace>. See the plugins:  dr-plugin list"
 
-        # sbx constrains `name` to lowercase alphanumeric and hyphens, so the
-        # plugin half of the id is slugged rather than used as it stands.
+        # sbx allows only lowercase letters, digits, and hyphens in `name`. Thus
+        # the code changes the plugin half of the id into a slug.
         _slug=plugin-$(printf '%s' "${_p%@*}" | tr '[:upper:]' '[:lower:]' \
             | tr -cs 'a-z0-9' '-')
         _slug=${_slug%-}
         _dir="$_ks/$_slug"
 
-        # A kit already in the library may have been edited by hand, so
-        # replacing one is a decision rather than a detail.
+        # A person possibly edited a kit in the library. Thus a replacement is a
+        # decision, not a detail.
         if [ -d "$_dir" ] && [ -z "$force" ]; then
             dr_warn "$_slug is already in the kit library"
             printf '  %s%s%s\n' "$_DR_DIM" "$_dir/spec.yaml" "$_DR_OFF" >&2
             dr_confirm "Overwrite it?" || { dr_info "kept $_slug"; continue; }
         fi
 
-        # Unquoted heredoc: the id, the slug and the seed path are substituted,
-        # and there is nothing else in here that a shell would touch.
+        # Unquoted heredoc. The shell puts in the id, the slug, and the seed
+        # path, and touches nothing else in here.
         mkdir -p "$_dir"
         cat > "$_dir/spec.yaml" <<YAML
 schemaVersion: "2"
@@ -597,9 +596,9 @@ kind: mixin
 name: $_slug
 displayName: Install $_p into the mound
 description: >-
-  Generated by dr-plugin kit. Installs the plugin named below from the seed as
-  the mound is created. No version is pinned: it resolves against whatever the
-  seed holds, so dr-plugin update needs no regeneration here.
+  dr-plugin kit made this file. At the creation of the mound, it installs the
+  plugin below from the seed. No version is pinned. It resolves against the
+  seed, so after dr-plugin update you do not have to make it again.
 
 commands:
   install:
@@ -611,85 +610,85 @@ YAML
         dr_ok "wrote $_dir/spec.yaml  ($_p $_ver)"
     done
 
-    # Nothing to say if every kit was already there and kept.
+    # If each kit was already there and kept, say nothing.
     [ ${#_made[@]} -gt 0 ] || exit 0
 
-    # Draugr does not parse kit YAML - sbx does - so dr-kit is the authority on
-    # whether what was just written is valid, not this command.
-    dr_info "validate it, then add it to a project's kit list:"
+    # Draugr does not parse kit YAML. sbx does. Thus dr-kit decides whether the
+    # new file is valid, not this command.
+    dr_info "validate it, then add it to the kit list of a project:"
     printf '  dr-kit validate\n' >&2
     printf '  DRAUGR_KIT=".draugr/kit %s"\n' "${_made[*]}" >&2
 
-    # Both halves, because only one of them is measured: a kit added to the end
-    # of the list can be applied to a running mound, but whether commands.install
-    # runs on apply or only at creation is still open.
-    printf '  %sA mound built from now on installs it as it is created. For the one\n' "$_DR_DIM" >&2
-    printf '  you are in, "dr-kit apply" adds the kit in place - then confirm with\n' >&2
-    printf '  "dr-shell -- claude plugin list", and install once by hand if it is\n' >&2
-    printf '  absent. See docs/CLAUDE_PLUGINS.md.%s\n' "$_DR_OFF" >&2
+    # Both halves, because a test showed only one. You can apply a kit at the
+    # end of the list to a running mound. Nobody knows yet whether
+    # commands.install runs on apply, or only at creation.
+    printf '  %sEach new mound installs it at its creation. For the current mound,\n' "$_DR_DIM" >&2
+    printf '  "dr-kit apply" adds the kit in place. Then make sure that it is there\n' >&2
+    printf '  with "dr-shell -- claude plugin list". If it is missing, install it\n' >&2
+    printf '  once yourself. See docs/CLAUDE_PLUGINS.md.%s\n' "$_DR_OFF" >&2
     ;;
 
 # --- add ----------------------------------------------------------------------
 add)
     [ ${#args[@]} -ge 1 ] || dr_die "add needs a marketplace" \
-        "  dr-plugin add <owner>/<repo>               every plugin the marketplace lists" \
-        "  dr-plugin add <owner>/<repo> <plugin>...   only the ones you name"
+        "  dr-plugin add <owner>/<repo>               each plugin that the marketplace lists" \
+        "  dr-plugin add <owner>/<repo> <plugin>...   only the ones that you name"
     _source=${args[0]}
 
     build_begin
-    # What a repository registers ITSELF as is its own business - "obra/superpowers"
-    # arrives as "superpowers-marketplace" - so the name is discovered by watching
-    # what appeared rather than derived from what was typed.
+    # A repository decides its OWN registration name. "obra/superpowers" arrives
+    # as "superpowers-marketplace". Thus the code finds the name from what
+    # appeared, and not from what you typed.
     _before=$(build_marketplaces)
     build_run market-add "$_source"
     _mkt=$(comm -13 <(printf '%s\n' "$_before" | sort) \
                     <(work_marketplaces | sort) | head -1)
 
-    # Nothing NEW is not the same as nothing there: a repeat add registers no
-    # marketplace because the library already holds it. Discovery cannot name it
-    # - it watches for an arrival - so the registry is asked instead, which is
-    # what turns both refusals below into answers rather than dead ends.
+    # Nothing NEW is not the same as nothing there. A repeat add registers no
+    # marketplace, because the library already holds it. The search cannot name
+    # it, because it looks for a new arrival. Thus the code asks the registry.
+    # That makes both refusals below into answers, not dead ends.
     _known=
     [ -n "$_mkt" ] || _known=$(marketplace_for_source "$_source")
 
-    # With no plugin named, install everything the new marketplace offers. Its
-    # catalogue is on disk by now, because market-add cloned it.
+    # If you name no plugin, install all that the new marketplace offers. Its
+    # catalog is on disk now, because market-add cloned it.
     if [ ${#args[@]} -ge 2 ]; then
-        # A bare name is completed with the marketplace this add discovered, or
-        # failing that the one the registry already holds for this source.
-        # Demanding <plugin>@<marketplace> up front would be asking for a name a
-        # FIRST add cannot know - and a repeat add knows only via the registry.
+        # The code completes a bare name with the marketplace that this add
+        # found. If there is none, it uses the one that the registry holds for
+        # this source. A FIRST add cannot know <plugin>@<marketplace>, and a
+        # repeat add knows it only through the registry.
         _plugins=()
         for _p in "${args[@]:1}"; do
             case "$_p" in
                 *@*) _plugins+=("$_p") ;;
                 *)   _m=${_mkt:-$_known}
                      [ -n "$_m" ] || dr_die \
-                         "cannot tell which marketplace $_p belongs to" \
+                         "cannot tell the marketplace of $_p" \
                          "$_source registered nothing new, and no registered marketplace" \
-                         "names that source either. Give the full id:" \
+                         "names that source. Give the full id:" \
                          "  dr-plugin add $_source <plugin>@<marketplace>" \
-                         "The registered names are listed by:  dr-plugin"
+                         "To list the registered names:  dr-plugin"
                      _plugins+=("$_p@$_m") ;;
             esac
         done
     else
-        # Nothing new is not a failure to report as one. The advice that used to
-        # stand here sent you to `dr-plugin add <source> <plugin>`, which the
-        # bare-name branch above then refused over the very same missing name.
+        # Nothing new is not a failure, so do not report it as one. The old
+        # advice here sent you to `dr-plugin add <source> <plugin>`. The
+        # bare-name branch above then refused that, for the same missing name.
         if [ -z "$_mkt" ]; then
             [ -n "$_known" ] || dr_die \
                 "$_source registered no new marketplace" \
-                "No registered marketplace names that source either, so there is" \
+                "No registered marketplace names that source, so there is" \
                 "nothing here to install from." \
-                "The registered names are listed by:  dr-plugin"
+                "To list the registered names:  dr-plugin"
 
-            # Registered already, so this is a repeat: report what is there, and
-            # name the verb that acts on it.
+            # Already registered, so this is a repeat. Report what is there, and
+            # name the verb for it.
             mapfile -t _have < <(installed_from "$_known")
             [ ${#_have[@]} -gt 0 ] || dr_die \
                 "$_source is already registered, as $_known" \
-                "Nothing from it is installed yet. Name what you want:" \
+                "Nothing from it is installed yet. Name the plugin that you want:" \
                 "  dr-plugin add $_source <plugin>@$_known"
             dr_die "$_source is already registered, as $_known" \
                 "Installed from it:" \
@@ -705,8 +704,8 @@ add)
 
     for _p in "${_plugins[@]}"; do build_run install "$_p"; done
     build_commit
-    # Enabling last, and only after the swap: a switch pointing at a plugin the
-    # library does not have is a lie, and the swap is the moment it does.
+    # Enable last, and only after the swap. A switch for a plugin that the
+    # library does not have is a lie, and the library gets it at the swap.
     for _p in "${_plugins[@]}"; do
         settings_write "$_p" true
         dr_ok "enabled $_p"
@@ -716,16 +715,16 @@ add)
 # --- update -------------------------------------------------------------------
 update)
     build_begin
-    # marketplace update refreshes the catalogues; plugin update acts on what
-    # they now offer. Doing the first unconditionally means "update" means the
-    # same thing whether or not a plugin was named.
+    # marketplace update refreshes the catalogs. plugin update acts on what they
+    # now offer. The first always runs, so "update" means the same, with or
+    # without a plugin name.
     build_run market-update ""
     if [ ${#args[@]} -ge 1 ]; then
         for _p in "${args[@]}"; do build_run update "$_p"; done
     else
-        # The whole list first, then the loop. Reading it as the loop runs would
-        # put a command that touches stdin inside the pipeline feeding it - see
-        # the redirect in build_run.
+        # The whole list first, then the loop. A read during the loop puts a
+        # command that reads stdin inside the pipeline that feeds it. See the
+        # redirect in build_run.
         mapfile -t _ids < <(installed | cut -d' ' -f1)
         for _id in "${_ids[@]}"; do
             [ -n "$_id" ] || continue
@@ -733,22 +732,22 @@ update)
         done
     fi
     build_commit
-    dr_info "superseded versions are not reaped by the CLI - run: dr-plugin clean"
+    dr_info "the CLI does not remove old versions. Run: dr-plugin clean"
     ;;
 
 # --- remove -------------------------------------------------------------------
 remove)
     [ ${#args[@]} -ge 1 ] || dr_die "remove needs a plugin" \
         "  dr-plugin remove <plugin>@<marketplace>" \
-        "See what is installed with:  dr-plugin list"
+        "See the installed plugins with:  dr-plugin list"
 
     build_begin
     for _p in "${args[@]}"; do
         build_run uninstall "$_p"
 
-        # The marketplace goes too when nothing else came from it. Leaving it
-        # would keep a catalogue registered in every mound for no plugin, and
-        # the clone it brought with it on disk.
+        # If nothing else came from the marketplace, it goes too. Otherwise each
+        # mound keeps a registered catalog for no plugin, and its clone stays on
+        # disk.
         _mkt=${_p#*@}
         _left=$(work_cat installed_plugins.json | jq -r --arg m "$_mkt" \
             '[.plugins // {} | keys[] | select(endswith("@" + $m))] | length' \
@@ -760,10 +759,10 @@ remove)
     build_commit
     for _p in "${args[@]}"; do settings_write "$_p" drop; done
 
-    # A generated kit installs this plugin by name, and the plugin is now gone
-    # from the seed - so that kit would send a mound to the network for it, or
-    # fail. Reported, NOT deleted: a kit in your library may have been edited
-    # since it was generated, and removing a plugin is not consent to discard it.
+    # A generated kit installs this plugin by name, and the plugin is no longer
+    # in the seed. Thus that kit sends a mound to the network for it, or fails.
+    # Report it, but do NOT delete it. A person possibly edited a kit in your
+    # library, and the removal of a plugin is no permission to discard it.
     _ks=$(dr_kit_store)
     if [ -d "$_ks" ]; then
         for _p in "${args[@]}"; do
@@ -771,7 +770,7 @@ remove)
             [ -n "$_hits" ] || continue
             dr_warn "a kit in your library still installs $_p:"
             printf '%s\n' "$_hits" | sed "s|^|    |" >&2
-            dr_info "drop it from DRAUGR_KIT, or delete that directory"
+            dr_info "remove it from DRAUGR_KIT, or delete that directory"
         done
     fi
     ;;
@@ -780,15 +779,15 @@ remove)
 enable|disable)
     [ ${#args[@]} -ge 1 ] || dr_die "$action needs a plugin" \
         "  dr-plugin $action <plugin>@<marketplace>"
-    # No mound and no build: this is one key in one JSON file, and it takes
-    # effect at the next attach because that is when a session reads settings.
+    # No mound and no build. This is one key in one JSON file. It applies at the
+    # next attach, because a session reads the configuration then.
     for _p in "${args[@]}"; do
         if [ "$action" = enable ]; then
             settings_write "$_p" true
         else
             settings_write "$_p" false
         fi
-        dr_ok "$action $_p - takes effect at the next dr-go"
+        dr_ok "$action $_p. It applies at the next dr-go."
     done
     ;;
 
@@ -796,10 +795,10 @@ enable|disable)
 clean)
     [ -d "$SEED/cache" ] || { dr_ok "nothing to clean"; exit 0; }
 
-    # Superseded versions are invisible and permanent: measured, a stale 0.9.0
-    # left beside a live 1.0.0 survived `plugin update`, `plugin prune` and
-    # `plugin list`, and list never mentioned it. Only the version the library
-    # says is installed is kept.
+    # Old versions are hidden and permanent. A test showed this. An old 0.9.0
+    # next to a live 1.0.0 stayed after `plugin update`, `plugin prune`, and
+    # `plugin list`, and list never named it. The code keeps only the version
+    # that the library names as installed.
     _kept=0 _dropped=0
     while read -r _id _ver; do
         [ -n "$_id" ] || continue
@@ -811,33 +810,33 @@ clean)
             if [ "$(basename "$_v")" = "$_ver" ]; then
                 _kept=$((_kept + 1))
             else
-                dr_info "dropping $_mkt/$_plug/$(basename "$_v")"
+                dr_info "removing $_mkt/$_plug/$(basename "$_v")"
                 rm -rf "$_v"; _dropped=$((_dropped + 1))
             fi
         done
     done < <(installed)
 
-    # An uninstall leaves the empty parents behind - cache/<mkt>/<plugin>/ with
-    # no version in it - which costs nothing but makes a find in the library name
+    # An uninstall leaves the empty parents: cache/<mkt>/<plugin>/ with no
+    # version in it. That costs nothing, but a find in the library then names
     # plugins that are gone.
     #
-    # Twice, deepest first: emptying <plugin> is what makes <mkt> empty, and a
-    # single find has already walked past <mkt> by the time that happens.
+    # Twice, the deepest first. An empty <plugin> makes <mkt> empty. At that
+    # time, one find is already past <mkt>.
     find "$SEED/cache" -mindepth 2 -maxdepth 2 -type d -empty -delete 2>/dev/null || :
     find "$SEED/cache" -mindepth 1 -maxdepth 1 -type d -empty -delete 2>/dev/null || :
-    dr_ok "kept $_kept, dropped $_dropped"
+    dr_ok "kept $_kept, removed $_dropped"
     ;;
 
 # --- rollback -----------------------------------------------------------------
 rollback)
     [ -d "$PREV" ] || dr_die "there is no $PREV to go back to"
     dr_confirm "Swap $SEED and $PREV?" || dr_die "cancelled"
-    # A swap rather than a restore, so running it twice returns you to where you
-    # started - which is what you want when the rollback was the mistake.
+    # A swap, not a restore. Thus a second run brings you back to the start.
+    # That is what you want after a wrong rollback.
     _tmp="$STORE/.swap.$$"
     mv "$SEED" "$_tmp"
     mv "$PREV" "$SEED"
     mv "$_tmp" "$PREV"
-    dr_ok "rolled back - run it again to undo"
+    dr_ok "rolled back. To undo, run it again."
     ;;
 esac

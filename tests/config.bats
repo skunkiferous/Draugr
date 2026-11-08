@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Config layering, provenance and trust-on-first-use.
+# Configuration layers, the source of each value, and trust on first use.
 
 load helper
 
@@ -83,7 +83,7 @@ teardown() { dr_test_teardown; }
 @test "an untrusted project config is NOT sourced" {
     repo=$(dr_make_repo)
     printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
-    # deliberately not trusted
+    # not trusted, on purpose
     dr_load_config "$repo" 2>/dev/null
     [ "$DRAUGR_AGENT" = claude ]
 }
@@ -109,10 +109,10 @@ teardown() { dr_test_teardown; }
 
 # --- reporting a layer that was skipped ---------------------------------------
 #
-# A refused config is the one failure mode that looks like nothing happening: the
-# table shows built-in defaults, which is exactly what it would show if the file
-# said nothing at all. Anyone running dr-config is asking why something is not
-# behaving, so the refusal has to survive to the bottom of the output.
+# A refused configuration is the one failure that looks like nothing happened.
+# The table shows built-in defaults, the same as for an empty file. A person who
+# runs dr-config wants to know why something does not work. Thus the refusal
+# must stay visible until the end of the output.
 
 @test "DR_UNTRUSTED names the layer that was skipped" {
     repo=$(dr_make_repo)
@@ -131,8 +131,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "DR_UNTRUSTED does not accumulate across loads" {
-    # It is reset per load rather than appended to, so a second dr_load_config in
-    # the same process cannot report the same file twice.
+    # Each load resets it, and does not append to it. Thus a second
+    # dr_load_config in the same process cannot report the same file twice.
     repo=$(dr_make_repo)
     printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
     dr_load_config "$repo" 2>/dev/null
@@ -151,15 +151,16 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr-config: it counts them, and still exits 0" {
-    # An ignored config is not a failure - nothing errored, and dr-config is fed
-    # to grep too often to start returning non-zero. It is loud, not fatal.
+    # An ignored configuration is not a failure. Nothing gave an error, and
+    # people often pipe dr-config to grep. Thus it must not return non-zero. It
+    # is loud, not fatal.
     repo=$(dr_make_repo)
     printf 'DRAUGR_AGENT=gemini\n'  > "$repo/.draugr.conf"
     printf 'DRAUGR_AGENT=codex\n'   > "$repo/.draugr.local.conf"
     cd "$repo"
     run dr-config
     [ "$status" -eq 0 ]
-    [[ "$output" == *"2 config files were NOT sourced"* ]]
+    [[ "$output" == *"2 configuration files were NOT sourced"* ]]
 }
 
 @test "dr-config: nothing is said when there is nothing to say" {
@@ -172,8 +173,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr-config --changed: the refusal survives there too" {
-    # --changed is where it matters most: a refused file makes the view empty,
-    # which reads as "you have configured nothing" rather than "it was ignored".
+    # This is most important with --changed. A refused file makes the view
+    # empty. That reads as "you configured nothing", not as "it was ignored".
     repo=$(dr_make_repo)
     printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
     cd "$repo"
@@ -186,7 +187,7 @@ teardown() { dr_test_teardown; }
     printf 'DRAUGR_AGENT=gemini\n' > "$repo/.draugr.conf"
     cd "$repo"
     run dr-config --files
-    [[ "$output" == *"NO - not sourced"* ]]
+    [[ "$output" == *"NO: not sourced"* ]]
 }
 
 @test "the user's own config needs no trust" {
@@ -231,11 +232,11 @@ teardown() { dr_test_teardown; }
 
 # --- per-agent agent arguments -----------------------------------------------
 #
-# DRAUGR_AGENT_ARGS holds the AGENT's own flags, so one machine-wide value is
-# wrong the moment a second agent is in play. These pin the key that fixes that,
-# and in particular the reason it has to be a key rather than advice: a shell
-# conditional in the user config cannot see DRAUGR_AGENT, because that layer is
-# sourced before the project sets it.
+# DRAUGR_AGENT_ARGS holds the own flags of the AGENT. Thus one machine-wide
+# value is wrong as soon as a second agent is used. These tests pin the key that
+# fixes that. Most of all, they pin why it must be a key, not advice. A shell
+# conditional in the user configuration cannot see DRAUGR_AGENT, because that
+# layer is sourced before the project sets it.
 
 @test "agent args: the per-agent key beats the generic one" {
     printf 'DRAUGR_AGENT=claude\nDRAUGR_AGENT_ARGS=generic\nDRAUGR_AGENT_ARGS_CLAUDE=--continue\n' \
@@ -254,14 +255,14 @@ teardown() { dr_test_teardown; }
 }
 
 @test "agent args: unset falls through, empty does not" {
-    # Unset means "nothing to say about codex", so the generic value stands.
+    # Unset means "nothing to say about codex", so the generic value applies.
     printf 'DRAUGR_AGENT=codex\nDRAUGR_AGENT_ARGS=generic\n' > "$DRAUGR_CONFIG_HOME/config"
     dr_load_config
     [ "$DRAUGR_AGENT_ARGS" = generic ]
 
-    # Empty means "nothing FOR codex", which is a decision and must win. This is
-    # the distinction ${!k+set} exists for, and the reason these keys have no
-    # built-in default: a default would make the two indistinguishable.
+    # Empty means "nothing FOR codex". That is a decision, and it must win.
+    # ${!k+set} exists for this difference. It is also why these keys have no
+    # built-in default. With a default, nobody can tell the two apart.
     printf 'DRAUGR_AGENT=codex\nDRAUGR_AGENT_ARGS=generic\nDRAUGR_AGENT_ARGS_CODEX=\n' \
         > "$DRAUGR_CONFIG_HOME/config"
     dr_load_config
@@ -270,9 +271,9 @@ teardown() { dr_test_teardown; }
 }
 
 @test "agent args: the agent set by the PROJECT chooses the key" {
-    # The point of the whole feature. The user config cannot know which agent
-    # will be in play - it is sourced first - so the choice has to happen after
-    # every layer has spoken. A conditional in that file would pick claude here.
+    # The purpose of the full feature. The user configuration cannot know which
+    # agent is used, because it is sourced first. Thus the choice must happen
+    # after all layers. A conditional in that file picks claude here.
     repo=$(dr_make_repo)
     printf 'DRAUGR_AGENT_ARGS_CLAUDE=--continue\nDRAUGR_AGENT_ARGS_CODEX=resume\n' \
         > "$DRAUGR_CONFIG_HOME/config"
@@ -293,9 +294,9 @@ teardown() { dr_test_teardown; }
 }
 
 @test "agent args: every agent Draugr knows has a registered key" {
-    # DR_KEYS is what dr-config lists and what the environment override in
-    # dr_load_config walks, so an agent missing from it would have a key that
-    # silently only worked from a config file.
+    # dr-config lists DR_KEYS, and the environment override in dr_load_config
+    # walks it. If an agent is missing from it, its key silently works only from
+    # a configuration file.
     local a k
     for a in "${DR_AGENTS[@]}"; do
         k=$(dr_agent_args_key "$a")

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# dr-diff - review what the agent actually changed, properly.
+# dr-diff: review what the agent changed.
 #
-# Uses the three-dot form, HEAD...draugr/<branch>, which diffs from where the two
-# diverged. That matters once you have committed on the host as well: two-dot
-# would also show your own commits, inverted, as though the agent had reverted
-# them. Three-dot shows only the agent's work.
+# It uses the three-dot form, HEAD...draugr/<branch>. That diff starts where the
+# two branches split. If you also commit on the host, this is important. The
+# two-dot form then shows your commits inverted, like a revert by the agent.
+# The three-dot form shows only the work of the agent.
 #
 #   dr-diff                  the whole change
-#   dr-diff --stat           just the shape of it
+#   dr-diff --stat           only a summary
 #   dr-diff -- src/foo.py    one path
 set -euo pipefail
 
 DR_PROG=dr-diff
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh

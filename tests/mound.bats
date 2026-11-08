@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
 # The mound lifecycle: dr-up, dr-go, dr-shell, dr-stop, dr-rm, dr-ls, dr-status.
 #
-# Nothing here starts a hypervisor. tests/mocks/sbx records the command line it
-# was handed and replays canned `ls --json`, so what these tests actually assert
-# is that Draugr builds the right sbx invocation from a given config - which is
-# the part with all the path translation in it, and therefore all the bugs.
+# Nothing here starts a hypervisor. tests/mocks/sbx records its command line and
+# replays a fixed `ls --json`. Thus these tests assert that Draugr builds the
+# right sbx call from a given configuration. That part does all the path
+# translation, and thus has all the bugs.
 
 load helper
 
@@ -13,22 +13,22 @@ setup() {
     REPO=$(dr_make_win_repo) || skip "no writable path under /mnt/<drive> on this machine"
     cd "$REPO" || return 1
 
-    # dr_sandbox_name derives this from the folder, and the mock has to agree or
-    # dr_sandbox_state will report "absent" no matter what DR_MOCK_STATE says.
+    # dr_sandbox_name gets this from the folder, and the mock must agree. If
+    # not, dr_sandbox_state reports "absent", whatever DR_MOCK_STATE says.
     SANDBOX="draugr-$(basename "$REPO")"
     export DR_MOCK_NAME="$SANDBOX"
 }
 
 teardown() { dr_test_teardown; }
 
-# The recorded argv for one subcommand, e.g. calls create -> the create line.
-# tests/mocks/ssh logs under "ssh", so `calls ssh` picks the attaches out of the
-# same file.
+# The recorded argv for one subcommand, for example calls create -> the create
+# line. tests/mocks/ssh logs under "ssh", so `calls ssh` finds the attaches in
+# the same file.
 calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 
-# True if anything attached, by either transport. Used where the point is that
-# nothing did - a check refused before the agent could start - which would
-# otherwise quietly stop meaning anything the day the default transport changes.
+# True if anything attached, by either transport. For tests where nothing must
+# attach, because a test refused before the agent started. Without it, such a
+# test silently loses its meaning when the default transport changes.
 attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 
 # --- dr-up: the state machine -----------------------------------------------
@@ -53,17 +53,17 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [ "$status" -eq 0 ]
     [[ "$output" == *"already running"* ]]
     [ -z "$(calls create)" ]
-    # "no-op" means it neither builds nor starts anything. It is not "runs no
-    # commands at all": DRAUGR_MEM_SYNC=auto looks inside the mound on every
-    # dr-up, which is an exec. The start is the specific one that must be absent.
+    # "no-op" means that it does not build or start anything. It does not mean
+    # "runs no commands". DRAUGR_MEM_SYNC=auto looks inside the mound on each
+    # dr-up, and that is an exec. Only the start must be absent.
     [[ "$(calls exec)" != *"$SANDBOX true"* ]]
 }
 
 @test "dr-up: twice in a row creates only one sandbox" {
     DR_MOCK_STATE=absent run dr-up
     [ "$status" -eq 0 ]
-    # The mock has no memory, so the second run is told the sandbox now exists -
-    # which is exactly what the real sbx would report.
+    # The mock has no memory, so the test tells the second run that the sandbox
+    # exists. The real sbx reports exactly that.
     DR_MOCK_STATE=running run dr-up
     [ "$status" -eq 0 ]
     [ "$(calls create | wc -l)" -eq 1 ]
@@ -100,8 +100,8 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 @test "dr-up: the repo is passed as a Windows path" {
     DR_MOCK_STATE=absent run dr-up
     [ "$status" -eq 0 ]
-    # Whatever drive the test landed on, it must have been translated: a colon
-    # and backslashes, and no trace of the /mnt form.
+    # On each drive, the path must be translated: a colon and backslashes, and
+    # no trace of the /mnt form.
     [[ "$(calls create)" == *':\'* ]]
     [[ "$(calls create)" != *"/mnt/"* ]]
 }
@@ -130,9 +130,9 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     DR_MOCK_STATE=absent run dr-up
     [[ "$output" != *"no kit found"* ]]
 
-    # Reported by the name you wrote, not by a resolved path: a bare entry is
-    # searched for in two places, so "no kit at /repo/nope" would hide half of
-    # where Draugr actually looked.
+    # Reported by the name that you wrote, not by a resolved path. Draugr looks
+    # for a bare entry in two places. Thus "no kit at /repo/nope" hides half of
+    # the places where Draugr looked.
     DRAUGR_KIT=.draugr/nope DR_MOCK_STATE=absent run dr-up
     [ "$status" -eq 0 ]
     [[ "$output" == *"no kit found for '.draugr/nope'"* ]]
@@ -146,10 +146,10 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 
 # --- creation-time settings drift --------------------------------------------
 #
-# Ports, mounts, memory, the image and the agent are frozen into the sandbox when
-# sbx builds it. Editing one and re-running dr-up does nothing, because dr-up's
-# job on an existing mound is to start it. That silent no-op is what these are
-# about: you add a mount, run dr-go, and the directory is simply absent.
+# When sbx builds the sandbox, the ports, mounts, memory, image and agent become
+# fixed. If you edit one and run dr-up again, nothing happens. On an existing
+# mound, dr-up only starts it. These tests are about that silent no-op. You add
+# a mount, run dr-go, and the directory is absent.
 
 @test "dr-up: records what it built with" {
     DRAUGR_MOUNTS="/mnt/c/Docs:ro" DR_MOCK_STATE=absent run dr-up
@@ -160,7 +160,7 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 @test "dr-up: a changed mount list is reported, not silently ignored" {
     DRAUGR_MOUNTS="/mnt/c/Docs:ro" DR_MOCK_STATE=absent run dr-up
     DRAUGR_MOUNTS="/mnt/c/Docs:ro /mnt/c/More:ro" DR_MOCK_STATE=running run dr-up
-    [[ "$output" == *"changed since"* ]]
+    [[ "$output" == *"changed after"* ]]
     [[ "$output" == *"DRAUGR_MOUNTS"* ]]
     [[ "$output" == *"dr-up --recreate"* ]]
 }
@@ -186,8 +186,8 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 }
 
 @test "dr-up: a mound built before the stamp existed is not called drift" {
-    # Unknown is not drift. Warning on every dr-up for every pre-existing mound
-    # would train people to ignore the one that matters.
+    # Unknown is not drift. A warning on each dr-up for each older mound teaches
+    # people to ignore the important warning.
     DR_MOCK_STATE=absent run dr-up
     rm -f "$REPO/.draugr/create.applied"
     DRAUGR_MEMORY=8g DR_MOCK_STATE=running run dr-up
@@ -200,14 +200,14 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [ "$status" -eq 0 ]
     grep -q "^DRAUGR_MOUNTS=/mnt/c/Other:ro$" "$REPO/.draugr/create.applied"
 
-    # And the warning is gone, because the mound now matches the config.
+    # And the warning is gone, because the mound now matches the configuration.
     DRAUGR_MOUNTS="/mnt/c/Other:ro" DR_MOCK_STATE=running run dr-up
     [[ "$output" != *"changed since"* ]]
 }
 
 @test "dr_create_drift: a key the stamp never held is not drift either" {
-    # An older Draugr wrote a stamp with fewer keys. Treating an absent line as a
-    # change would make every upgrade look like drift.
+    # An older Draugr wrote a stamp with fewer keys. If an absent line is a
+    # change, each upgrade looks like drift.
     DR_MOCK_STATE=absent run dr-up
     grep -v '^DRAUGR_CPUS=' "$REPO/.draugr/create.applied" > "$REPO/.draugr/tmp.applied"
     mv "$REPO/.draugr/tmp.applied" "$REPO/.draugr/create.applied"
@@ -216,15 +216,16 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 }
 
 @test "dr-init: the stamp is gitignored, so it cannot block dr-go" {
-    # DRAUGR_REQUIRE_CLEAN=true means an untracked file stops a session. A file
-    # Draugr writes itself must never be the thing that does it.
+    # DRAUGR_REQUIRE_CLEAN=true means that an untracked file stops a session. A
+    # file that Draugr writes itself must never do that.
     run dr-init
     [ "$status" -eq 0 ]
     grep -qx '\.draugr/create\.applied' "$REPO/.gitignore"
 }
 
-# dr-init leaves .draugr.conf and the kit untracked and .gitignore modified, so the very
-# next dr-go refuses. Saying so where it happens is cheaper than the refusal teaching it.
+# dr-init leaves .draugr.conf and the kit untracked, and .gitignore changed.
+# Thus the next dr-go refuses. A message at that time is better than a refusal
+# later.
 @test "dr-init: says the tree it just dirtied will refuse dr-go" {
     run dr-init
     [ "$status" -eq 0 ]
@@ -237,14 +238,15 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     printf 'wip\n' > "$REPO/scratch.txt"
     DR_MOCK_STATE=running run dr-go
     [ "$status" -ne 0 ]
-    [[ "$output" == *"clone only contains commits"* ]]
+    [[ "$output" == *"clone holds only commits"* ]]
     ! attached
 }
 
-# .gitignore IS THE CIRCULAR CASE: adding a pattern to it is how you stop other files
-# blocking, and that edit then blocks on its own account. It cannot be exempted - the clone
-# ignores what the COMMITTED .gitignore ignores - so the refusal has to say why, and name the
-# per-checkout alternative. docs/HACKING.md, "Working on Draugr".
+# .gitignore IS THE CIRCULAR CASE. You add a pattern to it, so that other files
+# do not block. That edit then blocks by itself. It cannot be exempt, because
+# the clone ignores what the COMMITTED .gitignore ignores. Thus the refusal must
+# say why, and name the alternative for one checkout. docs/HACKING.md, "Working
+# on Draugr".
 @test "dr-go: a dirty .gitignore says why it cannot be exempted" {
     printf 'scratch/\n' >> "$REPO/.gitignore"
     DR_MOCK_STATE=running run dr-go
@@ -254,9 +256,9 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     ! attached
 }
 
-# THE NEGATIVE HALF, and the reason the one above is worth having: advice that prints for
-# every dirty file is advice nobody reads, and a message test without this cannot tell a
-# targeted message from a constant one.
+# THE NEGATIVE HALF, and the reason for the test above. Nobody reads advice that
+# prints for each dirty file. Without this, a message test cannot tell a
+# specific message from a fixed one.
 @test "dr-go: an ordinary dirty file gets no .gitignore advice" {
     printf 'wip\n' > "$REPO/scratch.txt"
     DR_MOCK_STATE=running run dr-go
@@ -268,8 +270,8 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 @test "dr-go: --dirty overrides the clean-tree check" {
     printf 'wip\n' > "$REPO/scratch.txt"
     DR_MOCK_STATE=running run dr-go --dirty
-    # Still fails, but on the terminal check rather than the clean one - which is
-    # what proves --dirty got past it.
+    # Still fails, but on the terminal test, not the clean one. That proves that
+    # --dirty got past it.
     [[ "$output" != *"clone only contains commits"* ]]
     [[ "$output" == *"needs a terminal"* ]]
 }
@@ -284,7 +286,8 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     mkdir -p "$REPO/tmp"
     printf 'churn\n' > "$REPO/tmp/big.bin"
     DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-go
-    # Data churn is exempt, so it gets past the clean check to the terminal one.
+    # Data changes are exempt, so it gets past the clean test to the terminal
+    # test.
     [[ "$output" != *"clone only contains commits"* ]]
     [[ "$output" == *"needs a terminal"* ]]
 }
@@ -295,13 +298,13 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     printf 'wip\n' > "$REPO/source.py"
     DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-go
     [ "$status" -ne 0 ]
-    [[ "$output" == *"clone only contains commits"* ]]
+    [[ "$output" == *"clone holds only commits"* ]]
 }
 
 @test "dr-go: the refusal names only what blocked, and counts what did not" {
-    # Listing the exempt files too - which `git status --short` does - reads as
-    # "DRAUGR_DATA is being ignored" when it is doing exactly its job. Reported
-    # against a repo with fifteen churning .tsv files and one stray script.
+    # `git status --short` also lists the exempt files. That reads as "Draugr
+    # ignores DRAUGR_DATA", but DRAUGR_DATA does its job. A user reported this,
+    # on a repo with fifteen changing .tsv files and one stray script.
     mkdir -p "$REPO/tmp"
     printf 'churn\n' > "$REPO/tmp/big.bin"
     printf 'wip\n' > "$REPO/source.py"
@@ -340,17 +343,16 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 
 # --- dr-go: DRAUGR_AGENT_ARGS ------------------------------------------------
 #
-# dr-go refuses to attach without a terminal, and it refuses *before* it would
-# print anything about the agent - so these cannot assert on its output. `script`
-# allocates a pty so the attach really happens, and the assertion is then on what
-# the mock recorded, which is the truth rather than a log line.
+# dr-go refuses to attach without a terminal. It refuses *before* it prints
+# anything about the agent, so these tests cannot assert on its output. `script`
+# gives a pty, so that the attach really happens. The test then asserts on what
+# the mock recorded. That is the truth, not a log line.
 #
-# Over ssh the agent's command line is inside the rcfile, which travels
-# base64-encoded, so these decode it back. That is not indirection for its own
-# sake: it is the string the mound's bash will run, and asserting on anything
-# earlier would be asserting on our own intentions.
-# head -1 because the attach is the first connection of a session: an auto-sync
-# afterwards fetches over ssh:// as well, and git would put its own line here.
+# Over ssh, the command line of the agent is inside the rcfile, which travels in
+# base64. Thus these tests decode it. It is the string that the bash of the
+# mound runs. An assertion on an earlier form only tests our own intentions.
+# head -1, because the attach is the first connection of a session. A later
+# auto-sync also fetches over ssh://, and git puts its own line here.
 go_rc() {
     DR_MOCK_STATE=running script -qec "dr-go $*" /dev/null >/dev/null 2>&1 || true
     calls ssh | head -1 | sed 's/.*printf %s //; s/ | base64.*//' | base64 -d
@@ -388,11 +390,11 @@ go_rc() {
 }
 
 @test "dr-go: the same args reach sbx run under DRAUGR_ATTACH=sbx" {
-    # The old transport is still there, and still assembles "-- <args>". Kept as
-    # one test rather than a second copy of the whole set: what is being checked
-    # is that the fallback exists and is wired to the same arguments.
+    # The old transport still exists, and still builds "-- <args>". One test,
+    # not a second copy of the full set. It tests that the fallback exists and
+    # gets the same arguments.
     export DRAUGR_ATTACH=sbx DRAUGR_AGENT_ARGS="--continue"
-    # Auto-sync off: it fetches over ssh:// and would put a line in the same log.
+    # Auto-sync off. It fetches over ssh://, and puts a line in the same log.
     export DRAUGR_AUTO_SYNC=false DRAUGR_MEM_SYNC=off
     DR_MOCK_STATE=running script -qec "dr-go" /dev/null >/dev/null 2>&1 || true
     [[ "$(calls run)" == *"-- --continue"* ]]
@@ -410,9 +412,9 @@ go_rc() {
 
 # --- dr-shell ----------------------------------------------------------------
 #
-# The default transport is ssh, and tests/attach.bats covers it. These two are
-# the sbx spelling, which is still there behind DRAUGR_ATTACH and would
-# otherwise rot unnoticed.
+# The default transport is ssh, and tests/attach.bats covers it. These two test
+# the sbx form. It still exists behind DRAUGR_ATTACH, and without tests it
+# breaks with nobody noticing.
 
 @test "dr-shell: a command after -- runs without a terminal" {
     DRAUGR_ATTACH=sbx DR_MOCK_STATE=running run dr-shell -- ls -la
@@ -488,7 +490,8 @@ go_rc() {
 }
 
 @test "dr-ls: a Windows path survives jq intact" {
-    # Regression: jq's @tsv escapes backslashes, so C:\Code came out as C:\\Code.
+    # Regression: jq's @tsv escapes backslashes, so C:\Code came out as
+    # C:\\Code.
     DR_MOCK_STATE=running run dr-ls
     [[ "$output" == *'C:\Code\testrepo'* ]]
     [[ "$output" != *'C:\\Code'* ]]
@@ -519,16 +522,17 @@ go_rc() {
     printf 'wip\n' > "$REPO/scratch.txt"
     DR_MOCK_STATE=running run dr-status
     [ "$status" -eq 0 ]
-    [[ "$output" == *"the clone will not have them"* ]]
+    [[ "$output" == *"The clone does not have them"* ]]
 }
 
 @test "dr-status: headings stay with their rows when stdout is captured" {
-    # Regression: headings went to stderr and rows to stdout, so the two streams
-    # were buffered apart and "repo" printed above the "repository" heading.
+    # Regression: headings went to stderr and rows to stdout. Thus the two
+    # streams had separate buffers, and "repo" printed above the "repository"
+    # heading.
     DR_MOCK_STATE=running run dr-status
     [ "$status" -eq 0 ]
 
-    # On stdout alone, every heading must still precede its own first row.
+    # On stdout alone, each heading must still come before its own first row.
     DR_MOCK_STATE=running dr-status > "$DR_TMP/out" 2>/dev/null
     grep -q '^repository$' "$DR_TMP/out"
     [ "$(grep -n '^repository$' "$DR_TMP/out" | cut -d: -f1)" \
@@ -545,18 +549,18 @@ go_rc() {
 
 # --- dr-stop --all ------------------------------------------------------------
 #
-# A machine-level sweep. Deliberately NOT limited to sandboxes Draugr named: a
-# running mound holds a Hyper-V microVM open whoever created it, and the reason
-# to want this - reclaiming memory, or tidying up before shutting the machine
-# down - does not care which tool made them. So it lists what it found and asks.
+# A sweep of the full machine. On purpose, it is NOT limited to sandboxes that
+# Draugr named. A running mound holds a Hyper-V microVM open, whatever created
+# it. The reasons for this command are to get memory back, or to clean up before
+# a shutdown. Neither cares which tool made them. Thus it lists them and asks.
 
 @test "dr-stop --all: stops every running sandbox in one call" {
     DR_MOCK_NAMES="draugr-one draugr-two other-tool" DR_MOCK_STATE=running \
         run dr-stop --all --yes
     [ "$status" -eq 0 ]
     [[ "$output" == *"3 running sandbox(es)"* ]]
-    # One sbx call carrying all three, rather than a partial sweep that stops
-    # halfway and leaves you guessing which.
+    # One sbx call with all three. A partial sweep can stop halfway, and then
+    # you do not know which ones stopped.
     line=$(grep "^stop " "$DR_MOCK_LOG")
     [[ "$line" == *"draugr-one"* ]]
     [[ "$line" == *"draugr-two"* ]]
@@ -564,7 +568,7 @@ go_rc() {
 }
 
 @test "dr-stop --all: reaches past Draugr's own sandboxes, and says so first" {
-    # The listing is the consent: you cannot approve a sweep you cannot see.
+    # The list is the consent. You cannot approve a sweep that you cannot see.
     DR_MOCK_NAMES="other-tool" DR_MOCK_STATE=running run dr-stop --all --yes
     [[ "$output" == *"other-tool"* ]]
 }
@@ -588,8 +592,8 @@ go_rc() {
 }
 
 @test "dr-stop --all: says stopping is not syncing" {
-    # The trap this command invites: stopping feels like putting work somewhere
-    # safe, and it does nothing of the sort. dr-sync is what fetches commits.
+    # The trap of this command: a stop feels like it puts work in a safe place.
+    # It does not. dr-sync fetches the commits.
     DR_MOCK_NAMES="draugr-one" DR_MOCK_STATE=running run dr-stop --all --yes
     [[ "$output" == *"dr-sync"* ]]
 }
@@ -600,8 +604,8 @@ go_rc() {
 }
 
 @test "dr-stop --all: works outside any repository" {
-    # The usual moment to want this is on the way out of a terminal that is not
-    # in a project, so it must not go through dr_context.
+    # Usually you need this when you leave a terminal that is not in a project.
+    # Thus it must not go through dr_context.
     cd "$DR_TMP" || return 1
     DR_MOCK_NAMES="draugr-one" DR_MOCK_STATE=running run dr-stop --all --yes
     [ "$status" -eq 0 ]
@@ -610,21 +614,21 @@ go_rc() {
 
 # --- DRAUGR_STOP_ON_EXIT ------------------------------------------------------
 #
-# Off by default. Stopping is hygiene, not durability - the dr-sync that has just
-# run is what protects the agent's work - and it silently kills anything the kit
+# Off by default. A stop is clean-up, not protection. The dr-sync that just ran
+# protects the work of the agent. A stop also silently kills all that the kit
 # serves through publishedPorts or startup commands. Measured: an idle mound
-# holds ~1.4 GB, and a cold start costs 4.2s against 0.36s to attach to a live
-# one, so this is a real trade rather than a free win either way.
+# holds ~1.4 GB. A cold start takes 4.2s, and an attach to a live one 0.36s.
+# Thus both choices have a real cost.
 
-# dr-go needs a terminal before it will attach, so these go through a pty the
-# same way go_argv does - but keeping the OUTPUT rather than the recorded argv.
+# dr-go needs a terminal before it attaches. Thus these go through a pty, as
+# go_argv does, but they keep the OUTPUT, not the recorded argv.
 go_output() {
     DR_MOCK_STATE=running script -qec "dr-go $*" /dev/null 2>&1 || true
 }
 
 @test "dr-go: leaves the mound running by default, and says so" {
     run go_output
-    [[ "$output" == *"still running"* ]]
+    [[ "$output" == *"still runs"* ]]
     [ -z "$(calls stop)" ]
 }
 
@@ -636,25 +640,25 @@ go_output() {
 }
 
 @test "dr-go: the stop is the LAST thing it does" {
-    # Everything on the way out - the sync, the memory export, the data pull -
-    # talks to the mound. Stopping first would turn each into a cold start or an
-    # outright failure, so the ordering is load-bearing rather than cosmetic.
+    # All the exit steps talk to the mound: the sync, the memory export, the
+    # data pull. A stop before them makes each one a cold start or a failure.
+    # Thus the order is important.
     export DRAUGR_STOP_ON_EXIT=true
     run go_output
     [[ "$(tail -1 "$DR_MOCK_LOG")" == stop* ]]
 }
 
 @test "dr-go: a mound that will not stop warns rather than failing" {
-    # The session is over and the work is already fetched, so this is untidy
-    # rather than dangerous - and dying here would mask the agent's exit code.
+    # The session is over and the work is fetched, so this is untidy, not
+    # dangerous. An exit here hides the exit code of the agent.
     export DRAUGR_STOP_ON_EXIT=true DR_MOCK_FAIL=stop
     run go_output
     [[ "$output" == *"could not stop"* ]]
-    [[ "$output" == *"still running"* ]]
+    [[ "$output" == *"still runs"* ]]
 }
 
 @test "dr-go: an off-by-default key stays off when set to anything but true" {
-    # dr_is_true is the gate, so "yes" and "1" and typos all mean "leave it".
+    # dr_is_true decides, so "yes", "1" and typos all mean "leave it".
     export DRAUGR_STOP_ON_EXIT=maybe
     run go_output
     [ -z "$(calls stop)" ]
@@ -662,18 +666,18 @@ go_output() {
 
 # --- data is not "uncommitted work" ------------------------------------------
 #
-# A repo whose CONTENT is data - a hundred tracked .tsv files, say - has a dirty
-# tree almost all the time, and none of it is the thing the clean-tree check
-# exists to catch. Reporting the two together made every command say sixteen
-# things were wrong when nothing was, and "the clone will not have them" was
-# flatly false: data arrives by rsync before the agent starts.
+# A repo whose CONTENT is data, for example a hundred tracked .tsv files, has a
+# dirty tree almost all the time. The clean-tree test is not for that. When both
+# were in one report, each command said that sixteen things were wrong, and
+# nothing was. "the clone will not have them" was false. Data arrives by rsync
+# before the agent starts.
 
 @test "dr-status: data files are counted apart from uncommitted work" {
     mkdir -p "$REPO/tmp"
     printf 'churn\n' > "$REPO/tmp/big.bin"
     DRAUGR_DATA="tmp/**" DR_MOCK_STATE=stopped run dr-status
     [ "$status" -eq 0 ]
-    [[ "$output" == *"clean"*"apart from data"* ]]
+    [[ "$output" == *"clean"*"except data"* ]]
     [[ "$output" == *"1 changed"* ]]
     [[ "$output" == *"dr-data push"* ]]
 }
@@ -684,7 +688,7 @@ go_output() {
     printf 'wip\n' > "$REPO/source.py"
     DRAUGR_DATA="tmp/**" DR_MOCK_STATE=stopped run dr-status
     [[ "$output" == *"1 uncommitted change(s)"* ]]
-    [[ "$output" == *"the clone will not have them"* ]]
+    [[ "$output" == *"The clone does not have them"* ]]
     [[ "$output" == *"1 changed"* ]]
 }
 
@@ -714,7 +718,7 @@ go_output() {
     printf 'churn\n' > "$REPO/tmp/big.bin"
     DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-send
     [[ "$output" != *"only committed work is sent"* ]]
-    [[ "$output" == *"travel separately"* ]]
+    [[ "$output" == *"go separately"* ]]
     [[ "$output" == *"dr-data push"* ]]
 }
 
@@ -723,7 +727,7 @@ go_output() {
     mkdir -p "$REPO/tmp"
     printf 'churn\n' > "$REPO/tmp/big.bin"
     DRAUGR_DATA="tmp/**" DR_MOCK_STATE=running run dr-send
-    [[ "$output" == *"only committed work is sent"* ]]
+    [[ "$output" == *"Only committed work goes"* ]]
     [[ "$output" == *"source.py"* ]]
     [[ "$output" != *"big.bin"* ]]
 }
@@ -731,14 +735,13 @@ go_output() {
 # --- an exemption that carries nothing ---------------------------------------
 
 @test "dr-go: warns when dirty data is exempted but nothing will push it" {
-    # DRAUGR_DATA lets the session start with a dirty data file, on the grounds
-    # that dr-data carries it. With push off, nothing does - and the agent works
-    # from the copy already in the mound, which is the exact staleness
-    # DRAUGR_REQUIRE_CLEAN exists to prevent.
+    # DRAUGR_DATA lets the session start with a dirty data file, because dr-data
+    # carries it. With push off, nothing carries it. The agent then uses the old
+    # copy in the mound. DRAUGR_REQUIRE_CLEAN exists to prevent exactly that.
     mkdir -p "$REPO/tmp"
     printf 'churn\n' > "$REPO/tmp/big.bin"
     DRAUGR_DATA="tmp/**" DRAUGR_DATA_PUSH=manual DR_MOCK_STATE=running run dr-go
-    [[ "$output" == *"will not reach the mound"* ]]
+    [[ "$output" == *"do not go to the mound"* ]]
     [[ "$output" == *"dr-data push"* ]]
 }
 

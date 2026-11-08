@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# dr - dispatcher. `dr go` runs dr-go. Use whichever form you prefer; the dr-*
-# scripts are the real commands and work perfectly well on their own.
+# dr: the dispatcher. `dr go` runs dr-go. Both forms work. The dr-* scripts are
+# the real commands, and each one works alone.
 set -euo pipefail
 
 DR_PROG=dr
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
 . "$_dr_bin/../lib/common.sh"
 
-# The list of verbs is derived by globbing bin/dr-*, never hard-coded, so a new
-# command shows up in the help the moment its file exists. ${f##*/dr-} strips
-# everything up to and including "dr-", leaving the bare verb.
+# The verbs come from a glob of bin/dr-*, not from a fixed list. Thus the
+# help lists each command file that exists. ${f##*/dr-} removes all text up
+# to and including "dr-", and leaves the verb.
 _dr_verbs() {
     local f
     for f in "$_dr_bin"/dr-*; do
@@ -24,12 +24,12 @@ _dr_verbs() {
 
 usage() {
     cat >&2 <<EOF
-${_DR_BOLD}Draugr${_DR_OFF} $DRAUGR_VERSION - bind your coding agent to a mound it cannot leave.
+${_DR_BOLD}Draugr${_DR_OFF} $DRAUGR_VERSION: bind your coding agent to a mound that it cannot leave.
 
   ${_DR_BOLD}usage:${_DR_OFF} dr <verb> [args...]        (or run dr-<verb> directly)
 
   ${_DR_BOLD}every day${_DR_OFF}
-    go            create-or-start the mound, attach, launch the agent
+    go            create or start the mound, attach, and start the agent
     sync          fetch the agent's commits onto ${DRAUGR_REMOTE:-draugr}/<branch>
     diff  log     review what it did
     merge         accept it
@@ -65,7 +65,7 @@ if [ -x "$target" ]; then
     exec "$target" "$@"
 fi
 
-# Unknown verb: suggest the closest installed one rather than just refusing.
+# For an unknown verb, suggest similar installed verbs, not only a refusal.
 near=$(_dr_verbs | while read -r v; do
     case "$v" in
         "$verb"*|*"$verb"*) printf '%s ' "$v" ;;

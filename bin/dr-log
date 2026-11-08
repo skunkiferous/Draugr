@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# dr-log - what the agent did that you have not seen.
+# dr-log: the work of the agent that you did not see yet.
 #
-# Just `git log` scoped to HEAD..draugr/<branch>, so any git log option works:
-# `dr-log -p`, `dr-log --author=…`, `dr-log -3`. Defaults to --stat, because the
-# first question about an agent's work is usually "which files did it touch".
+# It is `git log` for HEAD..draugr/<branch>, so each git log option works:
+# `dr-log -p`, `dr-log --author=…`, `dr-log -3`. The default is --stat. The
+# first question about the work of an agent is usually about the changed files.
 #
-#   dr-log             one line and a file summary per commit
+#   dr-log             one line and a file summary for each commit
 #   dr-log -p          with the full patch
-#   dr-log --oneline   just the subjects
+#   dr-log --oneline   only the subjects
 set -euo pipefail
 
 DR_PROG=dr-log
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
@@ -26,11 +26,11 @@ dr_context
 dr_require_tracking_ref
 tracking=$(dr_tracking_ref)
 
-# Only supply --stat when the caller has not asked for a format of their own,
-# so `dr-log --oneline` is not fighting a default it never asked for.
+# If the caller asked for no format, add --stat. Thus `dr-log --oneline`
+# does not fight a default that nobody asked for.
 if [ $# -eq 0 ]; then
     set -- --stat
 fi
 
-# "$@" last so a caller's options win over anything above.
+# "$@" comes last, so that the options of the caller win over all above.
 exec git -C "$DR_REPO" log "HEAD..$tracking" "$@"

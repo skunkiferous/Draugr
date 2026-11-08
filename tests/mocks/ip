@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# A stand-in for iproute2's `ip`, so dr_host_ip has a fixed answer.
+# A stand-in for the `ip` of iproute2, so that dr_host_ip has a fixed answer.
 #
-# The real thing reports an address that WSL is handed per boot, which is the
-# whole reason dr_host_ip exists - so a test that depended on it would be testing
-# the developer's current lease.
+# The real tool reports an address that WSL gets at each boot. That is the full
+# reason for dr_host_ip. Thus a test that depends on it tests the current lease
+# of the developer.
 #
-#   DR_MOCK_HOST_IP   the address to report. Unset means a plausible default;
-#                     set to EMPTY means a route with no `src` at all, which is
-#                     how "this is not WSL" is exercised.
+#   DR_MOCK_HOST_IP   the address to report. Unset means a probable default.
+#                     EMPTY means a route with no `src`. That exercises "this is
+#                     not WSL".
 set -euo pipefail
 
 case "$*" in
     *"route get"*)
         ip=${DR_MOCK_HOST_IP-172.19.192.26}
         if [ -z "$ip" ]; then
-            # A real answer for an interface with no source address: the route
-            # resolves, there is simply nothing to come from.
+            # A real answer for an interface with no source address. The route
+            # resolves, but there is no source.
             printf '1.1.1.1 dev eth0 \n    cache \n'
             exit 0
         fi

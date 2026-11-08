@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
 # DRAUGR_KIT as a list, and the library of named kits behind it.
 #
-# The premise is one measured fact: sbx MERGES kits rather than choosing between
-# them. Verified against sbx 0.37.1 - two mixins on one sandbox contributed both
-# their install commands and both their network allow rules, merged into a single
-# policy. Everything here follows from that, so if it ever stops being true these
-# tests are describing the wrong product.
+# The premise is one fact from a test: sbx MERGES kits, and does not choose one.
+# A test on sbx 0.37.1 showed that two mixins on one sandbox gave both their
+# install commands and both their network allow rules, merged into one policy.
+# All here follows from that. If it stops being true, these tests describe the
+# wrong product.
 
 load helper
 
@@ -17,9 +17,10 @@ setup() {
     dr_fake_sbx_root
     dr_load_common
 
-    # Isolated per test, so nothing here can reach the real library. $DR_TMP is
-    # on WSL's own ext4 - which is where the real default lives too - so this
-    # also exercises the UNC spelling a kit outside /mnt/<drive> needs.
+    # Separate for each test, so that nothing here can reach the real library.
+    # $DR_TMP is on the own ext4 of WSL, where the real default also is. Thus
+    # this also exercises the UNC spelling that a kit outside /mnt/<drive>
+    # needs.
     export DRAUGR_KIT_STORE="$DR_TMP/kitstore"
     export WSL_DISTRO_NAME="${WSL_DISTRO_NAME:-Ubuntu}"
     DR_REPO=$REPO
@@ -29,15 +30,15 @@ teardown() { dr_test_teardown; }
 
 calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 
-# A kit is a directory with a spec in it; the contents only matter where a test
-# says they do.
+# A kit is a directory with a spec in it. The contents are important only where
+# a test says so.
 make_kit() {
     mkdir -p "$1"
     printf 'schemaVersion: "2"\nkind: mixin\nname: %s\ndisplayName: %s kit\n' \
         "$(basename "$1")" "$(basename "$1")" > "$1/spec.yaml"
 }
 
-# --- resolving one entry ------------------------------------------------------
+# --- the resolve of one entry -----------------------------------------------
 
 @test "dr_kit_resolve: an absolute path is used as it stands" {
     make_kit "$DR_TMP/elsewhere"
@@ -61,8 +62,8 @@ make_kit() {
 }
 
 @test "dr_kit_resolve: the repo wins over the library on a name collision" {
-    # The more specific answer wins, which is the rule the whole config cascade
-    # follows. A repo that happens to contain a directory called lua means its own.
+    # The more specific answer wins. The full configuration cascade uses that
+    # rule. A repo with a directory called lua means its own.
     make_kit "$REPO/lua"
     make_kit "$DRAUGR_KIT_STORE/lua"
     run dr_kit_resolve "lua"
@@ -82,18 +83,18 @@ make_kit() {
 }
 
 @test "dr_kit_resolve: a name that exists nowhere fails" {
-    # No ":" or "@", so there is nothing to fall back to and guessing would only
-    # move the error into sbx where it makes less sense.
+    # No ":" or "@", so there is no fallback. A guess only moves the error into
+    # sbx, where it is harder to understand.
     run dr_kit_resolve "nosuchkit"
     [ "$status" -ne 0 ]
     [ -z "$output" ]
 }
 
-# --- resolving the list -------------------------------------------------------
+# --- the resolve of the list -----------------------------------------------
 
 @test "dr_kit_refs: resolves every entry, in order" {
-    # Order is preserved because sbx applies kits in the order it is given them,
-    # so a later entry lands on top of an earlier one.
+    # The order stays, because sbx applies kits in the given order. Thus a later
+    # entry goes on top of an earlier one.
     make_kit "$REPO/.draugr/kit"
     make_kit "$DRAUGR_KIT_STORE/lua"
     DRAUGR_KIT=".draugr/kit lua"
@@ -118,8 +119,8 @@ make_kit() {
 }
 
 @test "dr_kit_missing: names the entries you wrote, not resolved paths" {
-    # A bare entry is searched for in two places, so a resolved path would hide
-    # half of where Draugr actually looked.
+    # The search for a bare entry is in two places. Thus a resolved path hides
+    # half of the places where Draugr really looked.
     make_kit "$REPO/.draugr/kit"
     DRAUGR_KIT=".draugr/kit lua"
     run dr_kit_missing
@@ -134,12 +135,12 @@ make_kit() {
     [ "$output" = "$REPO/.draugr/kit" ]
 }
 
-# --- the digest that drift is built on ----------------------------------------
+# --- the digest for drift detection ------------------------------------------
 
 @test "dr_kit_hash_all: changes when the LIBRARY kit changes" {
-    # The case a single-kit hash could not see, and the reason drift detection
-    # still matters once kits are shared: another repo edits the library copy and
-    # this mound is silently stale.
+    # The case that a hash of one kit cannot see. It is the reason why drift
+    # detection is still important with shared kits. Another repo edits the
+    # library copy, and this mound is silently old.
     make_kit "$REPO/.draugr/kit"
     make_kit "$DRAUGR_KIT_STORE/lua"
     DRAUGR_KIT=".draugr/kit lua"
@@ -158,8 +159,8 @@ make_kit() {
 }
 
 @test "dr_kit_hash_all: order is part of the digest" {
-    # The same two kits the other way round can build a different sandbox, so
-    # swapping them has to read as drift rather than as no change at all.
+    # The same two kits in the reverse order can build a different sandbox. Thus
+    # a swap must read as drift, not as no change.
     make_kit "$REPO/.draugr/kit"
     make_kit "$DRAUGR_KIT_STORE/lua"
     DRAUGR_KIT=".draugr/kit lua"
@@ -169,15 +170,15 @@ make_kit() {
 }
 
 @test "dr_kit_hash_all: a remote reference contributes its name" {
-    # All we can honestly do without fetching an OCI image on every dr-up. The
-    # point of the test is that changing the reference is still detected.
+    # Without a fetch of an OCI image at each dr-up, we cannot do more. The test
+    # makes sure that a change of the reference is still detected.
     DRAUGR_KIT="ghcr.io/org/kit:v1"
     one=$(dr_kit_hash_all)
     DRAUGR_KIT="ghcr.io/org/kit:v2"
     [ "$(dr_kit_hash_all)" != "$one" ]
 }
 
-# --- dr-up builds one --kit per entry -----------------------------------------
+# --- dr-up builds one --kit for each entry -----------------------------------
 
 @test "dr-up: passes every resolved kit as its own --kit" {
     make_kit "$REPO/.draugr/kit"
@@ -201,7 +202,7 @@ make_kit() {
     DRAUGR_KIT=".draugr/kit lua" DR_MOCK_STATE=absent run dr-up
     [ "$status" -eq 0 ]
     [[ "$output" == *"no kit found for 'lua'"* ]]
-    # The one that DID resolve still has to reach sbx.
+    # The one that DID resolve must still reach sbx.
     [[ "$(calls create)" == *"--kit"* ]]
 }
 
@@ -215,8 +216,8 @@ make_kit() {
 }
 
 @test "dr-kit save: it is a copy, not a link" {
-    # A library that silently tracked one repo's edits would be a shared mutable
-    # dependency nobody asked for.
+    # A library that silently follows the edits of one repo is a shared, mutable
+    # dependency that nobody asked for.
     make_kit "$REPO/.draugr/kit"
     dr-kit save lua >/dev/null 2>&1
     printf 'description: changed after saving\n' >> "$REPO/.draugr/kit/spec.yaml"
@@ -250,7 +251,7 @@ make_kit() {
     run dr-kit save lua
     [ "$status" -ne 0 ]
     [[ "$output" == *"already exists"* ]]
-    [[ "$output" == *"Every repo using it"* ]]
+    [[ "$output" == *"Each repo that uses it"* ]]
 }
 
 @test "dr-kit save: --yes overwrites" {
@@ -266,7 +267,7 @@ make_kit() {
     make_kit "$DRAUGR_KIT_STORE/lua"
     DRAUGR_KIT="lua" run dr-kit save copy
     [ "$status" -ne 0 ]
-    [[ "$output" == *"no kit of its own"* ]]
+    [[ "$output" == *"no own kit"* ]]
 }
 
 @test "dr-kit list: an empty library says how to fill it" {
@@ -285,8 +286,8 @@ make_kit() {
 }
 
 @test "dr-kit drift: a changed library kit is drift for this repo" {
-    # The whole reason drift detection survives into a shared library: you did
-    # not touch this repo, and its mound is nonetheless out of date.
+    # The full reason for drift detection in a shared library. You did not touch
+    # this repo, but its mound is old.
     make_kit "$REPO/.draugr/kit"
     make_kit "$DRAUGR_KIT_STORE/lua"
     export DRAUGR_KIT=".draugr/kit lua"
@@ -294,7 +295,7 @@ make_kit() {
     printf 'description: edited by another project\n' >> "$DRAUGR_KIT_STORE/lua/spec.yaml"
     run dr-kit drift
     [ "$status" -eq 1 ]
-    [[ "$output" == *"has changed"* ]]
+    [[ "$output" == *"changed after"* ]]
 }
 
 @test "dr-kit drift: clean when neither kit has moved" {
@@ -313,23 +314,24 @@ make_kit() {
     DR_MOCK_STATE=absent dr-up >/dev/null 2>&1
     run dr-kit drift
     [ "$status" -eq 0 ]
-    [[ "$output" == *"only its NAME is compared"* ]]
+    [[ "$output" == *"Only its NAME is compared"* ]]
 }
 
 # --- dr-kit apply ---------------------------------------------------------------
 #
-# Measured on sbx 0.37.1 against a throwaway mound, and every test below is a
-# consequence: `sbx kit add` refuses a kit whose name the sandbox already has,
-# and adding a new one writes a fresh rule WITHOUT deleting the old - so an edit
-# that narrows a kit would leave the wider rule in force. apply therefore does
-# exactly one thing, adding kits to the end of the list, and refuses the rest.
+# A test on sbx 0.37.1 with a throwaway mound showed this, and each test below
+# follows from it. `sbx kit add` refuses a kit whose name the sandbox already
+# has. An add of a new one writes a new rule, and does NOT delete the old one.
+# Thus an edit that narrows a kit leaves the wider rule in force. Thus apply
+# does exactly one thing: it adds kits to the end of the list. It refuses the
+# rest.
 #
-# The test this replaces counted `kit add` calls and passed for ages while the
-# argv it counted was wrong: the kit first, then a --sandbox flag sbx does not
-# have. These assert the argv itself.
+# The old test counted `kit add` calls. It passed for a long time, but the argv
+# that it counted was wrong: the kit first, then a --sandbox flag that sbx does
+# not have. These tests assert the argv itself.
 
-# A mound built from the current list, so the stamp records what it was built
-# with - the state every apply starts from.
+# A mound built from the current list, so that the stamp records its source.
+# Each apply starts from that state.
 build_mound() {
     DR_MOCK_STATE=absent dr-up >/dev/null 2>&1
 }
@@ -354,7 +356,8 @@ build_mound() {
     export DRAUGR_KIT=".draugr/kit lua"
     run dr-kit apply --yes
     [ "$status" -eq 0 ]
-    # Exactly one call, for the new kit only, and in sbx's order: SANDBOX REF.
+    # Exactly one call, only for the new kit, and in the order of sbx: SANDBOX
+    # REF.
     [ "$(calls kit | grep -c "^kit add ")" -eq 1 ]
     [[ "$(calls kit)" == "kit add $DR_MOCK_NAME "* ]]
     [[ "$(calls kit)" == *lua* ]]
@@ -382,7 +385,7 @@ build_mound() {
     printf 'description: narrowed\n' >> "$REPO/.draugr/kit/spec.yaml"
     run dr-kit apply --yes
     [ "$status" -ne 0 ]
-    [[ "$output" == *"has changed"* ]]
+    [[ "$output" == *"changed after"* ]]
     [[ "$output" == *"dr-up --recreate"* ]]
     [ -z "$(calls kit)" ]
 }
@@ -413,7 +416,7 @@ build_mound() {
 @test "dr-kit apply: a new kit named like one the mound has is refused before sbx sees it" {
     make_kit "$REPO/.draugr/kit"
     mkdir -p "$DRAUGR_KIT_STORE/other"
-    # Same name: as the project kit, in a different directory.
+    # The same name: as the project kit, in a different directory.
     printf 'schemaVersion: "2"\nkind: mixin\nname: kit\ndisplayName: clash\n' \
         > "$DRAUGR_KIT_STORE/other/spec.yaml"
     export DRAUGR_KIT=".draugr/kit"
@@ -431,7 +434,7 @@ build_mound() {
     make_kit "$DRAUGR_KIT_STORE/lua"
     export DRAUGR_KIT=".draugr/kit"
     build_mound
-    # What an older Draugr wrote: the combined hash and nothing else.
+    # What an older Draugr wrote: only the combined hash.
     head -1 "$REPO/.draugr/kit.applied" > "$REPO/.draugr/kit.stamp.old"
     mv "$REPO/.draugr/kit.stamp.old" "$REPO/.draugr/kit.applied"
     export DRAUGR_KIT=".draugr/kit lua"
@@ -469,9 +472,9 @@ build_mound() {
 
 # --- dr-setup creates the library ---------------------------------------------
 #
-# The kit store is machine-level, like the ssh bridge, so it belongs to the one
-# command that sets up the machine. An empty directory is a better first
-# encounter than dr-kit having to explain what a kit store is.
+# The kit store is machine-level, like the ssh bridge. Thus it belongs to the
+# one command that sets up the machine. A first view of an empty directory is
+# better than an explanation from dr-kit of what a kit store is.
 
 @test "dr-setup: creates the kit library" {
     [ ! -d "$DRAUGR_KIT_STORE" ]
@@ -482,7 +485,7 @@ build_mound() {
 }
 
 @test "dr-setup: creates it where DRAUGR_KIT_STORE says, not only the default" {
-    # Someone who moved the store still wants dr-setup to make the right one.
+    # A person who moved the store still wants dr-setup to make the right one.
     export DRAUGR_KIT_STORE="$DR_TMP/elsewhere/kits"
     run dr-setup
     [ -d "$DR_TMP/elsewhere/kits" ]
@@ -499,8 +502,8 @@ build_mound() {
     dr-setup >/dev/null 2>&1
     run dr-setup
     [ "$status" -eq 0 ]
-    # Already there is not news, and a setup command you can re-run safely has to
-    # stop announcing things it did not do.
+    # "Already there" is not news. A setup command that you can safely run again
+    # must not announce things that it did not do.
     [[ "$output" != *"created the kit library"* ]]
 }
 
@@ -508,12 +511,13 @@ build_mound() {
     run dr-setup --print
     [ "$status" -eq 0 ]
     [ ! -d "$DRAUGR_KIT_STORE" ]
-    # It still says what it would have done, which is the point of --print.
+    # It still says what it does without --print. That is the purpose of
+    # --print.
     [[ "$output" == *"$DRAUGR_KIT_STORE"* ]]
 }
 
 @test "dr-setup: still writes the ssh block" {
-    # The library must not have displaced the reason this command exists.
+    # The library must not replace the reason for this command.
     run dr-setup
     [ "$status" -eq 0 ]
     grep -q 'Host \*\.sbx' "$HOME/.ssh/config"
@@ -521,11 +525,12 @@ build_mound() {
 
 # --- the kit name sbx will accept ---------------------------------------------
 #
-# dr-init used to drop the repository's directory name straight into the kit's
-# `name:` field. sbx requires "lowercase alphanumeric with hyphens, 1-64 chars",
-# so any project with a capital in it - TabuLua, MyApp - got a kit that failed at
-# dr-up with an sbx error two steps removed from the cause. Every slug below was
-# checked against real sbx kit validate, not against a reading of its error text.
+# Before, dr-init put the directory name of the repository directly into the
+# `name:` field of the kit. sbx requires "lowercase alphanumeric with hyphens,
+# 1-64 chars". Thus each project with a capital in it (TabuLua, MyApp) got a kit
+# that failed at dr-up, with an sbx error two steps from the cause. Each slug
+# below was tested with the real sbx kit validate, not with a read of its error
+# text.
 
 @test "dr_kit_slug: lowercases" {
     [ "$(dr_kit_slug TabuLua)" = "tabulua" ]
@@ -539,7 +544,7 @@ build_mound() {
 }
 
 @test "dr_kit_slug: runs of hyphens collapse" {
-    # "My  App" would otherwise give "my--app", which sbx rejects.
+    # Without this, "My  App" gives "my--app", which sbx refuses.
     [ "$(dr_kit_slug "My  App")" = "my-app" ]
 }
 
@@ -560,14 +565,15 @@ build_mound() {
 }
 
 @test "dr_kit_slug: a name of pure punctuation falls back rather than emptying" {
-    # An empty name fails validation for a second, more confusing reason.
+    # An empty name fails validation for a second reason, which is more
+    # confusing.
     [ "$(dr_kit_slug ____)" = "project" ]
     [ -n "$(dr_kit_slug ...)" ]
 }
 
 @test "dr-init: writes a kit name sbx will accept, from a capitalised repo" {
-    # The exact case that broke: a repo directory with capitals in it.
-    # Beside the repo setup already made: dr_make_win_repo is called in a command
+    # The exact case that broke: a repo directory with capitals in it. Beside
+    # the repo that setup already made. dr_make_win_repo runs in a command
     # substitution, so its DR_WIN_TMP export never reaches this shell.
     dir="$(dirname "$REPO")/TabuLua"
     mkdir -p "$dir"
@@ -585,10 +591,10 @@ build_mound() {
 }
 
 @test "dr-init: displayName keeps the original spelling" {
-    # Only `name` is constrained; the human-facing fields should read the way the
-    # project is actually spelled.
-    # Beside the repo setup already made: dr_make_win_repo is called in a command
-    # substitution, so its DR_WIN_TMP export never reaches this shell.
+    # Only `name` has rules. The fields for people must use the real spelling of
+    # the project. Beside the repo that setup already made. dr_make_win_repo
+    # runs in a command substitution, so its DR_WIN_TMP export never reaches
+    # this shell.
     dir="$(dirname "$REPO")/TabuLua"
     mkdir -p "$dir"
     git -C "$dir" init -q -b main
@@ -605,8 +611,8 @@ build_mound() {
 }
 
 @test "dr-init: with a DRAUGR_KIT list, writes only the first entry" {
-    # Otherwise the whole value is used as one path and dr-init creates a
-    # directory literally named ".draugr/kit lua".
+    # If not, the full value is one path, and dr-init creates a directory with
+    # the literal name ".draugr/kit lua".
     DRAUGR_KIT=".draugr/kit lua" dr-init >/dev/null 2>&1
     [ -f "$REPO/.draugr/kit/spec.yaml" ]
     [ ! -e "$REPO/.draugr/kit lua" ]
@@ -614,18 +620,18 @@ build_mound() {
 
 # --- one kit, several agents ---------------------------------------------------
 #
-# Measured against sbx 0.37.1, and the reason all of this exists:
+# A test on sbx 0.37.1 showed this, and it is the reason for all of this:
 #
 #   requires: agent: claude  +  sbx create codex
 #     -> 400 Bad Request: kit "x" requires base agent "claude" but was composed
 #        with "codex"
 #
-# while a kit with no `requires:` block at all validates AND composes with any
-# agent. So Draugr stopped writing the field, prefers a per-agent directory when
-# there is one, and checks the field itself when somebody else wrote it.
+# But a kit with no `requires:` block validates AND composes with each agent.
+# Thus Draugr does not write the field now. It prefers a directory for each
+# agent if one exists. If somebody else wrote the field, Draugr tests it itself.
 
-# A kit that pins itself to one agent, which sbx will then refuse to compose
-# with any other.
+# A kit that pins itself to one agent. sbx then refuses to compose it with each
+# other agent.
 make_pinned_kit() {
     make_kit "$1"
     printf 'requires:\n  agent: %s\n' "$2" >> "$1/spec.yaml"
@@ -657,7 +663,7 @@ make_pinned_kit() {
 }
 
 @test "dr_kit_resolve: an OCI reference gets no agent suffix grafted on" {
-    # Not ours to invent a tag in somebody else's registry.
+    # We must not make up a tag in the registry of somebody else.
     DRAUGR_AGENT=codex run dr_kit_resolve "ghcr.io/org/kit:v1"
     [ "$output" = "ghcr.io/org/kit:v1" ]
 }
@@ -665,12 +671,12 @@ make_pinned_kit() {
 @test "dr-init: the generated kit does not pin an agent" {
     run dr-init --agent codex
     [ "$status" -eq 0 ]
-    # Pinning would make switching agents an edit to a committed file. Anchored
-    # so the comment explaining the absence does not count as the thing itself.
+    # A pin makes a change of agent into an edit of a committed file. Anchored,
+    # so that the comment that explains the absence does not count as the field.
     run grep -E '^[[:space:]]*(requires:|agent:)' "$REPO/.draugr/kit/spec.yaml"
     [ "$status" -ne 0 ]
 
-    # And the check that reads it agrees there is nothing to conflict with.
+    # And the test that reads it agrees that nothing conflicts.
     export DRAUGR_KIT=.draugr/kit
     DRAUGR_AGENT=gemini run dr_kit_agent_conflicts
     [ -z "$output" ]
@@ -710,7 +716,7 @@ make_pinned_kit() {
     [ "$status" -ne 0 ]
     [[ "$output" == *'requires agent "claude"'* ]]
     [[ "$output" == *codex* ]]
-    # And it never got as far as trying.
+    # And it never came as far as a try.
     [ -z "$(calls create)" ]
 }
 
@@ -728,7 +734,7 @@ make_pinned_kit() {
     export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=codex
 
     run dr-kit validate
-    # sbx said yes - the mock always does - and Draugr said "yes, but".
+    # sbx said yes (the mock always does), and Draugr said "yes, but".
     [[ "$output" == *'requires agent "claude"'* ]]
 }
 
@@ -739,18 +745,18 @@ make_pinned_kit() {
     run dr-up --recreate --yes
     [ "$status" -ne 0 ]
     [[ "$output" == *'requires agent "claude"'* ]]
-    # The whole point: a working mound is not thrown away over a problem that was
-    # visible before anything was touched.
+    # The full purpose: a working mound is not discarded for a problem that was
+    # visible before the first change.
     [ -z "$(calls rm)" ]
     [ -z "$(calls create)" ]
 }
 
 # --- a kit named after an agent ----------------------------------------------
 #
-# sbx composes the agent's own kit with the project's and refuses two that share
-# a name. A repository in a directory called "claude" produced exactly that, and
-# the failure arrived from sbx at create time saying `duplicate kit name
-# "claude"`, with dr-kit validate having just called the kit composable.
+# sbx composes the own kit of the agent with the kit of the project, and refuses
+# two with the same name. A repository in a directory called "claude" did
+# exactly that. The failure came from sbx at create time: `duplicate kit name
+# "claude"`. Just before, dr-kit validate said that the kit was composable.
 
 make_named_kit() {
     mkdir -p "$1"
@@ -765,8 +771,8 @@ make_named_kit() {
 }
 
 @test "dr_kit_slug: an agent Draugr has a module for is avoided too" {
-    # So that switching DRAUGR_AGENT later does not turn a working kit into one
-    # sbx refuses to compose.
+    # So that a later change of DRAUGR_AGENT does not make a working kit into
+    # one that sbx refuses to compose.
     DRAUGR_AGENT=claude
     [ "$(dr_kit_slug codex)" = "codex-project" ]
 }
@@ -801,9 +807,9 @@ make_named_kit() {
 }
 
 @test "kit name conflicts: an indented name: is not the kit's own" {
-    # publishedPorts entries carry a name: too. Reading one of those as the kit's
-    # name would report a conflict against a port called "claude" and, worse,
-    # miss the real name sitting at column 0.
+    # publishedPorts entries also have a name:. If one of those is read as the
+    # name of the kit, it reports a conflict with a port called "claude". Worse,
+    # it misses the real name at column 0.
     make_named_kit "$REPO/.draugr/kit" myproject
     printf 'publishedPorts:\n  - container: 5173\n    name: claude\n' >> "$REPO/.draugr/kit/spec.yaml"
     export DRAUGR_KIT=.draugr/kit DRAUGR_AGENT=claude
@@ -818,14 +824,16 @@ make_named_kit() {
 
     run dr-kit validate
     [[ "$output" == *'is also the name of an agent'* ]]
-    # The claim that sent someone to dr-up with a kit that could not be created.
+    # The claim that sent somebody to dr-up with a kit that was not able to be
+    # created.
     [[ "$output" != *"composable with claude"* ]]
 }
 
 @test "dr-init: the kit it generates is composable in a directory named claude" {
-    # The regression, end to end: dr-init slugged the directory name in
-    # unchanged, so C:\Code\claude produced `name: claude` - valid, and refused
-    # by sbx at create time as a duplicate of the agent's own kit.
+    # The regression, from end to end. dr-init made the slug from the directory
+    # name with no change. Thus C:\Code\claude gave `name: claude`. That is
+    # valid, but sbx refused it at create time, as a duplicate of the own kit of
+    # the agent.
     local repo
     repo=$(dr_make_win_repo claude) || skip "no writable path under /mnt/<drive>"
     cd "$repo" || return 1

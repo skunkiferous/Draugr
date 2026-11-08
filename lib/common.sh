@@ -1,99 +1,101 @@
 # shellcheck shell=bash
 #
-# lib/common.sh - shared plumbing for every dr-* command.
+# lib/common.sh: the shared code for all dr-* commands.
 #
-# Sourced, never executed. Everything a single command needs on its own stays in
-# that command; this file holds only what genuinely repeats. Internal helpers are
-# prefixed _dr_ so that sourcing a project's config cannot plausibly clobber them.
+# Commands source this file. Nothing runs it directly. Code that only one
+# command needs stays in that command. This file holds only the code that
+# repeats. The names of internal helpers start with _dr_. A project
+# configuration that is sourced is then unlikely to overwrite them.
 #
-# This is the densest file in the project, because it is where the fiddly bits
-# were deliberately concentrated so the command scripts could stay plain. If a
-# bash construct here is unfamiliar, docs/HACKING.md lists the ones we lean on.
+# This is the most complex file in the project. The difficult code is here on
+# purpose, so that the command scripts can stay simple. If you do not know a
+# bash construct in this file, read docs/HACKING.md. It lists the constructs
+# that the project uses.
 
-# Include guard. If a script sources this twice - directly and again through a
-# helper - do nothing the second time. `return` (not `exit`) because we are
-# being sourced: exit would kill the caller.
+# Include guard. A script can source this file twice, for example directly and
+# again through a helper. The second time, do nothing. Use `return`, not
+# `exit`, because this file is sourced. `exit` stops the caller.
 [ -n "${_DR_COMMON_LOADED:-}" ] && return 0
 _DR_COMMON_LOADED=1
 
 DRAUGR_VERSION="0.6.0"
 
-# --- work out where Draugr itself is installed ------------------------------
+# --- find the directory where Draugr is installed ---------------------------
 #
-# A dr-* command may be invoked through a symlink in ~/.local/bin, so
-# $BASH_SOURCE[0] can be that symlink rather than the real file. We need the
-# real one to find ../share/. This loop walks the chain of links to the end:
+# A user can start a dr-* command through a symlink in ~/.local/bin. Then
+# $BASH_SOURCE[0] is that symlink and not the real file. The code needs the
+# real file to find ../share/. This loop follows the chain of links to its end:
 #
 #   -L         "is a symlink"
-#   readlink   prints the one step it points at (which may itself be a link)
-#   /*)        an absolute target replaces the path outright
-#   *)         a relative target is resolved against the link's own directory
+#   readlink   prints the next step of the link (that step can be a link too)
+#   /*)        an absolute target replaces the full path
+#   *)         a relative target starts from the directory of the link
 #
-# It terminates because each hop moves toward a real file; a symlink loop would
-# be a broken installation either way.
+# The loop stops, because each step moves toward a real file. A symlink loop
+# is a broken installation in all cases.
 _dr_self="${BASH_SOURCE[0]}"
 while [ -L "$_dr_self" ]; do
     _dr_link=$(readlink "$_dr_self")
-    # An absolute target replaces the path; a relative one is resolved against
-    # the directory the link itself lives in.
+    # An absolute target replaces the path. A relative target starts from the
+    # directory that holds the link.
     case "$_dr_link" in
         /*) _dr_self=$_dr_link ;;
         *)  _dr_self=$(dirname "$_dr_self")/$_dr_link ;;
     esac
 done
 
-# We are lib/common.sh, so the project root is one directory up.
+# This file is lib/common.sh, so the root of the project is one directory up.
 DRAUGR_ROOT=$(cd "$(dirname "$_dr_self")/.." && pwd)
 DRAUGR_SHARE="$DRAUGR_ROOT/share"
 unset _dr_self _dr_link
-# Exported so that hooks - which run as separate processes on the host - can find
-# our share/ directory and report which Draugr invoked them.
+# Hooks run as separate processes on the host. These variables are exported, so
+# that a hook can find the share/ directory and report which Draugr started it.
 export DRAUGR_ROOT DRAUGR_SHARE DRAUGR_VERSION
 
 # ---------------------------------------------------------------------------
 # Output
 #
-# Diagnostics go to stderr so that a command's actual output stays pipeable.
-# Colour is suppressed when stderr is not a terminal, or when NO_COLOR is set
-# (https://no-color.org).
+# Diagnostic messages go to stderr. The real output of a command then stays
+# usable in a pipe. If stderr is not a terminal, or if NO_COLOR is set
+# (https://no-color.org), the messages have no color.
 # ---------------------------------------------------------------------------
 
-# -t 2 asks "is stderr a terminal?". $'...' is bash's ANSI-C quoting, which turns
-# \033 into a real escape character - plain '\033' would stay four characters.
+# -t 2 asks "is stderr a terminal?". $'...' is the ANSI-C quoting of bash. It
+# changes \033 into a real escape character. Plain '\033' stays four characters.
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
     _DR_RED=$'\033[31m'; _DR_YELLOW=$'\033[33m'; _DR_GREEN=$'\033[32m'
     _DR_BLUE=$'\033[34m'; _DR_DIM=$'\033[2m';    _DR_BOLD=$'\033[1m'
     _DR_OFF=$'\033[0m'
 else
-    # Piped or redirected: every colour becomes the empty string, so the same
-    # printf calls work unchanged and no escape codes end up in a log file.
+    # The output goes to a pipe or a file. Each color is an empty string. The
+    # same printf calls work, and a log file gets no escape codes.
     _DR_RED=; _DR_YELLOW=; _DR_GREEN=; _DR_BLUE=; _DR_DIM=; _DR_BOLD=; _DR_OFF=
 fi
 
-# What we call ourselves in messages: whatever the script set as DR_PROG, or
-# failing that its own filename (${0##*/} being basename $0).
+# The name that messages show. If the script set DR_PROG, the name is DR_PROG.
+# If not, it is the file name of the script (${0##*/} is basename $0).
 _dr_prog() { printf '%s' "${DR_PROG:-${0##*/}}"; }
 
-# Four severities, one shape: "<prog>: <message>", coloured, on stderr.
+# Four levels of message, one format: "<prog>: <message>", in color, on stderr.
 dr_info()  { printf '%s%s:%s %s\n'   "$_DR_BLUE"   "$(_dr_prog)" "$_DR_OFF" "$*" >&2; }
 dr_ok()    { printf '%s%s:%s %s\n'   "$_DR_GREEN"  "$(_dr_prog)" "$_DR_OFF" "$*" >&2; }
 dr_warn()  { printf '%s%s:%s %s\n'   "$_DR_YELLOW" "$(_dr_prog)" "$_DR_OFF" "$*" >&2; }
 dr_error() { printf '%s%s:%s %s\n'   "$_DR_RED"    "$(_dr_prog)" "$_DR_OFF" "$*" >&2; }
 
-# Silent unless DRAUGR_DEBUG is set, so scripts can trace freely.
+# If DRAUGR_DEBUG is not set, this prints nothing. Scripts can call it often.
 dr_debug() {
     [ -n "${DRAUGR_DEBUG:-}" ] || return 0
     printf '%s%s: %s%s\n' "$_DR_DIM" "$(_dr_prog)" "$*" "$_DR_OFF" >&2
 }
 
 # dr_die <message> [remedy...]
-# Every fatal error names the fix. A bare "not a git repository" costs the reader
-# a search; "run git init, or cd into your project" does not.
+# Each fatal error names the fix. With only "not a git repository", the reader
+# must search for the fix. "run git init, or cd into your project" gives it.
 dr_die() {
     dr_error "$1"
     shift
-    # Whatever is left is remedy text: print it indented and dimmed under the
-    # error, so the eye reads the problem first and the fix second.
+    # The other arguments tell how to fix the problem. Print them indented and
+    # dim under the error. The reader then sees the problem first, then the fix.
     local line
     for line in "$@"; do
         printf '  %s%s%s\n' "$_DR_DIM" "$line" "$_DR_OFF" >&2
@@ -103,29 +105,28 @@ dr_die() {
 
 dr_heading() { printf '\n%s%s%s\n' "$_DR_BOLD" "$*" "$_DR_OFF" >&2; }
 
-# dr_help [file] - print a script's leading comment block as its help text.
+# dr_help [file]: print the first comment block of a script as its help text.
 #
-# Every command's --help IS its header comment, which is the only way to keep the
-# two from drifting. This replaced a hand-counted `sed -n '2,Np' "$0"` in each
-# script, where N had to be the last comment line: in 17 of 27 commands it was
-# one too many, so --help ended with a stray `set -euo pipefail`. Nobody had
-# miscounted twice in the same direction - the range simply goes stale the moment
-# anyone edits a header, which is exactly the kind of upkeep to delete rather
-# than to get right.
+# The --help text of each command is its header comment. Only then can the two
+# not drift apart. Before, each script used `sed -n '2,Np' "$0"`, and N had to
+# be the number of the last comment line. In 17 of 27 commands, N was one too
+# large, so --help ended with a stray `set -euo pipefail`. The cause was not a
+# bad count. When someone changes a header, the range becomes wrong. It is
+# better to delete that kind of upkeep than to do it correctly.
 #
-# Starts at line 2 to skip the shebang and stops at the first line that is not a
-# comment, strips one leading "# " from what is left, and stops early at a linter
-# directive. That last rule earns its place: a file-wide "disable=" pragma has to
-# sit above the first command to apply at all, so in dr-mem it lives inside the
-# header block - and it is machine-readable metadata, not something a reader
-# typing --help asked to see.
+# The function starts at line 2, to skip the shebang. It stops at the first line
+# that is not a comment. It removes one leading "# " from each line. It also
+# stops at a linter directive. That last rule is necessary. A "disable=" pragma
+# for the full file must come before the first command. Thus in dr-mem, it is
+# in the header block. It is data for a machine, not text for a reader of --help.
 #
-# (Note the careful wording above. A comment line STARTING with the linter's own
-# name is parsed as a malformed directive, which fails the whole file - found the
-# hard way, by writing one here.)
-# Blank lines are held back and only flushed when a real line follows, so a
-# header that ends with a "#" separator - dr-mem does, just above its shellcheck
-# directive - does not leave --help trailing into whitespace.
+# (The text above uses careful words. If a comment line STARTS with the name of
+# the linter, the linter reads it as a bad directive and fails the full file. A
+# comment here once did that.)
+# The function holds back blank lines. When a real line follows, it prints
+# them. Thus --help does not end with blank lines. This matters for a header
+# that ends with a "#" separator. The header of dr-mem does that, above the
+# directive for the linter.
 dr_help() {
     awk 'NR == 1         { next }
          /^# shellcheck/ { exit }
@@ -143,24 +144,27 @@ dr_help() {
 # ---------------------------------------------------------------------------
 # Locating sbx.exe
 #
-# sbx is a Windows binary and is NOT on WSL's PATH by default, so every call has
-# to go through here. The result is cached in DRAUGR_SBX for the process.
+# sbx is a Windows binary. By default, it is NOT on the PATH of WSL. Thus each
+# call goes through this code. The result is cached in DRAUGR_SBX for the
+# process.
 # ---------------------------------------------------------------------------
 
-# Four strategies, cheapest and most explicit first. Each prints the path and
-# returns 0 on success; falling off the end returns 1 for "not installed".
+# Four methods. The fastest and most explicit method comes first. If a method
+# finds sbx, it prints the path and returns 0. If no method finds sbx, the
+# function returns 1, which means "not installed".
 dr_find_sbx() {
-    # 1. Already found this process, or the user pointed us at it.
+    # 1. This process found sbx before, or the user set DRAUGR_SBX.
     if [ -n "${DRAUGR_SBX:-}" ] && [ -x "$DRAUGR_SBX" ]; then
         printf '%s' "$DRAUGR_SBX"
         return 0
     fi
 
-    # 2. On PATH. Unusual under WSL, but free to check and true on Git Bash.
+    # 2. On the PATH. This is rare in WSL, but the test costs nothing. On Git
+    #    Bash, it is true.
     local candidate
     for candidate in sbx.exe sbx; do
         if command -v "$candidate" >/dev/null 2>&1; then
-            # command -v prints the resolved path, which is what we want to cache.
+            # command -v prints the full path. The code caches that path.
             DRAUGR_SBX=$(command -v "$candidate")
             dr_debug "found sbx on PATH: $DRAUGR_SBX"
             printf '%s' "$DRAUGR_SBX"
@@ -168,14 +172,14 @@ dr_find_sbx() {
         fi
     done
 
-    # 3. Ask Windows where LOCALAPPDATA is rather than guessing the username.
-    #    cmd.exe emits CRLF, hence the tr; and if the variable does not exist
-    #    cmd echoes the literal "%LOCALAPPDATA%" back at us.
+    # 3. Ask Windows for LOCALAPPDATA. Do not guess the user name. cmd.exe
+    #    writes CRLF line ends, and tr removes them. If the variable does not
+    #    exist, cmd prints the text "%LOCALAPPDATA%" unchanged.
     local localappdata
     if command -v cmd.exe >/dev/null 2>&1; then
         localappdata=$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r\n')
         if [ -n "$localappdata" ] && [ "$localappdata" != '%LOCALAPPDATA%' ]; then
-            # Translate C:\Users\x\AppData\Local into /mnt/c/... before testing it.
+            # Change C:\Users\x\AppData\Local into /mnt/c/..., then test it.
             candidate="$(dr_path_from_win "$localappdata")/DockerSandboxes/bin/sbx.exe"
             if [ -x "$candidate" ]; then
                 DRAUGR_SBX=$candidate
@@ -186,10 +190,10 @@ dr_find_sbx() {
         fi
     fi
 
-    # 4. Last resort: the two places sbx normally installs to, across all drives
-    #    and users. $glob is deliberately unquoted in the inner loop so the shell
-    #    expands the wildcards; an unmatched glob yields the pattern itself,
-    #    which then fails the -x test harmlessly.
+    # 4. The last method: the two usual install locations of sbx, on all
+    #    drives and for all users. In the inner loop, $glob has no quotes on
+    #    purpose, so that the shell expands the wildcards. A glob that matches
+    #    nothing gives the pattern itself. The -x test then fails, with no harm.
     local glob
     for glob in \
         /mnt/*/Users/*/AppData/Local/DockerSandboxes/bin/sbx.exe \
@@ -208,12 +212,12 @@ dr_find_sbx() {
     return 1
 }
 
-# dr_sbx <args...> - invoke sbx, logging the full command line under DRAUGR_DEBUG.
+# dr_sbx <args...>: run sbx. If DRAUGR_DEBUG is set, log the full command line.
 dr_sbx() {
     local sbx
     sbx=$(dr_find_sbx) || dr_die \
         "cannot find sbx.exe" \
-        "sbx is a Windows binary and is not on WSL's PATH by default." \
+        "sbx is a Windows binary. By default, it is not on the PATH of WSL." \
         "Install it with:  winget install Docker.sbx" \
         "Or point Draugr at it:  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
     dr_debug "sbx $*"
@@ -221,26 +225,26 @@ dr_sbx() {
 }
 
 # ---------------------------------------------------------------------------
-# sandboxd's own log, and why anything reads it
+# The log of sandboxd, and why Draugr reads it
 #
-# sbx reports a failed create as one line - `500 Internal Server Error: failed
-# to run sandbox container` - and stops. Its daemon knows far more than that.
-# Measured on 0.37.1, a kit install command that could not find a file reached
-# the user as that bare 500, while the log held the failing command, its exit
-# code and its captured output:
+# If a create fails, sbx reports one line and stops: `500 Internal Server
+# Error: failed to run sandbox container`. The daemon of sbx knows much more.
+# A test on 0.37.1 showed this. A kit install command did not find a file.
+# The user saw only that 500 line. The log held the failed command, its exit
+# code, and its output:
 #
 #   commands.install[2] (uv pip install -r requirements.txt): exited 2 after 13ms
 #     -- captured output --
 #     error: File not found: `requirements.txt`
 #
-# That is the difference between a dead end and a diagnosis, so Draugr reads it.
-# It is an undocumented file with an undocumented shape, which is a coupling we
-# do not get to complain about if it breaks: every step below is allowed to fail
-# quietly, and every caller keeps the advice it printed before this existed.
+# With the log, the user can find the cause. Without it, the user cannot. Thus
+# Draugr reads the log. The file and its format have no documentation. If they
+# change, that is a risk that Draugr accepted. Each step below can fail with no
+# message. Each caller still prints the advice that it printed before this code.
 # ---------------------------------------------------------------------------
 
-# dr_sbx_daemon_log - where that log lives, derived from sbx's own location the
-# same way dr_skills_dir is. Returns 1 if sbx is not found or the log is absent.
+# dr_sbx_daemon_log: the location of that log. It comes from the location of
+# sbx, as in dr_skills_dir. If sbx or the log is missing, it returns 1.
 dr_sbx_daemon_log() {
     local sbx_exe log
     sbx_exe=$(dr_find_sbx) || return 1
@@ -249,10 +253,10 @@ dr_sbx_daemon_log() {
     printf '%s\n' "$log"
 }
 
-# dr_sbx_log_mark - how large the log is right now, so that a later read can look
-# at only what an operation appended. A byte offset rather than a timestamp: it
-# needs no clock and no date parsing, and it cannot mistake last week's failure
-# for this one. Always prints a number, so a caller need not test the result.
+# dr_sbx_log_mark: the size of the log now. A later read can then look only at
+# the lines that an operation added. The mark is a byte offset, not a time. It
+# needs no clock and no date parsing. It cannot show a failure from last week as
+# the current failure. It always prints a number, so the caller does not test it.
 dr_sbx_log_mark() {
     local log size
     log=$(dr_sbx_daemon_log) || { printf '0\n'; return 0; }
@@ -260,18 +264,19 @@ dr_sbx_log_mark() {
     printf '%s\n' "${size//[^0-9]/}"
 }
 
-# dr_sbx_log_error <mark> - the last error sandboxd recorded after <mark>, or 1.
+# dr_sbx_log_error <mark>: the last error that sandboxd wrote after <mark>. If
+# there is no such error, it returns 1.
 dr_sbx_log_error() {
     local mark=${1:-0} log out
     command -v jq >/dev/null 2>&1 || return 1
     log=$(dr_sbx_daemon_log) || return 1
-    # fromjson? rather than plain parsing, because the file is being written
-    # while we read it: a torn final line is normal, and one unparseable line
-    # must not throw away the good ones. A create failure logs a `stage`, so
-    # that entry is preferred over any other error in the same window - which
-    # can be routine noise like a lookup that missed. The error field carries
-    # embedded newlines, and -r expands them, so what comes back is the
-    # multi-line block sbx captured.
+    # Use fromjson?, not plain parsing. The daemon writes the file while the
+    # code reads it. Thus the last line can be incomplete. One bad line must
+    # not discard the good lines. A failed create logs a `stage`. The code
+    # selects that entry before other errors in the same range. Those errors
+    # can be normal noise, for example a lookup that found nothing. The error
+    # field contains newlines, and -r expands them. The result is the block of
+    # lines that sbx captured.
     out=$(tail -c "+$((mark + 1))" "$log" 2>/dev/null \
               | jq -srR 'split("\n") | map(fromjson?)
                         | map(select(.level == "ERROR" and (.error // "") != ""))
@@ -284,71 +289,73 @@ dr_sbx_log_error() {
 # ---------------------------------------------------------------------------
 # Path translation
 #
-# One repository has three names, and getting them confused is the single
-# richest source of bugs in this tool:
+# One repository has three names. A mix-up of these names causes more bugs in
+# this tool than any other cause:
 #
-#   WSL      /mnt/c/src/myproject   what you cd into, what git runs against
-#   Windows  C:\src\myproject       what sbx.exe accepts as a workspace
-#   Mound    /c/src/myproject       where sbx mounts it inside the microVM
+#   WSL      /mnt/c/src/myproject   where you cd to, and where git runs
+#   Windows  C:\src\myproject       the workspace path that sbx.exe accepts
+#   Mound    /c/src/myproject       where sbx mounts it in the microVM
 #
-# These are implemented by hand rather than shelling out to wslpath so that they
-# are pure functions, testable in CI on a machine with no WSL at all.
+# The functions do not call wslpath. They are written by hand, so that they are
+# pure functions. CI can then test them on a machine with no WSL.
 # ---------------------------------------------------------------------------
 
 # dr_path_win /mnt/c/src/p -> C:\src\p
 dr_path_win() {
-    # `local` keeps these from leaking into the caller's scope. Naming a variable
-    # without assigning it (drive, rest) just declares it local.
+    # `local` keeps these variables out of the scope of the caller. A name with
+    # no value (drive, rest) only declares the variable as local.
     local p=$1 drive rest
 
     # Accept only /mnt/<one letter>/... or exactly /mnt/<one letter>. These are
-    # glob patterns, not regexes: [A-Za-z] is one character from that set, and
-    # `:` is the do-nothing command, used here as "matched, carry on".
-    # Anything else returns 1, which the caller reads as "not a Windows path".
+    # glob patterns, not regexes. [A-Za-z] is one character from that set. `:`
+    # is the command that does nothing. Here it means "matched, continue".
+    # All other paths return 1. The caller reads 1 as "not a Windows path".
     case "$p" in
         /mnt/[A-Za-z]/*|/mnt/[A-Za-z]) : ;;
         *) return 1 ;;
     esac
 
-    # ${p:5:1} is a substring: 1 character starting at offset 5, i.e. the drive
-    # letter in "/mnt/c/...". ${p:6} is everything from offset 6 to the end.
+    # ${p:5:1} is a substring: 1 character at offset 5. That is the drive letter
+    # in "/mnt/c/...". ${p:6} is all the text from offset 6 to the end.
     drive=${p:5:1}
     rest=${p:6}
 
-    # ${rest#/} strips one leading "/" if present ("#" removes a prefix).
-    # tr swaps forward slashes for backslashes. In single quotes '\\' is two
-    # characters, which tr reads as one escaped backslash - it is not bash
-    # escaping, which is why shellcheck needs telling.
+    # ${rest#/} removes one leading "/" if there is one ("#" removes a prefix).
+    # tr changes forward slashes into backslashes. In single quotes, '\\' is
+    # two characters. tr reads them as one escaped backslash. This is not an
+    # escape for bash. Thus the linter needs the directive below.
     # shellcheck disable=SC1003
     printf '%s:\\%s' "$(printf '%s' "$drive" | tr '[:lower:]' '[:upper:]')" "$(printf '%s' "${rest#/}" | tr '/' '\\')"
 }
 
-# dr_path_win_kit <path> - a Windows spelling sbx.exe can READ, for kits only.
+# dr_path_win_kit <path>: a Windows path that sbx.exe can READ. Use it for kits
+# only.
 #
-# A workspace and a kit are not the same problem, and this is the one place the
-# difference is worth exploiting. A workspace on WSL's own ext4 is impossible:
-# the microVM cannot bind-mount a path behind the Windows network redirector, so
-# dr_require_win_path refuses one. A kit is never bind-mounted - sbx reads it on
-# the host and packs it - so the UNC form works.
+# A workspace and a kit are different cases. This is the one place where the
+# difference helps. A workspace on the ext4 file system of WSL is not possible.
+# The microVM cannot bind-mount a path behind the Windows network redirector.
+# Thus dr_require_win_path refuses such a path. sbx never bind-mounts a kit. It
+# reads the kit on the host and packs it. Thus the UNC path works for a kit.
 #
-# Measured against sbx 0.37.1: a kit under ~/.config on ext4, passed as
-# \\wsl.localhost\<distro>\..., validated, had its install command run inside the
-# sandbox and its network rule applied. That is what lets the kit library default
-# to ~/.config/draugr/kits instead of forcing it onto a Windows drive.
+# A test on sbx 0.37.1 showed this. A kit under ~/.config on ext4 was given as
+# \\wsl.localhost\<distro>\.... sbx accepted it. sbx ran its install command in
+# the sandbox and applied its network rule. Thus the default location of the kit
+# library can be ~/.config/draugr/kits, and not a Windows drive.
 #
-# Do NOT use this for a workspace. dr_path_win stays strict for that reason.
+# Do NOT use this function for a workspace. For that reason, dr_path_win stays
+# strict.
 dr_path_win_kit() {
     local p=$1 out
 
-    # A path on a Windows drive has a real drive-letter spelling, which is always
-    # preferable: no network redirector, no distro name to be wrong about.
+    # A path on a Windows drive has a real path with a drive letter. That path
+    # is always better: it needs no network redirector and no distro name.
     if out=$(dr_path_win "$p"); then
         printf '%s' "$out"
         return 0
     fi
 
-    # $WSL_DISTRO_NAME is set by WSL itself, so this stays a pure function -
-    # testable in CI on a machine with no WSL, like everything else here.
+    # WSL sets $WSL_DISTRO_NAME. Thus this stays a pure function. As with all
+    # code here, CI can test it on a machine with no WSL.
     [ -n "${WSL_DISTRO_NAME:-}" ] || return 1
     # shellcheck disable=SC1003  # '\\' is one escaped backslash for tr, not bash
     printf '\\\\wsl.localhost\\%s%s' \
@@ -356,8 +363,8 @@ dr_path_win_kit() {
 }
 
 # dr_path_mound /mnt/c/src/p -> /c/src/p
-# The mound path is just the WSL path with "/mnt" removed, because sbx mounts a
-# workspace at the same path it has on the Windows side.
+# The mound path is the WSL path without "/mnt". The reason is that sbx mounts
+# a workspace at the same path that it has on Windows.
 dr_path_mound() {
     local p=$1
     case "$p" in
@@ -370,53 +377,53 @@ dr_path_mound() {
 dr_path_from_win() {
     local p=$1 drive rest
 
-    # Accept "C:\..." or "C:/..." or bare "C:". Inside a glob, backslash needs
-    # escaping, hence [\\/] for "either kind of slash".
+    # Accept "C:\..." or "C:/..." or only "C:". In a glob, a backslash needs
+    # an escape. Thus [\\/] means "a slash of either kind".
     case "$p" in
         [A-Za-z]:[\\/]*|[A-Za-z]:) : ;;
         *) return 1 ;;
     esac
 
     drive=$(printf '%s' "${p:0:1}" | tr '[:upper:]' '[:lower:]')
-    rest=${p:2}                     # everything after "C:"
+    rest=${p:2}                     # all the text after "C:"
     # shellcheck disable=SC1003
     printf '/mnt/%s%s' "$drive" "$(printf '%s' "$rest" | tr '\\' '/')"
 }
 
-# dr_require_win_path <path> - the constraint the README documents up front.
+# dr_require_win_path <path>: the limit that the README states first.
 dr_require_win_path() {
     dr_path_mound "$1" >/dev/null 2>&1 && return 0
     dr_die \
         "$1 is not on a Windows drive" \
-        "sbx.exe is a Windows binary and its workspaces are Windows paths, so a" \
-        "repo on WSL's own ext4 filesystem has no path sbx can mount." \
-        "Move the project under /mnt/c/ (or any Windows drive) and work on it from there."
+        "sbx.exe is a Windows binary, and its workspaces are Windows paths. A repo" \
+        "on the ext4 file system of WSL has no path that sbx can mount." \
+        "Move the project to /mnt/c/ (or another Windows drive), and work on it there."
 }
 
-# dr_path_canon_case <path> - a path on a Windows drive, spelled the way the disk
-# spells it. Anything else is returned untouched.
+# dr_path_canon_case <path>: a path on a Windows drive, with the letter case
+# that the disk uses. The function returns all other paths unchanged.
 #
-# WHY THIS EXISTS. Windows drives are case-INSENSITIVE, so /mnt/c/code and
-# /mnt/c/Code are one directory - but git, pwd and $PWD all hand back whichever
-# spelling you happened to type, and bash compares strings case-SENSITIVELY. So
-# everything keyed by the path quietly disagrees with itself depending on how you
-# cd'd in.
+# Why this function exists: Windows drives ignore letter case. Thus /mnt/c/code
+# and /mnt/c/Code are one directory. But git, pwd, and $PWD all return the
+# case that you typed, and bash compares strings with case. Thus each value
+# that uses the path as a key can differ, because of how you went to the
+# directory with cd.
 #
-# MEASURED, which is why this is not a tidy-up: a repo trusted as
-# /mnt/c/Code/draugr-gateway read as UNTRUSTED from /mnt/c/code/draugr-gateway.
-# Identical file, identical hash - the record is "<hash>  <path>" and the lookup
-# is a grep -xF, so one letter's case was the whole difference. The hook was
-# refused (fatal) and .draugr.conf was skipped (a warning), which left the run
-# using DEFAULTS for the agent, the sandbox name, the ports and the mounts.
-# Nothing looked broken. It cost an evening, twice.
+# This is not a cleanup. A real failure occurred. A repo that was trusted as
+# /mnt/c/Code/draugr-gateway was UNTRUSTED from /mnt/c/code/draugr-gateway.
+# The file and its hash were the same. The record is "<hash>  <path>", and the
+# lookup is a grep -xF. Thus the case of one letter was the only difference.
+# Draugr refused the hook (fatal) and skipped .draugr.conf (a warning). The
+# run then used the DEFAULTS for the agent, the sandbox name, the ports, and
+# the mounts. Nothing looked broken. The fault cost an evening, two times.
 #
-# ONLY /mnt/<drive>/ paths are folded. WSL's own ext4 IS case-sensitive, where two
-# names differing in case are two different files and folding them would be the
-# bug rather than the fix.
+# The function changes ONLY /mnt/<drive>/ paths. The ext4 file system of WSL
+# uses case. There, two names that differ in case are two different files. A
+# change of case there is the bug, not the fix.
 #
-# Component by component, because only the filesystem knows the real spelling:
-# `[ -e ]` cannot tell you - on a case-insensitive drive it answers yes to every
-# spelling, which is exactly what makes this class of bug invisible.
+# The function does each part of the path in turn, because only the file
+# system knows the real case. `[ -e ]` cannot tell you. On a drive that ignores
+# case, it says yes to each spelling. That is why this type of bug is hidden.
 dr_path_canon_case() {
     local p=$1 out rest comp pick lc entry name
 
@@ -428,30 +435,30 @@ dr_path_canon_case() {
     out=/mnt/${p:5:1}
     rest=${p:7}
 
-    # SPLIT FIRST, WITH GLOBBING OFF. `set -- $rest` is subject to pathname
-    # expansion, so a directory honestly named "[0-9]" or "*" would expand to
-    # something else entirely, or - once nullglob is on below - to nothing at all.
-    # $- holds the current option letters, which is how to ask whether noglob is
-    # already set without disturbing it.
+    # SPLIT FIRST, WITH GLOBBING OFF. The shell applies pathname expansion to
+    # `set -- $rest`. A directory with the real name "[0-9]" or "*" then expands
+    # to a different value. After nullglob is set below, it expands to nothing.
+    # $- holds the letters of the current options. With it, the code can find
+    # out if noglob is set, and not change it.
     local had_f=0
     case $- in *f*) had_f=1 ;; esac
     set -f
     local oldifs=$IFS
     IFS=/
-    # shellcheck disable=SC2086  # splitting on "/" is the whole point
+    # shellcheck disable=SC2086  # the split on "/" is the purpose
     set -- $rest
     IFS=$oldifs
     if [ "$had_f" = 0 ]; then set +f; fi
 
-    # NOW globbing, for the directory listings: dotglob to see .draugr - the very
-    # component the real bug tripped over - and nullglob so a directory that is
-    # not there yields nothing rather than the pattern itself. Both are put back
-    # before returning, because leaving them on would change globbing for every
-    # caller afterwards.
+    # NOW turn on globbing, for the directory listings. dotglob shows .draugr.
+    # The real bug occurred on that part of the path. With nullglob, a missing
+    # directory gives nothing, not the pattern itself. The code resets both
+    # options before it returns. If they stay on, globbing changes for each
+    # caller after this function.
     #
-    # `if shopt -q` rather than `shopt -q x && y=1`: under `set -e` the second
-    # form EXITS THE SHELL whenever the option happens to be off, because the
-    # whole && list then returns non-zero. An `if` asks instead of failing.
+    # Use `if shopt -q`, not `shopt -q x && y=1`. With `set -e`, the second
+    # form STOPS THE SHELL when the option is off. The reason is that the full
+    # && list then returns non-zero. An `if` asks, and does not fail.
     local had_dot=0 had_null=0
     if shopt -q dotglob; then had_dot=1; fi
     if shopt -q nullglob; then had_null=1; fi
@@ -463,15 +470,16 @@ dr_path_canon_case() {
         lc=${comp,,}
         for entry in "$out"/*; do
             name=${entry##*/}
-            # An exact match wins outright. Otherwise keep the first
-            # case-insensitive one and carry on looking for an exact: a drive can
-            # be mounted case-sensitively, and then both spellings may exist and
-            # the one that was asked for is the right answer.
+            # An exact match wins at once. If there is none, keep the first
+            # match that ignores case, and continue to look for an exact
+            # match. A drive can be mounted with case. Then both spellings can
+            # exist, and the spelling that was asked for is the correct one.
             if [ "$name" = "$comp" ]; then pick=$name; break; fi
             if [ -z "$pick" ] && [ "${name,,}" = "$lc" ]; then pick=$name; fi
         done
-        # Nothing of that name on disk: keep what was asked for. This reports a
-        # spelling; it does not assert that the path exists.
+        # If no file on the disk has that name, keep the name that was asked
+        # for. The function reports a spelling. It does not say that the path
+        # exists.
         out="$out/${pick:-$comp}"
     done
 
@@ -484,25 +492,26 @@ dr_path_canon_case() {
 # Repository helpers
 # ---------------------------------------------------------------------------
 
-# The top of the working tree, or a fatal error naming the fix.
+# The top of the working tree. If there is none, a fatal error that names the fix.
 dr_repo_root() {
     local root
     root=$(git rev-parse --show-toplevel 2>/dev/null) || dr_die \
         "$PWD is not a git repository" \
-        "Draugr works on one repository at a time: the sandbox gets a clone of it." \
+        "Draugr works on one repository at a time. The sandbox gets a clone of it." \
         "Run 'git init' here, or cd into your project." \
-        "To have Draugr create one for you, set DRAUGR_ON_MISSING_REPO and run dr-init."
-    # ONE spelling, whatever case you cd'd in with. git reports the path as typed,
-    # and DR_REPO keys the trust record, the kit stamp and the sandbox name - so the
-    # folding belongs here, once, rather than separately in each of them.
+        "If you want Draugr to create a repository, set DRAUGR_ON_MISSING_REPO and run dr-init."
+    # ONE spelling, for each case that you used with cd. git reports the path as
+    # you typed it. DR_REPO is the key for the trust record, the kit stamp, and
+    # the sandbox name. Thus the case change occurs here, one time, and not in
+    # each of them.
     dr_path_canon_case "$root"
 }
 
-# Empty, and successful, when there is no repository or no commit yet. git exits
-# 128 in both cases, and every caller here treats "no branch" as an answer rather
-# than a fault - so without the `|| true` this aborts any caller running under
-# `set -e`, which is all of them. That is precisely what it used to do when
-# dr-init was pointed at a directory that was not a repository yet.
+# If there is no repository, or no commit yet, the function prints nothing and
+# succeeds. In both cases, git exits with 128. Each caller here reads "no
+# branch" as an answer, not as a fault. Without the `|| true`, this stops each
+# caller that runs with `set -e`, and all callers do. It did exactly that
+# before, when dr-init got a directory that was not yet a repository.
 dr_repo_branch() {
     git -C "${1:-$PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || true
 }
@@ -514,42 +523,43 @@ dr_repo_is_clean() {
 # ---------------------------------------------------------------------------
 # Configuration
 #
-# Precedence, lowest to highest:
+# The order of precedence, from lowest to highest:
 #   built-in defaults -> user config -> project config -> project-local -> env -> flags
 #
-# Provenance is recorded per key so dr-config can answer "why is it doing that".
-# The layers are sourced in the current shell, because that is the only way for
-# their assignments to take effect; the diff that attributes each key is taken
-# before and after each source.
+# The code records the source of each key. Thus dr-config can answer "why does
+# it do that". The current shell sources the layers, because only then do their
+# assignments take effect. The code compares the keys before and after each
+# source, and that difference tells which layer set each key.
 # ---------------------------------------------------------------------------
 
 DR_CONFIG_USER="${DRAUGR_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/draugr}"
 DR_TRUST_FILE="$DR_CONFIG_USER/trusted"
 
-# The agents sbx can run. Draugr has a module for two of them - see lib/agents/ -
-# and the rest get default.sh, which is the honest answer for the other eight.
+# The agents that sbx can run. Draugr has a module for two of them, in
+# lib/agents/. The other eight get default.sh, because Draugr has no specific
+# knowledge of them.
 #
-# The list exists as data rather than as prose in the docs because the per-agent
-# argument keys below are BUILT from it: adding an agent here is the only edit
-# needed for it to gain one.
+# The list is data, not text in the docs, because the code BUILDS the argument
+# key of each agent from it. To give a new agent its key, add the agent here.
+# No other change is necessary.
 DR_AGENTS=(claude codex copilot cursor docker-agent droid gemini kiro opencode shell)
 
-# dr_agent_args_key <agent> - the per-agent argument key for that agent.
+# dr_agent_args_key <agent>: the argument key for that agent.
 #
-# Uppercased, with "-" turned into "_", because docker-agent is a legal agent
-# name and DRAUGR_AGENT_ARGS_DOCKER-AGENT is not a legal variable name. In tr's
-# first set a trailing "-" is a literal rather than a range, which is why the two
-# sets are 'a-z-' and 'A-Z_' and are the same length.
+# The key is in uppercase, and "-" becomes "_". The reason is that docker-agent
+# is a legal agent name, but DRAUGR_AGENT_ARGS_DOCKER-AGENT is not a legal
+# variable name. In the first set of tr, a "-" at the end is a literal and not a
+# range. Thus the two sets are 'a-z-' and 'A-Z_', and they have the same length.
 #
-# Defined above DR_KEYS rather than beside its friends, because the array below
-# is built by calling it at source time.
+# This function is above DR_KEYS, not next to the similar functions. The reason
+# is that the code calls it to build the array below when the file is sourced.
 dr_agent_args_key() {
     printf 'DRAUGR_AGENT_ARGS_%s' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
 }
 
-# Every key Draugr understands. dr-config iterates this, dr-doctor validates
-# against it, and an unknown DRAUGR_* in a config file is reported rather than
-# silently ignored.
+# All the keys that Draugr knows. dr-config goes through this list, and
+# dr-doctor compares the configuration with it. If a configuration file has an
+# unknown DRAUGR_* key, Draugr reports it and does not ignore it.
 DR_KEYS=(
     DRAUGR_AGENT DRAUGR_AGENT_ARGS DRAUGR_ATTACH DRAUGR_SANDBOX DRAUGR_MEMORY DRAUGR_CPUS DRAUGR_CLONE
     DRAUGR_TEMPLATE DRAUGR_KIT DRAUGR_KIT_STORE DRAUGR_PORTS DRAUGR_HOST_PORTS DRAUGR_MOUNTS
@@ -566,47 +576,50 @@ DR_KEYS=(
     DRAUGR_FORGE DRAUGR_FORGE_NOSCAN DRAUGR_FORGE_LAYERS
 )
 
-# One DRAUGR_AGENT_ARGS_<AGENT> per agent, appended rather than typed out.
+# One DRAUGR_AGENT_ARGS_<AGENT> for each agent. The loop adds them, so that
+# nobody types them.
 #
-# These are the only keys with NO built-in default, deliberately: _dr_defaults
-# leaves them unset so that a set-but-empty value stays distinguishable from an
-# absent one. "no arguments for codex, whatever the generic key says" is a real
-# thing to want, and it is spelled DRAUGR_AGENT_ARGS_CODEX="".
+# These are the only keys with NO built-in default, on purpose. _dr_defaults
+# does not set them. Thus an empty value that is set stays different from a
+# value that is not set. A user can want "no arguments for codex, whatever the
+# general key says". The user writes that as DRAUGR_AGENT_ARGS_CODEX="".
 for _dr_a in "${DR_AGENTS[@]}"; do
     DR_KEYS+=("$(dr_agent_args_key "$_dr_a")")
 done
 unset _dr_a
 
-# -g matters: if a caller sources this file from inside a function - which every
-# bats test does - a plain `declare -A` would scope the array to that function.
-# It would then vanish on return, and the later DR_ORIGIN[DRAUGR_KIT]= would be
-# an *indexed* array subscript, i.e. arithmetic on the string ".draugr/kit".
+# The -g is necessary. A caller can source this file from a function, and
+# each bats test does. Then a plain `declare -A` limits the array to that
+# function. The array is lost when the function returns. A later
+# DR_ORIGIN[DRAUGR_KIT]= is then a subscript of an *indexed* array, that is,
+# arithmetic on the string ".draugr/kit".
 declare -gA DR_ORIGIN=()
 
-# Config layers that exist on disk but were NOT sourced, because they are
-# untrusted. A skipped layer is otherwise indistinguishable from one that set
-# nothing, so dr-config reads this to say so out loud rather than leaving you to
-# wonder why the value you wrote is not in the table. Same -g reasoning as above.
+# Configuration layers that exist on the disk, but that Draugr did NOT source,
+# because they are not trusted. Without this list, a skipped layer looks the
+# same as a layer that set nothing. dr-config reads the list and says so. You
+# then know why the value that you wrote is not in the table. The -g is
+# necessary for the same reason as above.
 declare -ga DR_UNTRUSTED=()
 
-# shellcheck disable=SC2034  # these are the config surface; every dr-* reads them
+# shellcheck disable=SC2034  # these are the configuration keys; each dr-* reads them
 _dr_defaults() {
     DRAUGR_AGENT=claude
-    # Handed to the agent after "--" on every dr-go. Empty keeps today's
-    # behaviour exactly; set it to "--continue" to resume by default.
+    # dr-go gives this to the agent after "--". If it is empty, nothing
+    # changes. To continue the last session by default, set it to "--continue".
     DRAUGR_AGENT_ARGS=
 
-    # ssh | sbx - how dr-go and dr-shell get a terminal inside the mound.
+    # ssh | sbx: how dr-go and dr-shell get a terminal in the mound.
     #
-    # ssh, because it is the only one where Ctrl-Z works. sbx.exe is a WINDOWS
-    # binary reached through WSL interop, and suspending it suspends the relay
-    # rather than anything in the sandbox: the session stops responding and dies
-    # a few seconds later with "inspect exec: context deadline exceeded".
-    # Measured against sbx 0.37.1, both ways.
+    # The default is ssh, because only with ssh does Ctrl-Z work. sbx.exe is a
+    # WINDOWS binary that WSL interop runs. If you suspend it, you suspend the
+    # relay, not a process in the sandbox. The session then stops and fails
+    # after some seconds with "inspect exec: context deadline exceeded". Tests
+    # on sbx 0.37.1 showed both results.
     #
-    # Over ssh the remote pty does its own job control, so Ctrl-Z stops the agent
-    # and hands you a shell in the mound, and fg puts you back. That is the
-    # reason Draugr runs in WSL at all.
+    # Over ssh, the remote pty does its own job control. Ctrl-Z stops the agent
+    # and gives you a shell in the mound, and fg takes you back. That is the
+    # reason that Draugr runs in WSL.
     DRAUGR_ATTACH=ssh
 
     DRAUGR_SANDBOX=              # empty => draugr-<repo leaf>
@@ -614,35 +627,39 @@ _dr_defaults() {
     DRAUGR_CPUS=                 # empty => sbx default (all)
     DRAUGR_CLONE=true
     DRAUGR_TEMPLATE=
-    # A LIST, space separated. sbx accepts --kit repeatedly and merges the
-    # results, so entries add to one another rather than overriding.
+    # A LIST, with spaces between the items. sbx accepts --kit more than one
+    # time and merges the results. Thus the items add to each other. They do
+    # not replace each other.
     DRAUGR_KIT=.draugr/kit
     DRAUGR_KIT_STORE="$DR_CONFIG_USER/kits"
 
     DRAUGR_PORTS=
-    # Ports on THIS machine that the mound is allowed to reach, space
-    # separated. Bare port numbers: the address they belong to is resolved on
-    # every dr-up and never stored, because it does not survive a reboot.
+    # Ports on THIS machine that the mound can connect to, with spaces between
+    # them. Only port numbers. Each dr-up finds the address of the port again,
+    # and Draugr never stores it, because the address changes after a reboot.
     DRAUGR_HOST_PORTS=
     DRAUGR_MOUNTS=
 
-    # The agent's OWN model, when it should not be its vendor's cloud. Empty is
-    # the default and changes nothing about how the agent reaches its service.
+    # The OWN model of the agent, for when it must not be the cloud of its
+    # vendor. The default is empty. Then nothing changes in how the agent
+    # connects to its service.
     DRAUGR_MODEL=
-    # Where that model is served: a bare port on THIS machine, resolved at every
-    # attach because the address does not survive a reboot, or a full URL used
-    # exactly as written. The default is the query-only proxy in
-    # share/ollama-proxy rather than Ollama's own 11434, because the port that
-    # serves inference there also serves DELETE /api/delete.
+    # Where that model is served. It is a port number on THIS machine, or a
+    # full URL. Each attach finds the address of a port again, because the
+    # address changes after a reboot. Draugr uses a URL exactly as written.
+    # The default is the query-only proxy in share/ollama-proxy, not port 11434
+    # of Ollama. The reason is that the port of Ollama for inference also
+    # serves DELETE /api/delete.
     DRAUGR_MODEL_URL=11435
-    # The cheap background tier. Empty means "whatever DRAUGR_MODEL is": two
-    # models are only faster if both stay resident, and a second one that evicts
-    # the first costs more in reloads than the smaller model saves.
+    # The fast, low-cost model for background work. Empty means "the same as
+    # DRAUGR_MODEL". Two models are faster only if both stay in memory. If the
+    # second model removes the first from memory, the reloads cost more time
+    # than the smaller model saves.
     DRAUGR_MODEL_FAST=
-    # Arbitrary environment for the agent's session, as space-separated
-    # NAME=value pairs. The escape hatch for anything Draugr has no key of its
-    # own for - a local model's context limit being the case it was written for,
-    # where the variable that does it is undocumented and may be renamed.
+    # Any environment variables for the session of the agent, as NAME=value
+    # pairs with spaces between them. Use this for each value that has no
+    # Draugr key. It was written for the context limit of a local model. The
+    # variable for that limit has no documentation, and its name can change.
     DRAUGR_ENV=
 
     DRAUGR_DATA=
@@ -651,10 +668,11 @@ _dr_defaults() {
     DRAUGR_DATA_DELETE=false
     DRAUGR_DATA_CHMOD=D755,F644
 
-    # Per-file ceiling for `dr-data diff`, in bytes. Data files are routinely
-    # enormous, and a real diff of a 4 GB CSV helps nobody - so anything larger
-    # is reported by name and size instead of by content. 256 KB covers the
-    # scripts and config that are worth reading closely.
+    # The maximum size of one file for `dr-data diff`, in bytes. Data files are
+    # often very large, and a real diff of a 4 GB CSV helps nobody. Thus for a
+    # larger file, the command reports the name and the size, not the content.
+    # 256 KB is enough for the scripts and configuration files that you read
+    # carefully.
     DRAUGR_DATA_DIFF_MAX=262144
 
     DRAUGR_BRANCH=               # empty => the branch currently checked out
@@ -662,97 +680,103 @@ _dr_defaults() {
     DRAUGR_REQUIRE_CLEAN=true
     DRAUGR_AUTO_SYNC=true
 
-    # Off, because leaving it running is what people expect and stopping breaks
-    # a workflow the kit format explicitly supports: publishedPorts and startup
-    # commands exist so a mound can SERVE something, and that dies with it.
-    # Measured on one machine: a running mound holds ~1.4 GB, and a cold start
-    # costs 4.2s against 0.36s when it is already up. Worth opting into for
-    # projects that serve nothing; not worth imposing.
+    # Off by default. Users expect the mound to continue to run. A stop also
+    # breaks a workflow that the kit format supports on purpose.
+    # publishedPorts and startup commands exist, so that a mound can SERVE
+    # something, and a stop ends that service. A test on one machine showed
+    # this: a running mound uses about 1.4 GB. A cold start takes 4.2s, and a
+    # start of a running mound takes 0.36s. Turn it on for a project that
+    # serves nothing. Do not make it the default.
     DRAUGR_STOP_ON_EXIT=false
 
-    # What to do when you point Draugr at a directory that is not a repository.
-    # "fail" by default: creating a git repo in somebody's folder is a real side
-    # effect and not something to do because they mistyped a path.
-    #   fail              refuse, and say what the alternatives are
-    #   create-add-all    init and commit everything - "I forgot to git init"
-    #   create-data-only  init with a .gitignore of "*", so nothing is tracked
-    #                     and every file travels by DRAUGR_DATA instead
+    # What to do when you give Draugr a directory that is not a repository.
+    # The default is "fail". A new git repo in the directory of a user is a
+    # real change. Draugr must not make it because of a typing error in a path.
+    #   fail              refuse, and tell the other choices
+    #   create-add-all    init and commit all files ("I forgot to git init")
+    #   create-data-only  init with a .gitignore of "*", so git tracks no file
+    #                     and all files go through DRAUGR_DATA
     DRAUGR_ON_MISSING_REPO=fail
 
     DRAUGR_MEM_SYNC=auto
     DRAUGR_MEM_STORE="${XDG_DATA_HOME:-$HOME/.local/share}/draugr/memory"
 
-    # The plugin library dr-plugin manages, on a Windows drive so that a mound
-    # can be pointed at it. Empty by default and the feature is simply off:
-    # unlike the memory store there is no sensible place to invent, because this
-    # directory has to be mountable into a mound and $HOME under WSL is not.
+    # The plugin library that dr-plugin manages. It is on a Windows drive, so
+    # that a mound can mount it. The default is empty, and then the feature is
+    # off. The memory store has a good default location, but this directory
+    # has none. It must be mountable into a mound, and $HOME in WSL is not.
     # See docs/CLAUDE_PLUGINS.md.
     DRAUGR_PLUGIN_STORE=
 
-    # Run-state dependencies: other repositories whose mounds have to be RUNNING
-    # before this one's is any use. Empty and the feature does not exist - no
-    # claim is written, no directory is created, dr-up behaves exactly as it did.
-    # See docs/DEPENDENCIES.md.
+    # Run-state dependencies: other repositories whose mounds must be RUNNING
+    # before the mound of this repository is useful. If it is empty, the
+    # feature is off. Draugr writes no claim and makes no directory, and dr-up
+    # does the same as before. See docs/DEPENDENCIES.md.
     DRAUGR_REQUIRES=
 
-    # The other two are read from the DEPENDENCY's config, never from the
-    # consumer's, because both describe what kind of resource this repo's mound
-    # is. Exclusivity is a property of the resource: a gateway fronting one
-    # desktop is exclusive, a queueing database is not - and leaving that to each
-    # consumer means one careless repository defeats it.
+    # Draugr reads the next two keys from the configuration of the DEPENDENCY,
+    # never from the configuration of the consumer. Both keys tell what type
+    # of resource the mound of this repository is. Exclusive use is a property
+    # of the resource. A gateway in front of one desktop is exclusive. A
+    # database with a queue is not. If each consumer decides, one careless
+    # repository can break it.
     DRAUGR_EXCLUSIVE=false
 
-    # How long a mound that is up AS A DEPENDENCY stays up after its last user
-    # leaves. Not seconds, because the resource this was written for takes
-    # minutes to boot and a dr-up --recreate must not cost that. "off" keeps it
-    # up until somebody stops it. A mound you started yourself is never touched.
+    # How long a mound that runs AS A DEPENDENCY continues to run after its
+    # last user leaves. The time is not in seconds. The resource that this was
+    # written for takes minutes to boot, and a dr-up --recreate must not cost
+    # that time. "off" keeps it running until somebody stops it. Draugr never
+    # stops a mound that you started yourself.
     DRAUGR_LINGER=10m
 
     DRAUGR_SCAN=true
     DRAUGR_SCAN_PATTERNS=".env *.pem *.key id_rsa id_ed25519 credentials.json secrets.*"
     DRAUGR_SCAN_FAIL=block
 
-    # The name of the forge VM, and the ONLY switch the forge has. Empty means
-    # there is no forge, which is the right answer for almost everybody: it is
-    # a Windows 11 VM for building Windows software, driven through AppSandbox,
-    # and it is of interest to one person in a hundred. dr-forge refuses every action while
-    # this is empty, so the feature cannot be stumbled into.
+    # The name of the forge VM, and the ONLY switch of the forge. Empty means
+    # that there is no forge, and that is correct for almost all users. The
+    # forge is a Windows 11 VM for builds of Windows software, controlled
+    # through AppSandbox. About one user in a hundred needs it. While this is
+    # empty, dr-forge refuses all actions. Thus nobody turns on the feature
+    # by accident.
     #
-    # It names a VM, not a path, because the VM is the thing that exists on both
-    # sides of the boundary: AppSandbox knows it by name, and so does the tunnel
-    # supervisor. See docs/FORGE.md.
+    # It is the name of a VM, not a path. The VM is the item that exists on
+    # both sides of the boundary. AppSandbox knows it by name, and so does the
+    # tunnel supervisor. See docs/FORGE.md.
     DRAUGR_FORGE=
 
-    # Guest paths dr-forge init excludes from Defender, separated by SEMICOLONS because a
-    # Windows path contains spaces and does not contain semicolons - the same reason Windows
-    # uses them in PATH. Empty means Defender is left exactly as it is, which is the right
-    # default: init is generic, and only the project knows which trees are its build output
-    # rather than something worth scanning.
+    # Guest paths that dr-forge init excludes from Defender. SEMICOLONS go
+    # between the paths. A Windows path can contain spaces but not
+    # semicolons. For the same reason, Windows uses semicolons in PATH. Empty
+    # means that Defender stays as it is, and that is the correct default.
+    # init is general. Only the project knows which directories are build
+    # output and do not need a scan.
     DRAUGR_FORGE_NOSCAN=
-    # Where dr-layer keeps the forge's disk layers. Empty means C:\ForgeLayers, which is
-    # layer.ps1's own default - and the two must stay the same literal, because a value
-    # forwarded from here would be reported as a choice somebody made rather than as the
-    # default it is. It must be your FASTEST disk rather than your biggest: reads walk the
-    # chain, so the frozen parents holding Windows, Visual Studio and the engine are the hot
-    # read path. A store per drive is normal - the engine layers are the big ones.
+    # Where dr-layer keeps the disk layers of the forge. Empty means
+    # C:\ForgeLayers, which is the default of layer.ps1. The two values must
+    # stay the same text. If this file sends the value, the output shows it
+    # as a choice of a user, not as the default. Use your FASTEST disk, not
+    # your largest. Each read goes through the chain. Thus the frozen parents
+    # that hold Windows, Visual Studio, and the engine get the most reads. A
+    # store on each drive is normal. The engine layers are the large ones.
     DRAUGR_FORGE_LAYERS=
 }
 
-# --- how provenance is worked out -------------------------------------------
+# --- how the code finds the source of each key ------------------------------
 #
-# The trick in both helpers below is bash's *indirect expansion*: when $k holds
-# the string "DRAUGR_AGENT", then
+# Both helpers below use the *indirect expansion* of bash. When $k holds the
+# string "DRAUGR_AGENT", then:
 #
-#     ${!k}     is the value of the variable NAMED by $k, i.e. $DRAUGR_AGENT
-#     ${!k-}    the same, but empty instead of an error if it is unset
-#     printf -v NAME  writes into the variable called NAME, rather than printing
+#     ${!k}     is the value of the variable that $k NAMES, that is, $DRAUGR_AGENT
+#     ${!k-}    the same, but empty and not an error if it is not set
+#     printf -v NAME  writes into the variable NAME, and does not print
 #
-# Together they let us loop over DR_KEYS and read or write each setting by name,
-# without a 23-branch case statement.
+# With them, the code can loop over DR_KEYS and read or write each key by name.
+# It needs no case statement with 23 branches.
 
-# Copy every current setting into a parallel set of variables sharing a prefix.
+# Copy each current key into a second set of variables with a prefix.
 # _dr_snapshot_into _DR_PREV_ saves $DRAUGR_AGENT as $_DR_PREV_DRAUGR_AGENT, and
-# so on for all of them. That is the "before" picture.
+# the same for all keys. That is the "before" state.
 _dr_snapshot_into() {
     local prefix=$1 k
     for k in "${DR_KEYS[@]}"; do
@@ -760,14 +784,14 @@ _dr_snapshot_into() {
     done
 }
 
-# Compare "now" against that saved "before" picture, and credit every setting
-# that changed to the layer we just sourced. A config file that sets three keys
-# therefore gets the blame for exactly those three - which is what makes
-# `dr-config` able to say where each value came from.
+# Compare the current state with the saved "before" state. Each key that
+# changed gets the layer that the code sourced last as its source. Thus a
+# configuration file that sets three keys is the source of exactly those
+# three. With this, `dr-config` can tell where each value came from.
 _dr_attribute() {
     local prefix=$1 origin=$2 k ref
     for k in "${DR_KEYS[@]}"; do
-        ref="${prefix}${k}"          # e.g. "_DR_PREV_DRAUGR_AGENT"
+        ref="${prefix}${k}"          # for example "_DR_PREV_DRAUGR_AGENT"
         if [ "${!k-}" != "${!ref-}" ]; then
             DR_ORIGIN[$k]=$origin
         fi
@@ -775,40 +799,42 @@ _dr_attribute() {
 }
 
 # dr_load_config [repo-root]
-# Populates every DRAUGR_* variable and DR_ORIGIN. Safe to call once per process.
+# Sets each DRAUGR_* variable and DR_ORIGIN. Call it one time in each process.
 dr_load_config() {
     local repo=${1:-}
 
-    # STEP 1 - stash anything that arrived from the environment.
+    # STEP 1: save each value that came from the environment.
     #
-    # DRAUGR_AGENT=codex dr-go  must beat every config file. But we are about to
-    # source those files in this same shell, and they would overwrite it. So
-    # remember the environment's values now and put them back at the end.
+    # DRAUGR_AGENT=codex dr-go  must win over each configuration file. But the
+    # code sources those files next, in this shell, and they overwrite the
+    # value. Thus save the values of the environment now, and put them back at
+    # the end.
     #
-    # ${!k+set} is "set" only when the variable NAMED by $k exists, even if it is
-    # empty - unlike ${!k:+set}, which would also treat an empty value as absent.
-    # DRAUGR_PORTS= in the environment is a deliberate "no ports", not silence.
+    # ${!k+set} is "set" only when the variable that $k NAMES exists, even if
+    # it is empty. ${!k:+set} is different: it treats an empty value as
+    # missing. DRAUGR_PORTS= in the environment means "no ports" on purpose.
     local k envk had_env=()
     for k in "${DR_KEYS[@]}"; do
         if [ -n "${!k+set}" ]; then
-            envk="_DR_ENV_$k"                # e.g. "_DR_ENV_DRAUGR_AGENT"
+            envk="_DR_ENV_$k"                # for example "_DR_ENV_DRAUGR_AGENT"
             printf -v "$envk" '%s' "${!k}"
             had_env+=("$k")
         fi
     done
 
-    # STEP 2 - lay down the built-in defaults, and credit them all.
+    # STEP 2: set the built-in defaults, and record them as the source.
     _dr_defaults
     local key
     for key in "${DR_KEYS[@]}"; do DR_ORIGIN[$key]="built-in default"; done
     DR_UNTRUSTED=()
 
-    # STEP 3 - source each config file in turn, lowest precedence first, taking
-    # a before/after snapshot around each so we know which keys it touched.
+    # STEP 3: source each configuration file in turn, the lowest precedence
+    # first. Save the state before and after each file, to find the keys that
+    # it changed.
     #
-    # ${repo:+VALUE} expands to VALUE only when $repo is non-empty - so when we
-    # are not inside a repository those two entries collapse to empty strings and
-    # are skipped below. (It is the mirror image of the ${VAR:-default} form.)
+    # ${repo:+VALUE} expands to VALUE only when $repo is not empty. Outside a
+    # repository, those two items become empty strings, and the loop skips
+    # them. (It is the opposite of the ${VAR:-default} form.)
     local layer
     for layer in \
         "$DR_CONFIG_USER/config" \
@@ -818,24 +844,25 @@ dr_load_config() {
         if [ -z "$layer" ] || [ ! -f "$layer" ]; then
             continue
         fi
-        # Refuse to source a project config we have not been shown. Note this
-        # `continue`s rather than dying: an untrusted file is skipped, and the
-        # run carries on with the layers below it. Remember which ones, so the
-        # skip can be reported again at the end, where it will be read.
+        # Do not source a project configuration that the user did not see.
+        # This does `continue` and does not stop. The code skips a file that
+        # is not trusted, and the run continues with the next layers. Record
+        # the skipped files, so that the end of the output can report them.
+        # The user reads the end.
         dr_trust_check "$layer" || { DR_UNTRUSTED+=("$layer"); continue; }
 
         _dr_snapshot_into _DR_PREV_
         dr_debug "sourcing $layer"
-        # "." is `source`: run the file in THIS shell so its assignments stick.
-        # (Running it as a subprocess would change only that process's copy.)
-        # shellcheck disable=SC1090  # path is only known at runtime
+        # "." is `source`. It runs the file in THIS shell, so that its values
+        # stay. (A subprocess changes only its own copy.)
+        # shellcheck disable=SC1090  # the path is known only at runtime
         . "$layer" || dr_die "$layer failed to load" "Check it with: bash -n $layer"
         _dr_attribute _DR_PREV_ "$layer"
     done
 
-    # STEP 4 - put the environment's values back on top, and credit them.
-    # The length check is for bash 4.3 and earlier, where expanding an empty
-    # array under `set -u` is itself an error.
+    # STEP 4: put the values of the environment back on top, and record the
+    # environment as their source. The length test is for bash 4.3 and older.
+    # There, with `set -u`, the expansion of an empty array is an error.
     if [ ${#had_env[@]} -gt 0 ]; then
         for k in "${had_env[@]}"; do
             envk="_DR_ENV_$k"
@@ -844,7 +871,8 @@ dr_load_config() {
         done
     fi
 
-    # Derived defaults that need the repo, applied only if still unset.
+    # Defaults that come from the repo. The code sets them only if they are
+    # still not set.
     if [ -z "$DRAUGR_BRANCH" ] && [ -n "$repo" ]; then
         DRAUGR_BRANCH=$(dr_repo_branch "$repo")
         DR_ORIGIN[DRAUGR_BRANCH]="detected (current branch)"
@@ -854,25 +882,26 @@ dr_load_config() {
         DR_ORIGIN[DRAUGR_SANDBOX]="derived from repo name"
     fi
 
-    # STEP 5 - now that DRAUGR_AGENT is final, resolve the things that depend on
-    # which agent it is. This has to be last: both are chosen by a setting the
-    # cascade decides, so doing either earlier would pick from the wrong layer.
+    # STEP 5: DRAUGR_AGENT now has its final value. Find the values that
+    # depend on the agent. This step must be last. The layers decide the
+    # agent, and an earlier step uses the wrong layer.
 
-    # DRAUGR_AGENT_ARGS carries the AGENT's own flags - "--continue" is Claude
-    # Code's, "resume --last" is Codex's, and neither means anything to the
-    # other. So one machine-wide value is wrong the moment a second agent is in
-    # play, and there is no way to guard it by hand: a shell conditional in
-    # ~/.config/draugr/config cannot work, because that layer is sourced BEFORE
-    # the project one and $DRAUGR_AGENT is still the default while it runs.
+    # DRAUGR_AGENT_ARGS holds the flags of the AGENT. "--continue" is a flag of
+    # Claude Code, and "resume --last" is a flag of Codex. Neither has a meaning
+    # for the other agent. Thus one value for the full machine is wrong when
+    # you use a second agent. You cannot prevent this by hand. A shell
+    # condition in ~/.config/draugr/config does not work. That layer is sourced
+    # BEFORE the project layer, so $DRAUGR_AGENT still has the default then.
     #
-    # Hence a key per agent, which REPLACES the generic one rather than adding to
-    # it - the same rule .draugr/kit.<agent>/ follows against .draugr/kit/.
+    # Thus there is a key for each agent. It REPLACES the general key, and does
+    # not add to it. .draugr/kit.<agent>/ uses the same rule against
+    # .draugr/kit/.
     #
-    # ${!k+set} rather than ${!k:+set}: an empty DRAUGR_AGENT_ARGS_CODEX is a
-    # deliberate "nothing for codex", not silence, and must beat a generic value.
+    # Use ${!k+set}, not ${!k:+set}. An empty DRAUGR_AGENT_ARGS_CODEX means
+    # "nothing for codex" on purpose. It must win over a general value.
     local _ak; _ak=$(dr_agent_args_key "$DRAUGR_AGENT")
     if [ -n "${!_ak+set}" ]; then
-        # shellcheck disable=SC2034  # read by dr-go, like the rest of the surface
+        # shellcheck disable=SC2034  # dr-go reads it, as it reads the other keys
         DRAUGR_AGENT_ARGS=${!_ak}
         DR_ORIGIN[DRAUGR_AGENT_ARGS]="${DR_ORIGIN[$_ak]:-built-in default} (via $_ak)"
     fi
@@ -883,38 +912,40 @@ dr_load_config() {
 # ---------------------------------------------------------------------------
 # Agent modules
 #
-# Everything Draugr does is the same for every agent except where an agent's own
-# private layout is involved - which today means memory, and little else. That
-# knowledge lives in lib/agents/<agent>.sh rather than in a case statement in
-# each command, because it is the part most likely to be wrong: it is undocumented
-# by the agents themselves, measured rather than published, and changes without
-# notice. One file per agent means a wrong guess about one cannot break another.
+# Draugr does the same work for each agent. The exception is the private file
+# layout of an agent. Today that means memory, and almost nothing else. That
+# knowledge is in lib/agents/<agent>.sh, not in a case statement in each
+# command. It is the part that is most likely to be wrong. The agents do not
+# document it. It comes from tests, not from a published source, and it changes
+# with no notice. With one file for each agent, a wrong guess about one agent
+# cannot break another agent.
 #
-# lib/agents/default.sh carries the interface and is what an agent we have not
-# measured gets - which is the honest answer for eight of sbx's ten.
+# lib/agents/default.sh holds the interface. An agent that Draugr did not test
+# gets it. That is true for eight of the ten agents of sbx.
 # ---------------------------------------------------------------------------
 
-# dr_agent_load - source the module for $DRAUGR_AGENT, or the default.
+# dr_agent_load: source the module for $DRAUGR_AGENT, or the default module.
 #
-# Called twice: once at the bottom of this file, so that a command which never
-# reads a config still has the functions, and again at the end of dr_load_config
-# once the cascade has settled. Sourcing a second module simply redefines every
-# function, which is why each module must define ALL of them - a partial module
-# would leave one agent's answers standing in another agent's session.
+# The code calls it two times. The first call is at the end of this file, so
+# that a command that reads no configuration still has the functions. The
+# second call is at the end of dr_load_config, after the layers have their
+# final values. A second module defines each function again. Thus each module
+# must define ALL the functions. An incomplete module leaves the answers of
+# one agent in the session of a different agent.
 dr_agent_load() {
     local agent=${DRAUGR_AGENT:-claude} file
     file="$DRAUGR_ROOT/lib/agents/$agent.sh"
     [ -f "$file" ] || file="$DRAUGR_ROOT/lib/agents/default.sh"
     dr_debug "agent module: ${file#"$DRAUGR_ROOT"/}"
-    # shellcheck disable=SC1090  # path is only known at runtime
+    # shellcheck disable=SC1090  # the path is known only at runtime
     . "$file" || dr_die "could not load the agent module $file"
 }
 
-# dr_agent_known - the agents Draugr has a module for, space separated.
+# dr_agent_known: the agents that have a Draugr module, with spaces between them.
 #
-# Derived from the directory rather than from a list someone has to remember to
-# update, so adding lib/agents/gemini.sh is the whole of adding gemini. "default"
-# is not an agent, so it is left out of the answer.
+# The list comes from the directory, not from a list that someone must update.
+# Thus to add gemini, you add lib/agents/gemini.sh, and nothing else. "default"
+# is not an agent, so the answer does not include it.
 dr_agent_known() {
     local file name out=''
     for file in "$DRAUGR_ROOT"/lib/agents/*.sh; do
@@ -926,15 +957,15 @@ dr_agent_known() {
     printf '%s' "${out# }"
 }
 
-# dr_config_set_flag <KEY> <value> - highest precedence, for command-line flags.
+# dr_config_set_flag <KEY> <value>: the highest precedence, for command-line flags.
 dr_config_set_flag() {
     printf -v "$1" '%s' "$2"
-    # shellcheck disable=SC2034  # DR_ORIGIN is read by dr-config
+    # shellcheck disable=SC2034  # dr-config reads DR_ORIGIN
     DR_ORIGIN[$1]="command-line flag"
 }
 
-# Config files are hand-written, so accept every spelling of "yes" a person might
-# reasonably type. Anything else - including empty and typos - is false.
+# People write configuration files by hand. Thus accept each usual spelling of
+# "yes". All other values are false, also an empty value and a typing error.
 dr_is_true() {
     case "${1:-}" in
         true|True|TRUE|yes|y|1|on) return 0 ;;
@@ -945,13 +976,14 @@ dr_is_true() {
 # ---------------------------------------------------------------------------
 # Trust
 #
-# Sourcing a file from a cloned repository means running its code. Draugr records
-# the hash of each project config the first time you accept it, and refuses to
-# source one it has not seen. Same bargain as direnv, same reason.
+# To source a file from a cloned repository is to run its code. The first time
+# that you accept a project configuration, Draugr records its hash. Draugr does
+# not source a file that it did not record. direnv does the same, for the same
+# reason.
 # ---------------------------------------------------------------------------
 
-# SHA-256 of a file, printed bare. Linux has sha256sum, macOS has shasum; we take
-# whichever exists rather than assuming, since the hash format is identical.
+# The SHA-256 of a file, with no other text. Linux has sha256sum, and macOS has
+# shasum. The code uses the one that exists. Both give the same hash format.
 _dr_hash() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | cut -d' ' -f1
@@ -962,14 +994,15 @@ _dr_hash() {
     fi
 }
 
-# Trust is per CONTENT, not per path: the record is "<hash>  <path>", so editing a
-# trusted file changes its hash and silently revokes trust until you re-accept it.
+# Trust is for the CONTENT, not for the path. The record is "<hash>  <path>". A
+# change to a trusted file changes its hash. The file is then not trusted, with
+# no message, until you accept it again.
 dr_trust_is_trusted() {
     local file=$1 hash
     [ -f "$DR_TRUST_FILE" ] || return 1
-    # Both halves of the record have to be canonical or this misses a file it has
-    # already seen: see dr_path_canon_case. dr_repo_root folds the usual path in,
-    # but a file named on the command line arrives exactly as it was typed.
+    # Both parts of the record must be canonical. If not, the lookup misses a
+    # file that it saw before (see dr_path_canon_case). dr_repo_root changes
+    # the usual path. But a file from the command line has the case as typed.
     file=$(dr_path_canon_case "$file")
     hash=$(_dr_hash "$file")
     grep -qxF "$hash  $file" "$DR_TRUST_FILE" 2>/dev/null
@@ -977,11 +1010,12 @@ dr_trust_is_trusted() {
 
 dr_trust_add() {
     local file=$1 hash
-    # Recorded canonically, so the lookup above can match it: dr_path_canon_case.
+    # Record the canonical path, so that the lookup above finds it. See
+    # dr_path_canon_case.
     file=$(dr_path_canon_case "$file")
     hash=$(_dr_hash "$file")
     mkdir -p "$DR_CONFIG_USER"
-    # Drop any previous entry for this path, then record the current hash.
+    # Remove the old entries for this path, then record the current hash.
     if [ -f "$DR_TRUST_FILE" ]; then
         grep -vF "  $file" "$DR_TRUST_FILE" > "$DR_TRUST_FILE.tmp" 2>/dev/null || :
         mv "$DR_TRUST_FILE.tmp" "$DR_TRUST_FILE"
@@ -990,17 +1024,17 @@ dr_trust_add() {
     chmod 600 "$DR_TRUST_FILE"
 }
 
-# The user's own config is not subject to trust: they wrote it, and prompting
-# for it would train them to accept prompts.
+# The configuration of the user needs no trust. The user wrote it. A prompt
+# for it teaches users to accept each prompt.
 dr_trust_check() {
     local file=$1
     case "$file" in
         "$DR_CONFIG_USER"/*) return 0 ;;
     esac
     dr_trust_is_trusted "$file" && return 0
-    dr_warn "not sourcing $file - it is untrusted"
-    printf '  %sThis file is shell code and sourcing it runs it.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sReview it, then:  dr-trust %s%s\n' "$_DR_DIM" "$file" "$_DR_OFF" >&2
+    dr_warn "did not source $file, because it is not trusted"
+    printf '  %sThis file is shell code. To source it is to run it.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sRead it, then run:  dr-trust %s%s\n' "$_DR_DIM" "$file" "$_DR_OFF" >&2
     return 1
 }
 
@@ -1008,31 +1042,34 @@ dr_trust_check() {
 # The shared preamble
 # ---------------------------------------------------------------------------
 
-# dr_context - what every command that touches a mound does first.
+# dr_context: the first step of each command that uses a mound.
 #
-# Sets DR_REPO (the WSL path), DR_REPO_WIN (the same repo spelled the way sbx.exe
-# insists on) and loads the config cascade, which is what fills in DRAUGR_SANDBOX.
-# Assignments here have no `local`, so they land in the caller's scope by design.
+# It sets DR_REPO (the WSL path) and DR_REPO_WIN (the same repo, in the format
+# that sbx.exe requires). It also loads the configuration layers, and they set
+# DRAUGR_SANDBOX. The variables here have no `local`, so they go into the scope
+# of the caller on purpose.
 dr_context() {
     DR_REPO=$(dr_repo_root)
     dr_require_win_path "$DR_REPO"
-    # shellcheck disable=SC2034  # read by the dr-* command that called us
+    # shellcheck disable=SC2034  # the dr-* command that called this reads it
     DR_REPO_WIN=$(dr_path_win "$DR_REPO")
     dr_load_config "$DR_REPO"
 }
 
-# dr_context_create - dr_context, for the two commands allowed to make a repo.
+# dr_context_create: dr_context, for the two commands that can create a repo.
 #
-# Only dr-up and dr-init call this. Everything else keeps dr_context and its
-# refusal, for the same reason dr-status will not start a stopped mound: a
-# command you run to find out what is going on must not change what is going on.
+# Only dr-up and dr-init call this. All other commands use dr_context, which
+# refuses. The reason is the same as for dr-status, which does not start a
+# stopped mound. A command that you run to see the state must not change the
+# state.
 #
-# The awkward part is ordering. The policy lives in the config, the project
-# config lives in the directory, and the directory is not a repository yet - so
-# the config has to be loaded against a plain path first, and dr_load_config has
-# to be called EXACTLY ONCE. A second call would see the values the first one
-# computed, decide they came from the environment, and give them precedence over
-# every config file. Hence one load, then act.
+# The difficult part is the order. The policy is in the configuration. The
+# project configuration is in the directory, and the directory is not yet a
+# repository. Thus the code must first load the configuration for a plain
+# path, and call dr_load_config EXACTLY ONE TIME. A second call sees the
+# values from the first call, and thinks that they came from the environment.
+# It then gives them precedence over each configuration file. Thus the code
+# loads one time, then acts.
 dr_context_create() {
     local dir
     dir=$(git rev-parse --show-toplevel 2>/dev/null) || dir=$PWD
@@ -1044,28 +1081,29 @@ dr_context_create() {
     fi
 
     DR_REPO=$dir
-    # shellcheck disable=SC2034  # read by the dr-* command that called us
+    # shellcheck disable=SC2034  # the dr-* command that called this reads it
     DR_REPO_WIN=$(dr_path_win "$dir")
 }
 
-# dr_repo_create <dir> - act on DRAUGR_ON_MISSING_REPO. Fatal for "fail".
-# Sets DR_REPO_CREATED to the mode used, so the caller knows it is standing in a
-# repository that did not exist a moment ago and that anything it writes next is
-# its to commit. Empty when the repo was already there.
+# dr_repo_create <dir>: do what DRAUGR_ON_MISSING_REPO says. For "fail", it is
+# a fatal error. It sets DR_REPO_CREATED to the mode that it used. The caller
+# then knows that the repository is new, and that the caller must commit the
+# files that it writes next. If the repo existed before, the value is empty.
 DR_REPO_CREATED=
 
 dr_repo_create() {
     local dir=$1 mode=${DRAUGR_ON_MISSING_REPO:-fail}
 
-    # Validated before anything is written, so a typo in the setting is a clean
-    # refusal rather than half a repository.
+    # Make sure that the mode is correct before the code writes a file. A
+    # typing error in the value then gives a clean refusal, not half a
+    # repository.
     case "$mode" in
         fail) dr_die \
             "$dir is not a git repository" \
-            "Draugr works on one repository at a time: the sandbox gets a clone of it." \
-            "Run 'git init' here, or set DRAUGR_ON_MISSING_REPO to have Draugr do it:" \
-            "  create-add-all     commit what is here, then work in git as usual" \
-            "  create-data-only   track nothing; files travel by DRAUGR_DATA instead" ;;
+            "Draugr works on one repository at a time. The sandbox gets a clone of it." \
+            "Run 'git init' here, or set DRAUGR_ON_MISSING_REPO so that Draugr does it:" \
+            "  create-add-all     commit the files that are here, then use git as usual" \
+            "  create-data-only   track no file; the files go through DRAUGR_DATA" ;;
         create-add-all|create-data-only) : ;;
         *) dr_die "DRAUGR_ON_MISSING_REPO is '$mode'" \
                   "Expected one of: fail, create-add-all, create-data-only." \
@@ -1075,50 +1113,52 @@ dr_repo_create() {
     git -C "$dir" init -q -b "${DRAUGR_BRANCH:-main}" \
         || dr_die "could not create a git repository in $dir"
 
-    # A commit needs an identity, and someone whose machine has no global one
-    # would otherwise get git's four-line lecture from inside a Draugr command.
-    # Set it locally, on this throwaway repo only, and say so.
+    # A commit needs an identity. If the machine has no global identity, git
+    # prints a message of four lines from inside the Draugr command. Thus set
+    # an identity locally, only for this temporary repo, and tell the user.
     if ! git -C "$dir" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
         git -C "$dir" config user.name Draugr
         git -C "$dir" config user.email draugr@localhost
-        dr_info "no git identity configured; set one locally for this repo"
+        dr_info "no git identity is configured; set a local identity for this repo"
     fi
 
     case "$mode" in
     create-data-only)
-        # The dummy repo: one tracked file, which ignores everything including
-        # itself - so `git status` is empty from now on and DRAUGR_REQUIRE_CLEAN
-        # never has anything to complain about. -f is required precisely because
-        # the pattern already covers .gitignore.
+        # The dummy repo has one tracked file. That file ignores all files, also
+        # itself. Thus `git status` is always empty, and DRAUGR_REQUIRE_CLEAN
+        # never finds a change. -f is necessary, because the pattern also
+        # matches .gitignore.
         printf '%s\n' '# Draugr data-only mode: git tracks nothing here.' '*' \
             > "$dir/.gitignore"
         git -C "$dir" add -f .gitignore
         git -C "$dir" commit -qm "Draugr: data-only repository"
 
-        # The mode is inert without something for dr-data to carry, so seed it.
-        # Set in this shell as well as on disk: re-loading the config to pick it
-        # up is exactly the double-load dr_context_create must not do.
+        # The mode does nothing if dr-data has no files to copy. Thus give it a
+        # pattern. Set the value in this shell and on the disk. A second load of
+        # the configuration is the load that dr_context_create must not do.
         if [ ! -f "$dir/.draugr.conf" ]; then
             printf '%s\n' \
-                '# Written by Draugr for a directory that had no git repository.' \
-                '# Nothing is tracked by git here; these patterns decide what' \
-                '# actually travels to and from the mound. See dr-data --help.' \
+                '# Draugr wrote this file for a directory that had no git repository.' \
+                '# git tracks no file here. These patterns decide which files go' \
+                '# to and from the mound. See dr-data --help.' \
                 'DRAUGR_DATA="*"' \
                 'DRAUGR_ON_MISSING_REPO=create-data-only' > "$dir/.draugr.conf"
             dr_trust_add "$dir/.draugr.conf"
-            # SET HERE, AND ONLY HERE: inside the branch that just WROTE that value to the
-            # file. The default has to agree with what a child process will read back, and a
-            # child re-reads the file - it does not inherit this shell.
+            # SET IT HERE, AND ONLY HERE: in the branch that just WROTE that value
+            # to the file. The default must agree with what a child process reads.
+            # A child reads the file again. It does not inherit this shell.
             #
-            # MEASURED, on the first dr-up of a freshly generated gateway: setting
-            # it unconditionally made dr-up hold '*' for a config that says nothing about
-            # data, pass its own `-n "$DRAUGR_DATA"` guard, and call dr-data - which read the
-            # file, found nothing, and died. dr-up reported "auto data push failed" as the
-            # first thing a new gateway ever says, about a push that was never needed.
+            # A real failure occurred on the first dr-up of a new gateway. The
+            # code set the value in all cases. Thus dr-up held '*' for a
+            # configuration that says nothing about data. dr-up passed its own
+            # `-n "$DRAUGR_DATA"` guard and called dr-data. dr-data read the
+            # file, found nothing, and stopped. The first message of the new
+            # gateway was "auto data push failed", for a push that it did not need.
             #
-            # A data-only repo whose config exists and names no data has named no data. That
-            # is a complete answer, and `dr-forge gateway` relies on it: a gateway carries a
-            # proxy and an allowlist, and the mound already mounts its source read-only.
+            # A data-only repo that has a configuration with no data names no
+            # data. That is a full answer, and `dr-forge gateway` uses it. A
+            # gateway holds a proxy and an allowlist, and the mound already
+            # mounts its source read-only.
             [ -n "${DRAUGR_DATA:-}" ] || {
                 DRAUGR_DATA='*'
                 DR_ORIGIN[DRAUGR_DATA]="data-only mode"
@@ -1129,68 +1169,68 @@ dr_repo_create() {
         ;;
 
     create-add-all)
-        # Everything is committed, so anything that must NOT be committed has to
-        # be ignored first. Two sets matter, and the first is a safety fix rather
-        # than tidiness: dr-scan only reports UNTRACKED files, so committing a
-        # credential would put it in the agent's clone and in history, and
-        # silence the scan that exists to catch it.
+        # This mode commits all files. Thus first ignore each file that must NOT
+        # be committed. Two sets are important. The first set is a safety fix.
+        # dr-scan reports only UNTRACKED files. A committed credential goes into
+        # the clone of the agent and into the history. The scan that exists to
+        # find it then says nothing.
         if [ ! -f "$dir/.gitignore" ]; then
             local pat pats=()
-            printf '%s\n' '# Written by Draugr. Credential-shaped names first:' \
+            printf '%s\n' '# Draugr wrote this file. First, names of credential files:' \
                 > "$dir/.gitignore"
             read -ra pats <<< "${DRAUGR_SCAN_PATTERNS:-}"
             [ ${#pats[@]} -eq 0 ] || printf '%s\n' "${pats[@]}" >> "$dir/.gitignore"
 
-            # Draugr's own per-checkout files. Without these the very next dr-up
-            # writes .draugr/kit.applied, the tree is dirty, and the dr-go after
-            # that refuses - in a repo Draugr created and called clean.
+            # The Draugr files for each checkout. Without these lines, the next
+            # dr-up writes .draugr/kit.applied, and the tree has changes. The
+            # dr-go after that refuses, in a repo that Draugr created as clean.
             printf '\n%s\n%s\n%s\n%s\n' \
-                '# Draugr: describes this checkout, not the project.' \
+                '# Draugr: these files describe this checkout, not the project.' \
                 '.draugr.local.conf' '.draugr/kit.applied' '.draugr/tmp/' \
                 >> "$dir/.gitignore"
 
-            # Then the data patterns: those travel by rsync, and the README is
-            # explicit that they are expected to be gitignored on both sides.
+            # Then the data patterns. rsync copies those files. The README says
+            # that both sides must ignore them in git.
             read -ra pats <<< "${DRAUGR_DATA:-}"
             if [ ${#pats[@]} -gt 0 ]; then
-                printf '\n%s\n' '# DRAUGR_DATA travels beside git, not through it:' \
+                printf '\n%s\n' '# DRAUGR_DATA goes next to git, not through it:' \
                     >> "$dir/.gitignore"
                 for pat in "${pats[@]}"; do printf '%s\n' "$pat" >> "$dir/.gitignore"; done
             fi
         fi
 
-        # Says what was committed and what changes from here, because this mode
-        # hands back an ordinary git repo - with the dirty-tree check that comes
-        # with one - and that surprises people who wanted the other mode.
+        # Tell what was committed and what changes now. This mode gives back a
+        # usual git repo, with the usual test for uncommitted changes. That
+        # surprises users who wanted the other mode.
         git -C "$dir" add -A
         git -C "$dir" commit -qm "Draugr: initial commit" \
             || dr_die "could not make the initial commit in $dir"
         DR_REPO_CREATED=$mode
-        dr_ok "created a git repository in $dir and committed what was there"
-        printf '  %sIt is an ordinary repo now: commit before each session, or%s\n' \
+        dr_ok "created a git repository in $dir and committed the files that were there"
+        printf '  %sIt is now a usual repo. Commit before each session, or%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
-        printf '  %suse dr-go --dirty. Check what was committed before you rely on it.%s\n' \
+        printf '  %suse dr-go --dirty. Look at what was committed before you use it.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         ;;
     esac
 }
 
-# dr_repo_commit_setup <dir> - commit the files dr-init wrote after the repo.
+# dr_repo_commit_setup <dir>: commit the files that dr-init wrote after the repo.
 #
-# dr-init writes .draugr.conf and the kit *after* the repository exists, so
-# without this the repo it just created is dirty the moment it hands back. In
-# data-only mode that is not merely untidy: "the tree is always clean" is the
-# entire point of the mode, and breaking it on the first command would be a poor
-# way to introduce it. Does nothing unless dr_repo_create just ran.
+# dr-init writes .draugr.conf and the kit *after* the repository exists.
+# Without this function, the new repo has changes when dr-init returns. In
+# data-only mode, that is a real problem. The purpose of the mode is that the
+# tree is always clean. A change after the first command breaks that purpose.
+# If dr_repo_create did not just run, the function does nothing.
 dr_repo_commit_setup() {
     local dir=$1
     [ -n "$DR_REPO_CREATED" ] || return 0
 
     case "$DR_REPO_CREATED" in
     create-data-only)
-        # Named paths and -f, because .gitignore says "*" and covers these too.
-        # Deliberately not `add -A`: tracking the user's own files is the one
-        # thing this mode exists not to do.
+        # Use named paths and -f, because .gitignore says "*" and matches these
+        # files too. Do not use `add -A`, on purpose. This mode must not track
+        # the files of the user.
         local p paths=()
         for p in .gitignore .draugr.conf .draugr/kit; do
             if [ -e "$dir/$p" ]; then paths+=("$p"); fi
@@ -1202,25 +1242,25 @@ dr_repo_commit_setup() {
         ;;
     esac
 
-    # An empty stage is a fine outcome: it means dr-init found everything
-    # already in place and wrote nothing. --quiet exits 1 when there IS
-    # something staged, which is why the commit hangs off the failure.
+    # An empty stage is a good result. It means that all files were already
+    # in place, and dr-init wrote nothing. --quiet exits with 1 when there IS a
+    # staged change. Thus the commit runs when the test fails.
     git -C "$dir" diff --cached --quiet \
         || git -C "$dir" commit -qm "Draugr: project setup"
 }
 
-# dr_confirm <question> - ask before doing something irreversible.
+# dr_confirm <question>: ask before an action that you cannot undo.
 #
-# Three outcomes, matching dr-trust: --yes was passed, a human answered, or there
-# is no terminal at all. The last one refuses rather than assuming yes, because a
-# prompt that auto-accepts in a script is not a prompt.
+# Three results, as in dr-trust: the user gave --yes, a person answered, or
+# there is no terminal. In the last case, the function refuses and does not
+# assume yes. A prompt that accepts by itself in a script is not a prompt.
 dr_confirm() {
     local reply
     if [ -n "${DR_ASSUME_YES:-}" ]; then
         return 0
     fi
     if [ ! -t 0 ]; then
-        dr_die "$1" "Refusing to assume an answer without a terminal. Pass --yes if you mean it."
+        dr_die "$1" "There is no terminal, so Draugr does not assume an answer. If you agree, use --yes."
     fi
     printf '%s [y/N] ' "$1" >&2
     read -r reply
@@ -1230,57 +1270,59 @@ dr_confirm() {
     esac
 }
 
-# dr_require_tty <what> - fail early, and legibly, instead of deep inside sbx.
+# dr_require_tty <what>: fail early and clearly, not deep in sbx.
 #
-# `sbx run` attaches an interactive session. Without a terminal it gets partway in
-# and then dies with "inspect exec: context deadline exceeded", which tells the
-# reader nothing. Verified against sbx 0.37.1.
+# `sbx run` attaches an interactive session. Without a terminal, it starts and
+# then fails with "inspect exec: context deadline exceeded". That message tells
+# the reader nothing. A test on sbx 0.37.1 showed this.
 dr_require_tty() {
     [ -t 0 ] && [ -t 1 ] && return 0
     dr_die \
         "$1 needs a terminal" \
-        "It attaches an interactive session, which cannot work from a pipe or a script." \
-        "To run one command non-interactively instead:  dr-shell -- <command>"
+        "It attaches an interactive session. That cannot work from a pipe or a script." \
+        "To run one command with no interaction, use:  dr-shell -- <command>"
 }
 
 # ---------------------------------------------------------------------------
-# Attaching
+# Attach
 #
-# Two transports, and they are NOT equivalent.
+# There are two transports, and they are NOT the same.
 #
-# `sbx run` and `sbx exec` reach the mound through sbx.exe, which is a Windows
-# binary that WSL runs over interop. The terminal you are typing at belongs to
-# WSL; the process reading it does not. Ctrl-Z therefore suspends the relay
-# rather than anything inside the sandbox: the keystroke never arrives, the
-# daemon stops hearing from its client, and a few seconds later the whole
-# session dies with "inspect exec: context deadline exceeded".
+# `sbx run` and `sbx exec` connect to the mound through sbx.exe. sbx.exe is a
+# Windows binary that WSL runs through interop. The terminal where you type
+# belongs to WSL, but the process that reads it does not. Thus Ctrl-Z
+# suspends the relay, not a process in the sandbox. The key press never
+# arrives, and the daemon stops getting data from its client. Some seconds
+# later, the full session fails with "inspect exec: context deadline exceeded".
 #
-# ssh has no such seam. The client is a native Linux binary and the far end is a
-# real pty, so job control happens inside the sandbox where it belongs - Ctrl-Z
-# stops the agent and hands you the mound's own shell, fg puts you back. Both
-# measured against sbx 0.37.1; see docs/WORKFLOW.md.
+# ssh does not have this problem. The client is a native Linux binary, and the
+# other end is a real pty. Thus job control occurs in the sandbox, which is the
+# correct place. Ctrl-Z stops the agent and gives you the shell of the mound,
+# and fg takes you back. Tests on sbx 0.37.1 showed both results. See
+# docs/WORKFLOW.md.
 #
-# That is why DRAUGR_ATTACH defaults to ssh, and it is the reason Draugr runs in
-# WSL rather than PowerShell in the first place.
+# That is why the default of DRAUGR_ATTACH is ssh. It is also the reason that
+# Draugr runs in WSL and not in PowerShell.
 # ---------------------------------------------------------------------------
 
-# The Host pattern dr-setup writes into ~/.ssh/config - the same one git and
-# rsync already use, so attaching needs no port, no key and no new setup.
+# The Host pattern that dr-setup writes into ~/.ssh/config. git and rsync use
+# the same pattern. Thus an attach needs no port, no key, and no new setup.
 dr_ssh_host() { printf '%s.sbx' "$DRAUGR_SANDBOX"; }
 
-# Checked before anything is started, so a typo in the setting is a clean
-# refusal rather than a transport silently chosen for you.
+# The code makes sure that the value is correct before it starts anything. A
+# typing error then gives a clean refusal. Draugr does not select a transport
+# for you with no message.
 dr_attach_check() {
     case "$DRAUGR_ATTACH" in
         ssh|sbx) return 0 ;;
         *) dr_die "DRAUGR_ATTACH is '$DRAUGR_ATTACH'" \
-                  "Expected ssh (job control works) or sbx (it does not)." \
-                  "It came from ${DR_ORIGIN[DRAUGR_ATTACH]:-somewhere unexpected}." ;;
+                  "Use ssh (job control works) or sbx (job control does not work)." \
+                  "The value came from ${DR_ORIGIN[DRAUGR_ATTACH]:-an unknown source}." ;;
     esac
 }
 
-# printf %q over a whole argv. Bash's own quoting, produced by bash here and read
-# back by bash on the far side, which is the only pair guaranteed to agree.
+# printf %q on each argument. This is the quoting of bash. Bash writes it here,
+# and bash reads it on the other side. Only that pair is sure to agree.
 dr_shquote() {
     local out='' a
     for a in "$@"; do out+=" $(printf '%q' "$a")"; done
@@ -1290,31 +1332,32 @@ dr_shquote() {
 # ---------------------------------------------------------------------------
 # The agent's own model
 #
-# DRAUGR_MODEL points the agent at something other than its vendor's cloud. The
-# three functions here answer the three questions that come with that: is this a
-# port or a URL, what address does the mound actually dial, and is the
-# combination one that can work at all.
+# DRAUGR_MODEL sends the agent to a model that is not the cloud of its vendor.
+# The three functions here answer the three questions that this causes. Is the
+# value a port or a URL? Which address does the mound connect to? Can the
+# combination work?
 # ---------------------------------------------------------------------------
 
-# dr_model_is_port <value> - true when DRAUGR_MODEL_URL names a local port.
+# dr_model_is_port <value>: true when DRAUGR_MODEL_URL names a local port.
 #
-# Digits and nothing else. There is deliberately no third spelling: "localhost"
-# means the MOUND from inside the mound, so a value like localhost:11435 is a
-# URL like any other and must not be given the host-port treatment below - it
-# would resolve to the sandbox talking to itself and fail with nothing to read.
+# Only digits. There is no third form, on purpose. In the mound, "localhost"
+# means the MOUND. Thus a value such as localhost:11435 is a usual URL. The
+# host-port code below must not change it. If it does, the sandbox connects
+# to itself and fails, with no useful message.
 dr_model_is_port() {
     case "${1:-}" in
         ''|*[!0-9]*) return 1 ;;
     esac
 }
 
-# dr_model_url - DRAUGR_MODEL_URL as an address the mound can actually open.
+# dr_model_url: DRAUGR_MODEL_URL as an address that the mound can open.
 #
-# A bare port becomes http://<this machine>:<port>, resolved NOW rather than
-# stored, for the same reason dr-hostport re-resolves on every start: WSL hands
-# out its address per boot, so anywhere you could write it down is somewhere it
-# would be wrong. Anything else is somebody else's endpoint and is printed back
-# untouched. Returns 1 when the address cannot be worked out at all.
+# A port number becomes http://<this machine>:<port>. The code finds the
+# address NOW and does not store it. dr-hostport finds it again at each start
+# for the same reason. WSL gets a new address at each boot, so a stored address
+# becomes wrong. Any other value is the endpoint of a different service, and
+# the function prints it unchanged. If the function cannot find the address, it
+# returns 1.
 dr_model_url() {
     local ip
     if ! dr_model_is_port "${DRAUGR_MODEL_URL:-}"; then
@@ -1325,31 +1368,32 @@ dr_model_url() {
     printf 'http://%s:%s' "$ip" "$DRAUGR_MODEL_URL"
 }
 
-# dr_model_probe <url> - what is actually answering there. Prints one word:
+# dr_model_probe <url>: what answers at that URL. It prints one word:
 #
-#   proxy    the query-only front door, with a model server behind it
+#   proxy    the query-only proxy, with a model server behind it
 #   stalled  the proxy answers, but nothing is behind it
-#   bare     a model server with no proxy - the agent can administer it too
-#   alive    answering, but neither of those: somebody else's endpoint
-#   dead     nothing listening at all
-#   unknown  no curl here, so the question cannot be asked
+#   bare     a model server with no proxy (the agent can also administer it)
+#   alive    something answers, but it is neither of those (another service)
+#   dead     nothing listens
+#   unknown  there is no curl here, so the code cannot ask
 #
-# Only `dead` and `stalled` mean the session cannot work, and that distinction is
-# the whole point of returning a word rather than a status. A company endpoint
-# that has never heard of /healthz answers 404 and is perfectly usable, so
-# treating "not the proxy" as "broken" would refuse the one case DRAUGR_MODEL_URL
-# takes a full URL for.
+# Only `dead` and `stalled` mean that the session cannot work. That difference
+# is the reason that the function returns a word and not a status. A company
+# endpoint that does not know /healthz answers 404, and it is fully usable. If
+# "not the proxy" means "broken", the code refuses the case for which
+# DRAUGR_MODEL_URL accepts a full URL.
 #
-# /healthz is nginx's own, served with no upstream, so it separates the proxy
-# from the thing behind it - which is why `stalled` can be told from `proxy` at
-# all. From inside the agent those two fail identically.
+# nginx itself serves /healthz, with no upstream. Thus /healthz separates the
+# proxy from the server behind it. That is how the code can tell `stalled`
+# from `proxy`. From inside the agent, the two fail in the same way.
 dr_model_probe() {
     local url=$1 code
     command -v curl >/dev/null 2>&1 || { printf 'unknown'; return 0; }
 
     code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "$url/healthz" 2>/dev/null) || code=000
 
-    # The proxy answered. Ask the second question it cannot answer for itself.
+    # The proxy answered. Ask the second question, which the proxy cannot answer
+    # for itself.
     if [ "$code" = 200 ]; then
         code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "$url/api/version" 2>/dev/null) || code=000
         [ "$code" = 200 ] && { printf 'proxy'; return 0; }
@@ -1357,8 +1401,8 @@ dr_model_probe() {
         return 0
     fi
 
-    # 000 is curl for "no HTTP response at all" - refused, unreachable, timed
-    # out. Any other code means something is there and simply has no /healthz.
+    # For curl, 000 means "no HTTP response": refused, unreachable, or timed
+    # out. Any other code means that something is there, but it has no /healthz.
     [ "$code" = 000 ] && { printf 'dead'; return 0; }
 
     code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "$url/api/version" 2>/dev/null) || code=000
@@ -1366,151 +1410,154 @@ dr_model_probe() {
     printf 'alive'
 }
 
-# dr_model_check - refuse the two combinations that cannot work.
+# dr_model_check: refuse the two combinations that cannot work.
 #
-# Both are refusals rather than warnings, because neither has a working outcome
-# to warn about. An agent whose module cannot point it anywhere would ignore
-# DRAUGR_MODEL and keep talking to its cloud, which is the worst failure this
-# feature has: you would believe the work was staying local while it was not.
+# Both are refusals and not warnings, because neither combination can work. If
+# the module of an agent cannot send it to another endpoint, the agent ignores
+# DRAUGR_MODEL and continues to use its cloud. That is the worst failure of
+# this feature. You think that the work stays local, but it does not.
 #
-# The second is the missing host-port rule. Without it the mound's connection is
-# accepted by the sandbox's interception layer and dropped, so the symptom is a
-# timeout at the agent's first prompt that names nothing and points nowhere.
+# The second combination is a missing host-port rule. Without the rule, the
+# interception layer of the sandbox accepts the connection of the mound and
+# drops it. The result is a timeout at the first prompt of the agent. The
+# timeout names no cause.
 dr_model_check() {
     local p
     [ -n "${DRAUGR_MODEL:-}" ] || return 0
 
     if ! dr_agent_model_supported; then
-        dr_die "DRAUGR_MODEL is set, but Draugr cannot point $DRAUGR_AGENT at another endpoint" \
-            "Which variables an agent reads is per-agent, and this one has not been measured." \
+        dr_die "DRAUGR_MODEL is set, but Draugr cannot send $DRAUGR_AGENT to a different endpoint" \
+            "Each agent reads different variables, and nobody tested this agent." \
             "Unset DRAUGR_MODEL, or run this project with DRAUGR_AGENT=claude."
     fi
 
-    # A URL is somebody else's address, reached under the ordinary network
-    # policy. DRAUGR_HOST_PORTS has nothing to say about it; dr-policy does.
+    # A URL is the address of a different service. The usual network policy
+    # controls it. DRAUGR_HOST_PORTS does not apply to it, but dr-policy does.
     dr_model_is_port "${DRAUGR_MODEL_URL:-}" || return 0
 
     for p in ${DRAUGR_HOST_PORTS:-}; do
         [ "$p" = "$DRAUGR_MODEL_URL" ] && return 0
     done
 
-    # Naming the one line that fixes it, rather than the key in the abstract:
-    # the two keys are not redundant and Draugr will not manufacture the consent
-    # for a hole into your machine out of the fact that you named an address.
+    # Name the one line that fixes it, not only the key. The two keys are not
+    # duplicates. An address alone is not consent to open your machine, and
+    # Draugr does not treat it as consent.
     dr_die "DRAUGR_MODEL_URL is port $DRAUGR_MODEL_URL, which is not in DRAUGR_HOST_PORTS" \
-        "The mound cannot reach it, and the agent would fail at its first prompt." \
+        "The mound cannot connect to it, and the agent will fail at its first prompt." \
         "Add it:  DRAUGR_HOST_PORTS=\"$DRAUGR_MODEL_URL\""
 }
 
-# dr_env_pairs - DRAUGR_ENV as one validated NAME=value a line.
+# dr_env_pairs: DRAUGR_ENV as one correct NAME=value on each line.
 #
-# The escape hatch, for anything Draugr has no key of its own for. It exists
-# because the variable that caps Claude Code's context is undocumented and was
-# added between two point releases: a typed DRAUGR_MODEL_CONTEXT would hardcode
-# a name nobody has published and cannot be routed around when it changes,
-# whereas a passthrough leaves that judgement where it belongs.
+# Use DRAUGR_ENV for each value that has no Draugr key. It exists because the
+# variable that limits the context of Claude Code has no documentation. It
+# came in between two point releases. A DRAUGR_MODEL_CONTEXT key fixes a name
+# that nobody published, and that name can change. A plain passthrough
+# leaves that decision to the user.
 #
-# Validated rather than passed through, because every failure here is silent
-# otherwise. An unrecognised variable is IGNORED by the agent, not refused, so a
-# typo'd name produces a session that looks correct and behaves as though the
-# setting were never written - which is exactly the failure this key exists to
-# avoid, arrived at from the other side.
+# The code makes sure that each value is correct, because each failure here is
+# otherwise silent. The agent IGNORES an unknown variable, and does not refuse
+# it. A name with a typing error gives a session that looks correct, but acts
+# as if the value did not exist. That is the failure that this key exists to
+# prevent.
 dr_env_pairs() {
     local entry name
     local -a entries=()
     [ -n "${DRAUGR_ENV:-}" ] || return 0
 
-    # read -ra splits on whitespace WITHOUT globbing - the same trap documented
-    # at dr_kit_refs. An unquoted expansion would turn a value containing * into
-    # a listing of the current directory.
+    # read -ra splits on white space WITHOUT globbing. dr_kit_refs documents the
+    # same trap. An expansion with no quotes changes a value that contains *
+    # into a list of the current directory.
     read -ra entries <<< "$DRAUGR_ENV"
 
     for entry in "${entries[@]}"; do
-        # Nothing before the first "=" is not a pair, and the most likely way to
-        # write one is to forget that the separator between entries is a space.
+        # A value with no "=" is not a pair. The usual cause is that the user
+        # forgot that a space separates the items.
         case "$entry" in
             *=*) ;;
             *) dr_die "DRAUGR_ENV: \"$entry\" is not NAME=value" \
-                   "Entries are separated by spaces, so a value cannot contain one." \
+                   "Spaces separate the items, so a value cannot contain a space." \
                    'Example:  DRAUGR_ENV="CLAUDE_CODE_DISABLE_1M_CONTEXT=1 FOO=bar"' ;;
         esac
 
         name=${entry%%=*}
 
-        # A name that is not a shell identifier cannot be exported at all: the
-        # rcfile would fail to source, taking the whole session with it rather
-        # than just this variable.
+        # The shell cannot export a name that is not a shell identifier. Then
+        # the rcfile fails to source, and the full session fails, not only
+        # this variable.
         case "$name" in
             ''|[0-9]*|*[!A-Za-z0-9_]*)
                 dr_die "DRAUGR_ENV: \"$name\" is not a variable name" \
-                    "Letters, digits and underscore, and not starting with a digit." \
-                    "The entry was:  $entry" ;;
+                    "Use letters, digits, and underscores. Do not start with a digit." \
+                    "The item was:  $entry" ;;
         esac
 
-        # PATH is the one that looks harmless and is not: it REPLACES rather than
-        # extends, so an absolute one drops the directory holding the agent
-        # binary and the next dr-go ends in "command not found" before the agent
-        # starts. The kit spec carries the same warning about the same hazard.
+        # PATH looks safe, but it is not. It REPLACES the value and does not add
+        # to it. An absolute PATH removes the directory of the agent binary. The
+        # next dr-go then ends with "command not found" before the agent starts.
+        # The kit spec has the same warning about the same risk.
         case "$name" in
             PATH|HOME)
                 dr_die "DRAUGR_ENV must not set $name" \
-                    "Draugr and the agent both depend on it inside the mound, and a" \
-                    "replacement here breaks the session before it starts." ;;
+                    "Draugr and the agent both need it in the mound. If you replace" \
+                    "it here, the session breaks before it starts." ;;
         esac
 
         printf '%s\n' "$entry"
     done
 }
 
-# dr_attach_rc <command...> - the bash rcfile that starts the agent.
+# dr_attach_rc <command...>: the bash rcfile that starts the agent.
 #
-# The obvious spelling - putting the agent's command straight in the rcfile -
-# HANGS. Bash has not enabled job control by the time it runs its startup files,
-# so the first Ctrl-Z suspends a process that nothing is then able to resume.
-# Starting it from PROMPT_COMMAND instead defers it to the first prompt, by
-# which point the shell owns the terminal and the agent is an ordinary job.
+# The simple method HANGS: the agent command directly in the rcfile. When bash
+# runs its startup files, job control is not yet on. Thus the first Ctrl-Z
+# suspends a process that nothing can then resume. PROMPT_COMMAND starts the
+# agent at the first prompt. At that time, the shell owns the terminal, and the
+# agent is a usual job.
 #
-# 148 is 128 + SIGTSTP: what $? holds after a foreground job is STOPPED rather
-# than finished. It is what keeps the two endings apart -
+# 148 is 128 + SIGTSTP. $? holds it after a foreground job STOPPED and did not
+# finish. It keeps the two endings separate:
 #
-#   Ctrl-Z       -> 148 -> stay, and you have the mound's shell
-#   agent exits  -> its own status -> leave, exactly as `sbx run` did
+#   Ctrl-Z       -> 148 -> stay, and you have the shell of the mound
+#   agent exits  -> its own status -> leave, the same as `sbx run`
 #
-# and it is not optional. A suspended job does not abandon the rest of its
-# command list, so a bare `agent; exit` ends the session on Ctrl-Z as well.
-# Measured, after writing it that way first.
+# It is necessary. A suspended job does not skip the rest of its command list.
+# Thus a plain `agent; exit` also ends the session on Ctrl-Z. A test showed
+# this, after the code was first written that way.
 dr_attach_rc() {
     local cmd url k v model_keys='' envpairs
     cmd=$(dr_shquote "$@")
 
-    # Collected before the loop rather than piped into one: dr_env_pairs dies on
-    # a malformed entry, and a process substitution would take that exit with it
-    # - leaving an rcfile that quietly lacked the variables and a session that
-    # looked fine. The message has already reached stderr by the time we return.
+    # Collect the pairs before the loop, and do not pipe them into it.
+    # dr_env_pairs stops on a bad item. A process substitution loses that exit.
+    # The result is an rcfile without the variables, and a session that looks
+    # correct. When the function returns, the message is already on stderr.
     envpairs=$(dr_env_pairs) || return 1
 
-    # Single quotes throughout: none of this is for us to expand. It is a file to
-    # be read by a bash that has not started yet, in another machine.
+    # Single quotes everywhere: this code must not expand these lines. They are
+    # a file for a bash that has not started yet, on a different machine.
     # shellcheck disable=SC2016
     printf '%s\n' \
-        '# Written by Draugr at attach time. Overwritten on the next dr-go.' \
+        '# Draugr wrote this file at attach time. The next dr-go overwrites it.' \
         '[ -f ~/.bashrc ] && . ~/.bashrc'
 
-    # The agent's own model, when DRAUGR_MODEL asks for one. This is the only
-    # place it can go: sbx's ssh proxy honours no AcceptEnv, so nothing crosses
-    # that way, and a kit is committed while the address is known only now.
+    # The own model of the agent, when DRAUGR_MODEL asks for one. This is the
+    # only possible place. The ssh proxy of sbx accepts no AcceptEnv, so no
+    # variable gets through it. A kit is committed, but the address is known
+    # only now.
     if [ -n "${DRAUGR_MODEL:-}" ]; then
-        # Dying rather than carrying on is the point. An unresolved address would
-        # leave the variables unset and the agent talking to its cloud while you
-        # believed otherwise, which is the one failure this feature must not have.
+        # The code must stop here, and not continue. Without an address, the
+        # variables stay unset, and the agent uses its cloud while you think
+        # that it does not. This feature must not have that failure.
         url=$(dr_model_url) || dr_die \
-            "DRAUGR_MODEL is set, but this machine's address could not be resolved" \
-            "The mound needs it to reach port ${DRAUGR_MODEL_URL:-}." \
-            "Check the network with:  dr-doctor"
+            "DRAUGR_MODEL is set, but Draugr could not find the address of this machine" \
+            "The mound needs the address to connect to port ${DRAUGR_MODEL_URL:-}." \
+            "Examine the network with:  dr-doctor"
 
-        # Quoted with %q here and read back by a bash over there - the same pair
-        # that agrees about the command line above. IFS splits on the first = only,
-        # because v is the last field and takes everything left, = included.
+        # Bash quotes the values with %q here, and bash reads them on the other
+        # side. The same pair agrees about the command line above. IFS splits
+        # only on the first =, because v is the last field. It takes all the
+        # text that is left, = too.
         while IFS='=' read -r k v; do
             [ -n "$k" ] || continue
             model_keys+=" $k"
@@ -1518,14 +1565,14 @@ dr_attach_rc() {
         done < <(dr_agent_model_env "$url" "$DRAUGR_MODEL" "${DRAUGR_MODEL_FAST:-$DRAUGR_MODEL}")
     fi
 
-    # DRAUGR_ENV last, so an explicit setting beats one Draugr derived: an escape
-    # hatch the tool can silently overrule is not an escape hatch. The collision
-    # is still said out loud, because two settings and a quiet winner is how an
-    # afternoon goes missing.
+    # DRAUGR_ENV comes last. Thus a value that the user set wins over a value
+    # that Draugr made. If the tool can replace a user value with no message,
+    # the user value is useless. The code still reports the conflict. Two
+    # values and a silent winner can cost an afternoon.
     while IFS='=' read -r k v; do
         [ -n "$k" ] || continue
         case " $model_keys " in
-            *" $k "*) dr_warn "DRAUGR_ENV sets $k, overriding what DRAUGR_MODEL derived" ;;
+            *" $k "*) dr_warn "DRAUGR_ENV sets $k, and that replaces the value from DRAUGR_MODEL" ;;
         esac
         printf 'export %s=%s\n' "$k" "$(dr_shquote "$v")"
     done <<< "$envpairs"
@@ -1536,19 +1583,18 @@ dr_attach_rc() {
         "PROMPT_COMMAND='PROMPT_COMMAND=\$_dr_pc; $cmd; _dr_s=\$?; [ \$_dr_s -eq 148 ] || exit \$_dr_s'"
 }
 
-# dr_attach_remote <dir> [command...] - the single string handed to ssh.
+# dr_attach_remote <dir> [command...]: the one string that ssh gets.
 #
-# With no command it is a plain interactive shell, which is dr-shell's job. With
-# one it is the agent, started as described above.
+# With no command, it is a plain interactive shell, for dr-shell. With a
+# command, it is the agent, which starts as described above.
 #
-# The rcfile travels base64-encoded rather than as a heredoc. It passes through
-# ssh, which hands it to a remote shell, and every layer in between would
-# otherwise want its own round of quoting; base64 has no metacharacters to
-# argue about.
+# The rcfile goes in base64, not as a heredoc. It goes through ssh, which gives
+# it to a remote shell. Each layer between them needs its own quotes. base64 has
+# no special characters, so it needs no quotes.
 dr_attach_remote() {
     local dir=$1; shift
-    # $HOME is the MOUND's home, expanded over there by the shell ssh hands this
-    # to - which is why it stays in single quotes here.
+    # $HOME is the home of the MOUND. The shell on the other side of ssh expands
+    # it. Thus it stays in single quotes here.
     # shellcheck disable=SC2016
     local rc='$HOME/.cache/draugr/attach-rc' b64
 
@@ -1558,23 +1604,23 @@ dr_attach_remote() {
     fi
 
     b64=$(dr_attach_rc "$@" | base64 | tr -d '\n')
-    # Same again: every $ in this format string belongs to the far side.
+    # The same again: each $ in this format string is for the other side.
     # shellcheck disable=SC2016
     printf 'mkdir -p $HOME/.cache/draugr && printf %%s %s | base64 -d > %s && cd %s && exec bash --rcfile %s -i' \
         "$b64" "$rc" "$(printf '%q' "$dir")" "$rc"
 }
 
-# dr_ssh_attach <dir> [command...] - hand the terminal over and wait.
+# dr_ssh_attach <dir> [command...]: give the terminal to ssh, and wait.
 #
-# Returns whatever the far side returned, which the rcfile arranges to be the
-# agent's own status.
+# It returns the status of the other side. The rcfile makes that the status of
+# the agent.
 dr_ssh_attach() {
     local dir=$1 remote; shift
     remote=$(dr_attach_remote "$dir" "$@")
     dr_debug "ssh -t $(dr_ssh_host) $remote"
-    # -t because a remote command is given, and without it ssh allocates no pty
-    # at all - the agent would have no terminal to draw on. Callers have already
-    # been through dr_require_tty, so there is one to hand over.
+    # Use -t, because there is a remote command. Without -t, ssh gives no pty,
+    # and the agent has no terminal to draw on. The callers already went
+    # through dr_require_tty, so there is a terminal to give.
     ssh -t "$(dr_ssh_host)" "$remote"
 }
 
@@ -1582,31 +1628,31 @@ dr_ssh_attach() {
 # Sandbox identity and state
 # ---------------------------------------------------------------------------
 
-# dr_sandbox_name [repo-root] - draugr-<leaf>, restricted to sbx's charset.
+# dr_sandbox_name [repo-root]: draugr-<leaf>, with only the characters of sbx.
 #
-# sbx only accepts letters, numbers, hyphens, periods and plus signs in a name,
-# so "my project (old)" has to become "my-project-old".
+# In a name, sbx accepts only letters, numbers, hyphens, periods, and plus
+# signs. Thus "my project (old)" must become "my-project-old".
 dr_sandbox_name() {
     local repo=${1:-$PWD} leaf
 
-    # ${repo##*/} deletes the longest prefix ending in "/" - i.e. basename.
+    # ${repo##*/} removes the longest prefix that ends in "/". That is basename.
     leaf=${repo##*/}
 
-    # tr -c means "complement": replace every character NOT in the allowed set
-    # with a hyphen. The sed then tidies up after it - collapse runs of hyphens
-    # into one, and trim a leading or trailing hyphen. (\{2,\} is BRE for "two
-    # or more", the portable spelling of {2,}.)
+    # tr -c means "complement". It replaces each character that is NOT in the
+    # set with a hyphen. Then sed changes each run of hyphens into one hyphen,
+    # and removes a hyphen at the start or the end. (\{2,\} is BRE for "two or
+    # more". It is the portable form of {2,}.)
     leaf=$(printf '%s' "$leaf" | tr -c 'A-Za-z0-9.+-' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')
 
     printf 'draugr-%s' "$leaf"
 }
 
-# dr_sbx_json <text> - the JSON out of sbx's stdout, without its chatter.
+# dr_sbx_json <text>: the JSON from the stdout of sbx, without the other text.
 #
-# `sbx ls --json` is not only JSON: when a newer sbx exists it draws an upgrade
-# banner on stdout, around the document. Everything before the first "{" is that
-# banner, and jq fails on anything after the document - so callers judge by the
-# output they got, never by jq's exit status.
+# The output of `sbx ls --json` is not only JSON. When a newer sbx exists, sbx
+# writes an upgrade banner on stdout, around the document. All text before the
+# first "{" is that banner. jq fails on text after the document. Thus the
+# callers use the output that they got, and never the exit status of jq.
 dr_sbx_json() {
     local text=$1
     case $text in
@@ -1618,117 +1664,121 @@ dr_sbx_json() {
 # dr_sandbox_state <name> -> absent|stopped|running (whatever sbx reports)
 dr_sandbox_state() {
     local name=$1 json status _err _errf
-    # AN UNREACHABLE sandboxd MUST NOT BE SILENT, and this used to be exactly that:
+    # IF sandboxd CANNOT BE REACHED, THE CODE MUST SAY SO. Before, it said nothing:
     #
     #   json=$(dr_sbx ls --json 2>/dev/null) || { printf 'unknown'; return 1; }
     #
-    # Every caller writes `state=$(dr_sandbox_state ...)`, and under `set -euo pipefail` a
-    # command substitution that exits non-zero ABORTS THE WHOLE SCRIPT WITHOUT PRINTING
-    # ANYTHING. MEASURED: `dr-up --recreate` returned instantly, printed not one
-    # character, changed nothing, and sent its user looking for a mistake in a config that
-    # was correct. The `2>/dev/null` then discarded the one thing that explained it - sbx's
-    # own "previous sandboxd (PID 3700) did not exit within 10s".
+    # Each caller writes `state=$(dr_sandbox_state ...)`. With `set -euo pipefail`, a
+    # command substitution that exits non-zero STOPS THE FULL SCRIPT, AND PRINTS NOTHING.
+    # A real failure showed this. `dr-up --recreate` returned at once, printed no
+    # character, and changed nothing. Its user then looked for an error in a correct
+    # configuration. The `2>/dev/null` discarded the one message that explained it, from
+    # sbx itself: "previous sandboxd (PID 3700) did not exit within 10s".
     #
-    # Nothing relied on the `return 1`: all four call sites (dr-up, dr-status, dr-stop,
-    # dr-dep) assign it bare, so every one of them died the same silent death. Dying here,
-    # out loud, is what they all wanted. "absent" still returns normally - that is an answer,
-    # not a failure.
+    # No caller needed the `return 1`. All four callers (dr-up, dr-status, dr-stop,
+    # dr-dep) assign the result with no test. Thus each of them stopped in the same
+    # silent way. A stop here, with a message, is what they all need. "absent" still
+    # returns normally. It is an answer, not a failure.
     #
-    # stderr goes to a file rather than being folded into stdout with 2>&1: the comment below
-    # explains that sbx already mixes a banner into stdout, and adding its error text to the
-    # same stream is how a parser that nearly works starts failing on the interesting days.
+    # stderr goes to a file. It does not go into stdout with 2>&1. The comment below
+    # tells that sbx already writes a banner into stdout. If its error text goes into the
+    # same stream, a parser that almost works starts to fail at the worst times.
     #
-    # MEASURED, on the failure that prompted all this: sandboxd was running
-    # ELEVATED and perfectly healthy - its log answered /daemon/health 200 throughout - while
-    # an unelevated client could not open its pipe, reported "Status: stopped", and then said
-    # "previous sandboxd (PID 3700) did not exit within 10s" about a process it was not
-    # allowed to see. Elevation is the first thing to suspect here, not a wedged daemon:
-    # acting on the latter would stop a working one for nothing.
+    # The real failure that caused this code: sandboxd ran ELEVATED and had no fault. Its
+    # log answered /daemon/health with 200 all the time. But a client that was not
+    # elevated was not able to open its pipe. It reported "Status: stopped". Then it said
+    # "previous sandboxd (PID 3700) did not exit within 10s" about a process that it was
+    # not able to see. Suspect elevation first, not a daemon that hangs. If you act as if the
+    # daemon hangs, you stop a daemon that works.
     #
-    # The daemon was elevated because forge-provision.ps1 runs elevated for AppSandbox and
-    # reached dr-up through wsl.exe, which passes that token on; post-up's keeper session
-    # then held the daemon open for nine hours, so the elevation it was born with outlived
-    # every shell involved. The advice below says MATCH it rather than escalate, because
-    # telling people to run everything elevated cures the symptom by making it permanent.
+    # The daemon was elevated for this reason. forge-provision.ps1 runs elevated for
+    # AppSandbox, and it ran dr-up through wsl.exe, which passes that token on. The keeper
+    # session of post-up then kept the daemon open for nine hours. Thus the elevation of
+    # the daemon lasted longer than each shell. The advice below says MATCH the level, and
+    # do not escalate. If all users run all commands elevated, the problem becomes permanent.
     _errf=$(mktemp)
     json=$(dr_sbx ls --json 2>"$_errf") || {
         _err=$(cat "$_errf" 2>/dev/null); rm -f "$_errf"
-        dr_die "cannot ask sandboxd what state '$name' is in" \
-               "${_err:-sbx ls failed without saying why}" \
-               "Most often this is ELEVATION, not a broken daemon. sandboxd belongs to" \
-               "whichever shell started it, a client below that level cannot open its pipe," \
-               "and sbx then reads 'no daemon', starts its own, finds the lock held, and" \
-               "reports that the process it cannot even see \"did not exit\"." \
-               "Confirm it with 'sbx daemon status' in an elevated shell and an ordinary" \
-               "one: running+connected in the first and stopped in the second IS this, and" \
-               "the daemon is healthy. Stopped in BOTH means it really is down." \
-               "The fix is to MATCH it, not to escalate: integrity runs one way, so an" \
-               "elevated shell can use an ordinary daemon but never the other way round." \
-               "  keep going now ....  run dr-* from WSL started in an ELEVATED PowerShell" \
-               "  get back to normal .. dr-stop, wait ~30s for sandboxd to idle out after" \
-               "                        its last session, then dr-up from an ORDINARY WSL" \
-               "An elevated daemon here usually came from forge-provision.ps1, which runs" \
-               "elevated for AppSandbox and used to start one itself. It now refuses to."
+        dr_die "cannot ask sandboxd for the state of '$name'" \
+               "${_err:-sbx ls failed and gave no reason}" \
+               "The usual cause is ELEVATION, not a broken daemon. sandboxd belongs to the" \
+               "shell that started it. A client at a lower level cannot open its pipe." \
+               "sbx then reads 'no daemon', starts its own daemon, finds the lock held, and" \
+               "reports that the process that it cannot see \"did not exit\"." \
+               "To make sure, run 'sbx daemon status' in an elevated shell and in a usual" \
+               "shell. If the first says running+connected and the second says stopped, this" \
+               "is the cause, and the daemon has no fault. If BOTH say stopped, it is down." \
+               "The fix is to MATCH the level, not to escalate. Integrity goes one way: an" \
+               "elevated shell can use a usual daemon, but a usual shell cannot use an" \
+               "elevated daemon." \
+               "  to continue now ....  run dr-* from WSL started in an ELEVATED PowerShell" \
+               "  to go back to normal  dr-stop, wait about 30s until sandboxd stops after" \
+               "                        its last session, then dr-up from a USUAL WSL" \
+               "An elevated daemon here usually came from forge-provision.ps1. It runs" \
+               "elevated for AppSandbox, and before, it started a daemon. Now it refuses to."
     }
     rm -f "$_errf"
     json=$(dr_sbx_json "$json")
 
-    # The jq program, read left to right:
-    #   (.sandboxes // [])   the sandboxes array, or an empty one if absent
-    #   []                   iterate over its elements
-    #   select(.name == $n)  keep only the one we asked about
+    # The jq program, from left to right:
+    #   (.sandboxes // [])   the sandboxes array, or an empty array if it is missing
+    #   []                   go through its elements
+    #   select(.name == $n)  keep only the sandbox with this name
     #   .status              print that field
-    # --arg n "$name" passes the name in as a jq variable rather than splicing
-    # it into the program text, so a name with quotes in it cannot break jq.
+    # --arg n "$name" gives the name to jq as a variable. The name does not go into
+    # the program text, so a name with quotes cannot break jq.
     #
-    # Judged by what came out, not by the pipeline's exit status. sbx prints an
-    # upgrade banner on stdout beside the JSON, and jq then prints the status and
-    # *then* fails on the trailing text - which under `set -o pipefail` used to
-    # append "absent" to a perfectly good answer and make dr-up refuse a stopped
-    # mound (measured). No sandbox matched means empty, means absent.
+    # The code uses the output, not the exit status of the pipeline. sbx prints an
+    # upgrade banner on stdout next to the JSON. jq then prints the status and
+    # *then* fails on the text after it. With `set -o pipefail`, that added
+    # "absent" to a correct answer, and dr-up then refused a stopped mound. A
+    # test showed this. If no sandbox matches, the result is empty, which means
+    # absent.
     status=$(printf '%s' "$json" | jq -r --arg n "$name" \
         '(.sandboxes // [])[] | select(.name == $n) | .status' 2>/dev/null | head -1)
     [ -n "$status" ] || status=absent
     printf '%s' "$status"
 }
 
-# dr_forge_available - load lib/forge on demand, or say why it is not there.
+# dr_forge_available: load lib/forge when it is necessary, or tell why it is missing.
 #
-# A SOFT DEPENDENCY, deliberately. lib/forge/ must stay deletable: the forge is one person's
-# feature, and docs/FORGE.md promises that removing those files leaves the rest of Draugr
-# exactly as it was. So core never sources it at startup - it reaches for it only once
-# DRAUGR_FORGE names a VM, which on every machine that has not opted in is never.
+# This is an OPTIONAL DEPENDENCY, on purpose. A user must be able to delete lib/forge/.
+# The forge is a feature for one person. docs/FORGE.md says that without those files,
+# the rest of Draugr stays exactly the same. Thus the core never sources it at start.
+# It loads it only after DRAUGR_FORGE names a VM. On a machine without the forge, that
+# never occurs.
 dr_forge_available() {
     if declare -f dr_forge_far_end_running >/dev/null 2>&1; then return 0; fi
     local lib="$DRAUGR_ROOT/lib/forge/common.sh"
     if [ ! -r "$lib" ]; then
-        dr_warn "DRAUGR_FORGE names '$DRAUGR_FORGE', but $lib is missing - treating it as absent."
+        dr_warn "DRAUGR_FORGE names '$DRAUGR_FORGE', but $lib is missing. Draugr treats the forge as absent."
         return 1
     fi
-    # source-path, because `source=` alone is resolved against the CWD and shellcheck then
-    # reports a file that plainly exists as missing - the same trap bin/dr-forge documents.
+    # Use source-path. With only `source=`, the linter starts from the CWD. It then reports
+    # a file that exists as missing. bin/dr-forge documents the same trap.
     # shellcheck source-path=SCRIPTDIR
     # shellcheck source=forge/common.sh
     . "$lib"
 }
 
-# dr_sandbox_exists <name> - is the far end this name refers to actually there?
+# dr_sandbox_exists <name>: does the far end with this name exist?
 #
-# THE FORGE IS A FAR END TOO, and this is where that becomes true for the twelve commands that
-# gate on this function. The forge's code and data live in the VM rather than in a mound - the
-# gateway mound is there to control what the VM may reach and holds no clone - so the git loop
-# and the file loop have to be able to address it, and every one of them refused here first.
+# THE FORGE IS ALSO A FAR END. A far end is the other side of the git and file loops. This
+# function makes that true for the twelve commands that use it as a gate. The code and the
+# data of the forge are in the VM, not in a mound. The gateway mound controls what the VM can
+# connect to, and it holds no clone. Thus the git loop and the file loop must be able to use
+# the VM. Before, each of them refused here.
 #
-# NOTHING CHANGES FOR A MACHINE WITHOUT A FORGE, which is the condition this was built under.
-# The forge branch needs BOTH a configured forge AND a name that matches it, so with
-# DRAUGR_FORGE empty - the default, and everyone who has not opted in - this is the same single
-# dr_sandbox_state call it always was: no AppSandbox, no powershell.exe, no extra process, and
-# no lib/forge sourced. tests/forge.bats asserts that, by failing if powershell.exe is invoked
-# at all on that path.
+# NOTHING CHANGES FOR A MACHINE WITHOUT A FORGE. That was the condition for this code. The
+# forge branch needs BOTH a configured forge AND a name that matches it. If DRAUGR_FORGE is
+# empty (the default, for each user who did not turn it on), this is the same single
+# dr_sandbox_state call as before. There is no AppSandbox, no powershell.exe, no extra
+# process, and no sourced lib/forge. tests/forge.bats makes sure of that. It fails if that
+# path runs powershell.exe.
 #
-# dr_sandbox_state is deliberately NOT given the same treatment. dr-up, dr-stop and dr-dep read
-# it to decide whether to create or start a MOUND, and answering those with a VM's state would
-# have them act on the wrong thing - a far worse failure than the refusal this removes.
+# dr_sandbox_state does NOT get the same change, on purpose. dr-up, dr-stop, and dr-dep read
+# it to decide if they create or start a MOUND. If it gives the state of a VM, they act on
+# the wrong item. That failure is much worse than the refusal that this code removes.
 dr_sandbox_exists() {
     local name=$1
     if [ -n "${DRAUGR_FORGE:-}" ] && [ "$name" = "$DRAUGR_FORGE" ]; then
@@ -1739,13 +1789,14 @@ dr_sandbox_exists() {
     [ "$(dr_sandbox_state "$name")" != "absent" ]
 }
 
-# dr_sandboxes_running - the name of every running sandbox, one per line.
+# dr_sandboxes_running: the name of each running sandbox, one on each line.
 #
-# Every sandbox, not only the ones Draugr named. A mound holds a Hyper-V microVM
-# open whoever created it, and the reason to want this list - reclaiming memory,
-# or tidying up before shutting the machine down - does not care which tool made
-# them. dr-stop --all lists what it found and asks before acting, rather than
-# quietly reaching past its own sandboxes.
+# This includes all sandboxes, not only the ones that Draugr named. Each mound
+# keeps a Hyper-V microVM open, whoever created it. The reasons for this list
+# are to get memory back, or to clean up before you shut down the machine. For
+# those reasons, the tool that made the sandbox does not matter. dr-stop --all
+# lists what it found and asks before it acts. It does not touch other
+# sandboxes with no message.
 dr_sandboxes_running() {
     local json
     json=$(dr_sbx ls --json 2>/dev/null) || return 1
@@ -1755,50 +1806,51 @@ dr_sandboxes_running() {
 }
 
 # ---------------------------------------------------------------------------
-# DRAUGR_DATA - files that travel beside git rather than through it
+# DRAUGR_DATA: files that go next to git, not through it
 #
-# One list, two consumers with different syntaxes: rsync filter rules (dr-data)
-# and shell glob matching (the clean-tree exemption in dr-go). They must agree,
-# or a file would be transferred but still block dr-go, so both interpretations
-# of an entry are defined here, together, in one place.
+# One list has two consumers with different syntaxes. They are rsync filter
+# rules (dr-data) and shell glob matches (the clean-tree exception in dr-go).
+# They must agree. If not, a file is copied but still blocks dr-go. Thus this
+# one place defines both meanings of an item.
 #
-#   ending in "/"     a directory: that prefix and everything under it
-#   containing "/"    a path pattern, anchored at the repo root
-#   neither           a bare name or extension, matched ANYWHERE in the tree
+#   ends in "/"       a directory: that prefix and all files under it
+#   contains "/"      a path pattern, anchored at the root of the repo
+#   neither           a name or an extension, matched ANYWHERE in the tree
 # ---------------------------------------------------------------------------
 
-# _dr_data_entries - split DRAUGR_DATA into an array WITHOUT globbing it.
+# _dr_data_entries: split DRAUGR_DATA into an array WITHOUT globbing.
 #
-# `for entry in $DRAUGR_DATA` looks like the obvious way to do this and is wrong.
-# Unquoted expansion performs word splitting *and pathname expansion*, so
-# "tmp/**" is silently replaced by whatever tmp/ happens to contain in the
-# current directory - turning a pattern into a snapshot of today's filenames,
-# dependent on the working directory, and missing anything created later.
+# `for entry in $DRAUGR_DATA` looks correct, but it is wrong. An expansion
+# with no quotes does word splitting *and pathname expansion*. Thus the shell
+# replaces "tmp/**" with the files in tmp/ of the current directory, with no
+# message. The pattern becomes a list of the file names of today. It depends
+# on the working directory, and it misses files that are created later.
 #
-# `read -ra` splits on IFS and does not glob, which is what we actually want.
+# `read -ra` splits on IFS and does no globbing. That is the correct result.
 _dr_data_entries() {
     read -ra _DR_DATA_ENTRIES <<< "${DRAUGR_DATA:-}"
 }
 
-# dr_data_matches <repo-relative-path> - is this path covered by DRAUGR_DATA?
+# dr_data_matches <repo-relative-path>: does DRAUGR_DATA include this path?
 #
-# Everything below turns on one rule: a `case` pattern is a GLOB, and QUOTING is
-# what decides which parts of it are wildcards. Quoted text is literal; unquoted
-# text is a pattern; and a single pattern can mix the two. So
+# All the code below depends on one rule. A `case` pattern is a GLOB, and the
+# QUOTES decide which parts of it are wildcards. Text in quotes is literal.
+# Text without quotes is a pattern. One pattern can contain both. Thus these
+# are two very different tests:
 #
-#     case "$path" in "$entry")  …   # matches a file literally named *.parquet
-#     case "$path" in  $entry )  …   # matches every .parquet file
+#     case "$path" in "$entry")  …   # matches a file with the name *.parquet
+#     case "$path" in  $entry )  …   # matches each .parquet file
 #
-# are completely different tests. Both forms are used deliberately below.
+# The code below uses both forms on purpose.
 dr_data_matches() {
     local path=$1 entry
     [ -n "${DRAUGR_DATA:-}" ] || return 1
 
-    # The same plumbing dr_data_filters excludes, excluded here too - these two
-    # have to give the same answer. A path that matched here but did not transfer
-    # would be exempted from the clean-tree check and then never sent, which is
-    # exactly the "one says yes, the other says no" bug the pairing exists to
-    # prevent.
+    # Exclude the same internal paths that dr_data_filters excludes. The two
+    # functions must give the same answer. If a path matches here but is not
+    # copied, the clean-tree test skips it, and nobody sends it. The
+    # two functions are a pair to prevent that bug, where one says yes and the
+    # other says no.
     case "$path" in
         .git|.git/*|.draugr|.draugr/*) return 1 ;;
     esac
@@ -1808,43 +1860,43 @@ dr_data_matches() {
     for entry in "${_DR_DATA_ENTRIES[@]}"; do
         case "$entry" in
             */)
-                # A directory, e.g. "scratch/raw/". The pattern is built from
-                # three pieces:
+                # A directory, for example "scratch/raw/". The pattern has
+                # three parts:
                 #
-                #   "${entry%/}"   QUOTED, so literal. "%" trims from the back,
-                #                  removing the trailing slash: -> scratch/raw
+                #   "${entry%/}"   IN QUOTES, so literal. "%" removes from the
+                #                  end. It removes the last slash: -> scratch/raw
                 #   /              a literal slash
-                #   *              UNQUOTED, so a wildcard: anything at all
+                #   *              WITHOUT QUOTES, so a wildcard: any text
                 #
-                # The mandatory slash is what makes this precise: scratch/raw/r1
-                # matches, scratch/rawdata/r1 does not. Keeping the entry quoted
-                # also means a directory name containing [ or * is treated as
-                # the characters the user typed.
+                # The slash makes the match exact. scratch/raw/r1 matches, but
+                # scratch/rawdata/r1 does not. The quotes also keep a [ or a *
+                # in a directory name as the characters that the user typed.
                 case "$path" in
                     "${entry%/}"/*) return 0 ;;
                 esac
                 ;;
             */*)
-                # A path pattern, e.g. "tmp/**". Unquoted, so it globs.
+                # A path pattern, for example "tmp/**". It has no quotes, so
+                # it globs.
                 #
-                # Worth knowing: in `case` - unlike filename globbing - "*"
-                # matches slashes too, because no filesystem is involved. So
-                # tmp/* would already match tmp/deep/y.bin, and here "**" is
-                # exactly equivalent to "*". The "**" spelling is carried
-                # through for rsync's benefit (dr_data_filters), where the two
-                # genuinely differ.
-                # shellcheck disable=SC2254  # unquoted on purpose: it IS a pattern
+                # Note: in `case`, "*" also matches slashes, because no file
+                # system is used. Filename globbing is different. Thus tmp/*
+                # already matches tmp/deep/y.bin, and here "**" is the same as
+                # "*". The "**" form stays for rsync (dr_data_filters). In
+                # rsync, the two are different.
+                # shellcheck disable=SC2254  # no quotes on purpose: it IS a pattern
                 case "$path" in
                     $entry) return 0 ;;
                 esac
                 ;;
             *)
-                # A bare name or extension, e.g. "*.parquet".
+                # A name or an extension, for example "*.parquet".
                 #
-                # ${path##*/} is basename: "##" deletes the LONGEST prefix
-                # matching */, so src/lib/b.parquet -> b.parquet. Matching the
-                # basename is what lets one extension rule cover every depth.
-                # shellcheck disable=SC2254  # unquoted on purpose: it IS a pattern
+                # ${path##*/} is basename. "##" removes the LONGEST prefix
+                # that matches */. Thus src/lib/b.parquet -> b.parquet. The
+                # match on the basename lets one extension rule apply at each
+                # depth.
+                # shellcheck disable=SC2254  # no quotes on purpose: it IS a pattern
                 case "${path##*/}" in
                     $entry) return 0 ;;
                 esac
@@ -1854,58 +1906,61 @@ dr_data_matches() {
     return 1
 }
 
-# dr_data_filters - the same list as rsync filter rules, one per line.
+# dr_data_filters: the same list as rsync filter rules, one on each line.
 #
-# The order is the classic recipe and matters, because rsync takes the FIRST
-# rule that matches: descend into every directory, then include what we want,
-# then exclude everything else. dr-data pairs this with -m (--prune-empty-dirs)
-# so the "*/" include does not leave a skeleton of empty directories behind.
+# The order is the usual method, and it is important, because rsync uses the
+# FIRST rule that matches. First go into each directory, then include the
+# wanted files, then exclude all other files. dr-data adds -m
+# (--prune-empty-dirs), so that the "*/" include leaves no empty directories.
 dr_data_filters() {
     local entry
 
-    # Plumbing first, because rsync takes the FIRST rule that matches and these
-    # must win over anything DRAUGR_DATA says.
+    # The internal paths come first. rsync uses the FIRST rule that matches,
+    # and these rules must win over each DRAUGR_DATA item.
     #
-    # .git is the one that bites. A slashless entry is unanchored and matches at
-    # every depth, so DRAUGR_DATA="*.sample" quietly picks up .git/hooks/*.sample,
-    # and DRAUGR_DATA="*" pushes the host's entire .git over the mound clone's -
-    # replacing the agent's git metadata, remote and all. Neither is a pattern
-    # anyone would expect to reach into a repository's internals.
+    # .git causes the problem. An item with no slash is not anchored, and it
+    # matches at each depth. Thus DRAUGR_DATA="*.sample" also takes
+    # .git/hooks/*.sample, with no message. DRAUGR_DATA="*" copies the full
+    # .git of the host over the .git of the mound clone. That replaces the git
+    # metadata of the agent, with its remote. Nobody expects such a pattern to
+    # go into the internal files of a repository.
     #
-    # .draugr is ours: the kit belongs to git, and .draugr/tmp holds the staging
-    # copies dr-mem makes, which would otherwise be swept into the agent's tree.
-    # Written without a trailing slash so a `.git` *file* - what a submodule or a
-    # worktree leaves behind - is excluded too, not just a directory.
+    # .draugr belongs to Draugr. The kit belongs to git, and .draugr/tmp holds
+    # the staging copies of dr-mem. Without this rule, those copies go into the
+    # tree of the agent. The rule has no slash at the end. Thus it also
+    # excludes a `.git` *file*, which a submodule or a worktree leaves, not
+    # only a directory.
     printf '%s\n' '--exclude=.git' '--exclude=.draugr'
     printf '%s\n' '--include=*/'
 
-    # Split without globbing - see _dr_data_entries. Getting this wrong here
-    # would hand rsync a list of literal filenames instead of the patterns.
+    # Split without globbing (see _dr_data_entries). If globbing occurs here,
+    # rsync gets a list of file names, not the patterns.
     local _DR_DATA_ENTRIES=()
     _dr_data_entries
     for entry in "${_DR_DATA_ENTRIES[@]}"; do
         case "$entry" in
             # A directory needs both rules: the directory itself, and its contents.
             */)  printf -- '--include=/%s\n--include=/%s**\n' "$entry" "$entry" ;;
-            # A leading "/" anchors the pattern at the transfer root, i.e. the repo.
+            # A leading "/" anchors the pattern at the transfer root, that is, the repo.
             */*) printf -- '--include=/%s\n' "$entry" ;;
-            # No slash: unanchored, so it matches at any depth.
+            # No slash: not anchored, so it matches at each depth.
             *)   printf -- '--include=%s\n' "$entry" ;;
         esac
     done
     printf '%s\n' '--exclude=*'
 }
 
-# dr_data_path_safe <path> - a name we are willing to write under the repo?
+# dr_data_path_safe <path>: can Draugr write this name under the repo?
 #
-# rsync sanitises paths itself: modern versions strip a leading "/" and refuse a
-# "..". But "the copy tool handles it" is a dependency, not a guarantee, and the
-# sending side here is by definition the agent. The names are cheap to check and
-# we are the ones writing the files, so we check them.
+# rsync cleans paths itself. New versions remove a leading "/" and refuse a
+# "..". But that is a dependency on the copy tool, not a guarantee. Here, the
+# side that sends is always the agent. The test of a name costs little, and
+# Draugr writes the files. Thus Draugr tests the names.
 #
-# Rejected: absolute paths, any ".." component, and control characters - the last
-# because a newline in a filename also breaks the line-per-file parsing that every
-# caller of this relies on, which would be a silently truncated review.
+# The function refuses absolute paths, each ".." part, and control
+# characters. A newline in a file name also breaks the parsing of one file on
+# each line. Each caller needs that parsing. Without the test, a review can
+# be incomplete with no message.
 dr_data_path_safe() {
     local path=$1
     case "$path" in
@@ -1916,18 +1971,19 @@ dr_data_path_safe() {
     return 0
 }
 
-# dr_data_exec_shaped <path> - would anyone ever RUN this file?
+# dr_data_exec_shaped <path>: is this a file that a person can RUN?
 #
-# Names only, and deliberately so. The instinct is to ask "did it arrive with the
-# execute bit set", but that question has no useful answer here: a Draugr repo
-# must live on a Windows drive, DrvFs reports every file as 0777, and --chmod is
-# silently ignored there. Measured - a file rsync'd onto /mnt/c with
-# --chmod=D755,F644 lands -rwxrwxrwx and runs. So the mode tells you nothing and
-# the name is the only signal left.
+# The test uses only the name, on purpose. The first idea is to ask "did it
+# come with the execute bit". Here, that question has no useful answer. A
+# Draugr repo must be on a Windows drive. DrvFs reports each file as 0777, and
+# ignores --chmod with no message. A test showed this. A file that rsync copied
+# onto /mnt/c with --chmod=D755,F644 is -rwxrwxrwx and runs. Thus the mode
+# tells you nothing, and only the name is left.
 #
-# Kept narrow on purpose. A warning that fires on ordinary data is one people
-# learn to scroll past, so extensions that are as often data as code - .bin, .ts,
-# .run, .dat - are left out even though any of them could in principle be run.
+# The list is short on purpose. People learn to ignore a warning about usual
+# data. Thus the list does not include extensions that are often data and
+# often code: .bin, .ts, .run, .dat. Each of them can run, but the list skips
+# them.
 dr_data_exec_shaped() {
     case "${1##*/}" in
         *.sh|*.bash|*.zsh|*.ksh|*.fish|*.py|*.pl|*.rb|*.lua|*.php)        return 0 ;;
@@ -1939,13 +1995,13 @@ dr_data_exec_shaped() {
     return 1
 }
 
-# dr_data_is_text <path> - no NUL byte in the first 8 KB.
+# dr_data_is_text <path>: no NUL byte in the first 8 KB.
 #
-# The same heuristic git uses - and, more to the point, the same one `diff` uses,
-# so this never promises a diff that diff will then refuse to print. It also needs
-# no `file` binary, which is one less thing to be missing inside a stripped-down
-# mound. An empty file counts as text: there is nothing in it to be binary, and
-# calling it binary would hide the one diff that matters, "this file was emptied".
+# git uses the same rule. More important, `diff` uses the same rule. Thus this
+# never promises a diff that diff then refuses to print. It also needs no
+# `file` binary, which can be missing in a minimal mound. An empty file is
+# text. It contains nothing binary. If it is binary, the code hides the one
+# important diff: "this file is now empty".
 dr_data_is_text() {
     local total stripped
     [ -s "$1" ] || return 0
@@ -1954,17 +2010,17 @@ dr_data_is_text() {
     [ "$total" = "$stripped" ]
 }
 
-# dr_mode_note <repo> <path> - "mode X => Y, no content change", or nothing.
+# dr_mode_note <repo> <path>: "mode X => Y, no content change", or nothing.
 #
-# True only when the STAGED entry and HEAD hold the same blob under different
-# modes. Anything else - an edit, an addition, a deletion - is not a mode-only
-# change and gets no note.
+# It is true only when the STAGED entry and HEAD hold the same blob with
+# different modes. Other changes (an edit, an addition, a deletion) are not
+# changes of mode only, and they get no note.
 dr_mode_note() {
     local repo=$1 path=$2 idx head imode hmode iblob hblob
 
-    # A path git had to quote (spaces, non-ASCII) will not match as typed, and
-    # guessing at the unquoting would be worse than saying nothing: the note is
-    # a convenience, and its absence costs only the convenience.
+    # If git quoted a path (spaces, non-ASCII), the typed path does not match.
+    # A guess at the unquoted form is worse than no note. The note only helps,
+    # and without it, the user loses only that help.
     idx=$(git -C "$repo" ls-files -s -- "$path" 2>/dev/null) || return 1
     head=$(git -C "$repo" ls-tree HEAD -- "$path" 2>/dev/null) || return 1
     [ -n "$idx" ] && [ -n "$head" ] || return 1
@@ -1981,23 +2037,23 @@ dr_mode_note() {
     printf 'mode %s => %s, no content change\n' "$hmode" "$imode"
 }
 
-# dr_dirty_list <repo> - `git status --short`, with a mode-only change named.
+# dr_dirty_list <repo>: `git status --short`, and it names a change of mode only.
 #
-# git prints "M  run.sh" whether the file was rewritten or merely made
-# executable, and on a /mnt/c checkout the second is likelier than it looks.
-# With core.fileMode=false a mode can only have reached the index through
-# `git update-index --chmod`, a checkout, or a merge - never through `git add` -
-# so reading that "M" as "I edited that" sends you hunting for an edit that does
-# not exist.
+# git prints "M  run.sh" if the file was rewritten, and also if it only became
+# executable. On a /mnt/c checkout, the second case is more usual than it
+# looks. With core.fileMode=false, a mode can get into the index only through
+# `git update-index --chmod`, a checkout, or a merge. It never gets there
+# through `git add`. If you read that "M" as "I edited it", you look for an
+# edit that does not exist.
 #
-# Measured, and the reason this exists: a dr-merge was blocked by a staged
-# `100644 => 100755` on run.sh while the incoming commit carried THE SAME mode
-# change. The refusal was correct and the message was unreadable.
+# A real failure caused this function. A staged `100644 => 100755` on run.sh
+# blocked a dr-merge. The incoming commit had THE SAME change of mode. The
+# refusal was correct, but nobody was able to understand the message.
 dr_dirty_list() {
     local repo=${1:-$PWD} line path note
     while IFS= read -r line; do
-        # "XY path". A rename is "XY old -> new", where neither half is the
-        # path to ask git about, so it is left alone.
+        # "XY path". A rename is "XY old -> new". Neither part is the path to
+        # ask git about, so the code does not change the line.
         path=${line:3}
         case "$line" in
             *" -> "*) printf '%s\n' "$line"; continue ;;
@@ -2010,22 +2066,22 @@ dr_dirty_list() {
     done < <(git -C "$repo" status --short 2>/dev/null)
 }
 
-# dr_data_dirty_only <repo> - true when every uncommitted change is a data file.
+# dr_data_dirty_only <repo>: true when each uncommitted change is a data file.
 #
-# This is the DRAUGR_REQUIRE_CLEAN exemption: churning a parquet file must not
-# stop you starting a session, because that file is not travelling through git
-# anyway. A single dirty *source* file still blocks, which is the point.
+# This is the exception to DRAUGR_REQUIRE_CLEAN. A changed parquet file must
+# not stop you from starting a session, because that file does not go through
+# git. One changed *source* file still blocks the session, as intended.
 dr_data_dirty_only() {
     local repo=${1:-$PWD} line path
     [ -n "${DRAUGR_DATA:-}" ] || return 1
 
-    # --porcelain gives "XY path"; the status letters are always the first two
-    # columns, so cutting from the fourth character leaves the path.
+    # --porcelain gives "XY path". The status letters are always the first two
+    # columns. Thus the text from the fourth character is the path.
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         path=${line:3}
 
-        # A rename reads "old -> new"; judge it by the destination.
+        # A rename is "old -> new". Use the new path.
         case "$path" in
             *" -> "*) path=${path##* -> } ;;
         esac
@@ -2035,13 +2091,13 @@ dr_data_dirty_only() {
     return 0
 }
 
-# dr_data_dirty_blockers <repo> - the uncommitted changes that are NOT exempt.
+# dr_data_dirty_blockers <repo>: the uncommitted changes that are NOT exceptions.
 #
-# The companion to dr_data_dirty_only, which answers yes or no. This one answers
-# "which ones", because the yes/no version's caller printed `git status` in full:
-# a repo with fifteen churning data files and one stray script then reported
-# sixteen problems, buried the only real one, and made DRAUGR_DATA look as though
-# it were being ignored.
+# This is the pair of dr_data_dirty_only, which answers yes or no. This function
+# answers "which ones". The caller of the yes-or-no function printed the full
+# `git status`. A repo with fifteen changed data files and one stray script
+# then reported sixteen problems. The one real problem was hidden, and
+# DRAUGR_DATA looked as if Draugr ignored it.
 dr_data_dirty_blockers() {
     local repo=${1:-$PWD} line path
     while IFS= read -r line; do
@@ -2062,122 +2118,125 @@ dr_data_dirty_blockers() {
 # Kits
 # ---------------------------------------------------------------------------
 
-# DRAUGR_KIT is a LIST, because sbx kits compose.
+# DRAUGR_KIT is a LIST, because sbx kits combine.
 #
-# Measured against sbx 0.37.1: `--kit` takes the flag repeatedly, and two mixins
-# on one sandbox contributed BOTH their install commands and BOTH their network
-# allow rules, merged into a single policy. That is what makes a shared kit
-# worth having - "the Lua toolchain" is a fact about you, not about one repo, and
-# a library entry ADDS to the project's kit instead of replacing it.
+# A test on sbx 0.37.1 showed this. `--kit` accepts the flag more than one time.
+# Two mixins on one sandbox gave BOTH their install commands and BOTH their
+# network allow rules, merged into one policy. That is why a shared kit is
+# useful. "The Lua toolchain" is a fact about you, not about one repo. A library
+# kit ADDS to the kit of the project. It does not replace it.
 
-# dr_kit_reserved_names - names a kit must not take, one per line.
+# dr_kit_reserved_names: the names that a kit must not use, one on each line.
 #
-# The composition always contains the agent's own kit, so the agent's name is
-# spoken for. Two sources, and neither is a hand-written list:
+# The combination always contains the own kit of the agent. Thus the name of
+# the agent is taken. There are two sources, and neither is a list by hand:
 #
-#   $DRAUGR_AGENT        the only name that can break a create today
-#   lib/agents/*.sh      so switching to one Draugr knows about does not turn a
-#                        working kit into a broken one
+#   $DRAUGR_AGENT        today, the only name that can break a create
+#   lib/agents/*.sh      so that a change to a known agent does not break a
+#                        kit that works
 #
-# sbx offers ten agents and this names at most three of them, which is
-# deliberate. A hardcoded list of the other seven is the shape that rots - it
-# would be wrong the day sbx adds one, and silently. What is here is derived: one
-# from a directory listing, one from whatever you configured. An agent outside
-# both is caught by dr-up, and dr-kit validate then names it, because
-# DRAUGR_AGENT is by definition the agent you just switched to.
+# sbx has ten agents, and this function names three of them at most, on
+# purpose. A fixed list of the other seven becomes wrong over time. When sbx
+# adds an agent, the list is wrong, with no message. The names here come from
+# data: one from a directory list, one from your configuration. dr-up catches
+# an agent that is in neither source, and `dr-kit validate` then names it. The
+# reason is that DRAUGR_AGENT is always the agent that you just changed to.
 dr_kit_reserved_names() {
     { printf '%s\n' "${DRAUGR_AGENT:-claude}"; dr_agent_known | tr ' ' '\n'; } | sort -u
 }
 
-# dr_kit_slug <text> - a string sbx will accept as a kit's `name:` field.
+# dr_kit_slug <text>: a string that sbx accepts as the `name:` field of a kit.
 #
-# sbx's rule, quoted from its own error: "must be lowercase alphanumeric with
-# hyphens, 1-64 chars". dr-init used to drop the repository's directory name in
-# unchanged, so any project with a capital letter in it - TabuLua, MyApp - wrote
-# a kit that validated as INVALID and failed at `dr-up` with an sbx error two
-# steps removed from the cause.
+# The rule of sbx, from its own error: "must be lowercase alphanumeric with
+# hyphens, 1-64 chars". Before, dr-init used the directory name of the
+# repository with no change. Thus each project with a capital letter (TabuLua,
+# MyApp) wrote a kit that was INVALID. It failed at `dr-up` with an sbx error
+# that was two steps away from the cause.
 #
-# Only `name:` is constrained. `displayName:` is free text and keeps the
-# capitals, which is why the two are set from different values in dr-init.
+# Only `name:` has this limit. `displayName:` is free text and keeps the
+# capitals. Thus dr-init sets the two fields from different values.
 dr_kit_slug() {
     local s a
-    # Lowercase, then anything outside the permitted set becomes a hyphen. -c is
-    # tr's complement: "every character NOT in this set".
+    # Change to lowercase. Then each character outside the set becomes a
+    # hyphen. -c is the complement of tr: "each character NOT in this set".
     s=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')
 
-    # Collapse runs of hyphens, then trim the ends: "My App" would otherwise give
-    # "my--app", and a leading or trailing hyphen is not alphanumeric.
+    # Change each run of hyphens into one hyphen, then remove the hyphens at the
+    # ends. If not, "My App" gives "my--app". A hyphen at the start or the end
+    # is not alphanumeric.
     while [ "$s" != "${s//--/-}" ]; do s=${s//--/-}; done
     s=${s#-}; s=${s%-}
 
-    # Truncate before trimming again, because cutting at 64 can expose a hyphen
-    # that was in the middle a moment ago.
+    # Cut to 64 characters, then remove an end hyphen again. The cut at 64 can
+    # put a hyphen from the middle at the end.
     s=${s:0:64}
     s=${s%-}
 
-    # A kit named after an agent is legal and uncomposable. sbx puts the agent's
-    # own kit in the same composition and refuses two that share a name, so a
-    # repository in a directory called "claude" or "codex" produces a kit that
-    # validates cleanly and then fails at dr-up with sbx's own words, two steps
-    # from the cause - the same shape as the capitals problem above.
+    # A kit with the name of an agent is legal, but it cannot combine. sbx puts
+    # the own kit of the agent in the same combination, and it refuses two
+    # kits with the same name. Thus a repository in a directory "claude" or
+    # "codex" gives a kit that passes validation. It then fails at dr-up with
+    # an sbx message, two steps away from the cause. That is the same problem
+    # as the capitals above.
     #
-    # Checked against EVERY known agent rather than the configured one, because
-    # the kit is deliberately agent-agnostic: a name that works until you switch
-    # DRAUGR_AGENT is a trap rather than a kit.
+    # The code compares the name with EACH known agent, not only the
+    # configured one. The kit does not depend on the agent, on purpose. A name
+    # that fails when you change DRAUGR_AGENT is a trap, not a kit.
     while IFS= read -r a; do
         [ "$s" = "$a" ] || continue
         s="$s-project"
         break
     done < <(dr_kit_reserved_names)
 
-    # A name made entirely of punctuation leaves nothing behind. Better a dull
-    # placeholder than an empty field that fails validation for a second reason.
+    # A name of only punctuation becomes empty. A plain placeholder is better
+    # than an empty field, which fails validation for a second reason.
     [ -n "$s" ] || s=project
     printf '%s' "$s"
 }
 
-# dr_kit_store - the library of named kits, shared across repositories.
+# dr_kit_store: the library of named kits, which all repositories share.
 dr_kit_store() {
     printf '%s' "${DRAUGR_KIT_STORE%/}"
 }
 
-# dr_kit_resolve <entry> - turn one DRAUGR_KIT entry into something sbx accepts.
+# dr_kit_resolve <entry>: change one DRAUGR_KIT item into a value that sbx accepts.
 #
-# Four shapes, tried most specific first:
+# Four forms. The most specific form comes first:
 #
-#   /abs/path            an absolute path, used as it stands
-#   sub/dir              a directory inside the repo - the documented default
+#   /abs/path            an absolute path, used as it is
+#   sub/dir              a directory in the repo (the documented default)
 #   name                 a directory in the kit store: a named library kit
-#   ghcr.io/org/kit:tag  anything holding ":" or "@", i.e. an OCI or git ref
+#   ghcr.io/org/kit:tag  any value with ":" or "@", that is, an OCI or git ref
 #
-# The repo is searched before the store deliberately. A project that happens to
-# contain a directory called `lua` means its own, and the more specific answer
-# winning is the same rule the whole config cascade follows.
+# The code searches the repo before the store, on purpose. If a project
+# contains a directory `lua`, it means its own directory. The more specific
+# answer wins. All configuration layers follow the same rule.
 #
-# Each shape is tried twice: once with ".<agent>" appended, then plain. So under
-# DRAUGR_AGENT=codex, ".draugr/kit.codex" beats ".draugr/kit" and a library kit
-# "lua.codex" beats "lua". Most kits need nothing of the sort - network rules and
-# install commands do not care which agent runs them - but the escape hatch is
-# here for the ones that genuinely differ, and it costs one loop.
+# The code tries each form two times: first with ".<agent>" added, then plain.
+# Thus with DRAUGR_AGENT=codex, ".draugr/kit.codex" wins over ".draugr/kit",
+# and a library kit "lua.codex" wins over "lua". Most kits do not need this.
+# Network rules and install commands do not depend on the agent. But a kit
+# that really differs can use it, and it costs only one loop.
 #
-# A suffix rather than a subdirectory, deliberately: ".draugr/kit/codex/" would
-# be indistinguishable from a kit that happens to contain a directory of that
-# name, and sbx reads whole directories.
+# It is a suffix and not a subdirectory, on purpose. ".draugr/kit/codex/" looks
+# the same as a kit that contains a directory with that name, and sbx reads
+# full directories.
 #
-# Prints the resolved directory - or the reference untouched - and returns 0.
-# Prints nothing and returns 1 when the entry names nothing that exists, which
-# callers treat as ordinary: a kit is optional.
+# It prints the directory that it found (or the reference, unchanged), and
+# returns 0. When the item names nothing that exists, it prints nothing and
+# returns 1. The callers treat that as normal, because a kit is optional.
 dr_kit_resolve() {
     local entry=$1 cand name
     [ -n "$entry" ] || return 1
 
     for name in "$entry.${DRAUGR_AGENT:-claude}" "$entry"; do
         case "$name" in
-        # An absolute path means exactly itself - no search beyond the suffix.
+        # An absolute path means exactly itself. There is no search, only the
+        # suffix.
         /*)
             if [ -d "$name" ]; then printf '%s' "$name"; return 0; fi
             ;;
-        # Otherwise the repo first, then the library, so a local directory of the
+        # If not, first the repo, then the library. A local directory with the
         # same name always wins over a shared one.
         *)
             cand="$DR_REPO/$name"
@@ -2188,38 +2247,39 @@ dr_kit_resolve() {
         esac
     done
 
-    # Nothing on this disk. A ":" or "@" means a reference format we do not own,
-    # so it goes through untouched and sbx gets to reject it in its own words.
-    # No agent suffix here: it is not ours to graft onto somebody's registry tag.
+    # Nothing on this disk. A ":" or "@" means a reference format that Draugr
+    # does not own. Thus it goes through unchanged, and sbx can reject it with
+    # its own words. There is no agent suffix here. Draugr must not add it to
+    # the registry tag of a different owner.
     case "$entry" in
         *[:@]*) printf '%s' "$entry"; return 0 ;;
     esac
     return 1
 }
 
-# dr_kit_agent_conflicts - resolved kits that demand a different agent, one per
-# line as "<kit> <agent it wants>".
+# dr_kit_agent_conflicts: the found kits that need a different agent, one on
+# each line as "<kit> <agent it wants>".
 #
-# A kit MAY pin itself with `requires: agent: claude`, and sbx then refuses to
-# compose it with anything else:
+# A kit CAN fix its agent with `requires: agent: claude`. sbx then refuses to
+# combine it with a different agent:
 #
 #   ERROR: request failed: 400 Bad Request: kit_artifacts: compose:
 #   kit "x" requires base agent "claude" but was composed with "codex"
 #
-# which arrives at `dr-up` in sbx's vocabulary, two steps from the cause - the
-# same problem the kit slug had. Worse, `sbx kit validate` passes such a kit
-# happily: the mismatch only exists at compose time, so there is nothing else
-# that could catch it before creation. Hence Draugr reading the field itself.
+# The user sees this at `dr-up`, in the words of sbx, two steps away from the
+# cause. The kit slug had the same problem. Also, `sbx kit validate` accepts
+# such a kit. The conflict exists only when sbx combines the kits. Thus nothing
+# else can find it before the create. That is why Draugr reads the field itself.
 #
-# Directories only. A ZIP or an OCI reference cannot be read from here, and
-# guessing at one would be worse than letting sbx answer.
+# Only directories. Draugr cannot read a ZIP or an OCI reference here. A guess
+# is worse than the answer of sbx.
 dr_kit_agent_conflicts() {
     local ref want
     while IFS= read -r ref; do
         [ -d "$ref" ] || continue
-        # The field is two levels into the YAML, but "agent:" appears only under
-        # requires: in this schema, so one sed is honest enough - and a wrong
-        # read here costs a spurious warning, not a wrong mound.
+        # The field is two levels deep in the YAML. But in this schema, "agent:"
+        # occurs only under requires:. Thus one sed is enough. A wrong read here
+        # gives a false warning, not a wrong mound.
         want=$(sed -n 's/^[[:space:]]*agent:[[:space:]]*//p' "$ref/spec.yaml" 2>/dev/null | head -1)
         [ -n "$want" ] || continue
         [ "$want" = "${DRAUGR_AGENT:-claude}" ] && continue
@@ -2228,32 +2288,32 @@ dr_kit_agent_conflicts() {
     return 0
 }
 
-# dr_kit_name_conflicts - resolved kits whose `name:` is an agent's name, one per
-# line as "<kit> <name>".
+# dr_kit_name_conflicts: the found kits whose `name:` is the name of an agent,
+# one on each line as "<kit> <name>".
 #
-# sbx composes the agent's own kit with the project's and refuses two that share
-# a name:
+# sbx combines the own kit of the agent with the kit of the project. It refuses
+# two kits with the same name:
 #
 #   ERROR: request failed: 400 Bad Request: kit_artifacts: compose:
 #   duplicate kit name "claude" - each kit in a composition must have a unique name
 #
-# which arrives at dr-up in sbx's vocabulary, with nothing pointing back at the
-# file that caused it. `sbx kit validate` passes such a kit happily - the name is
-# perfectly legal, and the collision exists only at compose time - so this is the
-# second thing dr-kit has to check that sbx will not, and for the same reason as
-# dr_kit_agent_conflicts above.
+# The user sees this at dr-up, in the words of sbx. Nothing in it points to the
+# file that caused it. `sbx kit validate` accepts such a kit. The name is legal,
+# and the conflict exists only when sbx combines the kits. Thus this is the
+# second test that dr-kit must do and sbx does not. The reason is the same as
+# for dr_kit_agent_conflicts above.
 #
-# The set it checks against is dr_kit_reserved_names, so it covers the agent you
-# have configured plus the ones Draugr carries a module for - not sbx's full ten,
-# and see there for why not.
+# The names come from dr_kit_reserved_names. They are the agent that you
+# configured, and the agents that have a Draugr module. They are not all ten
+# agents of sbx. dr_kit_reserved_names tells why.
 #
-# Directories only, as above: a ZIP or an OCI reference cannot be read from here.
+# Only directories, as above. Draugr cannot read a ZIP or an OCI reference here.
 dr_kit_name_conflicts() {
     local ref name a
     while IFS= read -r ref; do
         [ -d "$ref" ] || continue
-        # Anchored at column 0. `name:` appears indented under publishedPorts as
-        # well, and only the top-level one is the kit's own.
+        # Anchored at column 0. `name:` also occurs with an indent under
+        # publishedPorts. Only the top-level `name:` is the name of the kit.
         name=$(sed -n 's/^name:[[:space:]]*//p' "$ref/spec.yaml" 2>/dev/null | head -1)
         [ -n "$name" ] || continue
         while IFS= read -r a; do
@@ -2263,19 +2323,19 @@ dr_kit_name_conflicts() {
     return 0
 }
 
-# dr_kit_refs - every DRAUGR_KIT entry that resolved, one per line, in order.
+# dr_kit_refs: each DRAUGR_KIT item that the code found, one on each line, in order.
 #
-# Order is preserved because sbx applies kits in the order it is given them, so
-# a later entry lands on top of an earlier one. Returns 1 when nothing at all
-# resolved, so "this project has no kit" stays a single cheap test.
+# The order stays the same, because sbx applies the kits in the order that it
+# gets them. A later item goes on top of an earlier one. If the code found no
+# item, it returns 1. Thus "this project has no kit" stays one fast test.
 dr_kit_refs() {
     local entry resolved rc=1
     local -a entries=()
     [ -n "${DRAUGR_KIT:-}" ] || return 1
 
-    # read -ra splits on whitespace WITHOUT globbing - the same trap documented
-    # at _dr_data_entries, where an unquoted expansion would turn a pattern into
-    # a snapshot of whatever happens to be in the current directory.
+    # read -ra splits on white space WITHOUT globbing. _dr_data_entries
+    # documents the same trap. There, an expansion with no quotes changes a
+    # pattern into a list of the files in the current directory.
     read -ra entries <<< "$DRAUGR_KIT"
     for entry in "${entries[@]}"; do
         if resolved=$(dr_kit_resolve "$entry"); then
@@ -2286,11 +2346,11 @@ dr_kit_refs() {
     return "$rc"
 }
 
-# dr_kit_missing - the entries that resolved to nothing, one per line.
+# dr_kit_missing: the items that the code did not find, one on each line.
 #
-# Reported by name rather than by resolved path, because the whole difficulty of
-# a typo'd entry is that it HAS no resolved path - "no kit at /repo/lua" would
-# hide that the kit store was searched too.
+# The report uses the name, not a path. An item with a typing error HAS no
+# path, and that is the problem. "no kit at /repo/lua" hides that the
+# code also searched the kit store.
 dr_kit_missing() {
     local entry
     local -a entries=()
@@ -2301,11 +2361,11 @@ dr_kit_missing() {
     done
 }
 
-# dr_kit_repo_dir - the first resolved kit that lives inside this repo.
+# dr_kit_repo_dir: the first found kit that is in this repo.
 #
-# What `dr-kit save` copies and what dr-policy points at when it suggests
-# graduating a rule into the kit: of a list that may mix project and library
-# entries, the project's own is the one a repo-scoped instruction means.
+# `dr-kit save` copies this kit. dr-policy names it when it suggests to move a
+# rule into the kit. The list can contain project kits and library kits. An
+# instruction for the repo means the kit of the project.
 dr_kit_repo_dir() {
     local ref
     while IFS= read -r ref; do
@@ -2316,10 +2376,11 @@ dr_kit_repo_dir() {
     return 1
 }
 
-# dr_dir_hash <dir> - one digest for a whole directory tree.
+# dr_dir_hash <dir>: one digest for a full directory tree.
 #
-# Sorted with -z and hashed pairwise, so the result depends on the contents and
-# the names but not on the order find happened to walk them in.
+# The code sorts with -z and hashes the names and contents together. Thus the
+# result depends on the contents and the names. It does not depend on the
+# order in which find found the files.
 dr_dir_hash() {
     find "$1" -type f -print0 2>/dev/null \
         | sort -z \
@@ -2328,20 +2389,21 @@ dr_dir_hash() {
         | cut -d' ' -f1
 }
 
-# dr_kit_hash <dir> - a digest of the whole kit, not just spec.yaml, because
-# initFiles and anything else in the directory change what the sandbox gets.
+# dr_kit_hash <dir>: a digest of the full kit, not only of spec.yaml. initFiles
+# and the other files in the directory change what the sandbox gets.
 dr_kit_hash() { dr_dir_hash "$1"; }
 
-# dr_kit_hash_all - one digest covering every kit in DRAUGR_KIT, in order.
+# dr_kit_hash_all: one digest for all kits in DRAUGR_KIT, in order.
 #
-# Order is part of the digest because it is part of the meaning: the same two
-# kits applied the other way round can build a different sandbox.
+# The order is part of the digest, because it is part of the meaning. The same
+# two kits in the opposite order can build a different sandbox.
 #
-# A remote reference contributes its reference STRING rather than its contents,
-# which is the only honest option - hashing it would mean fetching an OCI image
-# on every dr-up, and a mutable tag would defeat that anyway. So a tag that moved
-# under you is drift Draugr cannot see, while a changed local directory is drift
-# it can. dr-kit drift says so rather than implying it checked everything.
+# For a remote reference, the digest uses the reference STRING, not the
+# contents. No other choice is correct. A hash of the contents needs a
+# download of an OCI image at each dr-up, and a tag that can change makes it
+# useless. Thus Draugr cannot see a drift when a tag moves. It can see a
+# drift when a local directory changes. dr-kit drift says so. It does not
+# suggest that it examined all kits.
 dr_kit_hash_all() {
     local ref
     {
@@ -2351,17 +2413,18 @@ dr_kit_hash_all() {
     } | sha256sum | cut -d' ' -f1
 }
 
-# Where dr-up records the hash it built with, so dr-kit drift is a comparison
-# rather than a guess. Inside .draugr/ because it describes this checkout, not
-# the project - dr-init gitignores it, along with .draugr/tmp/.
+# Where dr-up records the hash of its build. Thus dr-kit drift is a comparison,
+# not a guess. The file is in .draugr/, because it describes this checkout,
+# not the project. dr-init adds it to .gitignore, with .draugr/tmp/.
 dr_kit_stamp() {
     printf '%s/.draugr/kit.applied' "$DR_REPO"
 }
 
-# dr_kit_spec_name <dir> - the kit's own name, from its spec.yaml.
+# dr_kit_spec_name <dir>: the name of the kit, from its spec.yaml.
 #
-# This is the name sbx composes by, and refuses to see twice: measured on
-# 0.37.1, re-adding a kit whose name the sandbox already has fails with
+# sbx combines kits by this name, and refuses the same name two times. A test
+# on 0.37.1 showed this. If you add a kit again, and the sandbox already has
+# its name, sbx fails with
 # 'duplicate kit name "x" - each kit in a composition must have a unique name'.
 dr_kit_spec_name() {
     sed -n 's/^name:[[:space:]]*"\{0,1\}\([^"#[:space:]]*\).*/\1/p' "$1/spec.yaml" 2>/dev/null | head -1
@@ -2369,13 +2432,13 @@ dr_kit_spec_name() {
 
 # The stamp, line by line:
 #
-#   <combined hash>                     line 1, exactly what it has always been
-#   kit<TAB><ref><TAB><name><TAB><hash>  one per kit, in DRAUGR_KIT order
+#   <combined hash>                     line 1, the same as in all versions
+#   kit<TAB><ref><TAB><name><TAB><hash>  one for each kit, in DRAUGR_KIT order
 #
-# Line 1 stays alone and first so that a stamp written by an older Draugr - one
-# line, nothing else - still reads correctly for drift. The per-kit lines are
-# what let dr-kit apply tell "a kit was added at the end", which sbx can do in
-# place, from "a kit changed", which it cannot.
+# Line 1 stays alone and first. Thus a stamp from an older Draugr (one line,
+# nothing else) still gives a correct drift. With the lines for each kit,
+# dr-kit apply can tell "a kit was added at the end" from "a kit changed".
+# sbx can do the first in place, but not the second.
 dr_kit_stamp_write() {
     local ref
     {
@@ -2384,53 +2447,56 @@ dr_kit_stamp_write() {
             if [ -d "$ref" ]; then
                 printf 'kit\t%s\t%s\t%s\n' "$ref" "$(dr_kit_spec_name "$ref")" "$(dr_dir_hash "$ref")"
             else
-                # A remote reference: its string is all we can honestly record,
-                # for the reason dr_kit_hash_all gives.
+                # A remote reference. Its string is the only correct value to
+                # record, for the reason that dr_kit_hash_all gives.
                 printf 'kit\t%s\t\t%s\n' "$ref" "$ref"
             fi
         done < <(dr_kit_refs)
     } > "$(dr_kit_stamp)"
 }
 
-# The combined hash the mound was built with, or nothing if there is no stamp.
+# The combined hash of the build of the mound. If there is no stamp, nothing.
 dr_kit_stamp_hash() {
     head -1 "$(dr_kit_stamp)" 2>/dev/null
 }
 
-# The per-kit lines, as "<ref>\t<name>\t<hash>". Empty for an old stamp, which
-# only ever recorded the combined hash - and "we do not know which kits" is an
-# answer the callers have to handle, not paper over.
+# The per-kit lines, as "<ref>\t<name>\t<hash>". For an old stamp, empty. An old
+# stamp recorded only the combined hash. "Draugr does not know which kits" is
+# an answer that the callers must handle, and must not hide.
 dr_kit_stamp_kits() {
     sed -n 's/^kit\t//p' "$(dr_kit_stamp)" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
-# Network policy, and the loop it makes possible
+# Network policy, and the loop that it makes possible
 #
-# A kit's allow list is frozen into the sandbox at creation, so changing it means
-# a recreate. But `sbx policy allow --sandbox` adds a rule to a RUNNING mound and
-# it takes effect at once - measured: a host that answered "Blocked by network
-# policy" answered with its own 404 immediately afterwards, same mound, no
-# restart. That is what lets a build be fixed iteratively instead of one
-# recreate at a time, with the kit written down once at the end.
+# The allow list of a kit is frozen into the sandbox when sbx creates it. To
+# change it, you must recreate the sandbox. But `sbx policy allow --sandbox`
+# adds a rule to a RUNNING mound, and the rule works at once. A test showed
+# this. A host that answered "Blocked by network policy" then answered with
+# its own 404, in the same mound, with no restart. Thus you can fix a build in
+# small steps, not one recreate at a time. At the end, you write the kit once.
 #
-# Two questions have to be answerable for that loop to work, and sbx answers both
-# in a way no build tool can:
+# For that loop, Draugr must answer two questions. sbx can answer both, and no
+# build tool can:
 #
-#   what was refused?   `sbx policy log` is the PROXY's record, so it is the same
-#                       whatever the client. Measured against one blocked host:
-#                       curl printed nothing at all, git named it exactly, and
-#                       pip reported "Could not find a version that satisfies the
-#                       requirement" - three dialects, one of them silent and one
-#                       actively misleading. The proxy logged all of them.
-#   what did I open?    so nothing has to be remembered during the loop.
+#   what was refused?   `sbx policy log` is the record of the PROXY, so it is
+#                       the same for each client. A test with one blocked host
+#                       showed this: curl printed nothing, git named the host,
+#                       and pip reported "Could not find a version that
+#                       satisfies the requirement". Those are three different
+#                       messages. One says nothing, and one is wrong. The proxy
+#                       logged all of them.
+#   what did I open?    so that you do not have to remember it during the loop.
 # ---------------------------------------------------------------------------
 
-# dr_policy_denied - hosts this mound was refused, one bare hostname per line.
+# dr_policy_denied: the hosts that this mound was refused, one host name on
+# each line.
 #
-# The log records "host:port"; the port is dropped because that is not what
-# `sbx policy allow network` or a kit's allow list take. Deduplicated, because a
-# retrying build hits the same host many times and the count is not the point.
+# The log records "host:port". The code removes the port, because
+# `sbx policy allow network` and the allow list of a kit do not take it. The
+# code removes duplicates. A build that retries connects to the same host many
+# times, and the count is not useful.
 dr_policy_denied() {
     dr_sbx policy log "$DRAUGR_SANDBOX" --json 2>/dev/null         | jq -r --arg n "$DRAUGR_SANDBOX" '
               (.blocked_hosts // [])[]
@@ -2438,13 +2504,13 @@ dr_policy_denied() {
               | .host | sub(":[0-9]+$"; "")' 2>/dev/null         | sort -u
 }
 
-# dr_policy_adhoc - hosts opened for this mound by hand, one per line.
+# dr_policy_adhoc: the hosts that a person opened for this mound, one on each line.
 #
-# Everything scoped to this sandbox appears in one table, the kit's rules
-# included, so the two have to be told apart. `editable` is the discriminator
-# that means it: a rule that came from the kit artifact is not editable, and one
-# added by `dr-policy --allow` is. Measured - the kit's rule also carries
-# name "kit:<sandbox>" while an ad-hoc one is a bare UUID, and both agree.
+# All rules for this sandbox are in one table, also the rules of the kit. Thus
+# the code must separate the two. `editable` is the field with that meaning. A
+# rule from the kit artifact is not editable. A rule from `dr-policy --allow`
+# is editable. A test showed this. The rule of the kit also has the name
+# "kit:<sandbox>", and an ad-hoc rule has only a UUID. Both fields agree.
 dr_policy_adhoc() {
     dr_sbx policy ls "$DRAUGR_SANDBOX" --wide --json 2>/dev/null         | jq -r --arg s "sandbox:$DRAUGR_SANDBOX" '
               .. | objects
@@ -2454,31 +2520,32 @@ dr_policy_adhoc() {
 }
 
 # ---------------------------------------------------------------------------
-# Host ports - reaching a service that runs on THIS machine, from inside a mound
+# Host ports: from a mound, connect to a service that runs on THIS machine
 # ---------------------------------------------------------------------------
 #
-# The mirror image of DRAUGR_PORTS. That publishes a port the mound listens on so
-# the host can reach in; this opens a port the HOST listens on so the mound can
-# reach out. Both are holes, and this is the more serious direction: the thing on
-# the other side is a process on your machine, outside the sandbox, that the
-# agent gets to talk to.
+# This is the opposite of DRAUGR_PORTS. DRAUGR_PORTS publishes a port where the
+# mound listens, so that the host can connect in. This opens a port where the
+# HOST listens, so that the mound can connect out. Both are holes, and this
+# direction is the more dangerous one. On the other side is a process on your
+# machine, outside the sandbox, and the agent can talk to it.
 
-# dr_host_ip - the address a mound must use to reach a service on this host.
+# dr_host_ip: the address that a mound must use for a service on this host.
 #
-# Not a constant, which is the whole reason this is a function. WSL sits on a
-# NAT'd Hyper-V network whose subnet is chosen when the network is created - per
-# Windows boot - and whose address within it comes from DHCP. Neither is
-# pinnable: WSL 2.6.1 parses networkingMode, dhcpTimeout and vmIdleTimeout out of
-# .wslconfig and contains no natNetwork or natGateway at all. So an address
-# written down today is wrong after the next reboot, and because the sandbox
-# policy is default-deny it then fails CLOSED and SILENTLY - the connection is
-# accepted and dropped with no error to read, which is a genuinely nasty thing to
-# debug. Hence: resolved at the moment the hole is opened, never stored.
+# The address is not a constant. That is the reason for this function. WSL is
+# on a Hyper-V network with NAT. Windows selects the subnet when it creates the
+# network, at each boot. The address in the subnet comes from DHCP. You cannot
+# fix either. WSL 2.6.1 reads networkingMode, dhcpTimeout, and vmIdleTimeout
+# from .wslconfig, and it has no natNetwork or natGateway. Thus an address that
+# you write down today is wrong after the next reboot. The sandbox policy
+# denies by default, so the connection then fails CLOSED and SILENTLY. The
+# sandbox accepts the connection and drops it, with no error. That is very
+# difficult to debug. Thus the code finds the address when it opens the hole,
+# and never stores it.
 #
-# `route get` rather than a named interface, because the question is "which
-# source address would this machine leave from", which is the one a mound can
-# route back to - and the answer does not depend on the interface being eth0. No
-# packet is sent; it is a routing-table query.
+# Use `route get`, not a named interface. The question is "which source
+# address does this machine use for outgoing traffic". A mound can send back
+# to that address. The answer does not need the interface to be eth0. No packet
+# is sent. It is a query of the routing table.
 dr_host_ip() {
     local ip
     ip=$(ip -4 route get 1.1.1.1 2>/dev/null |
@@ -2487,16 +2554,17 @@ dr_host_ip() {
     printf '%s\n' "$ip"
 }
 
-# dr_hostport_rules <port> - ids of the rules dr-hostport itself wrote for <port>.
+# dr_hostport_rules <port>: the ids of the rules that dr-hostport wrote for <port>.
 #
-# Deliberately narrow, because these ids are about to be handed to `policy rm`.
-# Only a rule that is editable (so: not one the kit composed), scoped to this
-# mound, and holding EXACTLY ONE resource that is a bare IPv4 address on <port>
-# can have come from here. A hand-written rule bundling several hosts, or one
-# naming a domain, is left alone even when <port> appears inside it.
+# The selection is narrow on purpose, because the code gives these ids to
+# `policy rm`. A rule came from here only if all of these are true. It is
+# editable (thus not from the kit). It is for this mound. It holds EXACTLY ONE
+# resource, and that resource is an IPv4 address on <port>. The code does not
+# touch a rule that a person wrote for several hosts, or a rule that names a
+# domain, even if <port> is in it.
 #
-# Without this pruning the rules accumulate one dead entry per reboot, each
-# naming an address that no longer exists.
+# Without this cleanup, each reboot adds one dead rule. Each dead rule names
+# an address that does not exist now.
 dr_hostport_rules() {
     local port=$1 re
     re=$(printf '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+:%s$' "$port")
@@ -2510,7 +2578,8 @@ dr_hostport_rules() {
               | .id? // empty' 2>/dev/null
 }
 
-# dr_hostport_open <port> - the addresses currently allowed on <port>, one per line.
+# dr_hostport_open <port>: the addresses that are now allowed on <port>, one on
+# each line.
 dr_hostport_open() {
     local port=$1 re
     re=$(printf '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+:%s$' "$port")
@@ -2522,24 +2591,24 @@ dr_hostport_open() {
               | .resources[]? | select(test($re))' 2>/dev/null | sort -u
 }
 
-# dr_kit_allow_list <kit-dir> - the hosts a kit already declares.
+# dr_kit_allow_list <kit-dir>: the hosts that a kit already declares.
 #
-# A hand-rolled reader rather than a YAML parser, so it is deliberately narrow:
-# find `allow:` nested under `network:`, then take the `- item` lines directly
-# beneath it and stop at the first line that is not one. That is enough for the
-# shape dr-init writes and for anything a person would write by hand, and it
-# CANNOT wander into `deny:` or `publishedPorts:` further down the file, which a
-# bare "every - line" grep would.
+# This is a small reader written by hand, not a YAML parser. Thus it is narrow
+# on purpose. It finds `allow:` under `network:`. Then it takes the `- item`
+# lines directly below it, and stops at the first line that is not an item.
+# That is enough for the format that dr-init writes, and for the files that a
+# person writes by hand. It CANNOT go into `deny:` or `publishedPorts:` lower
+# in the file. A plain grep for each "-" line does that.
 dr_kit_allow_list() {
     [ -f "$1/spec.yaml" ] || return 0
     awk '
-        # Track the indent of the allow: key so we know when its block ends.
+        # Record the indent of the allow: key, to find where its block ends.
         /^[[:space:]]*allow:[[:space:]]*(\[\])?[[:space:]]*$/ && innet {
             match($0, /^[[:space:]]*/); allow_indent = RLENGTH; inallow = 1; next
         }
         /^[[:space:]]*network:[[:space:]]*$/ { innet = 1 }
         inallow {
-            # A list item deeper than the key belongs to it; anything else ends it.
+            # A list item deeper than the key belongs to it. All else ends it.
             if (match($0, /^[[:space:]]*-[[:space:]]+/)) {
                 item = $0
                 sub(/^[[:space:]]*-[[:space:]]+/, "", item)
@@ -2548,26 +2617,25 @@ dr_kit_allow_list() {
                 if (item != "") print item
                 next
             }
-            if ($0 ~ /^[[:space:]]*(#.*)?$/) next     # comment or blank: still inside
+            if ($0 ~ /^[[:space:]]*(#.*)?$/) next     # comment or blank: still in the block
             match($0, /^[[:space:]]*/)
             if (RLENGTH <= allow_indent) { inallow = 0 }
         }
     ' "$1/spec.yaml" 2>/dev/null | sort -u
 }
 
-# dr_hostport_managed <resource> - true when DRAUGR_HOST_PORTS owns this rule.
+# dr_hostport_managed <resource>: true when DRAUGR_HOST_PORTS owns this rule.
 #
-# Such a rule is not machine state anyone has to preserve, and that changes the
-# answer to two separate questions. Recreating does destroy it, but dr-up writes
-# it again seconds later from the address of the day, so warning about the loss
-# sends you looking for a way to keep something that is about to come back. And
-# `dr-kit adopt` must never take it: the kit is COMMITTED, and the address in it
-# is true only until the next reboot - it is the one value this whole feature
-# exists to stop anybody writing down.
+# Nobody must keep such a rule, and that changes the answer to two questions.
+# A recreate removes it, but dr-up writes it again some seconds later, with the
+# address of the day. A warning about the loss makes you look for a way to keep
+# a rule that comes back. Also, `dr-kit adopt` must never take it. The kit is
+# COMMITTED, and the address is correct only until the next reboot. This
+# feature exists so that nobody writes that address down.
 #
-# Deliberately narrow. Only a bare IPv4 on a port this project declared can have
-# come from dr-hostport; a hostname on the same port belongs to somebody else and
-# is still reported.
+# The test is narrow on purpose. Only an IPv4 address on a port that this
+# project declared can come from dr-hostport. A host name on the same port
+# belongs to a different owner, and the code still reports it.
 dr_hostport_managed() {
     local res=$1 port p
     [ -n "${DRAUGR_HOST_PORTS:-}" ] || return 1
@@ -2582,26 +2650,27 @@ dr_hostport_managed() {
     return 1
 }
 
-# dr_policy_unadopted - ad-hoc hosts this repo's kit does not already declare.
+# dr_policy_unadopted: the ad-hoc hosts that the kits of this repo do not declare.
 #
-# The set that would be LOST by a recreate, which is what dr-rm and dr-up guard
-# on. Measured: a rule scoped to a sandbox does not outlive it - after `sbx rm`,
-# looking the rule up by id gives "policy or rule not found" - so a recreate
-# silently discards exactly the list you were about to write down.
+# A recreate LOSES these hosts. dr-rm and dr-up protect them. A test showed
+# this. A rule for a sandbox does not last longer than the sandbox. After
+# `sbx rm`, a lookup of the rule by id gives "policy or rule not found". Thus
+# a recreate discards, with no message, the list that you wanted to write down.
 #
-# With no kit of its own, every ad-hoc host counts as unadopted: there is nowhere
-# for it to have been written to.
+# If the repo has no kit, each ad-hoc host is unadopted. There is no file
+# where it can be written.
 dr_policy_unadopted() {
     local kit have host
-    # EVERY kit, not just the repo's own. dr-kit adopt writes into one kit, but a
-    # host is adopted whichever kit holds it - and a project with several would
-    # otherwise be told that hosts already written down are about to be lost, and
-    # offered --force, which is how you lose the ones that really were unadopted.
+    # Use EACH kit, not only the kit of the repo. dr-kit adopt writes into one
+    # kit, but a host is adopted in any kit that holds it. If not, a project
+    # with several kits gets a warning that it will lose hosts that are already
+    # written down. The warning offers --force. With --force, you lose the hosts
+    # that really were unadopted.
     #
-    # Spelled out rather than as have=$(...), which under set -e aborts the whole
-    # function when there is no kit - silently turning "every host is unadopted"
-    # into "there is nothing to report", the wrong answer in the one direction
-    # that loses data.
+    # The code is written out, not as have=$(...). With set -e, have=$(...)
+    # stops the full function when there is no kit. Then "each host is
+    # unadopted" becomes "there is nothing to report", with no message. That is
+    # the wrong answer in the one direction that loses data.
     have=
     while IFS= read -r kit; do
         [ -d "$kit" ] || continue
@@ -2610,8 +2679,8 @@ $(dr_kit_allow_list "$kit")"
     done < <(dr_kit_refs)
     while IFS= read -r host; do
         [ -n "$host" ] || continue
-        # A rule dr-hostport wrote is restored automatically, so it is neither
-        # something a recreate loses nor something to write into the kit.
+        # Draugr restores a rule from dr-hostport by itself. Thus a recreate does
+        # not lose it, and it must not go into the kit.
         if dr_hostport_managed "$host"; then continue; fi
         printf '%s
 ' "$have" | grep -qxF "$host" || printf '%s
@@ -2621,23 +2690,25 @@ $(dr_kit_allow_list "$kit")"
 }
 
 # ---------------------------------------------------------------------------
-# Creation-time settings
+# Values that are fixed at creation
 #
-# Most of what sbx needs is frozen into the sandbox when it is built: the image,
-# the agent, the memory cap, the published ports and every extra mount. Editing
-# one of those and re-running dr-up does nothing at all, because dr-up's job on
-# an existing mound is to START it, not to rebuild it.
+# Most values that sbx needs are frozen into the sandbox when sbx builds it:
+# the image, the agent, the memory limit, the published ports, and each extra
+# mount. If you change one of them and run dr-up again, nothing occurs. For a
+# mound that exists, dr-up STARTS it. It does not build it again.
 #
-# That is a silent no-op, which is the worst kind of no-op - you add a mount, run
-# dr-go, and the directory is simply not there, with nothing on screen to say
-# why. So dr-up records what it built with and compares, exactly as it already
-# does for kits.
+# Nothing occurs, and there is no message. That is the worst case. You add a
+# mount and run dr-go, and the directory is not there. Nothing on the screen
+# tells why. Thus dr-up records the values of the build and compares them, as
+# it already does for kits.
 # ---------------------------------------------------------------------------
 
-# dr_create_facts - the settings that are fixed at creation, one KEY=value a line.
+# dr_create_facts: the values that are fixed at creation, one KEY=value on each
+# line.
 #
-# DRAUGR_SANDBOX is not among them: changing it does not modify a mound, it names
-# a different one. Nor is DRAUGR_KIT, which has its own stamp and its own remedy.
+# DRAUGR_SANDBOX is not in the list. A change to it does not change a mound. It
+# names a different mound. DRAUGR_KIT is also not in the list. It has its own
+# stamp and its own fix.
 dr_create_facts() {
     local k
     for k in DRAUGR_AGENT DRAUGR_CLONE DRAUGR_TEMPLATE DRAUGR_MEMORY DRAUGR_CPUS \
@@ -2647,18 +2718,18 @@ dr_create_facts() {
     done
 }
 
-# Beside the kit stamp, and gitignored by dr-init for the same reason: it
-# describes this checkout's mound, not the project.
+# The file is next to the kit stamp. dr-init adds it to .gitignore for the
+# same reason: it describes the mound of this checkout, not the project.
 dr_create_stamp() {
     printf '%s/.draugr/create.applied' "$DR_REPO"
 }
 
-# dr_create_drift - names the keys that differ from what the mound was built with.
+# dr_create_drift: names the keys that differ from the values of the build.
 #
-# Silent when there is no stamp. A mound built before this existed is not drift,
-# it is unknown, and guessing would cry wolf on every single dr-up. A key the
-# stamp has never heard of is skipped for the same reason: an older Draugr wrote
-# that file and did not record it.
+# If there is no stamp, it says nothing. A mound that is older than this code
+# has no drift. Its state is unknown. A guess gives a false warning at
+# each dr-up. For the same reason, the code skips a key that is not in the
+# stamp. An older Draugr wrote that file and did not record the key.
 dr_create_drift() {
     local stamp k
     stamp=$(dr_create_stamp)
@@ -2673,58 +2744,57 @@ dr_create_drift() {
 # ---------------------------------------------------------------------------
 # The shared skills store
 #
-# Measured in Phase 2 and re-checked in Phase 6: this one directory is mounted
-# READ-WRITE into every mound, at /home/agent/.claude/skills, and it survives
-# sbx rm. It is the only path by which anything inside a sandbox can leave
-# something behind for a later one - so it is the exception to "the sandbox
-# cannot write to the host", and it holds agent instructions.
+# Tests in Phase 2 showed this, and Phase 6 tested it again. sbx mounts this one
+# directory READ-WRITE into each mound, at /home/agent/.claude/skills. It stays
+# after sbx rm. It is the only path through which a sandbox can leave files for
+# a later sandbox. Thus it is the exception to "the sandbox cannot write to the
+# host", and it holds instructions for agents.
 # ---------------------------------------------------------------------------
 
-# dr_skills_dir - where that store lives, derived from sbx's own location rather
-# than hard-coded: sbx.exe sits at <root>/bin/sbx.exe and the store under
-# <root>/sandboxes/state/. Prints the path whether or not it exists yet, and
-# returns 1 only when sbx cannot be found at all.
+# dr_skills_dir: the location of that store. It comes from the location of sbx,
+# and is not fixed in the code. sbx.exe is at <root>/bin/sbx.exe, and the store
+# is under <root>/sandboxes/state/. The function prints the path, also if it
+# does not exist yet. It returns 1 only when it cannot find sbx.
 dr_skills_dir() {
     local sbx_exe
     sbx_exe=$(dr_find_sbx) || return 1
     printf '%s/sandboxes/state/agent-skills' "$(dirname "$(dirname "$sbx_exe")")"
 }
 
-# dr_plugin_skills <plugin store> - "<skill> <plugin>@<marketplace> <version>" a
-# line, for every skill shipped by an INSTALLED plugin in that library.
+# dr_plugin_skills <plugin store>: one line "<skill> <plugin>@<marketplace>
+# <version>" for each skill of an INSTALLED plugin in that library.
 #
-# Here rather than in dr-plugin because dr-skills reports it too: a shell-out
-# between two commands that otherwise share nothing is a worse coupling than one
-# function they both call.
+# It is here and not in dr-plugin, because dr-skills reports it too. One shared
+# function is a better link than a call from one command to the other.
 #
-# A plugin DECLARES nothing about its skills - plugin.json carries hooks, MCP
-# servers and the rest - because skills are the convention skills/<name>/SKILL.md.
-# So this is a walk, not a query, and a directory with no SKILL.md is not a skill
-# and is skipped, which is what the agent does with it too.
+# A plugin DECLARES nothing about its skills. plugin.json holds hooks, MCP
+# servers, and more, but skills follow the convention skills/<name>/SKILL.md.
+# Thus this code walks the directories. It skips a directory without SKILL.md,
+# because that is not a skill. The agent skips it too.
 #
-# The front matter's `name:` wins over the directory name: it is what the agent
-# matches on, and the two are free to differ. Read with sed, one scalar, and no
-# YAML parser - `description:` is a block scalar in one shipped plugin already,
-# so a naive read of THAT would be wrong, and Draugr's dependencies are git, jq
-# and rsync. Same shallow read dr-kit uses for displayName.
+# The `name:` of the front matter wins over the directory name, because the
+# agent matches on it, and the two can differ. sed reads one scalar, with no
+# YAML parser. One plugin already has a block scalar for `description:`, so a
+# simple read of THAT is wrong. The dependencies of Draugr are git, jq, and
+# rsync. dr-kit reads displayName in the same simple way.
 #
-# Sorted, so the order does not depend on the order of keys in the JSON.
+# The output is sorted, so the order does not depend on the key order in the JSON.
 dr_plugin_skills() {
     local seed=$1/seed
     [ -f "$seed/installed_plugins.json" ] || return 0
     {
         local id ver plug mkt dir name
         while read -r id ver; do
-            # Both, and as two tests rather than A && B || C, which is not
-            # if-then-else. The version is half the cache path, so an entry
-            # without one cannot be located at all.
+            # Test both, as two tests. A && B || C is not if-then-else. The
+            # version is half of the cache path, so Draugr cannot find an entry
+            # without one.
             [ -n "$id" ] || continue
             [ -n "$ver" ] || continue
             plug=${id%@*}; mkt=${id#*@}
             for dir in "$seed/cache/$mkt/$plug/$ver"/skills/*/; do
                 [ -f "${dir}SKILL.md" ] || continue
                 name=$(sed -n 's/^name:[[:space:]]*//p' "${dir}SKILL.md" | head -1)
-                # An unnamed skill still loads, so fall back to the directory.
+                # A skill without a name still loads. Use the directory name.
                 [ -n "$name" ] || { name=${dir%/}; name=${name##*/}; }
                 printf '%s %s %s\n' "$name" "$id" "$ver"
             done
@@ -2736,208 +2806,216 @@ dr_plugin_skills() {
 # ---------------------------------------------------------------------------
 # Path keys, and the memory store
 #
-# An agent that keeps per-project state names the directory after the project's
-# ABSOLUTE PATH, so one repository has a different key on each side of the
-# boundary:
+# An agent that keeps a state for each project names the directory after the
+# ABSOLUTE PATH of the project. Thus one repository has a different key on
+# each side of the boundary:
 #
 #   Windows   C:\Code\Draugr       c--Code-Draugr
 #   WSL       /mnt/c/Code/Draugr   -mnt-c-Code-Draugr
 #   Mound     /c/Code/Draugr       -c-Code-Draugr
 #
-# The encoding is Claude Code's, and lib/agents/claude.sh explains what a copy
-# that crosses the boundary unrenamed does to an agent's memory. The encoder
-# lives HERE rather than there because Draugr's own store uses the Windows form
-# to name each repo's corner of it, whichever agent that repo runs.
+# The encoding is the one of Claude Code. lib/agents/claude.sh tells what
+# occurs to the memory of an agent when a copy crosses the boundary with no
+# rename. The encoder is HERE, not there. The store of Draugr uses the Windows
+# form to name the part of each repo, for each agent.
 # ---------------------------------------------------------------------------
 
-# dr_mem_key <absolute-path> - encode a path the way Claude Code names its folder.
+# dr_mem_key <absolute-path>: encode a path as Claude Code names its directory.
 #
-# Lowercase a Windows drive letter, then turn every "/", "\" and ":" into "-".
-# A leading separator therefore yields a leading "-", which is why the WSL and
-# mound forms start with one, and why the Windows form has "--" where "C:\" was.
+# Change a Windows drive letter to lowercase. Then change each "/", "\", and ":"
+# into "-". Thus a leading separator gives a leading "-". That is why the WSL
+# and mound forms start with "-", and why the Windows form has "--" in place
+# of "C:\".
 #
-# Only those three characters are known to be substituted; the rest of the path
-# keeps its case, as "c--Code-Draugr" shows. What a space or other punctuation in
-# a repo name does is NOT established, so dr-mem checks the answer against the
-# mound instead of trusting it.
+# Only those three characters are known to change. The rest of the path keeps
+# its case, as "c--Code-Draugr" shows. Nobody knows what occurs to a space or
+# other punctuation in a repo name. Thus dr-mem compares the answer with the
+# mound, and does not trust it.
 dr_mem_key() {
     local p=$1
-    # Lowercase the drive letter only - "Code" and "Draugr" keep their capitals.
+    # Change only the drive letter to lowercase. "Code" and "Draugr" keep their
+    # capitals.
     case "$p" in
         [A-Za-z]:*) p="$(printf '%s' "${p:0:1}" | tr '[:upper:]' '[:lower:]')${p:1}" ;;
     esac
-    # In single quotes '\\' is two characters, which tr reads as one escaped
-    # backslash - so SET1 is the three characters / \ : and SET2 is three
-    # hyphens. Not bash escaping, which is why shellcheck needs telling.
+    # In single quotes, '\\' is two characters. tr reads them as one escaped
+    # backslash. Thus SET1 is the three characters / \ : and SET2 is three
+    # hyphens. This is not an escape for bash. Thus the linter needs the
+    # directive below.
     # shellcheck disable=SC1003
     printf '%s' "$p" | tr '/\\:' '---'
 }
 
-# The same repo, keyed for each side. Each takes the WSL path, because that is
-# the one every dr-* command already has in DR_REPO.
+# The same repo, with the key for each side. Each function takes the WSL path,
+# because each dr-* command already has that path in DR_REPO.
 dr_mem_key_wsl()   { dr_mem_key "$1"; }
 dr_mem_key_win()   { dr_mem_key "$(dr_path_win "$1")"; }
 dr_mem_key_mound() { dr_mem_key "$(dr_path_mound "$1")"; }
 
-# Inside the mound the agent is uid 1000 with home /home/agent - verified, not
-# assumed: `sbx exec … id` reports uid=1000(agent) and $HOME=/home/agent.
-# shellcheck disable=SC2034  # read by the agent modules, which shellcheck does
-# not follow from here - every dr_agent_mem_dir is built on it
+# In the mound, the agent is uid 1000 with the home /home/agent. A test showed
+# this: `sbx exec … id` reports uid=1000(agent) and $HOME=/home/agent.
+# shellcheck disable=SC2034  # the agent modules read it, and the linter does
+# not follow them from here. Each dr_agent_mem_dir uses it.
 DR_MOUND_HOME=/home/agent
 
-# Where dr-mem assembles a transfer inside the mound. The carried set can be
-# several files in several places, so it is packed into this one directory and
-# moved in a single `sbx cp` - which is simpler, and leaves something whose
-# existence can be checked afterwards rather than trusted.
+# Where dr-mem collects a transfer in the mound. The transfer can be several
+# files in several places. Thus the code packs them into this one directory
+# and moves it with one `sbx cp`. That is simpler. After the copy, the code can
+# make sure that the directory exists, and does not have to trust it.
 #
-# Under .cache/ beside the attach rcfile: a scratch path the agent owns, that
-# nothing else reads, and that a wiped mound recreates.
-# shellcheck disable=SC2034  # read by dr-mem and the agent modules
+# It is under .cache/, next to the attach rcfile. The agent owns this temporary
+# path. Nothing else reads it, and a mound that was wiped creates it again.
+# shellcheck disable=SC2034  # dr-mem and the agent modules read it
 DR_MOUND_STAGE="$DR_MOUND_HOME/.cache/draugr/mem"
 
-# dr_mem_store_dir <repo> - this repo's corner of $DRAUGR_MEM_STORE.
+# dr_mem_store_dir <repo>: the part of $DRAUGR_MEM_STORE for this repo.
 #
-# Named with the WINDOWS key for two reasons: it has no leading "-", so it can
-# never be mistaken for an option by a command you type at it, and it is the
-# name a host-side Claude install would use for the same repo, so the store
-# stays recognisable when you go looking through it by hand.
+# Its name uses the WINDOWS key, for two reasons. It has no leading "-", so a
+# command cannot read it as an option. Also, a Claude install on the host uses
+# the same name for the same repo. Thus you can find your way in the store by
+# hand.
 #
-# Then by agent, because two agents' memories of the same project are two
-# different things that must not overwrite one another - and because they are
-# not even the same SHAPE: Claude Code's is a directory of markdown, Codex's is
-# markdown plus SQLite. Repo first rather than agent first, so that everything
-# about one project stays in one place when you go looking by hand.
+# Then a directory for each agent. The memories of two agents about the same
+# project are two different things. They must not overwrite each other. They
+# also do not have the same FORMAT. The memory of Claude Code is a directory
+# of markdown. The memory of Codex is markdown and SQLite. The repo comes
+# first, not the agent. Thus all data about one project stays in one place.
 dr_mem_store_dir() {
     printf '%s/%s/%s' "${DRAUGR_MEM_STORE%/}" "$(dr_mem_key_win "$1")" \
         "${DRAUGR_AGENT:-claude}"
 }
 
-# dr_mem_store_migrate <repo> - move a pre-0.2.0 store under its agent.
+# dr_mem_store_migrate <repo>: move a store from before 0.2.0 under its agent.
 #
-# Before the store was split by agent, this repo's memory sat directly in its
-# corner. Everything that could have written it was Claude Code, so that is
-# where it goes - NOT under whatever agent happens to be configured now, which
-# would file Claude's memories under Codex the first time you tried the new one.
+# Before the store had a directory for each agent, the memory of this repo was
+# directly in its part. Only Claude Code was able to write it. Thus it goes under
+# claude/. It does NOT go under the agent of the current configuration. If it
+# does, the first test of Codex puts the memories of Claude under Codex.
 #
-# Announced rather than silent: it is the user's data moving on disk, and one
-# line saying so is cheaper than the confusion of finding it somewhere else.
+# The code tells the user, and does not move the data silently. The data of the
+# user moves on the disk. One line of text costs less than the confusion when
+# the user finds the data in a different place.
 dr_mem_store_migrate() {
     local old new entry
     old="${DRAUGR_MEM_STORE%/}/$(dr_mem_key_win "$1")"
     new="$old/claude"
 
-    # The old shape is memory/ sitting directly in the corner. If claude/ already
-    # exists there is nothing to do, and a corner holding neither is a store this
-    # version wrote in the first place.
+    # The old format is memory/ directly in the part of the repo. If claude/
+    # already exists, there is nothing to do. A part that holds neither is a
+    # store that this version wrote.
     [ -d "$old/memory" ] || return 0
     [ -d "$new" ] && return 0
 
-    # The export marker and the one-mv-back copy move with it, or the store
-    # arrives in its new home having forgotten that it was ever exported - which
-    # is what makes `dr-mem import` trust it without asking.
+    # The export marker and the backup copy (one mv to restore) move with it.
+    # If not, the store in its new place forgets that it was exported. The
+    # marker is what makes `dr-mem import` trust it with no question.
     mkdir -p "$new"
     for entry in memory memory.previous .draugr-export; do
         if [ -e "$old/$entry" ]; then mv "$old/$entry" "$new/$entry"; fi
     done
-    dr_info "moved $old into claude/ - the memory store is now per agent"
+    dr_info "moved $old into claude/; the memory store now has one directory for each agent"
     return 0
 }
 
 # ---------------------------------------------------------------------------
-# Talking to the mound
+# Commands in the mound
 #
-# `sh -c 'script' sh ARG` makes ARG the script's $1. Passing paths as arguments
-# rather than splicing them into the script text means nothing in a path can be
-# re-read as shell syntax, and it keeps the scripts single-quoted and legible.
+# `sh -c 'script' sh ARG` makes ARG the $1 of the script. The paths go in as
+# arguments, not into the script text. Thus no part of a path can become shell
+# syntax, and the scripts stay in single quotes and easy to read.
 #
-# Agent modules use these, which is why they are here rather than in dr-mem
-# where they started: a module has to be able to look inside the mound to answer
-# anything about what the agent has actually written.
+# The agent modules use these functions. Thus they are here, and not in dr-mem,
+# where they were first. A module must be able to look into the mound, to
+# answer questions about what the agent wrote.
 # ---------------------------------------------------------------------------
 
-# Quiet: for probes and listings, where a failure is an answer rather than a
-# fault and sbx's own message would only be noise.
+# Quiet: for probes and lists. There, a failure is an answer and not a fault,
+# and the message of sbx is only noise.
 dr_mound_sh() {
     local script=$1; shift
     dr_sbx exec "$DRAUGR_SANDBOX" -- sh -c "$script" sh "$@" 2>/dev/null
 }
 
-# Loud: for the calls that change something, where the reason matters.
+# With messages: for the calls that change something. There, the reason of a
+# failure is important.
 dr_mound_run() {
     local script=$1; shift
     dr_sbx exec "$DRAUGR_SANDBOX" -- sh -c "$script" sh "$@"
 }
 
-# dr_stage - a scratch directory that sbx.exe can actually see.
+# dr_stage: a temporary directory that sbx.exe can see.
 #
-# `sbx cp` is a Windows binary and its HOST argument must be a WINDOWS path.
-# Measured against sbx 0.37.1: both of these fail,
+# `sbx cp` is a Windows binary, and its HOST argument must be a WINDOWS path.
+# A test on sbx 0.37.1 showed that both of these fail:
 #
 #   sbx cp <name>:/tmp/x /home/you/dest      ERROR: … GetFileAttributesEx \home\you
 #   sbx cp <name>:/tmp/x /mnt/c/Code/dest    ERROR: … GetFileAttributesEx \mnt\c\Code
 #
-# because sbx turns the leading "/" into "\" and looks for it on the current
-# drive. Only C:\… works. $DRAUGR_MEM_STORE may sit anywhere, including WSL's
-# own ext4 where sbx cannot reach at all, so every transfer hops through here:
-# .draugr/tmp/ inside the repo, which dr_require_win_path has already
-# guaranteed is on a Windows drive.
+# The reason is that sbx changes the leading "/" into "\", and looks for it on
+# the current drive. Only C:\… works. $DRAUGR_MEM_STORE can be anywhere, also on
+# the ext4 of WSL, where sbx cannot go. Thus each transfer goes through here:
+# .draugr/tmp/ in the repo. dr_require_win_path already made sure that the repo
+# is on a Windows drive.
 #
-# Sets DR_STAGE (the WSL path) and DR_STAGE_WIN (the same directory spelled for
-# sbx). The caller is expected to trap-remove DR_STAGE: it holds memory files,
-# which is exactly the sort of thing not to leave lying around after a crash.
+# It sets DR_STAGE (the WSL path) and DR_STAGE_WIN (the same directory, in the
+# format for sbx). The caller must remove DR_STAGE with a trap. It holds memory
+# files, and those must not stay on the disk after a crash.
 dr_stage() {
     DR_STAGE="$DR_REPO/.draugr/tmp/$$"
     rm -rf "$DR_STAGE"
     mkdir -p "$DR_STAGE"
-    # shellcheck disable=SC2034  # read by the dr-* command that called us
+    # shellcheck disable=SC2034  # the dr-* command that called this reads it
     DR_STAGE_WIN=$(dr_path_win "$DR_STAGE")
 }
 
 # ---------------------------------------------------------------------------
-# Talking to the mound over git
+# git to and from the mound
 # ---------------------------------------------------------------------------
 
 # dr_sandbox_url -> ssh://<sandbox>.sbx/<mound path>
 #
-# Always ssh, never the git:// daemon sbx publishes. That daemon binds *Windows*
-# loopback, which WSL2 cannot reach across its NAT, and its port is randomised on
-# every start. ssh needs no port, crosses no NAT, matches the *.sbx block dr-setup
-# writes, and - verified - starts a stopped sandbox when you connect to it.
+# Always ssh, never the git:// daemon that sbx publishes. That daemon listens
+# on the *Windows* loopback. WSL2 cannot connect to it across its NAT, and its
+# port changes at each start. ssh needs no port and no NAT crossing. It
+# matches the *.sbx block that dr-setup writes. A test showed that it also
+# starts a stopped sandbox when you connect.
 #
-# Reads DR_REPO and DRAUGR_SANDBOX rather than taking them as arguments: every
-# caller is past dr_context, so parameters would only be a second way to say the
-# same thing, and a chance for the two to disagree.
+# It reads DR_REPO and DRAUGR_SANDBOX, and does not take them as arguments.
+# Each caller already ran dr_context. Parameters are a second way to give the
+# same values, and the two can disagree.
 dr_sandbox_url() {
     local mound
     mound=$(dr_path_mound "$DR_REPO") || dr_die \
-        "$DR_REPO is not on a Windows drive, so it has no path inside the mound"
+        "$DR_REPO is not on a Windows drive, so it has no path in the mound"
 
-    # THE SAME PATH WORKS IN THE VM, which is the happy accident that makes this one line
-    # instead of a translation layer. The mound path is the WSL path with /mnt removed, so
-    # /mnt/c/Code/MyGame becomes /c/Code/MyGame - and MEASURED in the guest, git
-    # 2.56.0 from MSYS2 resolves /c/Users to C:\Users: `git -C /c/Users rev-parse` answered
-    # "not a git repository" rather than "cannot change to". So only the ssh HOST differs.
+    # THE SAME PATH WORKS IN THE VM. By good luck, this is one line and not a
+    # translation layer. The mound path is the WSL path without /mnt. Thus
+    # /mnt/c/Code/MyGame becomes /c/Code/MyGame. A test in the guest showed that
+    # git 2.56.0 from MSYS2 changes /c/Users into C:\Users. `git -C /c/Users
+    # rev-parse` answered "not a git repository", not "cannot change to". Thus
+    # only the ssh HOST is different.
     printf 'ssh://%s%s' "$(dr_sandbox_ssh_host)" "$mound"
 }
 
-# dr_sandbox_ssh_host - the ssh host that reaches this project's far end.
+# dr_sandbox_ssh_host: the ssh host for the far end of this project.
 #
-# ONE PLACE, because three commands build it and they must agree: dr-sync through
-# dr_sandbox_url, dr-data's rsync target, and dr-code's vscode-remote URI. They used to spell
-# "$DRAUGR_SANDBOX.sbx" each for themselves, which was fine while a mound was the only possible
-# far end and a silent inconsistency the moment one was not - dr-sync reaching the VM while
-# dr-data reached the mound is the kind of split that takes a day to see.
+# ONE PLACE, because three commands build it, and they must agree. They are dr-sync through
+# dr_sandbox_url, the rsync target of dr-data, and the vscode-remote URI of dr-code. Before,
+# each wrote "$DRAUGR_SANDBOX.sbx" itself. That was correct while a mound was the only
+# possible far end. When that changed, they became different with no message. If dr-sync
+# connects to the VM and dr-data connects to the mound, it takes a day to see it.
 #
-# A mound is <name>.sbx, resolved by the ProxyCommand sbx installs in ~/.ssh/config. A forge VM
-# is <name>.forge, resolved by the single `Host *.forge` block `dr-setup --forge` writes - one
-# block for every VM, because the host port is pinned and a per-VM block would be the same
-# bytes with a different Host line (docs/FORGE.md, "The pinned port has a price"). Neither is a
-# config key: one name for one machine is less to keep in sync than two, and `dr-forge doctor`
-# checks the alias resolves rather than leaving git to fail with "could not resolve hostname".
+# A mound is <name>.sbx. The ProxyCommand that sbx installs in ~/.ssh/config finds it. A forge
+# VM is <name>.forge. The one `Host *.forge` block that `dr-setup --forge` writes finds it.
+# There is one block for all VMs, because the host port is fixed. A block for each VM is
+# the same text with a different Host line (docs/FORGE.md, "The pinned port has a price").
+# Neither is a configuration key. One name for one machine is easier to keep correct than
+# two. `dr-forge doctor` makes sure that the alias resolves. Without it, git fails with
+# "could not resolve hostname".
 #
-# The suffix is spelled here AND in lib/forge/common.sh, which is not a duplication to tidy
-# away: no core script may source the forge library (docs/FORGE.md, "Optional by
-# construction"), so the two cannot share a definition. tests/forge.bats asserts they agree.
+# The suffix is written here AND in lib/forge/common.sh. Do not remove that duplicate. No
+# core script can source the forge library (docs/FORGE.md, "Optional by construction"),
+# so the two cannot share a definition. tests/forge.bats makes sure that they agree.
 dr_sandbox_ssh_host() {
     if [ -n "${DRAUGR_FORGE:-}" ] && [ "${DRAUGR_SANDBOX:-}" = "$DRAUGR_FORGE" ]; then
         printf '%s.forge' "$DRAUGR_FORGE"
@@ -2946,15 +3024,16 @@ dr_sandbox_ssh_host() {
     printf '%s.sbx' "${DRAUGR_SANDBOX:-}"
 }
 
-# dr_remote_ensure - point $DRAUGR_REMOTE at the mound, creating it if absent.
-# Prints the URL. Set rather than left alone, because renaming the sandbox or
-# moving the repo changes it and a stale remote fails in a confusing way.
+# dr_remote_ensure: set $DRAUGR_REMOTE to the mound. If the remote does not
+# exist, create it. It prints the URL. The code always sets the URL. A rename
+# of the sandbox or a move of the repo changes it, and an old remote fails in
+# a confusing way.
 dr_remote_ensure() {
     local url
     url=$(dr_sandbox_url)
 
-    # `git remote` lists names one per line; -x anchors so "draugr" cannot match
-    # a remote called "draugr-old".
+    # `git remote` lists one name on each line. -x anchors the match, so that
+    # "draugr" does not match a remote with the name "draugr-old".
     if git -C "$DR_REPO" remote | grep -qx "$DRAUGR_REMOTE"; then
         git -C "$DR_REPO" remote set-url "$DRAUGR_REMOTE" "$url"
     else
@@ -2962,14 +3041,14 @@ dr_remote_ensure() {
         dr_debug "added remote $DRAUGR_REMOTE -> $url"
     fi
 
-    # A second refspec, alongside git's default +refs/heads/*. dr-send drops your
-    # commits at refs/remotes/host/<branch> INSIDE the mound, which is a ref no
-    # amount of looking at refs/heads/* will ever show - so mirroring it back is
-    # the only way the host can tell "the mound has never seen this" apart from
-    # "the mound has it and the agent has not merged it". See dr_send_state.
+    # A second refspec, next to the default +refs/heads/* of git. dr-send puts
+    # your commits at refs/remotes/host/<branch> IN the mound. refs/heads/* never
+    # shows that ref. Only with a copy of it back can the host tell "the mound
+    # never got this" from "the mound has it, and the agent did not merge it".
+    # See dr_send_state.
     #
-    # --add, guarded, because git remote add already wrote one and a second call
-    # must not accumulate duplicates.
+    # Use --add with a guard. git remote add already wrote one refspec, and a
+    # second call must not add duplicates.
     if ! git -C "$DR_REPO" config --get-all "remote.$DRAUGR_REMOTE.fetch" \
          | grep -qxF "$DR_SENT_REFSPEC"; then
         git -C "$DR_REPO" config --add "remote.$DRAUGR_REMOTE.fetch" "$DR_SENT_REFSPEC"
@@ -2977,23 +3056,23 @@ dr_remote_ensure() {
     printf '%s' "$url"
 }
 
-# Kept out of refs/remotes/ on purpose: everything there is "branches in the
-# mound", and this is the mound's copy of OUR branch. Under refs/remotes it would
-# turn up in git branch -r and in dr_other_branches, reported as work to review.
+# Not in refs/remotes/, on purpose. All refs there are "branches in the mound",
+# and this is the copy of OUR branch in the mound. Under refs/remotes, it shows
+# in git branch -r and in dr_other_branches, as work to review.
 DR_SENT_REFSPEC='+refs/remotes/host/*:refs/draugr/sent/*'
 
 dr_sent_ref() { printf 'refs/draugr/sent/%s' "$DRAUGR_BRANCH"; }
 
-# dr_send_state - why the mound's branch is behind yours. Two situations that are
-# indistinguishable from draugr/<branch> alone:
+# dr_send_state: why the branch of the mound is behind your branch. With only
+# draugr/<branch>, you cannot tell these two cases apart:
 #
-#   not-sent   the mound has never received these         -> dr-send
-#   unmerged   dr-send delivered them; the agent's branch  -> dr-send --merge
-#              has not merged host/<branch> yet
+#   not-sent   the mound never got these commits          -> dr-send
+#   unmerged   dr-send gave them, but the branch of the    -> dr-send --merge
+#              agent did not merge host/<branch> yet
 #
-# Without the distinction dr-sync said "send them with dr-send" for ever: you
-# sent, it still said send, and re-sending was a no-op because the commits were
-# already sitting there. Reported by a user going round that loop twice.
+# Without this difference, dr-sync always said "send them with dr-send". You
+# sent, it still said send, and a second send did nothing, because the commits
+# were already there. A user went around that loop two times and reported it.
 dr_send_state() {
     local sent
     sent=$(dr_sent_ref)
@@ -3001,8 +3080,8 @@ dr_send_state() {
         printf 'not-sent\n'
         return 0
     fi
-    # Ancestor rather than equality: sending, then committing once more locally,
-    # leaves you genuinely with something new to send.
+    # Test for an ancestor, not for equality. If you send, then commit one more
+    # time locally, you really have something new to send.
     if git -C "$DR_REPO" merge-base --is-ancestor HEAD "$sent" 2>/dev/null; then
         printf 'unmerged\n'
     else
@@ -3010,33 +3089,35 @@ dr_send_state() {
     fi
 }
 
-# dr_tracking_ref - <remote>/<branch>, the thing dr-log, dr-diff, dr-merge and
-# dr-status all compare against. Named once here so they cannot disagree.
+# dr_tracking_ref: <remote>/<branch>. dr-log, dr-diff, dr-merge, and dr-status
+# all compare with it. It is named one time here, so that they cannot disagree.
 dr_tracking_ref() {
     printf '%s/%s' "$DRAUGR_REMOTE" "$DRAUGR_BRANCH"
 }
 
-# dr_other_branches - fetched mound branches holding commits your HEAD does not.
+# dr_other_branches: fetched branches of the mound with commits that your HEAD
+# does not have.
 #
-# The remote's refspec is +refs/heads/*:refs/remotes/<remote>/*, so dr-sync has
-# always fetched EVERY branch. Only the report was narrow: it looked at
-# draugr/$DRAUGR_BRANCH and nothing else. An agent that works on a branch of its
-# own - which agents habitually do - was therefore invisible. The commits were
-# already on this disk and dr-sync, dr-log and dr-diff all said there was nothing
-# there. That is how a session's work went missing for a day.
+# The refspec of the remote is +refs/heads/*:refs/remotes/<remote>/*. Thus
+# dr-sync always fetched EACH branch. Only the report was narrow. It looked at
+# draugr/$DRAUGR_BRANCH and nothing else. Agents often work on their own
+# branch, and such work was not visible. The commits were already on this disk,
+# but dr-sync, dr-log, and dr-diff all said that there was nothing. That is how
+# the work of a session was lost for a day.
 #
-# Prints "<ref> <count>" per line. The tracked branch is excluded because its
-# caller reports it separately, and <remote>/HEAD because it is a symref to one
-# of these rather than a branch of its own.
+# It prints "<ref> <count>" on each line. It excludes the tracked branch,
+# because its caller reports it separately. It also excludes <remote>/HEAD,
+# because that is a symref to one of these branches, not a branch itself.
 #
-# The FULL refname, deliberately: %(refname:short) is unsafe for that second
-# exclusion. refs/remotes/<name>/HEAD is one of git's own rev-parse rules, so it
-# shortens to "draugr" - NOT "draugr/HEAD" - and a */HEAD guard on the short form
-# never fires. Nothing created that ref until git 2.49 made `git fetch` do it by
-# default (remote.<name>.followRemoteHEAD=create); from then on every sync
-# reported "1 branch(es) you are NOT tracking: draugr", naming the branch you are
-# already on and taking the review hint with it. Found in CI, whose git is newer
-# than the one on the machine this was written on.
+# Use the FULL refname, on purpose. %(refname:short) is not safe for that
+# second exclusion. refs/remotes/<name>/HEAD is one of the rev-parse rules of
+# git. Thus it becomes "draugr", NOT "draugr/HEAD", and a */HEAD guard on the
+# short form never matches. Nothing created that ref until git 2.49. Then
+# `git fetch` started to create it by default
+# (remote.<name>.followRemoteHEAD=create). After that, each sync reported
+# "1 branch(es) you are NOT tracking: draugr". It named your current branch,
+# and the hint to review was wrong. CI found it, because its git was newer than
+# the git on the machine where this code was written.
 dr_other_branches() {
     local tracked ref count
     tracked=$(dr_tracking_ref)
@@ -3052,49 +3133,51 @@ dr_other_branches() {
     return 0
 }
 
-# dr_require_tracking_ref - fail helpfully when there is nothing fetched yet,
-# which is the normal state before the first dr-sync and reads as a git error
-# otherwise.
+# dr_require_tracking_ref: give a useful failure when nothing is fetched yet.
+# That is the normal state before the first dr-sync. Without this function, it
+# looks like a git error.
 dr_require_tracking_ref() {
     local ref
     ref=$(dr_tracking_ref)
     git -C "$DR_REPO" rev-parse --verify --quiet "$ref" >/dev/null && return 0
     dr_die \
-        "nothing fetched from the mound yet ($ref does not exist)" \
-        "Fetch the agent's commits first:  dr-sync"
+        "nothing is fetched from the mound yet ($ref does not exist)" \
+        "First, fetch the commits of the agent:  dr-sync"
 }
 
 # ---------------------------------------------------------------------------
-# Run-state dependencies: claims, and what makes one valid
+# Run-state dependencies: claims, and what makes a claim valid
 #
-# A repository that names another in DRAUGR_REQUIRES needs that repository's
-# mound RUNNING, and says so by writing a claim. The design is docs/DEPENDENCIES.md;
-# what matters here is the single rule that keeps it honest:
+# A repository that names a different repository in DRAUGR_REQUIRES needs the
+# mound of that repository to be RUNNING. It says so with a claim. The design is
+# in docs/DEPENDENCIES.md. Here, one rule keeps the design correct:
 #
-#   A claim is never trusted because it exists. It counts only while its
-#   claimant is real - that repository's mound running, or the claim younger
-#   than the grace below, which covers the minute between claiming and building.
+#   A claim is never trusted only because it exists. It counts only while its
+#   claimant is real: the mound of that repository runs, or the claim is
+#   younger than the grace time below. The grace time covers the minute
+#   between the claim and the build.
 #
-# That is what makes the mechanism self-healing rather than something to clean
-# up. A host that reboots wakes with every claim stale, because nothing is
-# running. A crashed dr-up leaves one that ages out. A mound stopped by hand
-# releases its claim by the act of stopping, whether or not anyone said so.
+# Thus the mechanism repairs itself, and nobody must clean it up. After a
+# reboot of the host, each claim is stale, because nothing runs. A dr-up that
+# crashed leaves a claim that becomes too old. A mound that you stop by hand
+# releases its claim when it stops, with or without a message.
 # ---------------------------------------------------------------------------
 
-# Run-state, not configuration: deleted freely, never backed up, meaningless on
-# another machine, and it would make ~/.config/draugr unsafe to copy. House rule
-# 7 names this directory for that reason. $HOME is redirected under test, so
-# tests land in their own tree without a special case here.
+# Run state, not configuration. Draugr can delete it at any time, it is never
+# backed up, and it has no meaning on a different machine. In ~/.config/draugr,
+# it makes that directory unsafe to copy. House rule 7 names this
+# directory for that reason. The tests redirect $HOME, so they get their own
+# tree with no special case here.
 DR_RUN_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/draugr/run"
 
-# How long a claim counts before the claimant's mound exists. The window is
-# real: the dependency must be up BEFORE the consumer's mound is created, so a
-# consumer claims first and builds second, and a cold create costs about a
-# minute. Overridable so tests do not have to sleep.
+# How long a claim counts before the mound of the claimant exists. The time is
+# necessary. The dependency must run BEFORE Draugr creates the mound of the
+# consumer. Thus a consumer claims first and builds second, and a cold create
+# takes about a minute. Tests can change the value, so that they do not sleep.
 DR_DEP_GRACE=${DR_DEP_GRACE:-300}
 
-# SHA-256 of a string rather than of a file, for turning a repository path into
-# a file name. Same two-tool fallback as _dr_hash, and the same reason.
+# The SHA-256 of a string, not of a file. It changes a repository path into a
+# file name. It uses the same two tools as _dr_hash, for the same reason.
 _dr_hash_text() {
     if command -v sha256sum >/dev/null 2>&1; then
         printf '%s' "$1" | sha256sum | cut -d' ' -f1
@@ -3105,63 +3188,65 @@ _dr_hash_text() {
     fi
 }
 
-# dr_dep_dir <key> - where the claims on one resource live.
+# dr_dep_dir <key>: the directory of the claims on one resource.
 #
-# A key is a sandbox name, or something like "vm:UE5-Test" for a resource that
-# is not a mound at all: dr-forge claims the VM through this same code, so that
-# "exclusive" means one thing on the machine rather than two. Anything outside
+# A key is a sandbox name, or a value such as "vm:UE5-Test" for a resource
+# that is not a mound. dr-forge claims the VM through this code too. Thus
+# "exclusive" has one meaning on the machine, not two. Each character outside
 # the safe set becomes "_", because the key becomes a directory name.
 dr_dep_dir() {
     printf '%s/%s' "$DR_RUN_DIR" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
 }
 
-# dr_dep_claim_file <key> <repo> - one claimant's claim on one resource.
+# dr_dep_claim_file <key> <repo>: the claim of one claimant on one resource.
 #
-# Named after a hash of the claimant's path, because a path contains "/" and may
-# contain anything else; the path itself is inside the file, so nothing is lost.
-# Hashing the path is also what makes the claim per REPOSITORY: a second
-# terminal in the same project writes the same file rather than a second claim,
-# which is what "re-entrant" means in practice.
+# Its name is a hash of the path of the claimant. A path contains "/" and can
+# contain any other character. The path itself is in the file, so nothing is
+# lost. The hash also makes the claim one for each REPOSITORY. A second
+# terminal in the same project writes the same file, not a second claim. That
+# is what "re-entrant" means here.
 dr_dep_claim_file() {
     printf '%s/%s.claim' "$(dr_dep_dir "$1")" "$(_dr_hash_text "$2")"
 }
 
-# _dr_dep_field <file> <name> - one field out of a claim file.
+# _dr_dep_field <file> <name>: one field from a claim file.
 #
-# Claim files are "name=value" lines, read rather than sourced. Sourcing would
-# make a file that anything on the machine can write into shell code that this
-# process runs, and no claim is worth that.
+# Claim files are "name=value" lines. The code reads them and does not source
+# them. Any process on the machine can write such a file. If this process
+# sources it, the file becomes shell code that this process runs. No
+# claim is worth that risk.
 _dr_dep_field() {
     sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1
 }
 
-# dr_dep_claim_valid <file> [<running-list>] - is this claim still real?
+# dr_dep_claim_valid <file> [<running-list>]: is this claim still real?
 #
-# The running list is passed in by callers that are about to check several
-# claims, so that one `sbx ls` answers for all of them instead of one per claim.
+# A caller that tests several claims gives the running list. Then one
+# `sbx ls` answers for all claims, not one for each claim.
 dr_dep_claim_valid() {
     local file=$1 running=${2-} sandbox age now since
 
-    # Younger than the grace: valid whatever sbx says, because the claimant is
-    # very likely still inside the dr-up that wrote it.
+    # Younger than the grace time: valid, whatever sbx says. The claimant is
+    # very probably still in the dr-up that wrote it.
     since=$(_dr_dep_field "$file" since_epoch)
     now=$(date +%s)
     age=$(( now - ${since:-0} ))
     [ "$age" -lt "$DR_DEP_GRACE" ] && return 0
 
-    # Otherwise the claimant's mound decides. No sandbox recorded means the
-    # claim came from something that is not a mound; there is nothing to check
-    # against, so the grace above is all it ever gets.
+    # If not, the mound of the claimant decides. If no sandbox is recorded,
+    # the claim came from something that is not a mound. There is nothing to
+    # test, so the claim gets only the grace time above.
     sandbox=$(_dr_dep_field "$file" sandbox)
     [ -n "$sandbox" ] || return 1
     [ -n "$running" ] || running=$(dr_sandboxes_running || true)
     printf '%s\n' "$running" | grep -qxF "$sandbox"
 }
 
-# dr_dep_claims <key> - every VALID claim, as "<repo>\t<sandbox>\t<since>".
+# dr_dep_claims <key>: each VALID claim, as "<repo>\t<sandbox>\t<since>".
 #
-# Read-only on purpose: a status command must not delete anything, so stale
-# files are ignored here and removed by dr_dep_prune, which the writers call.
+# It only reads, on purpose. A status command must not delete anything. Thus
+# this function ignores stale files, and dr_dep_prune removes them. The
+# functions that write claims call dr_dep_prune.
 dr_dep_claims() {
     local dir file running
     dir=$(dr_dep_dir "$1")
@@ -3177,7 +3262,7 @@ dr_dep_claims() {
     done
 }
 
-# dr_dep_prune <key> - drop the claim files that no longer count.
+# dr_dep_prune <key>: remove the claim files that do not count now.
 dr_dep_prune() {
     local dir file running
     dir=$(dr_dep_dir "$1")
@@ -3189,15 +3274,17 @@ dr_dep_prune() {
     done
 }
 
-# dr_dep_claim <key> <repo> <sandbox> [exclusive] - claim a resource.
+# dr_dep_claim <key> <repo> <sandbox> [exclusive]: claim a resource.
 #
-# Idempotent for the same repository: re-claiming refreshes the timestamp, which
-# is what makes a second terminal, and a dr-up that runs every morning, free.
+# For the same repository, it is idempotent (safe to run two times). A second
+# claim updates the time. Thus a second terminal, and a dr-up each morning,
+# cost nothing.
 #
-# Exclusivity is checked against the other VALID claims, after pruning, so a
-# lock whose holder is gone is taken over rather than waiting for somebody to
-# delete a file. Two dr-ups racing are decided by mkdir, which is atomic: the
-# loser sees the winner's claim and is refused by name.
+# The code compares an exclusive claim with the other VALID claims, after the
+# cleanup. Thus if the holder of a lock is gone, the new claim takes the lock.
+# It does not wait for somebody to delete a file. When two dr-ups run at the
+# same time, mkdir decides, because it is atomic. The loser sees the claim of
+# the winner, and gets a refusal that names the winner.
 dr_dep_claim() {
     local key=$1 repo=$2 sandbox=$3 exclusive=${4:-false} file dir other
 
@@ -3206,108 +3293,111 @@ dr_dep_claim() {
     dr_dep_prune "$key"
     file=$(dr_dep_claim_file "$key" "$repo")
 
-    # Refuse before writing anything, and name the holder: a lock that says only
-    # "in use" leaves the user with nothing to do next.
+    # Refuse before the code writes anything, and name the holder. A lock that
+    # says only "in use" does not tell the user what to do next.
     if dr_is_true "$exclusive" && [ ! -f "$file" ]; then
         other=$(dr_dep_claims "$key" | head -1)
         if [ -n "$other" ]; then
-            dr_die "$key is exclusive, and $(printf '%s' "$other" | cut -f1) has been using it since $(printf '%s' "$other" | cut -f3)" \
-                   "Its own config says DRAUGR_EXCLUSIVE=true, so one project at a time." \
-                   "Stop that project's mound, or release it there:  dr-dep release"
+            dr_die "$key is exclusive, and $(printf '%s' "$other" | cut -f1) uses it since $(printf '%s' "$other" | cut -f3)" \
+                   "Its own configuration says DRAUGR_EXCLUSIVE=true, so only one project at a time can use it." \
+                   "Stop the mound of that project, or release it there:  dr-dep release"
         fi
     fi
 
-    # Written whole and moved into place, so that a reader never sees half a
-    # claim: every field is written by one process and appears at once. The key
-    # is recorded as it was given, because the directory name has been through
-    # tr and "vm:UE5-Test" cannot be read back out of "vm_UE5-Test".
+    # The code writes the full file, then moves it into place. Thus a reader
+    # never sees half a claim. One process writes all fields, and they appear
+    # at the same time. The key is recorded as it was given. The directory name
+    # went through tr, and "vm_UE5-Test" cannot give back "vm:UE5-Test".
     printf 'key=%s\nrepo=%s\nsandbox=%s\nsince=%s\nsince_epoch=%s\n' \
         "$key" "$repo" "$sandbox" "$(date '+%Y-%m-%d %H:%M')" "$(date +%s)" > "$file.tmp"
     mv "$file.tmp" "$file"
 }
 
-# dr_dep_unclaim <key> <repo> - give one resource back.
+# dr_dep_unclaim <key> <repo>: give one resource back.
 dr_dep_unclaim() {
     rm -f "$(dr_dep_claim_file "$1" "$2")"
 }
 
-# dr_dep_requires [<repo>] - the repositories this one needs, as absolute paths.
+# dr_dep_requires [<repo>]: the repositories that this one needs, as absolute paths.
 #
-# Resolution follows DRAUGR_KIT's habit, because a path in a config file should
-# mean the same thing everywhere: "~" is the user's home, a relative path is
-# relative to the repository that asked, and an absolute path is itself.
+# The rules are the same as for DRAUGR_KIT. A path in a configuration file
+# must have the same meaning everywhere. "~" is the home of the user. A
+# relative path starts from the repository that asked. An absolute path is
+# itself.
 dr_dep_requires() {
     local repo=${1:-$DR_REPO} entry path
     local -a list
     read -ra list <<< "${DRAUGR_REQUIRES:-}"
     for entry in "${list[@]+"${list[@]}"}"; do
-        # A tilde written inside quotes is not expanded by the shell that sourced
-        # the config, and a list of two paths has to be quoted - so the first
-        # branch expands the literal prefix rather than leaving a path nobody can
-        # see is wrong. shellcheck reads that pattern as a failed expansion; it is
-        # a match against two characters.
+        # The shell that sourced the configuration does not expand a tilde in
+        # quotes. A list of two paths must have quotes. Thus the first branch
+        # expands the literal prefix. If not, the path is wrong, and nobody can
+        # see it. The linter reads that pattern as a failed expansion. It is a
+        # match of two characters.
         # shellcheck disable=SC2088
         case "$entry" in
             '~/'*) path="$HOME/${entry#'~/'}" ;;
             /*)    path=$entry ;;
             *)     path="$repo/$entry" ;;
         esac
-        # Canonical, so that two spellings of one repository are one claimant:
-        # the claim file is named after this string.
+        # Canonical, so that two spellings of one repository are one claimant.
+        # The name of the claim file comes from this string.
         printf '%s\n' "$(cd "$path" 2>/dev/null && pwd || printf '%s' "$path")"
     done
 }
 
-# dr_dep_trusted <repo> - refuse to treat an unreviewed repository as a dependency.
+# dr_dep_trusted <repo>: refuse a dependency on a repository that nobody read.
 #
-# Requiring a repository means running its dr-up, which sources its .draugr.conf
-# and runs its hooks, on this machine, as you. That is the exposure dr-trust
-# exists for - but dr_trust_check WARNS and carries on, and a config that never
-# gets sourced leaves DRAUGR_SANDBOX at its default "draugr-<leaf>". Claiming
-# and starting the wrong mound is the failure that produces, so this refuses
-# instead. Same check dr-trust records, one fatal step earlier.
+# To require a repository is to run its dr-up. dr-up sources its .draugr.conf
+# and runs its hooks, on this machine, as you. dr-trust exists for that risk.
+# But dr_trust_check only WARNS and continues. If the configuration is never
+# sourced, DRAUGR_SANDBOX keeps its default "draugr-<leaf>". The result is a
+# claim on the wrong mound, and a start of it. Thus this function refuses. It
+# is the same test that dr-trust records, as a fatal error one step earlier.
 dr_dep_trusted() {
     local repo=$1 file
     for file in "$repo/.draugr.conf" "$repo/.draugr.local.conf"; do
         [ -f "$file" ] || continue
         dr_trust_is_trusted "$file" && continue
-        dr_die "$repo is required by this repo, and its config is untrusted" \
-               "It is shell code, and requiring it means running it." \
-               "Read it, then:  dr-trust $file"
+        dr_die "this repo requires $repo, and the configuration of $repo is not trusted" \
+               "It is shell code. To require it is to run it." \
+               "Read it, then run:  dr-trust $file"
     done
 }
 
-# dr_dep_config <repo> <KEY> - one setting as that repository sees it.
+# dr_dep_config <repo> <KEY>: one value, as that repository sees it.
 #
-# Asks dr-config rather than parsing the file: it is the only thing that applies
-# the whole cascade, and half-parsing a shell file with grep would be a second,
-# worse config reader. The trust check above runs first, so a value that came
-# from defaults-because-untrusted cannot reach us.
+# It asks dr-config, and does not parse the file. Only dr-config applies all
+# the configuration layers. A partial parse of a shell file with grep is a
+# second, worse configuration reader. The trust test above runs first. Thus a
+# default value that came from a file that is not trusted cannot get here.
 dr_dep_config() {
     local repo=$1 key=$2 bin
-    # Our own bin/, worked out from this file rather than taken from the caller:
-    # every command sets $_dr_bin, but a helper that depends on its caller having
-    # done so breaks the moment something new calls it.
+    # The bin/ of Draugr, found from this file, not taken from the caller. Each
+    # command sets $_dr_bin. But a helper that needs its caller to do so breaks
+    # when a new caller uses it.
     bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../bin" && pwd)
     ( cd "$repo" && env "${_DR_DEP_CLEAN_ENV[@]}" "$bin/dr-config" "$key" ) 2>/dev/null
 }
 
-# Every DRAUGR_* key, spelled as arguments that unset it: "env -u DRAUGR_AGENT …".
+# Each DRAUGR_* key, as arguments that unset it: "env -u DRAUGR_AGENT …".
 #
-# A dependency's config is the authority on that dependency, so its commands run
-# with OURS out of the way. Ours could be in the environment for a reason that
-# has nothing to do with it - dr_hook exports all of them before running a hook,
-# and they stay exported for the rest of the process - and environment beats
-# every config file in the cascade. Without this, one repo with a pre-up hook
-# would silently claim and start another repo's mound under its own name.
+# The configuration of a dependency decides about that dependency. Thus its
+# commands run without OUR values. Our values can be in the environment for a
+# reason that has no relation to it. dr_hook exports all of them before it runs
+# a hook, and they stay exported for the rest of the process. The environment
+# wins over each configuration file. Without this list, one repo with a pre-up
+# hook claims and starts the mound of a different repo under its own name,
+# with no message.
 declare -ga _DR_DEP_CLEAN_ENV=()
 for _dr_k in "${DR_KEYS[@]}"; do _DR_DEP_CLEAN_ENV+=(-u "$_dr_k"); done
 unset _dr_k
 
-# dr_dep_seconds <duration> - "10m" -> 600. "off" and anything empty -> "".
+# dr_dep_seconds <duration>: "10m" -> 600. "off" and an empty value -> "".
 #
-# Three suffixes, because a linger is minutes and nobody should have to write
-# 600. An unparseable value is a config error rather than a guess.
+# Three suffixes, because a linger time is in minutes, and nobody must have
+# to write 600. A value that the code cannot read is a configuration error.
+# The code does not guess.
 dr_dep_seconds() {
     local v=$1 n=${1%[smh]}
     case "$v" in
@@ -3326,48 +3416,50 @@ dr_dep_seconds() {
 }
 
 # ---------------------------------------------------------------------------
-# Hooks - run on the HOST (WSL), which is exactly what a kit's commands cannot do.
+# Hooks: they run on the HOST (WSL). The commands of a kit cannot do that.
 # ---------------------------------------------------------------------------
 
 dr_hook() {
     local name=$1 repo=${2:-$PWD} hook
     hook="$repo/.draugr/hooks/$name"
 
-    # No hook, or not executable: silently fine. Hooks are opt-in.
+    # If there is no hook, or it is not executable, return with no message.
+    # Hooks are optional.
     [ -x "$hook" ] || return 0
 
-    # Trusted first, and for exactly the reason .draugr.conf is. A hook is a
-    # script that runs on the HOST, as you - strictly more dangerous than the
-    # config file sitting beside it, which has been trust-checked since Phase 1.
+    # First the trust test, for the same reason as for .draugr.conf. A hook is
+    # a script that runs on the HOST, as you. It is more dangerous than the
+    # configuration file next to it, which has a trust test since Phase 1.
     #
-    # It lives in the repository, so it arrives with a clone and can arrive with
-    # a `dr-merge` of the agent's own commits. Without this check, an agent that
-    # writes .draugr/hooks/pre-up and gets it merged executes code on your
-    # machine at the next dr-up - measured, before this line existed.
+    # It is in the repository. Thus it comes with a clone, and it can come with
+    # a `dr-merge` of the commits of the agent. Without this test, an agent can
+    # write .draugr/hooks/pre-up and get it merged. The code then runs on your
+    # machine at the next dr-up. A test showed this, before this line existed.
     #
-    # Refusing rather than prompting: dr_hook is called mid-command, often after
-    # a mound has been created, and "your hook did not run" is a safer surprise
-    # than "something you have not read just ran".
+    # Refuse, and do not prompt. dr_hook runs in the middle of a command, often
+    # after the mound was created. "Your hook did not run" is a safer surprise
+    # than "something that you did not read just ran".
     dr_trust_check "$hook" || dr_die \
-        "refusing to run an untrusted hook: $hook" \
-        "Hooks run on your machine, as you, with the config in their environment." \
-        "Read it, then:  dr-trust $hook"
+        "refused to run a hook that is not trusted: $hook" \
+        "Hooks run on your machine, as you, with the configuration in their environment." \
+        "Read it, then run:  dr-trust $hook"
 
     dr_debug "running hook $name"
 
-    # A hook is a separate process, so the merged config has to be exported to
-    # reach it. ${k?} is the form shellcheck accepts for "export by name".
+    # A hook is a separate process. Thus the code must export the merged
+    # configuration to it. The linter accepts ${k?} for "export by name".
     local k
     for k in "${DR_KEYS[@]}"; do export "${k?}"; done
     export DRAUGR_REPO="$repo" DRAUGR_HOOK="$name"
 
-    # A failing hook is fatal: it exists to veto, so ignoring it would defeat it.
+    # A hook that fails is fatal. A hook exists to stop the command, so the
+    # code must not ignore it.
     "$hook" || dr_die "hook $name failed (exit $?)" "Hook: $hook"
 }
 
-# One agent module is always loaded, from the moment this file is sourced. Some
-# commands - dr-skills, dr-setup - never read a config at all, and a dr_agent_*
-# function that existed only after dr_load_config would be a trap for whoever
-# adds the next caller. dr_load_config loads it again once the cascade has had
-# its say, which is the load that decides.
+# One agent module is always loaded, from the time that this file is sourced.
+# Some commands (dr-skills, dr-setup) never read a configuration. If a
+# dr_agent_* function existed only after dr_load_config, it is a trap for
+# the next caller. dr_load_config loads the module again after the
+# configuration layers have their final values. That load decides.
 dr_agent_load

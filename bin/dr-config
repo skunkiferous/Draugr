@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# dr-config - the merged configuration, with the origin of every value.
+# dr-config: the merged configuration, with the origin of each value.
 #
-# "Why is it doing that" should always be one command away.
+# "Why does it do that?" is one command away.
 #
-#   dr-config              every key, with where its value came from
-#   dr-config KEY          just that key's value, bare (for scripts)
+#   dr-config              each key, and where its value came from
+#   dr-config KEY          only the value of that key, bare (for scripts)
 #   dr-config --changed    only the keys that are not built-in defaults
-#   dr-config --files      which config files exist, and whether they are trusted
+#   dr-config --files      the configuration files, and if they are trusted
 set -euo pipefail
 
 DR_PROG=dr-config
-# readlink -f first: install.sh links this into ~/.local/bin by default, and
-# through a link BASH_SOURCE is the LINK, so ../lib would be ~/.local/lib.
+# readlink -f comes first. install.sh links this file into ~/.local/bin, and
+# through a link BASH_SOURCE is the LINK. Without it, ../lib is ~/.local/lib.
 _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../lib/common.sh
@@ -20,7 +20,7 @@ _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 mode=all
 key=
 
-# Any non-option argument is taken as a single setting to print bare.
+# An argument that is not an option is one setting to print bare.
 while [ $# -gt 0 ]; do
     case "$1" in
         --changed) mode=changed ;;
@@ -32,46 +32,46 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# `|| true` because being outside a repository is fine here - dr-config still has
-# machine-level settings to show. Without it, `set -e` would abort.
+# `|| true`, because dr-config also works outside a repository. It then shows
+# the configuration of the machine. Without it, `set -e` stops the script.
 repo=$(git rev-parse --show-toplevel 2>/dev/null || true)
 dr_load_config "$repo"
 
 if [ "$mode" = one ]; then
-    # Is $key one of ours? "${DR_KEYS[*]}" joins the array into one space-
-    # separated string; padding both it and the needle with spaces means we
-    # match whole words only, so "AGENT" cannot match inside "DRAUGR_AGENT".
+    # Is $key one of ours? "${DR_KEYS[*]}" joins the array into one string,
+    # with spaces between. Both strings get a space at each end. Thus only whole
+    # words match, and "AGENT" does not match inside "DRAUGR_AGENT".
     case " ${DR_KEYS[*]} " in
-        # ${!key-} is an indirect read: the value of the variable NAMED by $key,
-        # empty rather than an error when that variable is unset - which the
-        # DRAUGR_AGENT_ARGS_<AGENT> keys are until someone sets one.
-        # Printed bare, with no label, so scripts can use:  x=$(dr-config DRAUGR_AGENT)
+        # ${!key-} is an indirect read: the value of the variable that $key
+        # NAMES. An unset variable gives an empty value, not an error. The
+        # DRAUGR_AGENT_ARGS_<AGENT> keys are unset until someone sets one. It
+        # prints bare, with no label, for scripts:  x=$(dr-config DRAUGR_AGENT)
         *" $key "*) printf '%s\n' "${!key-}" ;;
-        *) dr_die "no such setting: $key" "Run dr-config with no arguments to list them all." ;;
+        *) dr_die "no such setting: $key" "To list all settings, run dr-config with no arguments." ;;
     esac
     exit 0
 fi
 
-# --files: which layers exist, and whether each is trusted. Answers "why is my
-# .draugr.conf being ignored" without making anyone read the loader.
+# --files: which layers exist, and the trust state of each one. It tells why
+# Draugr ignores a .draugr.conf, so nobody must read the loader.
 if [ "$mode" = files ]; then
     printf '%-46s %-9s %s\n' "FILE" "EXISTS" "TRUSTED"
 
-    # Same three layers, in the same order, as dr_load_config sources them.
-    # ${repo:+…} collapses the project entries to empty when outside a repo.
+    # The three layers that dr_load_config sources, in the same order. Outside a
+    # repo, ${repo:+…} makes the project entries empty.
     for f in "$DR_CONFIG_USER/config" \
              "${repo:+$repo/.draugr.conf}" \
              "${repo:+$repo/.draugr.local.conf}"
     do
         [ -n "$f" ] || continue
         if [ -f "$f" ]; then
-            # Your own config is never subject to trust; project files are.
+            # Trust applies to project files, not to your own configuration.
             case "$f" in
                 "$DR_CONFIG_USER"/*) t="n/a (yours)" ;;
-                # Red, because a "no" here means the file is being ignored
-                # wholesale - the one thing in this table worth noticing.
+                # Red, because "no" means that Draugr ignores the whole file.
+                # It is the one important item in this table.
                 *) if dr_trust_is_trusted "$f"; then t="yes"
-                   else t="${_DR_RED}NO - not sourced, run dr-trust${_DR_OFF}"; fi ;;
+                   else t="${_DR_RED}NO: not sourced, run dr-trust${_DR_OFF}"; fi ;;
             esac
             printf '%-46s %-9s %b\n' "$f" "yes" "$t"
         else
@@ -81,54 +81,53 @@ if [ "$mode" = files ]; then
     exit 0
 fi
 
-[ -n "$repo" ] || dr_warn "not in a git repository - showing machine-level configuration only"
+[ -n "$repo" ] || dr_warn "not in a git repository. Only the configuration of the machine shows."
 
-# The default view: every setting, its value, and which layer last set it.
+# The default view: each setting, its value, and the layer that set it last.
 printf '%-26s %-34s %s\n' "SETTING" "VALUE" "FROM"
 for k in "${DR_KEYS[@]}"; do
     origin=${DR_ORIGIN[$k]:-built-in default}
 
-    # --changed hides anything still sitting at its built-in value.
+    # --changed hides each setting that has its built-in value.
     [ "$mode" = changed ] && [ "$origin" = "built-in default" ] && continue
     value=${!k-}
     [ -z "$value" ] && value="${_DR_DIM}(unset)${_DR_OFF}"
 
-    # Shorten the two long paths that otherwise dominate the column: a config
-    # under $HOME becomes ~/..., one inside the repo becomes ./...
-    # The quotes in ${origin#"$HOME"} keep the prefix a literal string - without
-    # them, a path containing glob characters would be treated as a pattern.
+    # Shorten the two long paths, so they do not fill the column. A file under
+    # $HOME becomes ~/..., and a file in the repo becomes ./...
+    # The quotes in ${origin#"$HOME"} make the prefix a literal string. Without
+    # them, bash reads glob characters in the path as a pattern.
     case "$origin" in
         "$HOME"/*) origin="~${origin#"$HOME"}" ;;
         "$repo"/*) origin="./${origin#"$repo"/}" ;;
     esac
 
-    # %b rather than %s for the value, because when it is empty we substituted
-    # a string containing terminal escape codes that need interpreting.
+    # %b and not %s for the value. An empty value becomes a string with terminal
+    # escape codes, and %b reads them.
     printf '%-26s %-34b %s%s%s\n' "$k" "$value" "$_DR_DIM" "$origin" "$_DR_OFF"
 done
 
-# A config file that was refused is reported when it happens, at the top - which
-# is the wrong end of a thirty-row table to put the one line that explains why
-# the table is wrong. Anyone running dr-config is asking why something is not
-# behaving, so say it again at the bottom, in red, where it will be read.
+# The loader reports a refused file at the top, at the time of the refusal. In a
+# table of thirty rows, that is the wrong end for the line that tells why the
+# table is wrong. A person who runs dr-config wants to know why something is
+# wrong. Thus say it again at the bottom, in red, where the person reads it.
 #
-# It is an error in appearance rather than in exit status: nothing has failed,
-# and dr-config is piped into grep too often to start returning non-zero.
+# It looks like an error, but the exit status is 0. Nothing failed, and people
+# often pipe dr-config into grep.
 n=${#DR_UNTRUSTED[@]}
 if [ "$n" -gt 0 ]; then
     printf '\n' >&2
     if [ "$n" -eq 1 ]; then
-        dr_error "1 config file was NOT sourced, because it is untrusted:"
+        dr_error "1 configuration file was NOT sourced, because it is not trusted:"
         them=it
     else
-        dr_error "$n config files were NOT sourced, because they are untrusted:"
+        dr_error "$n configuration files were NOT sourced, because they are not trusted:"
         them=them
     fi
     for f in "${DR_UNTRUSTED[@]}"; do
         printf '  %s%s%s\n' "$_DR_BOLD" "$f" "$_DR_OFF" >&2
     done
-    # Deliberately not dimmed. The version of this at the top of the output is,
-    # and being easy to skip is exactly what went wrong.
-    printf '  Nothing set there appears above. If a setting is not what you\n' >&2
-    printf '  wrote, that is why. Review %s, then:  dr-trust\n' "$them" >&2
+    # Not dimmed, on purpose. The message at the top is dim, and people skip it.
+    printf '  The table above shows no value from these files. If a setting is\n' >&2
+    printf '  not what you wrote, that is why. Read %s, then run:  dr-trust\n' "$them" >&2
 fi

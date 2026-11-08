@@ -4,12 +4,12 @@ name: unreal
 displayName: Unreal toolchain egress
 description: Hosts the Epic Games Launcher, Fab and the Unreal Editor need, confirmed from the gateway's policy log.
 
-# Wildcards, measured on sbx 0.37.1 for rules from the CLI and from a kit:
+# Wildcards, tested on sbx 0.37.1 for rules from the CLI and from a kit:
 #   "*.example.com"   matches exactly ONE label, and NOT example.com itself
-#   "**.example.com"  matches example.com and every subdomain, at any depth
-# Epic's service hosts are shard-numbered and 3-5 labels deep
-# (library-service.live.use1a.on.epicgames.com), so exact names and "*." both break.
-# Quote every entry that starts with "*": unquoted, YAML reads it as an alias.
+#   "**.example.com"  matches example.com and each subdomain, at all depths
+# The service hosts of Epic have shard numbers, and are 3-5 labels deep
+# (library-service.live.use1a.on.epicgames.com). Thus exact names and "*." both break.
+# Quote each entry that starts with "*". Without quotes, YAML reads it as an alias.
 caps:
   network:
     allow:
@@ -17,46 +17,46 @@ caps:
       - "**.epicgames.com"     # sign-in, catalog, library, entitlements, friends, telemetry, self-update, download manifests
       - "**.epicgames.dev"     # Epic Online Services: api., connect.
       - "**.epicgamescdn.com"  # EOS overlay (eosh.), download chunks (egs-cloudfront-chunks.)
-      - "**.unrealengine.com"  # Unreal Engine tab, editor news and components; www. is the post-up probe
+      - "**.unrealengine.com"  # Unreal Engine tab, editor news and components. www. is the post-up probe
       - "**.fab.com"           # Fab: www., static. (scripts and styles), media. (thumbnails)
       - "**.quixel.com"        # cdn.quixel.com: Megascans content shown in Fab
       # Shared CDNs: exact names only, never a wildcard over a CDN
       - egdownload.fastly-edge.com         # carried the 131 MB project download
-      - epicgames-download1.akamaized.net  # requested in the same second; kept so downloads do not depend on the CDN Epic picks
+      - epicgames-download1.akamaized.net  # requested in the same second. Kept, so that downloads do not depend on the CDN that Epic picks
       # Third parties embedded in Fab
-      - "**.hcaptcha.com"           # Fab's bot check: js., <id>.w.
-      - cdn.cookielaw.org           # Fab's cookie-consent banner
-      - o10593.ingest.us.sentry.io  # Fab's error reporting; optional
-      # Epic's own OneTrust tenant, asked for while the launcher ran. Nothing
-      # visibly failed without it, so this is insurance against a consent panel that waits:
-      # one exact name, under Epic's control.
+      - "**.hcaptcha.com"           # the bot check of Fab: js., <id>.w.
+      - cdn.cookielaw.org           # the cookie-consent banner of Fab
+      - o10593.ingest.us.sentry.io  # the error reports of Fab. Optional
+      # The OneTrust tenant of Epic, requested while the launcher ran. Without it, nothing
+      # failed visibly. Thus this guards against a consent panel that waits. One exact
+      # name, under the control of Epic.
       - epicgames-privacy.my.onetrust.com
-      # Visual Studio 2022: installer, updates, licence (measured)
+      # Visual Studio 2022: installer, updates, license (found by test)
       - "**.visualstudio.microsoft.com"  # download. (payloads and the VC redistributable), settings., telemetry., newsfeed.
-      - aka.ms                           # redirector the installer and the VC redistributable follow
+      - aka.ms                           # redirector that the installer and the VC redistributable follow
       - go.microsoft.com                 # redirector for installer links
-      - app.vssps.visualstudio.com       # licence check at IDE start
+      - app.vssps.visualstudio.com       # license check at IDE start
       - builds.dotnet.microsoft.com      # .NET payloads pulled during a VS update
-      # Visual Studio's Unreal integration downloads its UE plugin from GitHub releases
+      # The Unreal integration of Visual Studio downloads its UE plugin from GitHub releases
       - api.github.com                    # release lookup for microsoft/vc-ue-extensions
       - github.com                        # the release URL, which redirects to the asset host
       - release-assets.githubusercontent.com  # the asset itself (VisualStudioTools.zip)
-      # Certificate revocation, needed by anything strict about it (see D6)
-      - crt.sectigo.com   # AIA: the intermediate for GitHub's certificate
+      # Certificate revocation, for each tool that is strict about it (see D6)
+      - crt.sectigo.com   # AIA: the intermediate for the certificate of GitHub
       - ocsp.sectigo.com  # OCSP for the same chain
       - crl.sectigo.com   # the CRL for the same chain
-      - c.pki.goog        # Google Trust Services CRLs; used during the lighting build
+      - c.pki.goog        # Google Trust Services CRLs. Used during the lighting build
       - ocsp.digicert.com # DigiCert chains, still common
       - crl3.digicert.com
       - crl4.digicert.com
-      # Microsoft's own chain ("Microsoft TLS RSA Root G2"), which Visual Studio's hosts use.
-      # Windows requested all three during the test; they were refused and the
-      # check soft-failed, so nothing broke, but anything strict about revocation would.
+      # The own chain of Microsoft ("Microsoft TLS RSA Root G2"). The hosts of Visual Studio
+      # use it. Windows requested all three during the test. They were refused, and the
+      # check soft-failed, so nothing broke. A tool that is strict about revocation breaks.
       - crl2.microsoft.com     # the CRL
       - oneocsp.microsoft.com  # OCSP
       - www.microsoft.com      # the same CRL, at /pkiops/crl/ (sbx rules cannot name a path)
-      # Windows, on behalf of the tools
+      # Windows, for the tools
       - ctldl.windowsupdate.com   # certificate trust list download (plain HTTP), during the lighting build
-      - wdcp.microsoft.com        # Defender cloud lookups: winget, and the editor's first start
+      - wdcp.microsoft.com        # Defender cloud lookups: winget, and the first start of the editor
       - wdcpalt.microsoft.com     # same
-      - cdn.winget.microsoft.com  # winget source; drop if winget is not used
+      - cdn.winget.microsoft.com  # winget source. If you do not use winget, remove it

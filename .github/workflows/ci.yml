@@ -16,32 +16,32 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint
-        # bin/* and tests/mocks/* have no extension, so they are globbed rather
-        # than named - a new mock is then linted without anyone remembering to
-        # add it here.
+        # bin/* and tests/mocks/* have no extension, so a glob finds them. They
+        # are not named. Thus a new mock gets linted, and nobody must remember
+        # to add it here.
         run: shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh lib/forge/*.sh install.sh tests/mocks/* bin/* .githooks/* tests/executable-paths.sh share/ollama-proxy/ollama-proxy
 
       - name: Comment density
-        # Draugr's premise is that you can read a file before you trust it, so
-        # an uncommented block is a defect like any other. See docs/HACKING.md.
+        # The premise of Draugr is that you can read a file before you trust
+        # it. Thus a block with no comments is a defect. See docs/HACKING.md.
         #
-        # No arguments on purpose: the file list lives in the script, so that
-        # running it locally checks exactly what CI checks. It used to be spelled
-        # out here, and the bare local invocation silently checked nothing.
+        # No arguments, on purpose. The file list is in the script, so that a
+        # local run tests exactly what CI tests. Before, the list was here, and
+        # a bare local run silently tested nothing.
         run: ./tests/lint-comments.sh
 
       - name: Inverted assertions that cannot fail
-        # set -e is ignored for a command preceded by `!`, so a mid-test `! cmd`
-        # in a .bats file passes whatever it finds. Sixteen of the suite's
-        # assertions were dead when this check was written, and the test job
-        # below reported all of them as green. See docs/HACKING.md.
+        # set -e ignores a command after `!`. Thus a `! cmd` in the middle of a
+        # test in a .bats file always passes. When this test was written,
+        # sixteen assertions of the suite were dead. The test job below
+        # reported all of them as green. See docs/HACKING.md.
         run: ./tests/lint-inverted.sh
 
       - name: Native stderr that Stop will make fatal
         # PowerShell 5.1 wraps a REDIRECTED native stderr line as a NativeCommandError,
-        # and $ErrorActionPreference = 'Stop' makes it terminating. A guard whose only
-        # job was to notice an ABSENT scheduled task therefore threw whenever it was
-        # absent - which is every first install. See docs/FORGE.md.
+        # and $ErrorActionPreference = 'Stop' makes it a terminating error. A guard
+        # that only had to see an ABSENT scheduled task thus threw at each absence.
+        # That is each first install. See docs/FORGE.md.
         run: ./tests/lint-native-stderr.sh
 
   test:
@@ -57,33 +57,33 @@ jobs:
           git config --global init.defaultBranch main
 
       - name: Provide a writable /mnt/c
-        # The mound commands refuse any repo outside /mnt/<drive>, because sbx
-        # cannot mount one. That check is pure string matching, so a plain
-        # directory satisfies it and the tests stay real on a Linux runner.
-        # Without this every mound test would skip and the job would pass empty.
+        # The mound commands refuse each repo outside /mnt/<drive>, because sbx
+        # cannot mount one. That test only matches strings, so a plain directory
+        # passes it, and the tests stay real on a Linux runner. Without this,
+        # each mound test skips, and the job passes with nothing tested.
         run: sudo mkdir -p /mnt/c/Temp && sudo chmod 1777 /mnt/c/Temp
 
       - name: Run tests
-        # One run, kept in a file, so the skip check below costs nothing extra.
-        # set -o pipefail keeps bats's exit status from being masked by tee.
+        # One run, kept in a file, so that the skip test below costs nothing.
+        # set -o pipefail stops tee from hiding the exit status of bats.
         run: |
           set -o pipefail
           bats -j 8 tests/ | tee bats.log
 
       - name: Fail if any test skipped
-        # A skip is invisible in a green tick: if /mnt/c ever stops being
-        # writable, every mound test turns into a no-op and the job still passes.
-        # This turns "tested nothing" into a failure.
+        # A green tick hides a skip. If /mnt/c stops being writable, each mound
+        # test does nothing, and the job still passes. This makes "tested
+        # nothing" a failure.
         #
-        # TWO REASONS ARE ALLOWED, and only these two: tests/forge-api.bats runs
-        # the real PowerShell against a mock daemon, which a Linux runner cannot
-        # do, so it skips by design here. That is a declared fact about the
-        # runner rather than something that quietly stopped working.
+        # TWO REASONS ARE ALLOWED, and only these two. tests/forge-api.bats runs
+        # the real PowerShell against a mock daemon. A Linux runner cannot do
+        # that, so here it skips by design. That is a declared fact about the
+        # runner, not something that silently stopped working.
         #
-        # An ALLOWLIST of reasons, not of files, on purpose: a new skip reason in
-        # that same file is news, and the build should say so. In particular "no
-        # Windows-visible scratch directory" stays fatal - that one IS the
-        # degradation this step was written to catch.
+        # An ALLOWLIST of reasons, not of files, on purpose. A new skip reason
+        # in that same file is news, and the build must say so. Most of all, "no
+        # Windows-visible scratch directory" stays fatal. That IS the problem
+        # that this step must catch.
         run: |
           if grep '# skip' bats.log \
                | grep -vE 'skip (no real powershell\.exe - not a Windows host|only the mock is on PATH)$' \
@@ -93,7 +93,7 @@ jobs:
           fi
           echo "platform skips, allowed: $(grep -c '# skip' bats.log)"
 
-  # The documentation checks live in tests/docs.bats and run with everything
-  # else. They were a separate advisory job while the README specified commands
-  # that were not written yet; the last one shipped in 0.1.0, so they are now
-  # ordinary blocking tests and need no job of their own.
+  # The documentation tests are in tests/docs.bats, and run with all the rest.
+  # They were a separate advisory job while the README described commands that
+  # did not exist yet. The last one shipped in 0.1.0. Now they are normal
+  # blocking tests, and need no job of their own.

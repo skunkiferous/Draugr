@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
-# Running the agent on a model you host, rather than on its vendor's cloud.
+# The agent on a model that you host, not on the cloud of its vendor.
 #
-# The interesting failures here are all silent ones. A model URL that resolves to
-# nothing, an agent module that does not know which variables to set, a port
-# nobody opened - each of them ends with an agent that either hangs at its first
-# prompt or, worse, carries on talking to the cloud while you believe it is not.
-# So most of these tests are about refusing early and loudly.
+# The important failures here are all silent. A model URL that resolves to
+# nothing. An agent module that does not know which variables to set. A port
+# that nobody opened. Each one ends with an agent that hangs at its first
+# prompt. Or, worse, it continues to talk to the cloud while you think that it
+# does not. Thus most of these tests refuse early and loudly.
 
 load helper
 
@@ -40,9 +40,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_model_is_port: host:port is NOT a port" {
-    # It matters that this is a URL rather than a port: localhost means the MOUND
-    # from inside the mound, so giving it the host-port treatment would open a
-    # rule for a machine that is not the one being named.
+    # This must be a URL, not a port. Inside the mound, localhost means the
+    # MOUND. A host-port rule for it opens a rule for the wrong machine.
     run dr_model_is_port "localhost:11435"
     [ "$status" -eq 1 ]
 }
@@ -64,8 +63,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_model_url: an unresolvable address is a failure, not an empty answer" {
-    # The same reasoning as dr_host_ip: "http://:11435" would look like success
-    # and fail later, somewhere with no connection to this.
+    # The same reason as for dr_host_ip. "http://:11435" looks like success, and
+    # fails later, in a place with no clear link to this.
     export DR_MOCK_HOST_IP=
     DRAUGR_MODEL_URL=11435
     run dr_model_url
@@ -90,9 +89,10 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_model_check: a bare port NOT in DRAUGR_HOST_PORTS is refused" {
-    # The combination cannot work: without the rule the connection is accepted by
-    # the interception layer and dropped, so the agent hangs at its first prompt
-    # with nothing to read. Better to say so before the mound is even built.
+    # The combination cannot work. Without the rule, the interception layer
+    # accepts the connection and drops it. The agent then hangs at its first
+    # prompt, with nothing to read. Thus Draugr says so before it builds the
+    # mound.
     DRAUGR_MODEL="qwen3.8:27b"
     DRAUGR_MODEL_URL=11435
     DRAUGR_HOST_PORTS=
@@ -115,15 +115,15 @@ teardown() { dr_test_teardown; }
     DRAUGR_HOST_PORTS="11434 8080"
     run dr_model_check
     [ "$status" -ne 0 ]
-    # Checked by message, not just by status: a refusal for the right reason
-    # and a function falling over both exit non-zero.
+    # The test reads the message, not only the status. A refusal for the right
+    # reason and a crashed function both exit non-zero.
     [[ "$output" == *"not in DRAUGR_HOST_PORTS"* ]]
 }
 
 @test "dr_model_check: a URL needs no DRAUGR_HOST_PORTS at all" {
-    # Somebody else's endpoint is reached under the ordinary network policy, so
-    # the host-port rule has nothing to do with it and demanding one would be a
-    # refusal nobody could satisfy.
+    # The normal network policy controls the endpoint of another party. The
+    # host-port rule has no effect on it. A demand for one is a refusal that
+    # nobody can satisfy.
     DRAUGR_MODEL="qwen3.8:27b"
     DRAUGR_MODEL_URL="https://llm.corp.example"
     DRAUGR_HOST_PORTS=
@@ -132,24 +132,24 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_model_check: an agent that cannot be pointed anywhere is refused" {
-    # The worst failure this feature could have is an agent that ignores
-    # DRAUGR_MODEL and keeps using its cloud while the setting sits in a config
-    # file looking like it works.
+    # The worst failure of this feature: an agent that ignores DRAUGR_MODEL, and
+    # continues to use its cloud. Meanwhile the value in the configuration file
+    # looks like it works.
     DRAUGR_AGENT=nosuchagent
     dr_agent_load
     DRAUGR_MODEL="qwen3.8:27b"
     DRAUGR_MODEL_URL="https://llm.corp.example"
     run dr_model_check
     [ "$status" -ne 0 ]
-    [[ "$output" == *"cannot point nosuchagent at another endpoint"* ]]
+    [[ "$output" == *"cannot send nosuchagent to a different endpoint"* ]]
 }
 
 # --- what the agent module contributes --------------------------------------
 
 @test "claude: names all three tiers, so none falls through to a cloud model" {
-    # Claude Code picks a tier per call. An unmapped one reaches the local
-    # endpoint as a cloud model name it has never heard of, and fails as
-    # "model not found" at a moment unrelated to whatever you were typing.
+    # Claude Code selects a tier for each call. A tier with no mapping reaches
+    # the local endpoint as an unknown cloud model name. It fails as "model not
+    # found", at a time with no link to what you typed.
     run dr_agent_model_env "http://host:11435" "qwen3.8:27b" "qwen3:8b"
     [ "$status" -eq 0 ]
     [[ "$output" == *"ANTHROPIC_DEFAULT_OPUS_MODEL=qwen3.8:27b"* ]]
@@ -158,8 +158,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "claude: sets the base URL and a placeholder token" {
-    # Claude Code sends no request at all without a token, even to somewhere that
-    # ignores it - and a real one has no business on a local port.
+    # Without a token, Claude Code sends no request, even to an endpoint that
+    # ignores it. A real token must not go to a local port.
     run dr_agent_model_env "http://host:11435" "qwen3.8:27b" ""
     [[ "$output" == *"ANTHROPIC_BASE_URL=http://host:11435"* ]]
     [[ "$output" == *"ANTHROPIC_AUTH_TOKEN="* ]]
@@ -171,8 +171,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "claude: the anthropic secret stops being recommended on a local model" {
-    # dr-doctor would otherwise tell you to sign in to a service this session is
-    # never going to call, which is advice that makes things worse.
+    # If not, dr-doctor tells you to sign in to a service that this session
+    # never calls. That advice makes things worse.
     DRAUGR_MODEL="qwen3.8:27b"
     run dr_agent_secret
     [ "$status" -ne 0 ]
@@ -197,8 +197,8 @@ teardown() { dr_test_teardown; }
 # --- reaching the agent, which is the whole point ---------------------------
 
 @test "dr_attach_rc: exports the model variables when one is configured" {
-    # This is the only route in: sbx's ssh proxy honours no AcceptEnv, and a kit
-    # is committed while the address is known only now.
+    # This is the only way in. The ssh proxy of sbx ignores AcceptEnv, and a kit
+    # is committed before the address is known.
     DRAUGR_MODEL="qwen3.8:27b"
     DRAUGR_MODEL_URL=11435
     run dr_attach_rc claude
@@ -215,8 +215,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_attach_rc: still starts the agent from PROMPT_COMMAND" {
-    # The exports must not disturb the job-control arrangement above them: a
-    # command in the rcfile body cannot be suspended and resumed.
+    # The exports must not change the job control above them. A command in the
+    # rcfile body cannot be suspended and resumed.
     DRAUGR_MODEL="qwen3.8:27b"
     DRAUGR_MODEL_URL=11435
     run dr_attach_rc claude
@@ -225,8 +225,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr_attach_rc: a model name with shell metacharacters is quoted" {
-    # Model names carry colons and dots today; the quoting has to hold for
-    # whatever a registry allows tomorrow, because this is read back by a shell.
+    # Model names contain colons and dots today. The quoting must hold for all
+    # names that a registry allows later, because a shell reads this back.
     DRAUGR_MODEL='we;ird $name'
     DRAUGR_MODEL_URL=11435
     run dr_attach_rc claude
@@ -236,13 +236,13 @@ teardown() { dr_test_teardown; }
 
 # --- what is actually answering there ----------------------------------------
 #
-# The bug this section exists for: a mound was created, the agent attached, and
-# every prompt failed with `500 dial tcp ...: connectex: No connection could be
-# made`. Nothing had checked the endpoint was up, so the one thing the session
-# depended on was the one thing nobody asked about.
+# The bug for this section: Draugr created a mound, the agent attached, and
+# each prompt failed with `500 dial tcp ...: connectex: No connection could be
+# made`. Nothing made sure that the endpoint was up. The session needed only
+# that, and nobody asked about it.
 
-# dr_model_probe is called in-process here, so a shell function named curl is
-# what it finds - including through `command -v`.
+# dr_model_probe runs in-process here. Thus it finds a shell function named
+# curl, also through `command -v`.
 fake_curl() {
     eval "curl() {
         case \"\$*\" in
@@ -259,8 +259,8 @@ fake_curl() {
 }
 
 @test "dr_model_probe: the proxy answering with nothing behind it" {
-    # Distinguished because from inside the agent these two look identical, and
-    # the remedy is different: start the proxy, or start the model server.
+    # Kept apart, because inside the agent these two look the same. The fix is
+    # different: start the proxy, or start the model server.
     fake_curl 200 000
     [ "$(dr_model_probe http://x)" = stalled ]
 }
@@ -271,9 +271,9 @@ fake_curl() {
 }
 
 @test "dr_model_probe: somebody else's endpoint is alive, not broken" {
-    # The case that must not be refused: a company endpoint has never heard of
-    # /healthz or /api/version and is perfectly usable. Treating "not the proxy"
-    # as "not working" would reject the one case a full URL exists for.
+    # This case must not be refused. A company endpoint does not know /healthz
+    # or /api/version, but it works. If "not the proxy" means "not working",
+    # Draugr rejects the one case that a full URL is for.
     fake_curl 404 404
     [ "$(dr_model_probe http://x)" = alive ]
 }
@@ -284,8 +284,8 @@ fake_curl() {
 }
 
 @test "dr_model_probe: says so rather than guessing when it cannot ask" {
-    # A subshell with no PATH, so command -v finds no curl. Answering "dead"
-    # here would refuse a working session on the strength of a missing tool.
+    # A subshell with no PATH, so command -v finds no curl. An answer of "dead"
+    # here refuses a working session only because a tool is missing.
     out=$( PATH=""; dr_model_probe http://x )
     [ "$out" = unknown ]
 }
@@ -293,8 +293,8 @@ fake_curl() {
 # --- and the refusal it feeds ------------------------------------------------
 
 @test "dr-go: refuses to attach when nothing is answering" {
-    # Port 1, which nothing can be listening on - a real refused connection
-    # rather than a mocked one, so this exercises the path dr-go really takes.
+    # Port 1, where nothing listens. It is a real refused connection, not a
+    # mock. Thus this exercises the real path of dr-go.
     REPO=$(dr_make_win_repo) || skip "no writable path under /mnt/<drive> on this machine"
     cd "$REPO" || return 1
     export DR_MOCK_NAME="draugr-$(basename "$REPO")" DR_MOCK_STATE=running
@@ -303,8 +303,8 @@ fake_curl() {
 
     run dr-go
     [ "$status" -ne 0 ]
-    [[ "$output" == *"nothing is answering"* ]]
-    # Before the terminal check, which used to come first and hide this entirely.
+    [[ "$output" == *"nothing answers"* ]]
+    # Before the terminal test. That test came first before, and hid this fully.
     [[ "$output" != *"needs a terminal"* ]]
 }
 
