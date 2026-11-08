@@ -112,7 +112,7 @@ caps:
       - "**.msftauth.net"  # the same CDN under its second name. Covers aadcdn.msftauth.net
       - lgincdnmsftuswe2.azureedge.net  # the assets of the sign-in page. A shared CDN, so exact
       # The next three were opened during the search for that failure. They stay as they
-      # were, but no test showed that ONE of them is necessary. install-windows-online.ps1
+      # were, but no test showed that ANY of them is necessary. install-windows-online.ps1
       # fixed sign-in, not these. A test showed that management.core.windows.net alone
       # changes nothing. Remove them only after a test on a new guest, not on a guess. The
       # removal of a host that is necessary costs an evening.
