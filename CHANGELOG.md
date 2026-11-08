@@ -23,6 +23,12 @@ people reading the source, not for people calling it.
 
 ### Changed
 
+- Every comment, user-facing message and document rewritten into Simple English: short sentences,
+  plain words, and no idiom or possessive apostrophes, so that the source reads for people whose
+  first language is not English. 140 files, and no behaviour change — every edit is prose inside a
+  comment or inside a string literal, and the test assertions that match a rewritten message moved
+  with it. This file is the one deliberate exception: its existing entries stay exactly as they
+  were written, so the record of what shipped when is never re-worded after the fact.
 - Specific warnings about the importance of .gitignore
 - `dr-plugin remove` says when a generated kit still installs the plugin it dropped. The kit is not
   deleted: one in your library may have been edited since it was generated.
