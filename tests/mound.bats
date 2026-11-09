@@ -626,9 +626,15 @@ go_output() {
     DR_MOCK_STATE=running script -qec "dr-go $*" /dev/null 2>&1 || true
 }
 
-@test "dr-go: leaves the mound running by default, and says so" {
+@test "dr-go: leaves the mound to stop itself, and says so" {
+    # It must not promise that the mound stays up. sandboxd stops it a short
+    # time after the last session, so "still runs. To stop it: dr-stop" was
+    # true for about half a minute and then sent the reader to dr-stop for
+    # something the daemon had already done.
     run go_output
-    [[ "$output" == *"still runs"* ]]
+    [[ "$output" == *"stops itself"* ]]
+    [[ "$output" == *"dr-stop"* ]]
+    [[ "$output" != *"still runs"* ]]
     [ -z "$(calls stop)" ]
 }
 

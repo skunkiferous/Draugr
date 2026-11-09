@@ -128,10 +128,23 @@ dr_require_tracking_ref
 ahead=$(git -C "$DR_REPO" rev-list --count "HEAD..$tracking" 2>/dev/null || printf 0)
 behind=$(git -C "$DR_REPO" rev-list --count "$tracking..HEAD" 2>/dev/null || printf 0)
 
+# Read before the report, not after it, because the first line of the report
+# depends on it. `ahead` counts ONE branch, and "nothing new in the mound" is a
+# claim about the whole mound. When the agent worked on a branch of its own,
+# that line landed directly above the list of what it did, and the two read as a
+# contradiction. A user hit exactly that and asked which one to believe.
+mapfile -t _others < <(dr_other_branches)
+
 # For new work, list it, and name the next two commands. At this step of the
 # loop, you decide to look more closely, or to accept.
 if [ "$ahead" -eq 0 ]; then
-    [ -n "$quiet" ] || dr_ok "nothing new in the mound. $tracking is the same as your branch."
+    # "in the mound" only when it is true of the mound. With untracked branches
+    # present, something IS new there, and the next lines name it.
+    if [ ${#_others[@]} -gt 0 ]; then
+        [ -n "$quiet" ] || dr_ok "nothing new on $tracking. It is the same as your branch."
+    else
+        [ -n "$quiet" ] || dr_ok "nothing new in the mound. $tracking is the same as your branch."
+    fi
 else
     dr_ok "$ahead new commit(s) on $tracking"
     git -C "$DR_REPO" log --oneline --no-decorate "HEAD..$tracking" | sed 's/^/  /'
@@ -164,7 +177,8 @@ fi
 # agent that makes its own branch name is normal, not an error. Thus this
 # informs, and does not warn. The exception: the tracked branch is empty, and
 # these are the only work.
-mapfile -t _others < <(dr_other_branches)
+#
+# _others is read further up, because the first line of the report needs it.
 if [ ${#_others[@]} -gt 0 ]; then
     if [ "$ahead" -eq 0 ]; then
         dr_warn "the agent worked on ${#_others[@]} branch(es) that you do NOT track:"

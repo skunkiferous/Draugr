@@ -36,6 +36,21 @@ teardown() { dr_test_teardown; }
     [[ "$output" == *"nothing new in the mound"* ]]
 }
 
+@test "dr-sync: with an untracked branch, nothing-new names the branch, not the mound" {
+    # "nothing new in the mound" is a claim about the MOUND, but `ahead` counts
+    # one branch. With the agent on a branch of its own, that line landed
+    # directly above the list of what it had done, and the two read as a
+    # contradiction. A user asked which of the two to believe.
+    git -C "$MOUND" checkout -q -b feature
+    dr_mound_commit "$MOUND" "agent work on its own branch"
+    run dr-sync
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing new on draugr/main"* ]]
+    [[ "$output" != *"nothing new in the mound"* ]]
+    # And it still says what IS there, which is the half that must not regress.
+    [[ "$output" == *"do NOT track"* ]]
+}
+
 @test "dr-sync: fetches the agent's commits and counts them" {
     dr_mound_commit "$MOUND" "first agent commit"
     dr_mound_commit "$MOUND" "second agent commit"
@@ -336,11 +351,18 @@ mound_head_ref() {
 }
 
 @test "dr-sync: an invented branch is a warning when the tracked one is empty" {
-    # "nothing new in the mound" with a quiet note after it reads as "all good".
-    # When the tracked branch has nothing, this IS the news.
+    # A quiet note after a calm first line reads as "all good". When the tracked
+    # branch has nothing, the invented branch IS the news, so the list warns
+    # instead: "do NOT track" is the loud wording, "do not track" the quiet one,
+    # and that is what the second assertion tells apart.
+    #
+    # The first line used to say "nothing new in the mound" here too, which is a
+    # claim about the mound made directly above the list of what was in it. It
+    # now names the branch it actually counted.
     mound_branch_commit feature-x
     run dr-sync
-    [[ "$output" == *"nothing new in the mound"* ]]
+    [[ "$output" == *"nothing new on draugr/main"* ]]
+    [[ "$output" != *"nothing new in the mound"* ]]
     [[ "$output" == *"do NOT track"* ]]
 }
 

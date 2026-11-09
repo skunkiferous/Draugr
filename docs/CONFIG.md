@@ -671,15 +671,25 @@ difference on purpose.
 Default `false`. When true, `dr-go` stops the mound after you leave the agent. That is the last step,
 after the sync, the memory export and the data pull, because each of those needs a running mound.
 
-Off by default, for two reasons. A stop silently kills all that the kit starts through
-`publishedPorts` or `startup` commands, and the kit format exists to support that workflow. Also,
-you run `dr-go` often, and a cold start costs clearly more than an attach.
+Off by default, and the difference is smaller than it looks. sandboxd stops a mound by itself a
+short time after its last session disconnects, and leaving the agent **is** that disconnect. So this
+key decides whether the mound goes down *now* or *shortly*, and not whether it goes down at all.
+`dr-go` says so when it leaves one running.
+
+What the key really changes is the grace period. A stop at once kills all that the kit starts
+through `publishedPorts` or `startup` commands, and it gives up the window in which a second
+`dr-go` attaches instead of cold-starting. Inside that window an attach costs 0.36 s and a cold
+start 4.2 s; after it, you pay the cold start whether the key is set or not.
 
 | measured on one machine | |
 |---|---|
 | RAM that a running mound holds | ~1.4 GB, all of it freed on stop |
 | cold start (`stopped → running`) | 4.2 s |
 | attach to a running mound | 0.36 s |
+| grace period before sandboxd stops an idle mound | 30 s on sbx 0.37.1 |
+
+The grace period is sbx's, not Draugr's. It is recorded here because it decides what this key is
+worth, not as something to rely on: re-measure it after an sbx upgrade.
 
 Turn it on for each project that serves nothing, or in `~/.config/draugr/config` if the four seconds
 are acceptable to you. It does **not** protect your work. The `dr-sync` that already ran protects

@@ -37,6 +37,16 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `dr-sync` said "nothing new in the mound" directly above the list of what the agent had done on a
+  branch you do not track. The count behind that line covers one branch, so it now names it:
+  "nothing new on draugr/main". The list of untracked branches still warns rather than informs,
+  which is the half of this that was already right.
+- `dr-go` claimed the mound "still runs" and told you to `dr-stop` it. sandboxd stops a mound a
+  short time after its last session disconnects, and leaving the agent *is* that disconnect, so the
+  claim expired within the minute and the advice was to do by hand what the daemon had already
+  done — you ran `dr-stop` and were told it was already stopped. It now says that the mound stops
+  itself. `DRAUGR_STOP_ON_EXIT` is documented for what it really decides, *now* or *shortly*, with
+  the grace period measured at 30 s on sbx 0.37.1 and marked as sbx's to change.
 - `dr-send --merge` blamed the wrong branch. `git merge` applies to whatever is checked out in the
   clone, which an agent habitually moves off, and nothing here read it — so a refused fast-forward
   said "could not fast-forward the mound to host/main" one line after `dr-sync` had said
