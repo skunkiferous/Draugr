@@ -185,7 +185,7 @@ entry_nested() {
 }
 
 @test "dr_sbx_log_error: a nested cause beats an outer consequence" {
-    # The shape of a refused start. Over the real window on 2026-11-08, nine
+    # The shape of a refused start. Over the real window, nine
     # nested lines named the cause and the only outer ERROR said
     # `endpoint not connected`, which is what happens AFTER the VM fails to
     # boot. Reporting that would read as an answer and send the reader nowhere.
@@ -213,8 +213,8 @@ entry_nested() {
 # --- what dr-up says when a START is refused ---------------------------------
 
 @test "dr-up: a refused start names the daemon that holds the disk" {
-    # Before this, the start path said only "Look at: dr-ls". A hard reset on
-    # 2026-11-08 sent a start down it, the log held the cause nine times, and
+    # Before this, the start path said only "Look at: dr-ls". A hard reset
+    # sent a start down it, the log held the cause nine times, and
     # the user saw none of it.
     export DR_MOCK_STATE=stopped DR_MOCK_FAIL=exec
     export DR_MOCK_DAEMON_NESTED_ERR="Configuration error: Failed to open block device /x/y.img: The process cannot access the file because it is being used by another process. (os error 32)"

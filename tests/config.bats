@@ -257,7 +257,7 @@ teardown() { dr_test_teardown; }
 @test "agent args: a replaced generic value and its origin are kept" {
     # The replacement overwrites the value AND its origin, so without this
     # nothing afterwards can tell a deliberate per-agent value from one that
-    # discarded a project setting. Found the hard way on 2026-11-08: a
+    # discarded a project setting. Found the hard way: a
     # DRAUGR_AGENT_ARGS_CLAUDE written for the plugin seed disabled --continue
     # in every repo on the machine, and no command said so.
     printf 'DRAUGR_AGENT=claude\nDRAUGR_AGENT_ARGS=--continue\nDRAUGR_AGENT_ARGS_CLAUDE="--settings x"\n' \
