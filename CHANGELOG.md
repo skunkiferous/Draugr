@@ -37,6 +37,14 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `dr_model_probe` read the refusal of an intercepting proxy as a live endpoint. Inside a mound
+  every request carries `http_proxy`, and the gateway of sbx answers `403 Blocked by network
+  policy` for an address it denies. 403 is not `000`, so the rule "any other code means something
+  is there" turned a dead endpoint into `alive`, `dr_model_check` raised no refusal, and the agent
+  attached to nothing and failed at its first prompt. A bare `DRAUGR_MODEL_URL` port is the address
+  of this machine, and no route to your own machine goes through a proxy, so that case now bypasses
+  it. A full URL still goes through the proxy, because that is how the endpoint of a company is
+  reached — to bypass it there would report `dead` for an endpoint that works.
 - `dr-sync` said "nothing new in the mound" directly above the list of what the agent had done on a
   branch you do not track. The count behind that line covers one branch, so it now names it:
   "nothing new on draugr/main". The list of untracked branches still warns rather than informs,

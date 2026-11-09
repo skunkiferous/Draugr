@@ -1388,14 +1388,38 @@ dr_model_url() {
 # from `proxy`. From inside the agent, the two fail in the same way.
 dr_model_probe() {
     local url=$1 code
+    local -a np=()
     command -v curl >/dev/null 2>&1 || { printf 'unknown'; return 0; }
 
-    code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "$url/healthz" 2>/dev/null) || code=000
+    # A bare DRAUGR_MODEL_URL port became the address of THIS machine, and no
+    # route to your own machine goes through an HTTP proxy. The reason to care:
+    # an intercepting proxy ANSWERS for a host that it refuses. A test inside a
+    # mound on 2026-11-08 showed the gateway of sbx returning
+    #
+    #   403  Blocked by network policy: domain 172.19.192.26:1
+    #        no matching allow rule - blocked by default deny policy
+    #
+    # and 403 is not 000, so `dead` was reported as `alive`, the refusal in
+    # dr_model_check never came, and the agent attached to nothing. Every mound
+    # exports http_proxy, so this is the normal state there, not a corner case.
+    #
+    # NOT a blanket --noproxy. A full URL is the endpoint of somebody else, and
+    # a company proxy is how such an endpoint is reached; to bypass it there
+    # would report `dead` for an endpoint that works and refuse a session that
+    # would have run. dr_model_is_port is the same test that dr_model_check uses
+    # to tell the two apart.
+    if dr_model_is_port "${DRAUGR_MODEL_URL:-}"; then
+        np=(--noproxy '*')
+    fi
+
+    # ${np[@]+...} and not "${np[@]}": an empty array under `set -u` is an error
+    # on the bash that this repo still supports. dr-status uses the same form.
+    code=$(curl ${np[@]+"${np[@]}"} -s -o /dev/null -m 4 -w '%{http_code}' "$url/healthz" 2>/dev/null) || code=000
 
     # The proxy answered. Ask the second question, which the proxy cannot answer
     # for itself.
     if [ "$code" = 200 ]; then
-        code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "$url/api/version" 2>/dev/null) || code=000
+        code=$(curl ${np[@]+"${np[@]}"} -s -o /dev/null -m 4 -w '%{http_code}' "$url/api/version" 2>/dev/null) || code=000
         [ "$code" = 200 ] && { printf 'proxy'; return 0; }
         printf 'stalled'
         return 0
@@ -1405,7 +1429,7 @@ dr_model_probe() {
     # out. Any other code means that something is there, but it has no /healthz.
     [ "$code" = 000 ] && { printf 'dead'; return 0; }
 
-    code=$(curl -s -o /dev/null -m 4 -w '%{http_code}' "$url/api/version" 2>/dev/null) || code=000
+    code=$(curl ${np[@]+"${np[@]}"} -s -o /dev/null -m 4 -w '%{http_code}' "$url/api/version" 2>/dev/null) || code=000
     [ "$code" = 200 ] && { printf 'bare'; return 0; }
     printf 'alive'
 }

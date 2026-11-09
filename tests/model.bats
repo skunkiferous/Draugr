@@ -290,6 +290,52 @@ fake_curl() {
     [ "$out" = unknown ]
 }
 
+# --- the proxy that answers for a host it refuses ----------------------------
+#
+# These three are why dr_model_probe passes --noproxy for a bare port. The
+# stubs above answer the same for every call; these have to tell a proxied call
+# from a direct one, so they look at the argv.
+
+@test "dr_model_probe: the refusal of a proxy is not a live endpoint" {
+    # A test inside a mound showed the gateway of sbx answering
+    #   403 Blocked by network policy: domain <host>:<port>
+    # for an address with nothing on it. 403 is not 000, so the rule "any other
+    # code means something is there" turned `dead` into `alive`, dr_model_check
+    # raised no refusal, and the agent attached to nothing.
+    DRAUGR_MODEL_URL=11435
+    curl() {
+        case "$*" in
+            *--noproxy*) printf '000' ;;   # direct: nothing is on that port
+            *)           printf '403' ;;   # proxied: the deny page of the gateway
+        esac
+    }
+    [ "$(dr_model_probe http://x)" = dead ]
+}
+
+@test "dr_model_probe: a bare port does not ask the proxy" {
+    # A bare port became the address of this machine, and no route to your own
+    # machine goes through a proxy.
+    DRAUGR_MODEL_URL=11435
+    curl() { printf '%s\n' "$*" >> "$DR_TMP/curlargv"; printf '000'; }
+    : > "$DR_TMP/curlargv"
+    dr_model_probe http://x > /dev/null
+    grep -q -- '--noproxy' "$DR_TMP/curlargv"
+}
+
+@test "dr_model_probe: a full URL still goes through the proxy" {
+    # The case that must not regress. A company endpoint is reached THROUGH the
+    # proxy, so a blanket --noproxy would report `dead` for an endpoint that
+    # works and refuse a session that would have run.
+    DRAUGR_MODEL_URL="https://llm.corp.example"
+    curl() { printf '%s\n' "$*" >> "$DR_TMP/curlargv"; printf '000'; }
+    : > "$DR_TMP/curlargv"
+    dr_model_probe https://llm.corp.example > /dev/null
+    # `run`, not a bare `!`: set -e ignores a negated command, so a mid-test
+    # `! grep` passes whatever it finds. See tests/lint-inverted.sh.
+    run grep -q -- '--noproxy' "$DR_TMP/curlargv"
+    [ "$status" -ne 0 ]
+}
+
 # --- and the refusal it feeds ------------------------------------------------
 
 @test "dr-go: refuses to attach when nothing is answering" {
