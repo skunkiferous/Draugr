@@ -506,16 +506,16 @@ Know these facts about the lines above:
   To find this problem, run `dr-config DRAUGR_ENV` in the repo where you will work.
 - `DRAUGR_AGENT_ARGS` **replaces**, and does not extend. If you already use it, add to it, and do
   not overwrite it: `DRAUGR_AGENT_ARGS="--continue --settings /c/Code/claude-plugins/settings.json"`.
-- **The key for one agent also beats the general key of a PROJECT.** The option above puts
-  `--settings` in `DRAUGR_AGENT_ARGS_CLAUDE`, and that key replaces `DRAUGR_AGENT_ARGS` *after the
-  whole cascade*, once `DRAUGR_AGENT` is known. So it replaces a `DRAUGR_AGENT_ARGS` in the
-  `.draugr.conf` of a project too, against the usual order of the layers. This happened: a repo
-  asked for `--continue`, the machine-wide key for the seed replaced it, and every `dr-go` on the
-  machine opened a new conversation with nothing anywhere to say why. `dr-doctor` reports it now.
-  To keep both, append in the layer that sets the key for the agent:
+- **The key for one agent also replaces the general key of a project.** The option above puts
+  `--settings` in `DRAUGR_AGENT_ARGS_CLAUDE`. Draugr applies that key after it reads all the layers,
+  when it knows `DRAUGR_AGENT`. Thus the key also replaces a `DRAUGR_AGENT_ARGS` in the
+  `.draugr.conf` of a project, against the usual order of the layers. One repo asked for
+  `--continue`, and the machine-wide key for the seed replaced it. Each `dr-go` on the machine then
+  started a new conversation, and no message said why. `dr-doctor` now reports this case. To keep
+  both values, add to the key in the layer that sets it:
   `DRAUGR_AGENT_ARGS_CLAUDE="${DRAUGR_AGENT_ARGS_CLAUDE:+$DRAUGR_AGENT_ARGS_CLAUDE }--continue"`.
-  Editing a trusted `.draugr.conf` changes its hash and revokes the trust, so run `dr-trust` after
-  any change there.
+  A change to a trusted `.draugr.conf` changes its hash and removes the trust. Thus run `dr-trust`
+  after each change to that file.
 
 Mounts become fixed when Draugr builds a mound. Thus existing mounds need `dr-up --recreate` once.
 After that, they do not. The mount and the environment variable stay, and each start reads the
@@ -960,38 +960,38 @@ Two results follow, and neither is a defect of the kit:
   `remove` says so when a generated kit names the plugin that it removes. It does not delete the
   kit. You can edit a kit in your library, and a plugin removal is not consent to delete it.
 
-### Measured: `commands.install` DOES run on apply
+### `commands.install` runs on apply
 
-Tested with sbx 0.37.1, on two throwaway sandboxes whose kits each append a marker
-line, so a run leaves evidence and the runs are countable. Four answers:
+We tested this with sbx 0.37.1, on two test sandboxes. The kit of each sandbox added a marker line
+to a file. Thus each run left one line, and we counted the lines. The test gave four answers:
 
-1. **Install runs when a kit is added to a RUNNING sandbox.** `sbx kit add` reports "Recreating
-   sandbox to apply augmented kit list", starts a swap container, and the install commands run. So
-   make, add, `dr-kit apply` is the whole process, and the mound you are sitting in needs no second
-   install through `dr-shell`.
-2. **It re-runs the install of EVERY kit, not only the new one.** The recreate replays the install
-   commands of the whole composition. So **install commands must be idempotent.** For the generated
-   plugin kit that is free, because `claude plugin install` on an installed plugin does nothing. It
-   is not free in general: a command that appends to a file, raises a counter or clones into a fixed
-   path does it again for every kit you add later.
-3. **Install does NOT run on a plain stop or start.** Three start cycles produced one install line.
-   Only creation and the kit-add recreate run it.
-4. **`sbx kit add` REFUSES a kit that declares `commands.startup`**, with
-   "the kit-add recreate flow does not yet apply" it, and asks you to `sbx rm` and
-   `sbx create --kit` instead. It exits 1 and leaves the sandbox alone. The check is on the kit
-   being ADDED, so a startup command on a kit the sandbox already has does not block it. **A kit
-   that must stay applicable in place therefore has to be install-only**, which is what
-   `dr-plugin kit` generates.
+1. **If you add a kit to a running sandbox, install runs.** `sbx kit add` reports "Recreating
+   sandbox to apply augmented kit list" and starts a swap container. Then the install commands run.
+   Thus make, add and `dr-kit apply` are the full process. The mound that you work in does not need
+   a second install through `dr-shell`.
+2. **The recreate runs the install commands of each kit again, not only of the new kit.** Thus each
+   install command must be idempotent (safe to run twice). For the generated plugin kit, this costs
+   nothing. `claude plugin install` does nothing for a plugin that is already installed. Other
+   commands are different. Examples are a command that adds to a file, increments a counter, or
+   clones into a fixed path. Each of them does that again for each kit that you add later.
+3. **If the sandbox only stops and starts, install does not run.** Three start cycles gave one
+   install line. Only the creation and the recreate of `sbx kit add` run it.
+4. **`sbx kit add` refuses a kit that declares `commands.startup`.** It says that
+   "the kit-add recreate flow does not yet apply" to it, and tells you to use `sbx rm` and
+   `sbx create --kit`. It exits with 1, and does not change the sandbox. This test looks only at the
+   kit that you add. A startup command in a kit that the sandbox already has does not block it. Thus
+   a kit that you apply in place must have install commands only. `dr-plugin kit` makes that type
+   of kit.
 
-Two more facts from the same measurement, because both can cost an afternoon:
+The same test gave two more facts. Each of them can cost you an afternoon:
 
-- **Install runs as root, and startup runs as `agent` (uid 1000)**, with no `user:` in either. A
-  startup command that writes to something install created hits permission denied, silently, and
-  nothing reports it: not the daemon log, not sbx, not the sandbox. Give such a command `user: "0"`
-  or a path it owns.
-- **Startup runs on create and on every start**, and it runs in the BACKGROUND as the sandbox
-  starts. A `cat` in the same `sbx exec` that triggered the start can read the file before the line
-  lands, so a measurement there needs a pause first.
+- **If neither sets `user:`, install runs as root, and startup runs as `agent` (uid 1000).** A
+  startup command that writes to a file that install made gets "permission denied". Nothing reports
+  it: not the daemon log, not sbx, and not the sandbox. Give such a command `user: "0"`, or a path
+  that it owns.
+- **Startup runs at creation and at each start.** It runs in the background while the sandbox
+  starts. A `cat` in the `sbx exec` that started the sandbox can read the file before the line is
+  there. Thus wait a short time before you measure in that call.
 
 ## Checks worth running once
 

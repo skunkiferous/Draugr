@@ -619,19 +619,19 @@ YAML
     printf '  dr-kit validate\n' >&2
     printf '  DRAUGR_KIT=".draugr/kit %s"\n' "${_made[*]}" >&2
 
-    # One answer now, not two. A test showed that commands.install
-    # DOES run when `sbx kit add` recreates the container, so "dr-kit apply"
-    # installs the plugin into the mound you are in. The old wording said both,
-    # because nobody had measured it.
+    # One answer now, not two. A test showed that commands.install DOES run
+    # when `sbx kit add` recreates the container. Thus "dr-kit apply" installs
+    # the plugin into the mound that you work in. The old text gave both
+    # answers, because nobody measured it.
     #
-    # This generator must stay INSTALL-ONLY. The same test showed that
-    # `sbx kit add` REFUSES a kit declaring commands.startup, and asks for an
-    # sbx rm plus sbx create instead. A startup command here would make every
-    # generated kit un-appliable in place.
+    # This generator must make kits with install commands ONLY. The same test
+    # showed that `sbx kit add` REFUSES a kit that declares commands.startup,
+    # and asks for sbx rm and then sbx create. With a startup command here, you
+    # cannot apply a generated kit in place.
     printf '  %sEach new mound installs it at its creation, and "dr-kit apply"\n' "$_DR_DIM" >&2
-    printf '  installs it into the mound you are in now.\n' >&2
-    printf '  That recreate also re-runs the install commands of every other kit\n' >&2
-    printf '  the mound has. See docs/CLAUDE_PLUGINS.md.%s\n' "$_DR_OFF" >&2
+    printf '  installs it into the mound that you work in now.\n' >&2
+    printf '  That recreate also runs the install commands of each other kit of\n' >&2
+    printf '  the mound again. See docs/CLAUDE_PLUGINS.md.%s\n' "$_DR_OFF" >&2
     ;;
 
 # --- add ----------------------------------------------------------------------

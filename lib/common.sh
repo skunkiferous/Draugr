@@ -278,24 +278,25 @@ dr_sbx_log_error() {
     # field contains newlines, and -r expands them. The result is the block of
     # lines that sbx captured.
     # The second pass exists because the VM supervisor of sbx (`sailor`) logs
-    # JSON INSIDE JSON. Its own severity and error sit in an escaped string in
-    # `.msg`, while the OUTER level of that same entry is INFO:
+    # JSON INSIDE JSON. Its own level and error are in an escaped string in
+    # `.msg`, but the OUTER level of that entry is INFO:
     #
     #   "level":"INFO","msg":"{\"level\":\"error\",\"component\":\"sailor\",
     #     \"msg\":\"failed to create vm\",\"error\":\"...Failed to open block
     #     device ...: ... (os error 32)\"}"
     #
-    # A filter that reads only the outer level cannot see those. A test over the
-    # real window of a failed start showed what that costs: nine
-    # such lines named the cause, and the one outer ERROR in the window said
-    # `endpoint not connected`, which is a CONSEQUENCE of the VM never starting.
-    # Printing that would be worse than printing nothing, because it reads as an
+    # A filter that reads only the outer level cannot see those entries. A test
+    # on the real log window of a failed start showed the cost. Nine nested
+    # lines named the cause. The one outer ERROR in the window said
+    # `endpoint not connected`, which is a RESULT of the VM that did not start.
+    # To print that is worse than to print nothing, because it looks like an
     # answer.
     #
-    # Order of preference, and why: an outer entry with a `stage` is a failed
-    # create, which sbx reports deliberately and which has always won here. Then
-    # a nested cause. Then any outer error. So the create path keeps exactly the
-    # behaviour it had, and the start path gains a real cause.
+    # The order of preference, and the reason for it. First, an outer entry
+    # with a `stage`. That is a failed create, which sbx reports on purpose, and
+    # which always came first here. Then a nested cause. Then any outer error.
+    # Thus the create path keeps exactly its old behavior, and the start path
+    # gets a real cause.
     out=$(tail -c "+$((mark + 1))" "$log" 2>/dev/null \
               | jq -srR 'split("\n") | map(fromjson?)
                         | (map(select(.level == "ERROR" and (.error // "") != "")))
@@ -622,11 +623,11 @@ unset _dr_a
 # arithmetic on the string ".draugr/kit".
 declare -gA DR_ORIGIN=()
 
-# What the general DRAUGR_AGENT_ARGS held before a per-agent key replaced it,
-# where that general value came from, and which key did the replacing. All three
-# are empty when no replacement happened. dr-doctor reports the combination,
-# because it is invisible otherwise: the replacement overwrites both the value
-# and its origin. See the comment at the swap itself.
+# The value of the general DRAUGR_AGENT_ARGS before a key for one agent
+# replaced it, the origin of that value, and the key that replaced it. All three
+# are empty if no replacement happened. dr-doctor reports the combination,
+# because you cannot see it in another way: the replacement overwrites both the
+# value and its origin. See the comment at the swap.
 DR_AGENT_ARGS_REPLACED=
 DR_AGENT_ARGS_REPLACED_FROM=
 DR_AGENT_ARGS_REPLACED_BY=
@@ -937,18 +938,20 @@ dr_load_config() {
     # "nothing for codex" on purpose. It must win over a general value.
     local _ak; _ak=$(dr_agent_args_key "$DRAUGR_AGENT")
     if [ -n "${!_ak+set}" ]; then
-        # Keep what the general key held, and where it came from, before the
+        # Keep the value of the general key, and its origin, before the
         # replacement hides both. dr-doctor needs them to tell a deliberate
-        # per-agent value from one that threw a project setting away in silence.
+        # value for one agent from one that threw a project value away in
+        # silence.
         #
-        # Found the hard way. A user put
-        # DRAUGR_AGENT_ARGS=--continue in the .draugr.conf of a repo, ran dr-go,
-        # and did not get the conversation back. The file was trusted and was
-        # read. A DRAUGR_AGENT_ARGS_CLAUDE in the machine-wide config, written
-        # for the plugin seed, had replaced it - for every repo on the machine,
-        # because this swap happens AFTER the whole cascade, once DRAUGR_AGENT
-        # is known. So a user-level per-agent key beats a project-level general
-        # one, whatever the usual order of the layers.
+        # A user found this. The user put DRAUGR_AGENT_ARGS=--continue in the
+        # .draugr.conf of a repo, ran dr-go, and did not get the conversation
+        # back. The file was trusted, and Draugr read it. But a
+        # DRAUGR_AGENT_ARGS_CLAUDE in the machine-wide configuration, written
+        # for the plugin seed, replaced it. That happened in each repo on the
+        # machine, because this swap comes AFTER Draugr reads all the layers,
+        # when it knows DRAUGR_AGENT. Thus a key of the user for one agent
+        # replaces a general key of the project, against the usual order of
+        # the layers.
         # shellcheck disable=SC2034  # bin/dr-doctor reads all three
         DR_AGENT_ARGS_REPLACED=${DRAUGR_AGENT_ARGS:-}
         # shellcheck disable=SC2034
@@ -1445,29 +1448,30 @@ dr_model_probe() {
     local -a np=()
     command -v curl >/dev/null 2>&1 || { printf 'unknown'; return 0; }
 
-    # A bare DRAUGR_MODEL_URL port became the address of THIS machine, and no
-    # route to your own machine goes through an HTTP proxy. The reason to care:
-    # an intercepting proxy ANSWERS for a host that it refuses. A test inside a
-    # mound showed the gateway of sbx returning
+    # A bare port in DRAUGR_MODEL_URL became the address of THIS machine. No
+    # route to your own machine goes through an HTTP proxy. The reason: an
+    # intercepting proxy ANSWERS for a host that it refuses. A test inside a
+    # mound showed the gateway of sbx return
     #
     #   403  Blocked by network policy: domain 172.19.192.26:1
     #        no matching allow rule - blocked by default deny policy
     #
-    # and 403 is not 000, so `dead` was reported as `alive`, the refusal in
-    # dr_model_check never came, and the agent attached to nothing. Every mound
-    # exports http_proxy, so this is the normal state there, not a corner case.
+    # 403 is not 000. Thus the probe reported `alive` for `dead`, dr_model_check
+    # did not refuse, and the agent attached to nothing. Each mound exports
+    # http_proxy, so this is the normal case there, not a rare one.
     #
-    # NOT a blanket --noproxy. A full URL is the endpoint of somebody else, and
-    # a company proxy is how such an endpoint is reached; to bypass it there
-    # would report `dead` for an endpoint that works and refuse a session that
-    # would have run. dr_model_is_port is the same test that dr_model_check uses
-    # to tell the two apart.
+    # NOT --noproxy for each URL. A full URL is the endpoint of another party,
+    # and a company proxy is how you reach it. A bypass there reports `dead`
+    # for a working endpoint, and refuses a session that can run.
+    # dr_model_is_port is the same test that dr_model_check uses to tell the
+    # two apart.
     if dr_model_is_port "${DRAUGR_MODEL_URL:-}"; then
         np=(--noproxy '*')
     fi
 
-    # ${np[@]+...} and not "${np[@]}": an empty array under `set -u` is an error
-    # on the bash that this repo still supports. dr-status uses the same form.
+    # ${np[@]+...}, not "${np[@]}": on the bash version that this repo still
+    # supports, an empty array under `set -u` is an error. dr-status uses the
+    # same form.
     code=$(curl ${np[@]+"${np[@]}"} -s -o /dev/null -m 4 -w '%{http_code}' "$url/healthz" 2>/dev/null) || code=000
 
     # The proxy answered. Ask the second question, which the proxy cannot answer

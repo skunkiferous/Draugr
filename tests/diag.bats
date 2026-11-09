@@ -174,8 +174,8 @@ entry() {
 # --- the nested entries of the VM supervisor ---------------------------------
 #
 # `sailor` writes JSON inside JSON. Its level and error are in an escaped string
-# in .msg, and the OUTER level of that entry is INFO. Thus a filter on the outer
-# level cannot see any of it.
+# in .msg, but the OUTER level of that entry is INFO. Thus a filter on the outer
+# level cannot see them.
 entry_nested() {
     local err=$1 inner
     mkdir -p "$LOGDIR"
@@ -185,10 +185,10 @@ entry_nested() {
 }
 
 @test "dr_sbx_log_error: a nested cause beats an outer consequence" {
-    # The shape of a refused start. Over the real window, nine
-    # nested lines named the cause and the only outer ERROR said
-    # `endpoint not connected`, which is what happens AFTER the VM fails to
-    # boot. Reporting that would read as an answer and send the reader nowhere.
+    # The shape of a refused start. In the real log window, nine nested lines
+    # named the cause. The only outer ERROR said `endpoint not connected`,
+    # which comes AFTER the VM fails to boot. A report of that line looks like
+    # an answer, but it does not help the reader.
     dr_load_common
     mark=$(dr_sbx_log_mark)
     entry_nested "Configuration error: Failed to open block device /x/y.img: The process cannot access the file because it is being used by another process. (os error 32)"
@@ -200,8 +200,8 @@ entry_nested() {
 }
 
 @test "dr_sbx_log_error: a create failure still beats a nested entry" {
-    # The create path must keep exactly the behaviour it had. An entry with a
-    # `stage` is sbx reporting a failed create on purpose, and it stays first.
+    # The create path must keep exactly its old behavior. With an entry that
+    # has a `stage`, sbx reports a failed create on purpose. It stays first.
     dr_load_common
     mark=$(dr_sbx_log_mark)
     entry_nested "failed to open block device /x/y.img (os error 32)"
@@ -213,9 +213,9 @@ entry_nested() {
 # --- what dr-up says when a START is refused ---------------------------------
 
 @test "dr-up: a refused start names the daemon that holds the disk" {
-    # Before this, the start path said only "Look at: dr-ls". A hard reset
-    # sent a start down it, the log held the cause nine times, and
-    # the user saw none of it.
+    # Before this, the start path said only "Look at: dr-ls". After a hard
+    # reset, a start went down it. The log held the cause nine times, and the
+    # user saw none of them.
     export DR_MOCK_STATE=stopped DR_MOCK_FAIL=exec
     export DR_MOCK_DAEMON_NESTED_ERR="Configuration error: Failed to open block device /x/y.img: The process cannot access the file because it is being used by another process. (os error 32)"
     run dr-up
@@ -224,14 +224,14 @@ entry_nested() {
     [[ "$output" == *"os error 32"* ]]
     [[ "$output" == *"disk is held open"* ]]
     [[ "$output" == *"sbx daemon stop"* ]]
-    # It must never advise this: it runs in the foreground, so a reader who
-    # pastes it gets a daemon in their terminal.
+    # It must never give this advice. The command runs in the foreground, so a
+    # reader who pastes it gets a daemon in the terminal.
     [[ "$output" != *"sbx daemon start"* ]]
 }
 
 @test "dr-up: any other refused start still offers the daemon restart" {
-    # No log entry at all, which is the ordinary case for every other failure.
-    # The old advice named nothing that could fix anything.
+    # No log entry at all, which is the usual case for each other failure.
+    # The old advice named no fix.
     export DR_MOCK_STATE=stopped DR_MOCK_FAIL=exec
     run dr-up
     [ "$status" -ne 0 ]

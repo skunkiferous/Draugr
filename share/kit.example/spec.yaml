@@ -84,16 +84,16 @@ commands:
   # A failure here reaches sbx as a bare `500 ... failed to run sandbox
   # container`. dr-up prints the real record of sandboxd below it.
   #
-  # MAKE EACH COMMAND IDEMPOTENT. It does not run only once. `sbx kit add`, and
-  # so `dr-kit apply`, recreates the container and replays the install commands
-  # of EVERY kit in the composition, not only of the kit being added. A test
-  # counted the lines. So a command that appends to a file, raises a
-  # counter, or clones into a fixed path does it again for each kit you add
-  # later. apt-get and uv are safe. `>>` is not.
+  # MAKE EACH COMMAND IDEMPOTENT (safe to run twice). It does not run only once.
+  # `sbx kit add`, and thus `dr-kit apply`, recreates the container. Then it
+  # runs the install commands of EACH kit in the composition again, not only of
+  # the kit that you add. A test counted the runs. Thus a command that adds to a
+  # file, increments a counter, or clones into a fixed path does that again for
+  # each kit that you add later. apt-get and uv are safe. `>>` is not.
   #
-  # These run as ROOT with no `user:`. Startup commands run as agent (uid 1000),
-  # so a startup command that writes to something install made gets permission
-  # denied, in silence, with nothing reported anywhere.
+  # These commands run as ROOT if they have no `user:`. Startup commands run as
+  # agent (uid 1000). Thus a startup command that writes to a file that install
+  # made gets "permission denied". Nothing reports it.
   install: []
     # - command: "uv venv /home/agent/.venv"
     #   user: "1000"

@@ -32,13 +32,13 @@ if [ -n "${DR_MOCK_DAEMON_ERR:-}" ] && [ "$sub" = create ]; then
 fi
 
 # The same for a refused START, which has a different shape in the log. The VM
-# supervisor of sbx (`sailor`) writes JSON INSIDE JSON: its own level and error
-# are in an escaped string in .msg, while the OUTER level of that entry is INFO.
-# A stand-in that wrote a plain ERROR entry would not test the read at all.
+# supervisor of sbx (`sailor`) writes JSON INSIDE JSON. Its own level and error
+# are in an escaped string in .msg, but the OUTER level of that entry is INFO. A
+# stand-in that writes a plain ERROR entry does not test that read.
 #
-# The second line is the trap. Over the real window of a failed start, the only
-# outer ERROR said `endpoint not connected`, which is a CONSEQUENCE of the VM
-# never starting. A reader that takes it reports the wrong cause confidently.
+# The second line is the trap. In the real log window of a failed start, the
+# only outer ERROR said `endpoint not connected`. That is a RESULT of the VM
+# that did not start. Code that reads that line reports the wrong cause.
 if [ -n "${DR_MOCK_DAEMON_NESTED_ERR:-}" ] && [ "$sub" = exec ]; then
     _root=$(dirname "$(dirname "$0")")
     mkdir -p "$_root/sandboxes/state/sandboxd"

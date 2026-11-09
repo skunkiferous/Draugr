@@ -255,11 +255,11 @@ teardown() { dr_test_teardown; }
 }
 
 @test "agent args: a replaced generic value and its origin are kept" {
-    # The replacement overwrites the value AND its origin, so without this
-    # nothing afterwards can tell a deliberate per-agent value from one that
-    # discarded a project setting. Found the hard way: a
-    # DRAUGR_AGENT_ARGS_CLAUDE written for the plugin seed disabled --continue
-    # in every repo on the machine, and no command said so.
+    # The replacement overwrites the value AND its origin. Without this record,
+    # no later code can tell a deliberate value for one agent from one that
+    # threw a project value away. A user found this: a DRAUGR_AGENT_ARGS_CLAUDE
+    # for the plugin seed turned off --continue in each repo on the machine,
+    # and no command said so.
     printf 'DRAUGR_AGENT=claude\nDRAUGR_AGENT_ARGS=--continue\nDRAUGR_AGENT_ARGS_CLAUDE="--settings x"\n' \
         > "$DRAUGR_CONFIG_HOME/config"
     dr_load_config
@@ -270,8 +270,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "agent args: with no replacement, nothing is recorded as dropped" {
-    # So that dr-doctor stays quiet in the ordinary case. A note on every run
-    # would be noise, and the replacement is the documented rule.
+    # Thus dr-doctor stays quiet in the usual case. A note on each run is
+    # noise, and the replacement is the documented rule.
     printf 'DRAUGR_AGENT=claude\nDRAUGR_AGENT_ARGS=--continue\n' \
         > "$DRAUGR_CONFIG_HOME/config"
     dr_load_config
@@ -281,8 +281,8 @@ teardown() { dr_test_teardown; }
 }
 
 @test "agent args: a per-agent key with no generic one is not a dropped value" {
-    # The common case for the plugin seed on a fresh machine. There is nothing
-    # to warn about, because nothing was thrown away.
+    # The usual case for the plugin seed on a new machine. There is nothing to
+    # warn about, because no value was lost.
     printf 'DRAUGR_AGENT=claude\nDRAUGR_AGENT_ARGS_CLAUDE="--settings x"\n' \
         > "$DRAUGR_CONFIG_HOME/config"
     dr_load_config

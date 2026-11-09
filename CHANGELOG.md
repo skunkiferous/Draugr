@@ -29,6 +29,9 @@ people reading the source, not for people calling it.
   comment or inside a string literal, and the test assertions that match a rewritten message moved
   with it. This file is the one deliberate exception: its existing entries stay exactly as they
   were written, so the record of what shipped when is never re-worded after the fact.
+- The comments, messages and docs that later commits added are now in Simple English too. The
+  review covered 22 files. The messages of `dr-doctor`, `dr-go`, `dr-kit`, `dr-plugin`, `dr-send`
+  and `dr-up` have new words, but the behavior is the same. The test assertions still match.
 - Specific warnings about the importance of .gitignore
 - `dr-plugin remove` says when a generated kit still installs the plugin it dropped. The kit is not
   deleted: one in your library may have been edited since it was generated.

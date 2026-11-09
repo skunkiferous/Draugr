@@ -206,26 +206,27 @@ if [ -n "$DRAUGR_MODEL" ]; then
     esac
 fi
 
-# An argument that needs a session which does not exist is not a session, it is
-# a refusal. With --continue in DRAUGR_AGENT_ARGS, every freshly created mound
-# starts like this: the agent prints one line, exits, and the attach you asked
-# for never happens. The argument is right nearly always, and wrong exactly
-# when the mound is new. Thus it is dropped for that one run.
+# An argument that needs a missing session does not start a session. The agent
+# refuses it. With --continue in DRAUGR_AGENT_ARGS, each new mound starts like
+# this: the agent prints one line and stops, and the attach does not happen.
+# The argument is almost always correct, and wrong only when the mound is new.
+# Thus dr-go drops it for that one run.
 #
-# The probe is a round trip into the mound, so it runs only when there is
-# something it could drop. Only "none" drops anything. "unknown" leaves the
-# arguments as they are: an argument dropped where it would have worked costs
-# the session it would have continued, which is worse than the refusal above.
+# The probe is a round trip into the mound. Thus it runs only if there is an
+# argument that it can drop. Only the answer "none" drops an argument.
+# "unknown" keeps the arguments as they are. A correct argument that dr-go
+# drops loses the session that it was to continue. That is worse than the
+# refusal.
 #
-# It also drops a --continue that you TYPED. The rule that the command line
-# wins over the configuration is about which SOURCE of arguments wins, and
-# neither source can continue a session that is not there. The line below names
-# where it came from, so nothing happens in silence.
+# It also drops a --continue that you TYPED. The rule "the command line wins
+# over the configuration" chooses the SOURCE of the arguments. No source can
+# continue a session that does not exist. The message below names the source,
+# so nothing happens in silence.
 sess_flags=(); sess_keep=(); sess_drop=()
 mapfile -t sess_flags < <(dr_agent_session_flags)
 if [ ${#agent_args[@]} -gt 0 ] && [ ${#sess_flags[@]} -gt 0 ]; then
-    # Two lists, in one pass: what goes to the agent, and what would go only to
-    # fail. The comparison is on the whole word. A value that happens to read
+    # Two lists, in one pass: the arguments for the agent, and the arguments
+    # that can only fail. The test compares whole words. A value that looks
     # like a flag, as in --model -c, belongs to its own argument and stays.
     for sess_arg in "${agent_args[@]}"; do
         sess_is=
@@ -238,28 +239,28 @@ if [ ${#agent_args[@]} -gt 0 ] && [ ${#sess_flags[@]} -gt 0 ]; then
 
     if [ ${#sess_drop[@]} -gt 0 ]; then
         # The default is unknown, and a call that fails keeps it. Thus a failure
-        # inside the mound can never read as an answer about the session.
+        # inside the mound never becomes an answer about the session.
         sess=unknown
         sess=$(dr_agent_session_present "$DR_REPO") || sess=unknown
         if [ "$sess" = none ]; then
             agent_args=(${sess_keep[@]+"${sess_keep[@]}"})
 
-            # Name the source. For the configuration it is the origin that the
-            # debug line above prints, so the two can never disagree.
+            # Name the source. For the configuration, use the origin that the
+            # debug line above prints. Thus the two always agree.
             if [ -n "$args_given" ]; then
                 sess_origin="the command line"
             else
                 sess_origin="${DR_ORIGIN[DRAUGR_AGENT_ARGS]:-your configuration}"
             fi
 
-            # Three lines, because the next question is always "then how do I
-            # continue it", and its answer is "the next dr-go".
+            # Three lines, because the next question is always "how do I
+            # continue it then?", and the answer is "with the next dr-go".
             dr_info "$DRAUGR_SANDBOX has no session to continue, so this one starts fresh"
-            printf '  %s%s dropped for this run, from %s. With it, %s refuses%s\n' \
+            printf '  %sDropped for this run: %s, from %s. With it, %s does not%s\n' \
                 "$_DR_DIM" "${sess_drop[*]}" "$sess_origin" "$DRAUGR_AGENT" "$_DR_OFF" >&2
-            printf '  %sto start, and you come straight back here. The next dr-go%s\n' \
+            printf '  %sstart, and you come back here at once. The next dr-go%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
-            printf '  %scontinues the session that this one is about to make.%s\n' \
+            printf '  %scontinues the session that this run makes.%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
         fi
     fi
@@ -357,17 +358,18 @@ if dr_is_true "$DRAUGR_STOP_ON_EXIT"; then
         dr_warn "could not stop $DRAUGR_SANDBOX. It still runs."
     fi
 else
-    # sandboxd stops a mound a short time after its last session disconnects,
-    # and leaving the agent IS that disconnect. So "still runs. To stop it:
-    # dr-stop" was true for about half a minute, and then it advised doing by
-    # hand what the daemon had already done.
+    # sandboxd stops a mound a short time after its last session disconnects.
+    # When you leave the agent, that session disconnects. Thus the old message
+    # "still runs. To stop it: dr-stop" was true for about half a minute. After
+    # that, it told you to do by hand what the daemon already did.
     #
-    # A test timed it in daemon.log: the session disconnected and the daemon
-    # recorded a 30 s deferral, the grace period expired, and the mound was stopped.
-    # The user read "still runs", ran dr-stop, and was told it was already stopped.
+    # A test measured it in daemon.log. The session disconnected, the daemon
+    # recorded a delay of 30 s, the grace period ended, and the daemon stopped
+    # the mound. The user read "still runs" and ran dr-stop, and dr-stop said
+    # that the mound was already stopped.
     #
-    # No number in the message. The grace period belongs to sbx and not to
-    # Draugr, and the only promise that stays true is that it is short.
+    # The message gives no number. The grace period belongs to sbx, not to
+    # Draugr. The only statement that stays true is that it is short.
     dr_info "$DRAUGR_SANDBOX stops itself a short time after this session"
     printf '  %sDown now:  dr-stop     Every time:  DRAUGR_STOP_ON_EXIT=true%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2

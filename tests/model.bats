@@ -292,16 +292,17 @@ fake_curl() {
 
 # --- the proxy that answers for a host it refuses ----------------------------
 #
-# These three are why dr_model_probe passes --noproxy for a bare port. The
-# stubs above answer the same for every call; these have to tell a proxied call
-# from a direct one, so they look at the argv.
+# These three tests are the reason that dr_model_probe passes --noproxy for a
+# bare port. The stubs above give the same answer for each call. These stubs
+# must tell a call through the proxy from a direct call. Thus they read the
+# argv.
 
 @test "dr_model_probe: the refusal of a proxy is not a live endpoint" {
     # A test inside a mound showed the gateway of sbx answering
     #   403 Blocked by network policy: domain <host>:<port>
-    # for an address with nothing on it. 403 is not 000, so the rule "any other
-    # code means something is there" turned `dead` into `alive`, dr_model_check
-    # raised no refusal, and the agent attached to nothing.
+    # for an address with nothing on it. 403 is not 000. Thus the rule "each
+    # other code means that something is there" changed `dead` into `alive`.
+    # dr_model_check did not refuse, and the agent attached to nothing.
     DRAUGR_MODEL_URL=11435
     curl() {
         case "$*" in
@@ -313,7 +314,7 @@ fake_curl() {
 }
 
 @test "dr_model_probe: a bare port does not ask the proxy" {
-    # A bare port became the address of this machine, and no route to your own
+    # A bare port became the address of this machine. No route to your own
     # machine goes through a proxy.
     DRAUGR_MODEL_URL=11435
     curl() { printf '%s\n' "$*" >> "$DR_TMP/curlargv"; printf '000'; }
@@ -323,9 +324,9 @@ fake_curl() {
 }
 
 @test "dr_model_probe: a full URL still goes through the proxy" {
-    # The case that must not regress. A company endpoint is reached THROUGH the
-    # proxy, so a blanket --noproxy would report `dead` for an endpoint that
-    # works and refuse a session that would have run.
+    # This case must not break again. You reach a company endpoint THROUGH the
+    # proxy. Thus --noproxy for each URL reports `dead` for a working endpoint,
+    # and refuses a session that can run.
     DRAUGR_MODEL_URL="https://llm.corp.example"
     curl() { printf '%s\n' "$*" >> "$DR_TMP/curlargv"; printf '000'; }
     : > "$DR_TMP/curlargv"

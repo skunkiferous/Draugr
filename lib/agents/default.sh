@@ -53,15 +53,15 @@
 #   dr_agent_model_env <url> <model> <fast>
 #                                 the KEY=value lines to export into the attach
 #                                 rcfile, one on each line, for those three values
-#   dr_agent_session_flags        the arguments of this agent that can only work
-#                                 when a session already exists, one on each
-#                                 line. Nothing when Draugr knows of none
+#   dr_agent_session_flags        the arguments of this agent that work only
+#                                 if a session already exists, one on each
+#                                 line. Nothing if Draugr knows none
 #   dr_agent_session_present <repo>
 #                                 "present", "none" or "unknown": whether the
 #                                 mound holds a session that those arguments can
 #                                 continue. A WORD, not an exit code, because a
-#                                 call into the mound that fails must not read
-#                                 as "there is no session"
+#                                 failed call into the mound must not mean
+#                                 "there is no session"
 #
 # pack, unpack, and list are the important part of the contract. They are three
 # views of one thing: the PACKED TREE. What pack writes is what the store holds,
@@ -151,9 +151,9 @@ dr_agent_mem_host_hint() {
 
 # The session that an argument like --continue needs.
 #
-# Nothing is known about where this agent keeps its sessions. Thus there is no
-# argument to drop, and nothing to look for. "unknown" is not "none". A caller
-# that read it as "none" would throw away an argument that was about to work,
-# and the session it would have continued is then out of reach.
+# Draugr knows nothing about where this agent keeps its sessions. Thus there is
+# no argument to drop, and nothing to look for. "unknown" is not "none". A
+# caller that reads it as "none" throws away a correct argument. The session
+# that the argument was to continue is then out of reach.
 dr_agent_session_flags()   { return 0; }
 dr_agent_session_present() { printf 'unknown\n'; }

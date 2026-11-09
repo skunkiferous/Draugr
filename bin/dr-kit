@@ -380,13 +380,13 @@ apply)
         "$_DR_DIM" "$_DR_OFF" >&2
     printf '  %sstops. Software that you installed yourself outside those can be lost.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    # The part that costs real time, and that the warning did not say. A test
-    # counted it: the recreate replays the install commands of EVERY
-    # kit in the composition, not only of the ones being added. On a repo whose
-    # kit runs apt-get or uv pip, adding one plugin kit replays all of that too.
-    printf '  %sIt re-runs the install commands of EVERY kit this mound has, not only the%s\n' \
+    # This part costs real time, and the warning above did not say it. A test
+    # counted the runs. The recreate runs the install commands of EACH kit in
+    # the composition again, not only of the kits that you add. If the kit of a
+    # repo runs apt-get or uv pip, one new plugin kit runs all of that again.
+    printf '  %sIt runs the install commands of EACH kit of this mound again, not only%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %snew one. A kit that installs packages pays that time again here.%s\n' \
+    printf '  %sof the new kit. A kit that installs packages takes that time again.%s\n' \
         "$_DR_DIM" "$_DR_OFF" >&2
     for k in "${new_args[@]}"; do
         printf '    %s\n' "$k" >&2

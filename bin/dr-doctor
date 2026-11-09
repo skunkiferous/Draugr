@@ -226,38 +226,38 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
     # dr_context stops. Thus the code sets DR_REPO here, and does not assume it.
     DR_REPO=$repo
 
-    # A per-agent key REPLACES the general DRAUGR_AGENT_ARGS, and that swap
-    # happens after the WHOLE cascade, once DRAUGR_AGENT is known. So a
-    # user-level DRAUGR_AGENT_ARGS_CLAUDE beats a project-level
-    # DRAUGR_AGENT_ARGS, against the usual order of the layers, and the project
-    # value then disappears with no message anywhere.
+    # A key for one agent REPLACES the general DRAUGR_AGENT_ARGS. The swap
+    # comes after Draugr reads ALL the layers, when it knows DRAUGR_AGENT. Thus
+    # a DRAUGR_AGENT_ARGS_CLAUDE of the user replaces a DRAUGR_AGENT_ARGS of the
+    # project, against the usual order of the layers. The value of the project
+    # is then lost, and no message says so.
     #
-    # Found the hard way. A .draugr.conf asked for --continue, the
-    # machine-wide config held a DRAUGR_AGENT_ARGS_CLAUDE written for the plugin
-    # seed, and dr-go opened a new conversation in every repo on the machine.
-    # dr-config --changed showed it, but only to somebody who already suspected
-    # it.
+    # A user found this. A .draugr.conf asked for --continue, and the
+    # machine-wide configuration held a DRAUGR_AGENT_ARGS_CLAUDE for the plugin
+    # seed. Thus dr-go started a new conversation in each repo on the machine.
+    # dr-config --changed showed it, but only to a person who already looked
+    # for it.
     #
-    # A soft note and not a fault. The replacement is the documented rule and is
-    # often what you want. It is worth saying only when a NON-EMPTY general
-    # value was thrown away, because then somebody wrote something that never
-    # arrives. Keyed on the value and not on its origin: with no general value
-    # set anywhere, the origin is still "built-in default", and a note on that
-    # would fire on every run of every project.
+    # A soft note, not a fault. The replacement is the documented rule, and it
+    # is often what you want. The note is useful only when the lost general
+    # value is NOT EMPTY, because then somebody wrote a value that never
+    # arrives. The test is on the value, not on its origin. With no general
+    # value anywhere, the origin is still "built-in default", and a note on
+    # that comes on each run of each project.
     if [ -n "$DR_AGENT_ARGS_REPLACED" ]; then
-        # The append form works because the layers are sourced in order in one
-        # shell, so the per-agent key can read its own earlier value.
+        # The form that adds works because one shell sources the layers in
+        # order. Thus the key for the agent can read its own earlier value.
         _append="$DR_AGENT_ARGS_REPLACED_BY=\"\${$DR_AGENT_ARGS_REPLACED_BY:+\$$DR_AGENT_ARGS_REPLACED_BY }$DR_AGENT_ARGS_REPLACED\""
         soft "agent args" "$DR_AGENT_ARGS_REPLACED_BY replaced DRAUGR_AGENT_ARGS" \
             "dropped:  $DR_AGENT_ARGS_REPLACED" \
             "          from $DR_AGENT_ARGS_REPLACED_FROM" \
             "in use:   $DRAUGR_AGENT_ARGS" \
             "          from ${DR_ORIGIN[DRAUGR_AGENT_ARGS]:-unknown}" \
-            "A key for one agent replaces the general key. To keep both, append" \
-            "in the layer that sets the per-agent key:" \
+            "A key for one agent replaces the general key. To keep both, add to" \
+            "the key in the layer that sets it:" \
             "  $_append" \
-            "Editing a trusted .draugr.conf changes its hash and revokes the" \
-            "trust, so run dr-trust again, or Draugr ignores the whole file."
+            "A change to a trusted .draugr.conf changes its hash and removes the" \
+            "trust. Then run dr-trust again, or Draugr ignores the whole file."
     fi
 
     if [ -n "$DRAUGR_KIT" ]; then

@@ -111,16 +111,17 @@ DRAUGR_AGENT_ARGS="resume --last"     # dr-go resumes the last Codex thread
 
 Neither means anything to `shell`.
 
-**One exception, and the only one:** an argument that needs a session which does not exist is
-dropped for that one run. A mound that was just created holds no session, so a configured
-`--continue` would make Claude Code print `No conversation found to continue` and exit before the
-attach. `dr-go` names what it dropped and where it came from, and the next `dr-go` continues the
-session that this one makes. It drops the argument only when the mound answers that it has none. An
-answer that cannot be got leaves your arguments exactly as you wrote them: a dropped argument that
-would have worked costs the session it would have continued, which is worse than the refusal above.
+There is one exception. If an argument needs a session that does not exist, `dr-go` drops it for
+that one run. A new mound has no session. With a configured `--continue`, Claude Code then prints
+`No conversation found to continue` and stops before the attach. `dr-go` names the argument that it
+dropped, and the place that set it. The next `dr-go` continues the session that this run makes.
 
-Draugr knows those arguments for Claude Code only. For every other agent nothing is dropped and
-nothing is probed, because where that agent files its sessions is not measured.
+If the mound answers that it has no session, `dr-go` drops the argument. If `dr-go` gets no
+answer, it keeps your arguments as you wrote them. A correct argument that `dr-go` drops loses the
+session that it was to continue. That is worse than the refusal of Claude Code.
+
+Draugr knows these arguments only for Claude Code. For each other agent, `dr-go` drops nothing and
+asks the mound nothing, because nobody measured where that agent keeps its sessions.
 
 > ### Codex on a ChatGPT plan usually needs a model named here
 >
@@ -682,15 +683,16 @@ difference on purpose.
 Default `false`. When true, `dr-go` stops the mound after you leave the agent. That is the last step,
 after the sync, the memory export and the data pull, because each of those needs a running mound.
 
-Off by default, and the difference is smaller than it looks. sandboxd stops a mound by itself a
-short time after its last session disconnects, and leaving the agent **is** that disconnect. So this
-key decides whether the mound goes down *now* or *shortly*, and not whether it goes down at all.
-`dr-go` says so when it leaves one running.
+Off by default, and the difference is smaller than it looks. sandboxd stops a mound a short time
+after its last session disconnects. When you leave the agent, that session disconnects. Thus this
+key changes only the time of the stop: now, or a short time later. The mound stops in both cases. If
+`dr-go` leaves the mound running, it tells you so.
 
-What the key really changes is the grace period. A stop at once kills all that the kit starts
-through `publishedPorts` or `startup` commands, and it gives up the window in which a second
-`dr-go` attaches instead of cold-starting. Inside that window an attach costs 0.36 s and a cold
-start 4.2 s; after it, you pay the cold start whether the key is set or not.
+The key changes one thing: the grace period (the time before sandboxd stops an idle mound). A stop
+at once kills all that the kit starts through `publishedPorts` or `startup` commands. It also ends
+the time in which a second `dr-go` attaches to the running mound, and does not start it cold. In
+that time, an attach costs 0.36 s, and a cold start costs 4.2 s. After that time, you pay for the
+cold start, with or without the key.
 
 | measured on one machine | |
 |---|---|
@@ -699,8 +701,8 @@ start 4.2 s; after it, you pay the cold start whether the key is set or not.
 | attach to a running mound | 0.36 s |
 | grace period before sandboxd stops an idle mound | 30 s on sbx 0.37.1 |
 
-The grace period is sbx's, not Draugr's. It is recorded here because it decides what this key is
-worth, not as something to rely on: re-measure it after an sbx upgrade.
+The grace period comes from sbx, not from Draugr. This page gives the value because it decides
+what this key is worth. Do not rely on it. Measure it again after each upgrade of sbx.
 
 Turn it on for each project that serves nothing, or in `~/.config/draugr/config` if the four seconds
 are acceptable to you. It does **not** protect your work. The `dr-sync` that already ran protects

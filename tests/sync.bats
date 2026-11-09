@@ -37,17 +37,17 @@ teardown() { dr_test_teardown; }
 }
 
 @test "dr-sync: with an untracked branch, nothing-new names the branch, not the mound" {
-    # "nothing new in the mound" is a claim about the MOUND, but `ahead` counts
-    # one branch. With the agent on a branch of its own, that line landed
-    # directly above the list of what it had done, and the two read as a
-    # contradiction. A user asked which of the two to believe.
+    # "nothing new in the mound" is a statement about the MOUND, but `ahead`
+    # counts one branch. If the agent worked on a branch of its own, that line
+    # came directly above the list of its work. The two looked like a
+    # contradiction, and a user asked which one was true.
     git -C "$MOUND" checkout -q -b feature
     dr_mound_commit "$MOUND" "agent work on its own branch"
     run dr-sync
     [ "$status" -eq 0 ]
     [[ "$output" == *"nothing new on draugr/main"* ]]
     [[ "$output" != *"nothing new in the mound"* ]]
-    # And it still says what IS there, which is the half that must not regress.
+    # It still says what IS there. That half must not break again.
     [[ "$output" == *"do NOT track"* ]]
 }
 
@@ -351,14 +351,14 @@ mound_head_ref() {
 }
 
 @test "dr-sync: an invented branch is a warning when the tracked one is empty" {
-    # A quiet note after a calm first line reads as "all good". When the tracked
-    # branch has nothing, the invented branch IS the news, so the list warns
-    # instead: "do NOT track" is the loud wording, "do not track" the quiet one,
-    # and that is what the second assertion tells apart.
+    # A quiet note after a calm first line looks like "all good". If the
+    # tracked branch has nothing, the invented branch IS the news. Thus the
+    # list warns. "do NOT track" is the loud text, and "do not track" is the
+    # quiet text. The second assertion tells them apart.
     #
-    # The first line used to say "nothing new in the mound" here too, which is a
-    # claim about the mound made directly above the list of what was in it. It
-    # now names the branch it actually counted.
+    # Before, the first line said "nothing new in the mound" here too. That
+    # was a statement about the mound, directly above the list of its contents.
+    # Now the line names the branch that it counted.
     mound_branch_commit feature-x
     run dr-sync
     [[ "$output" == *"nothing new on draugr/main"* ]]
@@ -490,12 +490,12 @@ host_commit() {
 
 # --- dr-send: the mark it writes, and the branch the clone is really on -------
 #
-# A stand-in filesystem for the mound, so that the git commands dr-send sends
-# through `sbx exec` really run. The mock rewrites every ABSOLUTE argument into
-# this tree, so the clone of the agent and /run/sandbox/source both live under
-# it. The clone is made BEFORE the host commits, so that there is something to
-# send; the source copy is made after, because it stands for a live read-only
-# view of the host repo.
+# A stand-in file system for the mound, so that the git commands that dr-send
+# sends through `sbx exec` really run. The mock changes each ABSOLUTE argument
+# to a path in this tree. Thus the clone of the agent and /run/sandbox/source
+# are both in it. The code makes the clone BEFORE the host commits, so that
+# there is something to send. It makes the source copy after, because that copy
+# stands for a live, read-only view of the host repo.
 fake_mound_clone() {
     local on=$1 clone
     export DR_MOCK_MOUND="$DR_TMP/mound-fs"
@@ -516,9 +516,9 @@ fake_mound_source() {
 }
 
 @test "dr-send: writes the sent mark itself, with no dr-sync after it" {
-    # The mark used to come only from the extra refspec of dr-sync, so it
-    # appeared only if you synced AFTER you sent. Sync first and send second -
-    # the ordinary order - and it was never written, and dr-status said
+    # Before, only the extra refspec of dr-sync wrote the mark. Thus the mark
+    # came only if you synced AFTER you sent. In the usual order, you sync
+    # first and send second. Then nothing wrote the mark, and dr-status said
     # "Use dr-send" for ever.
     host_commit
     dr-sync >/dev/null 2>&1
@@ -543,8 +543,8 @@ fake_mound_source() {
     run dr-send --merge
     [ "$status" -ne 0 ]
     [[ "$output" == *"the mound is on simple-english, not main"* ]]
-    # Both halves. The message can be right while the merge still runs, and a
-    # test on the message alone would not notice.
+    # Both halves. The message can be correct while the merge still runs. A
+    # test on the message alone does not see that.
     [[ "$(cat "$DR_MOCK_LOG")" != *"merge --ff-only"* ]]
 }
 

@@ -628,9 +628,9 @@ go_output() {
 
 @test "dr-go: leaves the mound to stop itself, and says so" {
     # It must not promise that the mound stays up. sandboxd stops it a short
-    # time after the last session, so "still runs. To stop it: dr-stop" was
-    # true for about half a minute and then sent the reader to dr-stop for
-    # something the daemon had already done.
+    # time after the last session. Thus "still runs. To stop it: dr-stop" was
+    # true for about half a minute. After that, it sent the reader to dr-stop
+    # for a stop that the daemon already did.
     run go_output
     [[ "$output" == *"stops itself"* ]]
     [[ "$output" == *"dr-stop"* ]]

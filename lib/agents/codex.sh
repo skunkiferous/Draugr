@@ -63,10 +63,11 @@ _DR_CODEX_DBS='state_*.sqlite memories_*.sqlite goals_*.sqlite queue_*.sqlite'
 # mean "safe". Thus a missing pgrep has its own exit code, and does not become
 # a success. (The image has pgrep. This is for a future image without it.)
 dr_agent_mem_quiesce() {
-    # `&& exit 1` on its own read EVERY non-zero pgrep as "not running", and
-    # pgrep exits 2 or 3 for ITS OWN errors, not only 1 for "no match". So a
-    # pgrep that could not answer became the quiet answer, which is the one
-    # thing the three-answer contract above forbids. Dispatch on the code.
+    # `&& exit 1` alone read EACH non-zero exit of pgrep as "not running". But
+    # pgrep exits with 2 or 3 for ITS OWN errors, and with 1 only for "no
+    # match". Thus a pgrep that could not answer gave the quiet answer. The
+    # three-answer contract above forbids exactly that. The case below reads
+    # each exit code.
     dr_mound_sh 'command -v pgrep >/dev/null 2>&1 || exit 2
                  pgrep -x codex >/dev/null 2>&1
                  case $? in
@@ -307,9 +308,9 @@ dr_agent_model_supported() { return 1; }
 dr_agent_model_env()       { return 1; }
 
 # The session that an argument like --continue needs. Codex continues with a
-# SUBCOMMAND, `codex resume --last`, and not with a flag that could sit in
-# DRAUGR_AGENT_ARGS. Where it files those sessions is not measured. Thus there
-# is no argument to drop and no answer about what the mound holds. A guess here
-# would start a new session in place of the one you asked to continue.
+# SUBCOMMAND, `codex resume --last`, not with a flag that dr-go can drop.
+# Nobody measured where Codex keeps those sessions. Thus there is no argument
+# to drop, and no answer about the contents of the mound. A guess here can
+# start a new session in place of the one that you asked to continue.
 dr_agent_session_flags()   { return 0; }
 dr_agent_session_present() { printf 'unknown\n'; }

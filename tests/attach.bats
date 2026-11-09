@@ -209,11 +209,11 @@ go_pty() {
 
 # --- the session that --continue needs ---------------------------------------
 #
-# With --continue in DRAUGR_AGENT_ARGS, a mound that was just created has no
-# transcript to continue. Claude Code then prints one line and exits, so the
-# attach never happens, and the fix for that must not cost a session that WAS
-# there. Thus the probe answers in words: a call into the mound that fails
-# cannot read as "there is no session".
+# With --continue in DRAUGR_AGENT_ARGS, a new mound has no transcript to
+# continue. Claude Code then prints one line and stops, and the attach does not
+# happen. The fix for that must not lose a session that WAS there. Thus the
+# probe answers in words: a failed call into the mound never means "there is no
+# session".
 
 @test "claude session flags: only the arguments that carry no value" {
     dr_load_common
@@ -222,9 +222,9 @@ go_pty() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"--continue"* ]]
     [[ "$output" == *"-c"* ]]
-    # --resume takes an optional session id. Dropping the flag alone would
-    # leave that id behind as a positional argument, which the agent reads as
-    # a prompt. Thus it must NOT be in this list.
+    # --resume takes an optional session id. If dr-go drops only the flag, the
+    # id stays behind as a positional argument, and the agent reads it as a
+    # prompt. Thus --resume must NOT be in this list.
     [[ "$output" != *"--resume"* ]] || return 1
 }
 
@@ -255,8 +255,8 @@ go_pty() {
     DRAUGR_AGENT=claude dr_agent_load
     dr_mound_memory_dir "$REPO"
     DRAUGR_SANDBOX=$SANDBOX
-    # Nothing in the tree, so an implementation that read a failed call as an
-    # answer would say "none" here, and dr-go would throw the argument away.
+    # The tree is empty. Thus code that reads a failed call as an answer says
+    # "none" here, and dr-go throws the argument away.
     DR_MOCK_FAIL=exec run dr_agent_session_present "$REPO"
     [ "$output" != none ] || return 1
 }
@@ -266,7 +266,8 @@ go_pty() {
     dr_mound_memory_dir "$REPO"
     mkdir -p "$DR_MEMDIR"
     go_pty
-    # The rest of the arguments still arrive. Only the dead one is gone.
+    # The other arguments still arrive. Only the argument that cannot work is
+    # gone.
     [[ "$(decode_rc)" == *"claude --settings /x/s.json;"* ]]
     [[ "$(decode_rc)" != *"--continue"* ]] || return 1
 }
@@ -281,9 +282,9 @@ go_pty() {
 }
 
 @test "default module: an unmeasured agent declares nothing and answers unknown" {
-    # The two halves that keep dr-go away from an agent nobody measured. Each
-    # alone is enough, and "unknown" is the important one: if this answered
-    # "none", dr-go would throw a working argument away for every such agent.
+    # These two answers keep dr-go away from an agent that nobody measured.
+    # Each one alone is enough. "unknown" is the important one. If this answer
+    # is "none", dr-go throws a correct argument away for each such agent.
     dr_load_common
     DRAUGR_AGENT=gemini dr_agent_load
     run dr_agent_session_flags
@@ -293,9 +294,9 @@ go_pty() {
 }
 
 @test "dr-go: a probe that cannot answer leaves --continue alone" {
-    # The tree holds no transcript, so the only thing that keeps the argument
-    # is the rule that unknown is not none. dr-up does not exec when the mound
-    # already runs, so the failure below hits the probe and nothing else.
+    # The tree holds no transcript. Thus only the rule "unknown is not none"
+    # keeps the argument. dr-up does not exec when the mound already runs.
+    # Thus the failure below hits only the probe.
     export DRAUGR_AGENT_ARGS="--continue" DR_MOCK_FAIL=exec
     dr_mound_memory_dir "$REPO"
     mkdir -p "$DR_MEMDIR"

@@ -296,23 +296,23 @@ dr_agent_model_env() {
 #
 # Claude Code keeps one transcript for each session as <uuid>.jsonl, directly
 # in the project directory that dr_mem_mound_dir names. --continue reads the
-# newest of them. With none there, it prints "No conversation found to
-# continue" and EXITS, so the session never starts. A mound that was just
-# created holds none. Thus a create, and a dr-up --recreate, are the one
-# moment when a configured --continue cannot work.
+# newest of them. If there is none, it prints "No conversation found to
+# continue" and EXITS, and the session does not start. A new mound has none.
+# Thus a create, and a dr-up --recreate, are the one moment when a configured
+# --continue cannot work.
 #
-# Only the arguments that take NO value are here. --resume takes an optional
-# session id. Dropping that flag would leave the id behind as a positional
-# argument, which the agent reads as a PROMPT. A session that starts with a
-# stray prompt is worse than the refusal this replaces.
+# This list holds only the arguments that take NO value. --resume takes an
+# optional session id. If dr-go drops that flag, the id stays behind as a
+# positional argument, and the agent reads it as a PROMPT. A session that
+# starts with a wrong prompt is worse than the refusal.
 # ---------------------------------------------------------------------------
 
 dr_agent_session_flags() { printf '%s\n' --continue -c; }
 
-# A word, and not an exit code. `sbx exec` can fail for reasons of its own, and
-# such a failure must not become "there is no session": that answer throws a
-# working argument away. The caller reads an empty answer as unknown, which is
-# what a failed call leaves behind.
+# A word, not an exit code. `sbx exec` can fail for reasons of its own, and
+# such a failure must not become "there is no session". That answer throws a
+# correct argument away. The caller reads an empty answer as unknown, and a
+# failed call leaves an empty answer.
 dr_agent_session_present() {
     dr_mound_sh 'command -v find >/dev/null 2>&1 || { printf "unknown\n"; exit 0; }
                  if [ ! -d "$1" ]; then printf "none\n"; exit 0; fi
