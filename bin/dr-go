@@ -303,10 +303,9 @@ else
     # dr-stop" was true for about half a minute, and then it advised doing by
     # hand what the daemon had already done.
     #
-    # A test on 2026-11-08 timed it in daemon.log: the session disconnected at
-    # 11:23:46 and the daemon recorded a 30 s deferral, the grace period expired
-    # at 11:24:16, and the mound was stopped at 11:24:21. The user read "still
-    # runs", ran dr-stop, and was told it was already stopped.
+    # A test timed it in daemon.log: the session disconnected and the daemon
+    # recorded a 30 s deferral, the grace period expired, and the mound was stopped.
+    # The user read "still runs", ran dr-stop, and was told it was already stopped.
     #
     # No number in the message. The grace period belongs to sbx and not to
     # Draugr, and the only promise that stays true is that it is short.

@@ -962,7 +962,7 @@ Two results follow, and neither is a defect of the kit:
 
 ### Measured: `commands.install` DOES run on apply
 
-Tested on 2026-11-08 with sbx 0.37.1, on two throwaway sandboxes whose kits each append a marker
+Tested with sbx 0.37.1, on two throwaway sandboxes whose kits each append a marker
 line, so a run leaves evidence and the runs are countable. Four answers:
 
 1. **Install runs when a kit is added to a RUNNING sandbox.** `sbx kit add` reports "Recreating

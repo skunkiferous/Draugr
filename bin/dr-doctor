@@ -232,7 +232,7 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
     # DRAUGR_AGENT_ARGS, against the usual order of the layers, and the project
     # value then disappears with no message anywhere.
     #
-    # Found the hard way on 2026-11-08. A .draugr.conf asked for --continue, the
+    # Found the hard way. A .draugr.conf asked for --continue, the
     # machine-wide config held a DRAUGR_AGENT_ARGS_CLAUDE written for the plugin
     # seed, and dr-go opened a new conversation in every repo on the machine.
     # dr-config --changed showed it, but only to somebody who already suspected

@@ -115,7 +115,7 @@ fi
 # the HEAD of the clone, so the refusal below named host/$branch while the merge
 # had in fact been tried on another branch.
 #
-# A test on 2026-11-08 showed how that reads: the clone was on `simple-english`,
+# A test showed how that reads: the clone was on `simple-english`,
 # the own `main` of the clone WAS fast-forwardable, and dr-send said "could not
 # fast-forward the mound to host/main" one line after dr-sync said
 # "nothing new in the mound - draugr/main matches your branch". Together the two

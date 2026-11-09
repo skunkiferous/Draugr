@@ -86,8 +86,8 @@ commands:
   #
   # MAKE EACH COMMAND IDEMPOTENT. It does not run only once. `sbx kit add`, and
   # so `dr-kit apply`, recreates the container and replays the install commands
-  # of EVERY kit in the composition, not only of the kit being added. A test on
-  # 2026-11-08 counted the lines. So a command that appends to a file, raises a
+  # of EVERY kit in the composition, not only of the kit being added. A test
+  # counted the lines. So a command that appends to a file, raises a
   # counter, or clones into a fixed path does it again for each kit you add
   # later. apt-get and uv are safe. `>>` is not.
   #

@@ -286,7 +286,7 @@ dr_sbx_log_error() {
     #     device ...: ... (os error 32)\"}"
     #
     # A filter that reads only the outer level cannot see those. A test over the
-    # real window of a failed start on 2026-11-08 showed what that costs: nine
+    # real window of a failed start showed what that costs: nine
     # such lines named the cause, and the one outer ERROR in the window said
     # `endpoint not connected`, which is a CONSEQUENCE of the VM never starting.
     # Printing that would be worse than printing nothing, because it reads as an
@@ -941,7 +941,7 @@ dr_load_config() {
         # replacement hides both. dr-doctor needs them to tell a deliberate
         # per-agent value from one that threw a project setting away in silence.
         #
-        # Found the hard way on 2026-11-08. A user put
+        # Found the hard way. A user put
         # DRAUGR_AGENT_ARGS=--continue in the .draugr.conf of a repo, ran dr-go,
         # and did not get the conversation back. The file was trusted and was
         # read. A DRAUGR_AGENT_ARGS_CLAUDE in the machine-wide config, written
@@ -1448,7 +1448,7 @@ dr_model_probe() {
     # A bare DRAUGR_MODEL_URL port became the address of THIS machine, and no
     # route to your own machine goes through an HTTP proxy. The reason to care:
     # an intercepting proxy ANSWERS for a host that it refuses. A test inside a
-    # mound on 2026-11-08 showed the gateway of sbx returning
+    # mound showed the gateway of sbx returning
     #
     #   403  Blocked by network policy: domain 172.19.192.26:1
     #        no matching allow rule - blocked by default deny policy

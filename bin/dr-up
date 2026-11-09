@@ -345,7 +345,7 @@ create_failed() {
 
 # The same evidence for a refused START. The create path has printed what
 # sandboxd recorded from the beginning, and the start path printed
-# "Look at: dr-ls", which is nothing to go on. A hard reset on 2026-11-08 sent a
+# "Look at: dr-ls", which is nothing to go on. A hard reset sent a
 # start down this path, nine log lines named the cause, and the user saw none of
 # them.
 start_failed() {
@@ -361,8 +361,8 @@ start_failed() {
 
     # The one signature worth naming. After a hard reset, the startup recovery
     # of sandboxd reopens the block images of a sandbox that still had a runtime
-    # record, and then cannot open them again to boot the VM. A test on
-    # 2026-11-08 found the holder by trying to open the .img exclusively: held
+    # record, and then cannot open them again to boot the VM. A test found the
+    # holder by trying to open the .img exclusively: held
     # before `sbx daemon stop`, free after. The process that holds the file IS
     # the daemon.
     #

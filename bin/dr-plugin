@@ -619,7 +619,7 @@ YAML
     printf '  dr-kit validate\n' >&2
     printf '  DRAUGR_KIT=".draugr/kit %s"\n' "${_made[*]}" >&2
 
-    # One answer now, not two. A test on 2026-11-08 showed that commands.install
+    # One answer now, not two. A test showed that commands.install
     # DOES run when `sbx kit add` recreates the container, so "dr-kit apply"
     # installs the plugin into the mound you are in. The old wording said both,
     # because nobody had measured it.
