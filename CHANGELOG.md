@@ -36,6 +36,15 @@ people reading the source, not for people calling it.
   mound, and the staging copy — instead of printing nothing for the first several seconds.
 
 ### Fixed
+- A configured `--continue` no longer stops you entering a mound that was just created. Claude Code
+  prints `No conversation found to continue` and **exits** when the project directory holds no
+  transcript, so `DRAUGR_AGENT_ARGS="--continue"` turned every create and every `dr-up --recreate`
+  into a session that ended before it began. `dr-mem` does not cover it either: the store carries
+  the memory directory, never the transcripts beside it. `dr-go` now asks the mound whether there is
+  a session to continue, drops the argument for that one run when there is none, and says what it
+  dropped and where it came from. It drops nothing when the mound cannot answer, because losing a
+  session that was there is worse than the refusal this replaces, and nothing at all for an agent
+  whose session layout Draugr has not measured.
 
 - `commands.install` on `sbx kit add` is measured now, and three places said the wrong thing about
   it. It DOES run when a kit is applied, so `dr-plugin kit` no longer hedges: `dr-kit apply`

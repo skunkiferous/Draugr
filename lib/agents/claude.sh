@@ -290,3 +290,34 @@ dr_agent_model_env() {
     printf 'ANTHROPIC_DEFAULT_SONNET_MODEL=%s\n' "$2"
     printf 'ANTHROPIC_DEFAULT_HAIKU_MODEL=%s\n'  "${3:-$2}"
 }
+
+# ---------------------------------------------------------------------------
+# The session that --continue needs
+#
+# Claude Code keeps one transcript for each session as <uuid>.jsonl, directly
+# in the project directory that dr_mem_mound_dir names. --continue reads the
+# newest of them. With none there, it prints "No conversation found to
+# continue" and EXITS, so the session never starts. A mound that was just
+# created holds none. Thus a create, and a dr-up --recreate, are the one
+# moment when a configured --continue cannot work.
+#
+# Only the arguments that take NO value are here. --resume takes an optional
+# session id. Dropping that flag would leave the id behind as a positional
+# argument, which the agent reads as a PROMPT. A session that starts with a
+# stray prompt is worse than the refusal this replaces.
+# ---------------------------------------------------------------------------
+
+dr_agent_session_flags() { printf '%s\n' --continue -c; }
+
+# A word, and not an exit code. `sbx exec` can fail for reasons of its own, and
+# such a failure must not become "there is no session": that answer throws a
+# working argument away. The caller reads an empty answer as unknown, which is
+# what a failed call leaves behind.
+dr_agent_session_present() {
+    dr_mound_sh 'command -v find >/dev/null 2>&1 || { printf "unknown\n"; exit 0; }
+                 if [ ! -d "$1" ]; then printf "none\n"; exit 0; fi
+                 s=$(find "$1" -maxdepth 1 -type f -name "*.jsonl" 2>/dev/null |
+                     head -1)
+                 if [ -n "$s" ]; then printf "present\n"; else printf "none\n"; fi' \
+        "$(dr_mem_mound_dir "$1")"
+}

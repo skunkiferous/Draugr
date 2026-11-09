@@ -206,6 +206,65 @@ if [ -n "$DRAUGR_MODEL" ]; then
     esac
 fi
 
+# An argument that needs a session which does not exist is not a session, it is
+# a refusal. With --continue in DRAUGR_AGENT_ARGS, every freshly created mound
+# starts like this: the agent prints one line, exits, and the attach you asked
+# for never happens. The argument is right nearly always, and wrong exactly
+# when the mound is new. Thus it is dropped for that one run.
+#
+# The probe is a round trip into the mound, so it runs only when there is
+# something it could drop. Only "none" drops anything. "unknown" leaves the
+# arguments as they are: an argument dropped where it would have worked costs
+# the session it would have continued, which is worse than the refusal above.
+#
+# It also drops a --continue that you TYPED. The rule that the command line
+# wins over the configuration is about which SOURCE of arguments wins, and
+# neither source can continue a session that is not there. The line below names
+# where it came from, so nothing happens in silence.
+sess_flags=(); sess_keep=(); sess_drop=()
+mapfile -t sess_flags < <(dr_agent_session_flags)
+if [ ${#agent_args[@]} -gt 0 ] && [ ${#sess_flags[@]} -gt 0 ]; then
+    # Two lists, in one pass: what goes to the agent, and what would go only to
+    # fail. The comparison is on the whole word. A value that happens to read
+    # like a flag, as in --model -c, belongs to its own argument and stays.
+    for sess_arg in "${agent_args[@]}"; do
+        sess_is=
+        for sess_f in "${sess_flags[@]}"; do
+            if [ "$sess_arg" = "$sess_f" ]; then sess_is=1; break; fi
+        done
+        if [ -n "$sess_is" ]; then sess_drop+=("$sess_arg")
+        else sess_keep+=("$sess_arg"); fi
+    done
+
+    if [ ${#sess_drop[@]} -gt 0 ]; then
+        # The default is unknown, and a call that fails keeps it. Thus a failure
+        # inside the mound can never read as an answer about the session.
+        sess=unknown
+        sess=$(dr_agent_session_present "$DR_REPO") || sess=unknown
+        if [ "$sess" = none ]; then
+            agent_args=(${sess_keep[@]+"${sess_keep[@]}"})
+
+            # Name the source. For the configuration it is the origin that the
+            # debug line above prints, so the two can never disagree.
+            if [ -n "$args_given" ]; then
+                sess_origin="the command line"
+            else
+                sess_origin="${DR_ORIGIN[DRAUGR_AGENT_ARGS]:-your configuration}"
+            fi
+
+            # Three lines, because the next question is always "then how do I
+            # continue it", and its answer is "the next dr-go".
+            dr_info "$DRAUGR_SANDBOX has no session to continue, so this one starts fresh"
+            printf '  %s%s dropped for this run, from %s. With it, %s refuses%s\n' \
+                "$_DR_DIM" "${sess_drop[*]}" "$sess_origin" "$DRAUGR_AGENT" "$_DR_OFF" >&2
+            printf '  %sto start, and you come straight back here. The next dr-go%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %scontinues the session that this one is about to make.%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+        fi
+    fi
+fi
+
 # The test comes after dr-up. Thus `dr-go` from a script still creates the mound
 # before it reports that it cannot attach.
 dr_require_tty dr-go

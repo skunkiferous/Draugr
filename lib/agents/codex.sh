@@ -305,3 +305,11 @@ dr_agent_plugin_cli()       { return 1; }
 # ---------------------------------------------------------------------------
 dr_agent_model_supported() { return 1; }
 dr_agent_model_env()       { return 1; }
+
+# The session that an argument like --continue needs. Codex continues with a
+# SUBCOMMAND, `codex resume --last`, and not with a flag that could sit in
+# DRAUGR_AGENT_ARGS. Where it files those sessions is not measured. Thus there
+# is no argument to drop and no answer about what the mound holds. A guess here
+# would start a new session in place of the one you asked to continue.
+dr_agent_session_flags()   { return 0; }
+dr_agent_session_present() { printf 'unknown\n'; }

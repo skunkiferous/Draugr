@@ -101,7 +101,7 @@ other values. It is also the only way to drop a configured argument for one run:
 | `dr-go --bare` | pass the agent nothing |
 | `dr-go -- --model opus` | pass these instead |
 
-These are the own flags of the agent, passed with no interpretation. Thus the agent sets the
+These are the own flags of the agent, passed as you wrote them. Thus the agent sets the
 spelling, not Draugr. "Continue from last time" is `--continue` for Claude Code, and
 `resume --last` for Codex. The Codex form is a subcommand, not a flag, but it works here too:
 
@@ -110,6 +110,17 @@ DRAUGR_AGENT_ARGS="resume --last"     # dr-go resumes the last Codex thread
 ```
 
 Neither means anything to `shell`.
+
+**One exception, and the only one:** an argument that needs a session which does not exist is
+dropped for that one run. A mound that was just created holds no session, so a configured
+`--continue` would make Claude Code print `No conversation found to continue` and exit before the
+attach. `dr-go` names what it dropped and where it came from, and the next `dr-go` continues the
+session that this one makes. It drops the argument only when the mound answers that it has none. An
+answer that cannot be got leaves your arguments exactly as you wrote them: a dropped argument that
+would have worked costs the session it would have continued, which is worse than the refusal above.
+
+Draugr knows those arguments for Claude Code only. For every other agent nothing is dropped and
+nothing is probed, because where that agent files its sessions is not measured.
 
 > ### Codex on a ChatGPT plan usually needs a model named here
 >
