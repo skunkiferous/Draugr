@@ -506,6 +506,16 @@ Know these facts about the lines above:
   To find this problem, run `dr-config DRAUGR_ENV` in the repo where you will work.
 - `DRAUGR_AGENT_ARGS` **replaces**, and does not extend. If you already use it, add to it, and do
   not overwrite it: `DRAUGR_AGENT_ARGS="--continue --settings /c/Code/claude-plugins/settings.json"`.
+- **The key for one agent also beats the general key of a PROJECT.** The option above puts
+  `--settings` in `DRAUGR_AGENT_ARGS_CLAUDE`, and that key replaces `DRAUGR_AGENT_ARGS` *after the
+  whole cascade*, once `DRAUGR_AGENT` is known. So it replaces a `DRAUGR_AGENT_ARGS` in the
+  `.draugr.conf` of a project too, against the usual order of the layers. This happened: a repo
+  asked for `--continue`, the machine-wide key for the seed replaced it, and every `dr-go` on the
+  machine opened a new conversation with nothing anywhere to say why. `dr-doctor` reports it now.
+  To keep both, append in the layer that sets the key for the agent:
+  `DRAUGR_AGENT_ARGS_CLAUDE="${DRAUGR_AGENT_ARGS_CLAUDE:+$DRAUGR_AGENT_ARGS_CLAUDE }--continue"`.
+  Editing a trusted `.draugr.conf` changes its hash and revokes the trust, so run `dr-trust` after
+  any change there.
 
 Mounts become fixed when Draugr builds a mound. Thus existing mounds need `dr-up --recreate` once.
 After that, they do not. The mount and the environment variable stay, and each start reads the

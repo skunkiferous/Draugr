@@ -37,6 +37,12 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `dr-doctor` says when a per-agent key has thrown away a project value. `DRAUGR_AGENT_ARGS_<AGENT>`
+  replaces the general `DRAUGR_AGENT_ARGS` after the *whole* cascade, once `DRAUGR_AGENT` is known,
+  so a key in `~/.config/draugr/config` beats one in the `.draugr.conf` of a project, against the
+  usual order of the layers. Setting up the plugin seed that way disabled `--continue` in every
+  repo on one machine, and nothing said so. The note names both values with both origins, and the
+  append that keeps them both. It appears only when a non-empty general value was discarded.
 - `dr-up` now says what sandboxd recorded when a START is refused, and not only when a create is.
   The start path printed "Look at: dr-ls". After a hard reset — when the startup recovery of
   sandboxd reopens the block images of a sandbox that still had a runtime record, and then cannot

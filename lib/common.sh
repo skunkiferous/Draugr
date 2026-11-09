@@ -622,6 +622,15 @@ unset _dr_a
 # arithmetic on the string ".draugr/kit".
 declare -gA DR_ORIGIN=()
 
+# What the general DRAUGR_AGENT_ARGS held before a per-agent key replaced it,
+# where that general value came from, and which key did the replacing. All three
+# are empty when no replacement happened. dr-doctor reports the combination,
+# because it is invisible otherwise: the replacement overwrites both the value
+# and its origin. See the comment at the swap itself.
+DR_AGENT_ARGS_REPLACED=
+DR_AGENT_ARGS_REPLACED_FROM=
+DR_AGENT_ARGS_REPLACED_BY=
+
 # Configuration layers that exist on the disk, but that Draugr did NOT source,
 # because they are not trusted. Without this list, a skipped layer looks the
 # same as a layer that set nothing. dr-config reads the list and says so. You
@@ -928,6 +937,24 @@ dr_load_config() {
     # "nothing for codex" on purpose. It must win over a general value.
     local _ak; _ak=$(dr_agent_args_key "$DRAUGR_AGENT")
     if [ -n "${!_ak+set}" ]; then
+        # Keep what the general key held, and where it came from, before the
+        # replacement hides both. dr-doctor needs them to tell a deliberate
+        # per-agent value from one that threw a project setting away in silence.
+        #
+        # Found the hard way on 2026-11-08. A user put
+        # DRAUGR_AGENT_ARGS=--continue in the .draugr.conf of a repo, ran dr-go,
+        # and did not get the conversation back. The file was trusted and was
+        # read. A DRAUGR_AGENT_ARGS_CLAUDE in the machine-wide config, written
+        # for the plugin seed, had replaced it - for every repo on the machine,
+        # because this swap happens AFTER the whole cascade, once DRAUGR_AGENT
+        # is known. So a user-level per-agent key beats a project-level general
+        # one, whatever the usual order of the layers.
+        # shellcheck disable=SC2034  # bin/dr-doctor reads all three
+        DR_AGENT_ARGS_REPLACED=${DRAUGR_AGENT_ARGS:-}
+        # shellcheck disable=SC2034
+        DR_AGENT_ARGS_REPLACED_FROM=${DR_ORIGIN[DRAUGR_AGENT_ARGS]:-}
+        # shellcheck disable=SC2034
+        DR_AGENT_ARGS_REPLACED_BY=$_ak
         # shellcheck disable=SC2034  # dr-go reads it, as it reads the other keys
         DRAUGR_AGENT_ARGS=${!_ak}
         DR_ORIGIN[DRAUGR_AGENT_ARGS]="${DR_ORIGIN[$_ak]:-built-in default} (via $_ak)"
