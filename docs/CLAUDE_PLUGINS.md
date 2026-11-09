@@ -960,16 +960,38 @@ Two results follow, and neither is a defect of the kit:
   `remove` says so when a generated kit names the plugin that it removes. It does not delete the
   kit. You can edit a kit in your library, and a plugin removal is not consent to delete it.
 
-### Open: does `commands.install` run on apply?
+### Measured: `commands.install` DOES run on apply
 
-Not known, and it changes only the last message of the command. If `install` runs when a kit is
-*applied* to a running mound, then make, add, `dr-kit apply` is the full process. If it runs only at
-creation, the kit works from the next mound, and the current mound still needs one `dr-shell`
-install.
+Tested on 2026-11-08 with sbx 0.37.1, on two throwaway sandboxes whose kits each append a marker
+line, so a run leaves evidence and the runs are countable. Four answers:
 
-Until somebody measures it, the last advice of the generated kit says both, because both are true.
-A related measurement is bad news. sbx kit **startup** commands stop working after a daemon restart.
-Thus do not trust `install` to work as documented either.
+1. **Install runs when a kit is added to a RUNNING sandbox.** `sbx kit add` reports "Recreating
+   sandbox to apply augmented kit list", starts a swap container, and the install commands run. So
+   make, add, `dr-kit apply` is the whole process, and the mound you are sitting in needs no second
+   install through `dr-shell`.
+2. **It re-runs the install of EVERY kit, not only the new one.** The recreate replays the install
+   commands of the whole composition. So **install commands must be idempotent.** For the generated
+   plugin kit that is free, because `claude plugin install` on an installed plugin does nothing. It
+   is not free in general: a command that appends to a file, raises a counter or clones into a fixed
+   path does it again for every kit you add later.
+3. **Install does NOT run on a plain stop or start.** Three start cycles produced one install line.
+   Only creation and the kit-add recreate run it.
+4. **`sbx kit add` REFUSES a kit that declares `commands.startup`**, with
+   "the kit-add recreate flow does not yet apply" it, and asks you to `sbx rm` and
+   `sbx create --kit` instead. It exits 1 and leaves the sandbox alone. The check is on the kit
+   being ADDED, so a startup command on a kit the sandbox already has does not block it. **A kit
+   that must stay applicable in place therefore has to be install-only**, which is what
+   `dr-plugin kit` generates.
+
+Two more facts from the same measurement, because both can cost an afternoon:
+
+- **Install runs as root, and startup runs as `agent` (uid 1000)**, with no `user:` in either. A
+  startup command that writes to something install created hits permission denied, silently, and
+  nothing reports it: not the daemon log, not sbx, not the sandbox. Give such a command `user: "0"`
+  or a path it owns.
+- **Startup runs on create and on every start**, and it runs in the BACKGROUND as the sandbox
+  starts. A `cat` in the same `sbx exec` that triggered the start can read the file before the line
+  lands, so a measurement there needs a pause first.
 
 ## Checks worth running once
 

@@ -37,6 +37,14 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `commands.install` on `sbx kit add` is measured now, and three places said the wrong thing about
+  it. It DOES run when a kit is applied, so `dr-plugin kit` no longer hedges: `dr-kit apply`
+  installs the plugin into the mound you are in. It also re-runs the install commands of **every**
+  kit the mound already has, which `dr-kit apply` now warns about, because on a kit that runs
+  `apt-get` or `uv pip` that is where the time goes. And `share/kit.example/spec.yaml` no longer
+  says install "runs once, when the sandbox is created": that is false for any sandbox that later
+  gets a kit added, so **install commands must be idempotent**. `sbx kit add` also refuses a kit
+  declaring `commands.startup`, which is why the generated plugin kit has to stay install-only.
 - `dr-doctor` says when a per-agent key has thrown away a project value. `DRAUGR_AGENT_ARGS_<AGENT>`
   replaces the general `DRAUGR_AGENT_ARGS` after the *whole* cascade, once `DRAUGR_AGENT` is known,
   so a key in `~/.config/draugr/config` beats one in the `.draugr.conf` of a project, against the

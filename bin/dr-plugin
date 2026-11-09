@@ -619,13 +619,19 @@ YAML
     printf '  dr-kit validate\n' >&2
     printf '  DRAUGR_KIT=".draugr/kit %s"\n' "${_made[*]}" >&2
 
-    # Both halves, because a test showed only one. You can apply a kit at the
-    # end of the list to a running mound. Nobody knows yet whether
-    # commands.install runs on apply, or only at creation.
-    printf '  %sEach new mound installs it at its creation. For the current mound,\n' "$_DR_DIM" >&2
-    printf '  "dr-kit apply" adds the kit in place. Then make sure that it is there\n' >&2
-    printf '  with "dr-shell -- claude plugin list". If it is missing, install it\n' >&2
-    printf '  once yourself. See docs/CLAUDE_PLUGINS.md.%s\n' "$_DR_OFF" >&2
+    # One answer now, not two. A test on 2026-11-08 showed that commands.install
+    # DOES run when `sbx kit add` recreates the container, so "dr-kit apply"
+    # installs the plugin into the mound you are in. The old wording said both,
+    # because nobody had measured it.
+    #
+    # This generator must stay INSTALL-ONLY. The same test showed that
+    # `sbx kit add` REFUSES a kit declaring commands.startup, and asks for an
+    # sbx rm plus sbx create instead. A startup command here would make every
+    # generated kit un-appliable in place.
+    printf '  %sEach new mound installs it at its creation, and "dr-kit apply"\n' "$_DR_DIM" >&2
+    printf '  installs it into the mound you are in now.\n' >&2
+    printf '  That recreate also re-runs the install commands of every other kit\n' >&2
+    printf '  the mound has. See docs/CLAUDE_PLUGINS.md.%s\n' "$_DR_OFF" >&2
     ;;
 
 # --- add ----------------------------------------------------------------------

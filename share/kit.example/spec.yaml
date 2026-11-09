@@ -69,7 +69,7 @@ caps:
 #    NODE_ENV: development
 
 commands:
-  # Runs once, when the sandbox is created, and BEFORE your repository is in
+  # Runs when the sandbox is created, and BEFORE your repository is in
   # the workspace. At that moment, the working directory is EMPTY, and the repo
   # is read-only at /run/sandbox/source. Thus a command that reads a project
   # file fails, also if it looks correct. Tests on sbx 0.37.1 showed this, in
@@ -83,6 +83,17 @@ commands:
   #
   # A failure here reaches sbx as a bare `500 ... failed to run sandbox
   # container`. dr-up prints the real record of sandboxd below it.
+  #
+  # MAKE EACH COMMAND IDEMPOTENT. It does not run only once. `sbx kit add`, and
+  # so `dr-kit apply`, recreates the container and replays the install commands
+  # of EVERY kit in the composition, not only of the kit being added. A test on
+  # 2026-11-08 counted the lines. So a command that appends to a file, raises a
+  # counter, or clones into a fixed path does it again for each kit you add
+  # later. apt-get and uv are safe. `>>` is not.
+  #
+  # These run as ROOT with no `user:`. Startup commands run as agent (uid 1000),
+  # so a startup command that writes to something install made gets permission
+  # denied, in silence, with nothing reported anywhere.
   install: []
     # - command: "uv venv /home/agent/.venv"
     #   user: "1000"
