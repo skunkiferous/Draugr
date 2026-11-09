@@ -37,6 +37,16 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `dr-send --merge` blamed the wrong branch. `git merge` applies to whatever is checked out in the
+  clone, which an agent habitually moves off, and nothing here read it — so a refused fast-forward
+  said "could not fast-forward the mound to host/main" one line after `dr-sync` had said
+  `draugr/main` matched your branch. It now names the branch the mound is really on and gives both
+  ways forward. A detached HEAD still falls through to the merge: there the question cannot be
+  asked, and a refusal would be a guess.
+- `dr-send` writes `refs/draugr/sent/<branch>` itself. Before, only the extra refspec of `dr-sync`
+  wrote it, so the mark appeared only if you synced *after* you sent. In the ordinary order —
+  collect the agent's work, then hand it yours — it was never written, and `dr-status` said
+  "Use dr-send" for ever. That is the loop the mark was added to break.
 - `dr-mem export` could copy Codex's sqlite databases while Codex was writing them, which can give
   a WAL pair that does not agree. The "is the agent running" probe asked `pgrep` and read every
   non-zero exit as "not running" — but `pgrep` exits 2 and 3 for its own errors, not only 1 for "no

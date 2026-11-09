@@ -74,6 +74,22 @@ dr_sbx exec "$DRAUGR_SANDBOX" \
         "could not fetch inside the mound" \
         "Does the mound run, and is $clone the clone of the agent?  dr-status"
 
+# dr-status and dr-sync tell "the mound never saw these" from "delivered, but
+# not merged" by refs/draugr/sent/<branch>. Until now the extra fetch refspec of
+# dr-sync was the only thing that wrote it, so the mark appeared only if you
+# synced AFTER you sent. In the ordinary order - collect the work of the agent,
+# then hand it yours - the mark was never made, because at fetch time the mound
+# had no refs/remotes/host/* to copy. dr-status then said "Use dr-send" for
+# ever, which is the loop this mark exists to break.
+#
+# After the fetch and not before: a delivery that failed must not claim one.
+# $branch and not HEAD, because $branch is what was just sent. The refspec of
+# dr-sync stays: it is still the only thing that can CORRECT the mark when the
+# host/* ref of the mound is older than what the host believes it sent, as after
+# a dr-up --recreate threw the clone away.
+git -C "$DR_REPO" update-ref "$(dr_sent_ref)" "$(git -C "$DR_REPO" rev-parse "$branch")" \
+    || dr_warn "could not mark $branch as sent, so dr-status may still say dr-send"
+
 dr_ok "your commits are on host/$branch inside the mound"
 
 # A stop here is the normal case. Thus name both ways forward. Do not let the
@@ -92,6 +108,33 @@ if ! dr_sbx exec "$DRAUGR_SANDBOX" git -C "$clone" diff --quiet HEAD 2>/dev/null
         "the tree of the agent has uncommitted changes. No merge into it." \
         "Ask the agent to commit, then run again:  dr-send --merge" \
         "Or do nothing. The commits are already there as host/$branch."
+fi
+
+# `git merge` applies to what is CHECKED OUT in the clone, and that need not be
+# $branch. An agent works on a branch of its own all the time. Nothing here read
+# the HEAD of the clone, so the refusal below named host/$branch while the merge
+# had in fact been tried on another branch.
+#
+# A test on 2026-11-08 showed how that reads: the clone was on `simple-english`,
+# the own `main` of the clone WAS fast-forwardable, and dr-send said "could not
+# fast-forward the mound to host/main" one line after dr-sync said
+# "nothing new in the mound - draugr/main matches your branch". Together the two
+# lines look like a contradiction, and the real answer - that the merge went to
+# a third branch - appeared nowhere.
+#
+# A detached HEAD makes symbolic-ref fail. An empty answer means "cannot tell",
+# and falls through to the merge below. Do not refuse on a question that could
+# not be asked.
+_head=$(dr_sbx exec "$DRAUGR_SANDBOX" \
+            git -C "$clone" symbolic-ref --short HEAD 2>/dev/null) || _head=
+_head=${_head%%[[:space:]]*}
+if [ -n "$_head" ] && [ "$_head" != "$branch" ]; then
+    dr_die \
+        "the mound is on $_head, not $branch. No merge into it." \
+        "host/$branch is fetched and waiting. To take it, inside the mound:" \
+        "  git merge host/$branch            on $_head, a real merge" \
+        "Or move the own $branch of the mound forward:" \
+        "  git checkout $branch && git merge --ff-only host/$branch"
 fi
 
 dr_sbx exec "$DRAUGR_SANDBOX" git -C "$clone" merge --ff-only "host/$branch" \

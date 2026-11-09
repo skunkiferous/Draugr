@@ -466,6 +466,76 @@ host_commit() {
     [[ "$output" != *"not merged"* ]]
 }
 
+# --- dr-send: the mark it writes, and the branch the clone is really on -------
+#
+# A stand-in filesystem for the mound, so that the git commands dr-send sends
+# through `sbx exec` really run. The mock rewrites every ABSOLUTE argument into
+# this tree, so the clone of the agent and /run/sandbox/source both live under
+# it. The clone is made BEFORE the host commits, so that there is something to
+# send; the source copy is made after, because it stands for a live read-only
+# view of the host repo.
+fake_mound_clone() {
+    local on=$1 clone
+    export DR_MOCK_MOUND="$DR_TMP/mound-fs"
+    clone="$DR_MOCK_MOUND${REPO#/mnt}"
+    mkdir -p "$(dirname "$clone")" "$DR_MOCK_MOUND/run/sandbox"
+    git clone -q "$REPO" "$clone"
+    git -C "$clone" config user.email agent@example.com
+    git -C "$clone" config user.name Agent
+    if [ "$on" != main ]; then
+        git -C "$clone" checkout -q -b "$on"
+        printf 'agent work\n' >> "$clone/README.md"
+        git -C "$clone" commit -aqm "agent commit on $on"
+    fi
+    printf '%s' "$clone"
+}
+fake_mound_source() {
+    git clone -q "$REPO" "$DR_MOCK_MOUND/run/sandbox/source"
+}
+
+@test "dr-send: writes the sent mark itself, with no dr-sync after it" {
+    # The mark used to come only from the extra refspec of dr-sync, so it
+    # appeared only if you synced AFTER you sent. Sync first and send second -
+    # the ordinary order - and it was never written, and dr-status said
+    # "Use dr-send" for ever.
+    host_commit
+    dr-sync >/dev/null 2>&1
+    run dr-send
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$REPO" rev-parse refs/draugr/sent/main)" = "$(git -C "$REPO" rev-parse HEAD)" ]
+}
+
+@test "dr-send: dr-status then says delivered, not send it again" {
+    host_commit
+    dr-sync >/dev/null 2>&1
+    dr-send >/dev/null 2>&1
+    run dr-status
+    [[ "$output" == *"delivered, not merged"* ]]
+    [[ "$output" != *"Use dr-send."* ]]
+}
+
+@test "dr-send --merge: says which branch the mound is on, and does not merge" {
+    fake_mound_clone simple-english >/dev/null
+    host_commit
+    fake_mound_source
+    run dr-send --merge
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"the mound is on simple-english, not main"* ]]
+    # Both halves. The message can be right while the merge still runs, and a
+    # test on the message alone would not notice.
+    [[ "$(cat "$DR_MOCK_LOG")" != *"merge --ff-only"* ]]
+}
+
+@test "dr-send --merge: merges when the mound is on the branch being sent" {
+    fake_mound_clone main >/dev/null
+    host_commit
+    fake_mound_source
+    run dr-send --merge
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the mound is now at your main"* ]]
+    [[ "$(cat "$DR_MOCK_LOG")" == *"merge --ff-only"* ]]
+}
+
 @test "dr-status: names --merge rather than repeating dr-send" {
     host_commit
     deliver
