@@ -37,6 +37,11 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `dr-mem export` could copy Codex's sqlite databases while Codex was writing them, which can give
+  a WAL pair that does not agree. The "is the agent running" probe asked `pgrep` and read every
+  non-zero exit as "not running" — but `pgrep` exits 2 and 3 for its own errors, not only 1 for "no
+  match", so a probe that could not answer became the safe answer. It now reports the three answers
+  its own rule always named: quiet, running and unknown, and unknown does not permit the copy.
 - `dr-plugin add` on an already-registered marketplace said "registered no new marketplace" and
   advised naming a bare plugin — which the next branch then refused for want of the very same
   missing name. It now names the marketplace the source is registered as, what is installed from it

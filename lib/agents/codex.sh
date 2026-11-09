@@ -63,9 +63,17 @@ _DR_CODEX_DBS='state_*.sqlite memories_*.sqlite goals_*.sqlite queue_*.sqlite'
 # mean "safe". Thus a missing pgrep has its own exit code, and does not become
 # a success. (The image has pgrep. This is for a future image without it.)
 dr_agent_mem_quiesce() {
+    # `&& exit 1` on its own read EVERY non-zero pgrep as "not running", and
+    # pgrep exits 2 or 3 for ITS OWN errors, not only 1 for "no match". So a
+    # pgrep that could not answer became the quiet answer, which is the one
+    # thing the three-answer contract above forbids. Dispatch on the code.
     dr_mound_sh 'command -v pgrep >/dev/null 2>&1 || exit 2
-                 pgrep -x codex >/dev/null 2>&1 && exit 1
-                 exit 0'
+                 pgrep -x codex >/dev/null 2>&1
+                 case $? in
+                     0) exit 1 ;;
+                     1) exit 0 ;;
+                     *) exit 2 ;;
+                 esac'
 }
 
 # dr_agent_mem_present <repo>: is there data to export?

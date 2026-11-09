@@ -566,6 +566,27 @@ seed_codex() {
     [ ! -e "$claude_store/memory" ]
 }
 
+# The three answers of dr_agent_mem_quiesce had NO test at all, which is how the
+# bug in the body survived: the header states a contract, and the body did not
+# keep it. These two cover the answers that are not "quiet". The quiet one is
+# covered by every other codex test in this file.
+@test "dr_agent_mem_quiesce: a running codex is not quiet" {
+    setup_codex || skip "no writable Windows drive path"
+    export DR_MOCK_AGENT_RUNNING=codex
+    run dr_agent_mem_quiesce
+    [ "$status" -eq 1 ]
+}
+
+@test "dr_agent_mem_quiesce: a pgrep that cannot answer is unknown, not safe" {
+    # pgrep exits 2 and 3 for its own errors, not only 1 for "no match". To read
+    # every non-zero as "not running" made an unanswerable probe the SAFE
+    # answer, and a copy of a live WAL pair is exactly what that permits.
+    setup_codex || skip "no writable Windows drive path"
+    export DR_MOCK_PGREP_BROKEN=1
+    run dr_agent_mem_quiesce
+    [ "$status" -eq 2 ]
+}
+
 # --- the first dr-up of a project that never had a session ------------------
 
 @test "dr-mem import --if-empty: an empty store is not a failure" {

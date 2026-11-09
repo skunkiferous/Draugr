@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# A stand-in for pgrep, so that dr_agent_mem_quiesce has a fixed answer.
+#
+# The real pgrep reads the process table of the HOST, and the mock sbx runs the
+# quiesce probe on the host rather than in a mound. So any process named `codex`
+# anywhere on the machine decided the result of a test. MEASURED: a copy of
+# /bin/sleep named `codex` turned "codex check: unexported session history is
+# not nothing to lose" from ok to not ok, at tests/mem.bats:553, and killing it
+# turned the test back to ok. Under `bats -j 8` that read as a flaky failure
+# and looked like a real defect in dr-mem.
+#
+#   DR_MOCK_AGENT_RUNNING   the process names that are running, space separated.
+#                           Unset means none, which is the quiet answer.
+#   DR_MOCK_PGREP_BROKEN    exit 2, as the real pgrep does for its own errors,
+#                           so that "could not tell" can be tested.
+set -euo pipefail
+
+[ -n "${DR_MOCK_PGREP_BROKEN:-}" ] && exit 2
+
+# Only the last non-flag word is the pattern. -x and -f change what the real
+# pgrep compares; this mock always compares the whole name, because every
+# caller in Draugr passes -x.
+want=
+for arg in "$@"; do
+    case "$arg" in
+        -*) ;;
+        *)  want=$arg ;;
+    esac
+done
+
+for name in ${DR_MOCK_AGENT_RUNNING:-}; do
+    if [ "$name" = "$want" ]; then
+        # A plausible pid, because pgrep prints one per match and a caller may
+        # read it. Nothing in Draugr does yet.
+        printf '4242\n'
+        exit 0
+    fi
+done
+exit 1
