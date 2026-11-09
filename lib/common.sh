@@ -18,7 +18,7 @@
 [ -n "${_DR_COMMON_LOADED:-}" ] && return 0
 _DR_COMMON_LOADED=1
 
-DRAUGR_VERSION="0.6.0"
+DRAUGR_VERSION="0.7.0"
 
 # --- find the directory where Draugr is installed ---------------------------
 #

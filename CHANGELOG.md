@@ -12,14 +12,22 @@ people reading the source, not for people calling it.
 
 ### Added
 
+### Removed
+
+### Changed
+
+### Fixed
+
+## [0.7.0] — 2026-11-09
+
+### Added
+
 - `dr-plugin skills` names the skills your plugins ship, and `dr-skills list` now names them too
   under a heading of their own. They load from the plugin and never from the shared store, so
   nothing previously said they existed — on this machine that was fifteen skills reported as one.
 - `dr-plugin kit` writes the per-mound `claude plugin install` out as a composable kit, one per
   plugin so adding another is an append rather than an edit — the only change sbx can apply to a
   running mound. No version is pinned, so `dr-plugin update` needs no regeneration.
-
-### Removed
 
 ### Changed
 
