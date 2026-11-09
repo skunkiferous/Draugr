@@ -343,6 +343,53 @@ create_failed() {
         "To see the exact sbx command line, run again with DRAUGR_DEBUG=1."
 }
 
+# The same evidence for a refused START. The create path has printed what
+# sandboxd recorded from the beginning, and the start path printed
+# "Look at: dr-ls", which is nothing to go on. A hard reset on 2026-11-08 sent a
+# start down this path, nine log lines named the cause, and the user saw none of
+# them.
+start_failed() {
+    local detail line
+    detail=$(dr_sbx_log_error "$_log_mark") || detail=
+    if [ -n "$detail" ]; then
+        dr_heading "sandboxd recorded:"
+        while IFS= read -r line; do
+            printf '  %s\n' "$line" >&2
+        done <<<"$detail"
+        printf '\n' >&2
+    fi
+
+    # The one signature worth naming. After a hard reset, the startup recovery
+    # of sandboxd reopens the block images of a sandbox that still had a runtime
+    # record, and then cannot open them again to boot the VM. A test on
+    # 2026-11-08 found the holder by trying to open the .img exclusively: held
+    # before `sbx daemon stop`, free after. The process that holds the file IS
+    # the daemon.
+    #
+    # The advice never says `sbx daemon start`. That runs in the FOREGROUND, so
+    # a reader who pastes it gets a daemon in their terminal. Any ordinary sbx
+    # command starts a detached one.
+    case $detail in
+        *"os error 32"* | *"used by another process"*)
+            dr_die "could not start $DRAUGR_SANDBOX, because its disk is held open" \
+                "After a hard reset, sandboxd reopens the images of a sandbox that still" \
+                "had a runtime record, and then cannot open them to boot it. The process" \
+                "that holds the file is the daemon itself." \
+                "Make it let go, and the next sbx command starts a detached one:" \
+                "  sbx daemon stop" \
+                "  dr-up"
+            ;;
+    esac
+
+    # Every other refused start. One remedy covers the family: a daemon that
+    # came back from a crash can hold state that only a restart clears.
+    dr_die "could not start $DRAUGR_SANDBOX" \
+        "If it fails again, the daemon may hold state from a crash. Stop it, and" \
+        "the next sbx command starts a detached one:" \
+        "  sbx daemon stop" \
+        "Then:  dr-up        See also:  dr-ls   sbx diagnose"
+}
+
 # pre-up runs at each dr-up. post-create runs only after a mound is built. Both
 # run on the HOST, in WSL. The commands of a kit cannot do that.
 dr_hook pre-up "$DR_REPO"
@@ -359,8 +406,10 @@ running)
 # too. That is the job of dr-go, not of dr-up.)
 stopped)
     dr_info "starting $DRAUGR_SANDBOX"
-    dr_sbx exec "$DRAUGR_SANDBOX" true >/dev/null \
-        || dr_die "could not start $DRAUGR_SANDBOX" "Look at:  dr-ls"
+    # The same mark the create path takes, for the same reason: a failure report
+    # must use only what THIS attempt added.
+    _log_mark=$(dr_sbx_log_mark)
+    dr_sbx exec "$DRAUGR_SANDBOX" true >/dev/null || start_failed
     dr_ok "started $DRAUGR_SANDBOX"
     report_drift
     ;;

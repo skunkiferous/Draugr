@@ -37,6 +37,19 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `dr-up` now says what sandboxd recorded when a START is refused, and not only when a create is.
+  The start path printed "Look at: dr-ls". After a hard reset — when the startup recovery of
+  sandboxd reopens the block images of a sandbox that still had a runtime record, and then cannot
+  open them to boot it — the log named the cause nine times and none of it reached you. It names
+  the daemon as the process that holds the disk, and `sbx daemon stop` as the cure. It never
+  advises `sbx daemon start`, which runs in the foreground; any later sbx command starts a
+  detached daemon.
+- The reader of the sandboxd log now finds the causes that the VM supervisor nests inside its own
+  entries. `sailor` writes JSON inside JSON, so its level and its error sit in an escaped string in
+  `.msg` while the outer level of that entry is `INFO`. A filter on the outer level found only
+  `endpoint not connected`, which is what happens *after* a VM fails to boot, and reporting it read
+  as an answer. An entry with a `stage` — sbx reporting a failed create on purpose — still comes
+  first, so the create path is unchanged.
 - `dr_model_probe` read the refusal of an intercepting proxy as a live endpoint. Inside a mound
   every request carries `http_proxy`, and the gateway of sbx answers `403 Blocked by network
   policy` for an address it denies. 403 is not `000`, so the rule "any other code means something

@@ -277,10 +277,37 @@ dr_sbx_log_error() {
     # can be normal noise, for example a lookup that found nothing. The error
     # field contains newlines, and -r expands them. The result is the block of
     # lines that sbx captured.
+    # The second pass exists because the VM supervisor of sbx (`sailor`) logs
+    # JSON INSIDE JSON. Its own severity and error sit in an escaped string in
+    # `.msg`, while the OUTER level of that same entry is INFO:
+    #
+    #   "level":"INFO","msg":"{\"level\":\"error\",\"component\":\"sailor\",
+    #     \"msg\":\"failed to create vm\",\"error\":\"...Failed to open block
+    #     device ...: ... (os error 32)\"}"
+    #
+    # A filter that reads only the outer level cannot see those. A test over the
+    # real window of a failed start on 2026-11-08 showed what that costs: nine
+    # such lines named the cause, and the one outer ERROR in the window said
+    # `endpoint not connected`, which is a CONSEQUENCE of the VM never starting.
+    # Printing that would be worse than printing nothing, because it reads as an
+    # answer.
+    #
+    # Order of preference, and why: an outer entry with a `stage` is a failed
+    # create, which sbx reports deliberately and which has always won here. Then
+    # a nested cause. Then any outer error. So the create path keeps exactly the
+    # behaviour it had, and the start path gains a real cause.
     out=$(tail -c "+$((mark + 1))" "$log" 2>/dev/null \
               | jq -srR 'split("\n") | map(fromjson?)
-                        | map(select(.level == "ERROR" and (.error // "") != ""))
-                        | ((map(select(has("stage"))) | last) // last)
+                        | (map(select(.level == "ERROR" and (.error // "") != "")))
+                          as $outer
+                        | (map(.msg? // "" | fromjson?
+                               | select(type == "object")
+                               | select((.level // "") | ascii_downcase == "error")
+                               | select((.error // "") != "")))
+                          as $nested
+                        | (($outer | map(select(has("stage"))) | last)
+                           // ($nested | last)
+                           // ($outer | last))
                         | .error // empty' 2>/dev/null) || return 1
     [ -n "$out" ] || return 1
     printf '%s\n' "$out"

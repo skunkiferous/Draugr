@@ -31,6 +31,25 @@ if [ -n "${DR_MOCK_DAEMON_ERR:-}" ] && [ "$sub" = create ]; then
     jq -cn --arg e "$DR_MOCK_DAEMON_ERR" "$_filter" >> "$_root/sandboxes/state/sandboxd/daemon.log"
 fi
 
+# The same for a refused START, which has a different shape in the log. The VM
+# supervisor of sbx (`sailor`) writes JSON INSIDE JSON: its own level and error
+# are in an escaped string in .msg, while the OUTER level of that entry is INFO.
+# A stand-in that wrote a plain ERROR entry would not test the read at all.
+#
+# The second line is the trap. Over the real window of a failed start, the only
+# outer ERROR said `endpoint not connected`, which is a CONSEQUENCE of the VM
+# never starting. A reader that takes it reports the wrong cause confidently.
+if [ -n "${DR_MOCK_DAEMON_NESTED_ERR:-}" ] && [ "$sub" = exec ]; then
+    _root=$(dirname "$(dirname "$0")")
+    mkdir -p "$_root/sandboxes/state/sandboxd"
+    _inner=$(jq -cn --arg e "$DR_MOCK_DAEMON_NESTED_ERR" \
+        '{time:"t",level:"error",component:"sailor",msg:"failed to create vm",error:$e}')
+    jq -cn --arg m "$_inner" '{time:"t",level:"INFO",msg:$m}' \
+        >> "$_root/sandboxes/state/sandboxd/daemon.log"
+    jq -cn '{time:"t",level:"ERROR",error:"endpoint not connected"}' \
+        >> "$_root/sandboxes/state/sandboxd/daemon.log"
+fi
+
 case " ${DR_MOCK_FAIL:-} " in
     *" $sub "*) printf 'mock sbx: %s failed\n' "$sub" >&2; exit 1 ;;
 esac
