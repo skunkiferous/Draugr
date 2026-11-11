@@ -68,11 +68,47 @@ clone=$(dr_path_mound "$DR_REPO")
 # refs/remotes/host/<branch>, not a local branch name. Thus nothing inside the
 # clone is overwritten, and the agent sees it as a remote to merge from.
 dr_info "sending $branch into $DRAUGR_SANDBOX"
-dr_sbx exec "$DRAUGR_SANDBOX" \
-    git -C "$clone" fetch /run/sandbox/source "$branch:refs/remotes/host/$branch" \
-    || dr_die \
+# A fetch reads EVERY ref of the clone before it transfers anything. Thus one
+# unreadable ref stops dr-send although the commits, the mound and the mount
+# are all fine. It happens: a ref file left EMPTY by a write that never
+# finished, for example by a mound that stopped in the middle of a fetch. git
+# names the ref in its own output, so Draugr can name it too, instead of asking
+# whether the mound runs.
+if ! dr_sbx exec "$DRAUGR_SANDBOX" \
+        git -C "$clone" fetch /run/sandbox/source "$branch:refs/remotes/host/$branch"
+then
+    # `2>&1 >/dev/null` keeps the warnings and throws the list of refs away.
+    # The order matters: stderr goes to the pipe first, and stdout goes away
+    # after it. The other order sends both to the pipe.
+    # shellcheck disable=SC2016  # $1 is the sh of the mound, not this shell
+    _broken=$(dr_mound_sh 'git -C "$1" for-each-ref 2>&1 >/dev/null' "$clone" \
+              | sed -n 's/^.*ignoring broken ref //p')
+
+    if [ -n "$_broken" ]; then
+        # One line for each ref, indented, so that several of them read as a
+        # list and not as a sentence.
+        _refs=()
+        while IFS= read -r _r; do
+            if [ -n "$_r" ]; then _refs+=("    $_r"); fi
+        done <<< "$_broken"
+
+        # `git update-ref -d` is the obvious cure, and it does NOT work. It
+        # reads the ref before it deletes it, and refuses with "reference
+        # broken". A test showed this. Thus the advice names the file.
+        dr_die \
+            "the clone in $DRAUGR_SANDBOX has a ref that git cannot read" \
+            "A fetch reads every ref first. Thus this stops dr-send even though" \
+            "your commits and the mound are fine." \
+            "${_refs[@]}" \
+            "git update-ref -d refuses a broken ref, so remove the file:" \
+            "  dr-shell -- rm $clone/.git/${_refs[0]#    }" \
+            "The next dr-send writes the ref again, correctly."
+    fi
+
+    dr_die \
         "could not fetch inside the mound" \
         "Does the mound run, and is $clone the clone of the agent?  dr-status"
+fi
 
 # dr-status and dr-sync use refs/draugr/sent/<branch> to tell "the mound never
 # saw these" from "delivered, but not merged". Before, only the extra fetch

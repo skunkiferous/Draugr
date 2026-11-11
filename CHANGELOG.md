@@ -17,6 +17,13 @@ people reading the source, not for people calling it.
 ### Changed
 
 ### Fixed
+- `dr-send` names a ref the clone cannot read, instead of asking whether the mound is running. A
+  `git fetch` reads every ref before it transfers anything, so one unreadable ref inside the clone
+  stops the send although the commits, the mound and the mount are all fine. It arrived that way: a
+  tag ref file left empty by a write that never finished, which git reports as a broken ref. The old
+  message asked whether the mound ran and whether the clone belonged to the agent — both were true,
+  and neither was the cure. It now lists every broken ref and gives the `rm` for the file, because
+  `git update-ref -d` reads a ref before it deletes it and refuses one that is broken.
 
 ## [0.7.0] — 2026-11-09
 

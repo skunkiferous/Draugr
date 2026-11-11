@@ -558,6 +558,60 @@ fake_mound_source() {
     [[ "$(cat "$DR_MOCK_LOG")" == *"merge --ff-only"* ]]
 }
 
+
+# --- dr-send: a ref the clone cannot read ------------------------------------
+#
+# From the field: `git fetch` reads every ref before it transfers anything, so
+# one unreadable ref in the clone stops dr-send although the commits, the mound
+# and the mount are all fine. A ref file left EMPTY is exactly that. The old
+# message asked whether the mound was running, which was true and useless.
+
+@test "dr-send: a ref the clone cannot read is named, with the file to remove" {
+    # Not clone=$(fake_mound_clone main). The helper EXPORTS DR_MOCK_MOUND, and a
+    # command substitution is a subshell, so that export would be lost here.
+    fake_mound_clone main >/dev/null
+    clone="$DR_MOCK_MOUND${REPO#/mnt}"
+    host_commit
+    fake_mound_source
+    # The fault as it arrived: a write that began and never finished.
+    mkdir -p "$clone/.git/refs/tags"
+    : > "$clone/.git/refs/tags/v0.7.0"
+    run dr-send
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refs/tags/v0.7.0"* ]]
+    # The path of the MOUND, which is what you would type, and not the path of
+    # the stand-in tree that only the test knows about.
+    [[ "$output" == *"rm ${REPO#/mnt}/.git/refs/tags/v0.7.0"* ]]
+    # And the old advice is gone, because here it sends the reader nowhere.
+    [[ "$output" != *"Does the mound run"* ]] || return 1
+}
+
+@test "dr-send: every unreadable ref is listed, not only the first" {
+    fake_mound_clone main >/dev/null
+    clone="$DR_MOCK_MOUND${REPO#/mnt}"
+    host_commit
+    fake_mound_source
+    mkdir -p "$clone/.git/refs/tags"
+    : > "$clone/.git/refs/tags/v0.7.0"
+    : > "$clone/.git/refs/tags/v0.8.0"
+    run dr-send
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"v0.7.0"* ]]
+    [[ "$output" == *"v0.8.0"* ]]
+}
+
+@test "dr-send: a fetch that fails for another reason keeps the plain advice" {
+    # Every ref of the clone is readable, and there is no /run/sandbox/source
+    # in the tree, so the fetch fails for a reason this branch knows nothing
+    # about. The broken-ref answer must not fire, because it would be a guess.
+    fake_mound_clone main >/dev/null
+    host_commit
+    run dr-send
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not fetch inside the mound"* ]]
+    [[ "$output" != *"cannot read"* ]] || return 1
+}
+
 @test "dr-status: names --merge rather than repeating dr-send" {
     host_commit
     deliver
