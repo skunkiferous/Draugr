@@ -1822,6 +1822,31 @@ dr_sandbox_state() {
     printf '%s' "$status"
 }
 
+# dr_sandbox_agent <name>: the agent that sbx installed in that sandbox, or
+# nothing when sbx does not say.
+#
+# sbx fixes the agent when it CREATES a sandbox, and installs that binary then.
+# Thus this is the agent that IS in the mound, while DRAUGR_AGENT is the agent
+# that you want now. After a change of that key the two differ, and the binary
+# of the agent you asked for is not in there.
+#
+# Nothing, and not a failure, when sbx cannot be reached or leaves the field
+# out. An older sbx did not report it. Unknown must not become a refusal: that
+# would stop a session which was about to work.
+dr_sandbox_agent() {
+    local name=$1 json agent
+    json=$(dr_sbx ls --json 2>/dev/null) || return 0
+    json=$(dr_sbx_json "$json")
+
+    # The same reading as dr_sandbox_state, for the same reason: the code uses
+    # the output and never the exit status of the pipeline, because sbx writes
+    # an upgrade banner into stdout next to the JSON.
+    agent=$(printf '%s' "$json" | jq -r --arg n "$name" \
+        '(.sandboxes // [])[] | select(.name == $n) | .agent // empty' 2>/dev/null | head -1)
+    printf '%s' "$agent"
+    return 0
+}
+
 # dr_forge_available: load lib/forge when it is necessary, or tell why it is missing.
 #
 # This is an OPTIONAL DEPENDENCY, on purpose. A user must be able to delete lib/forge/.

@@ -88,12 +88,19 @@ ls)
             case "$_pad" in
                 *" $_n="*) _s=${_pad##*" $_n="}; _s=${_s%% *} ;;
             esac
+            # DR_MOCK_AGENT is the agent that sbx reports for the sandbox. Set
+            # and EMPTY leaves the field out, as an older sbx did, so that "sbx
+            # does not say" is testable and not only imaginable.
+            _agent_line=
+            if [ -n "${DR_MOCK_AGENT-claude}" ]; then
+                _agent_line=$(printf '      "agent": "%s",' "${DR_MOCK_AGENT:-claude}")
+            fi
             printf '%s' "$_sep"
             cat <<EOF
     {
       "name": "$_n",
       "id": "00000000-0000-0000-0000-000000000000",
-      "agent": "claude",
+$_agent_line
       "status": "$_s",
       "workspaces": [
         "C:\\\\Code\\\\testrepo"

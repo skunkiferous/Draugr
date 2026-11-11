@@ -207,6 +207,56 @@ go_pty() {
     [ -z "$(calls create)" ]
 }
 
+# --- the agent that is really in the mound -----------------------------------
+#
+# sbx installs the agent when it CREATES a sandbox. Thus a changed DRAUGR_AGENT
+# cannot reach a mound that already exists, and the attach used to end in
+# `bash: codex: command not found`, the message of the shell of the mound. It
+# named neither the cause nor the cure. The answer comes from sbx, which
+# reports the agent of each sandbox, and not from a probe of the PATH.
+
+@test "dr-go: a mound built for another agent is refused, with the recreate" {
+    export DRAUGR_AGENT=codex DR_MOCK_AGENT=claude
+    DR_MOCK_STATE=running run dr-go
+    [ "$status" -ne 0 ]
+    # Both names, because "wrong agent" without them is a riddle.
+    [[ "$output" == *"has claude in it"* ]]
+    [[ "$output" == *"you asked for codex"* ]]
+    [[ "$output" == *"dr-up --recreate"* ]]
+    # And it must refuse BEFORE the attach. A message in front of a session
+    # that still breaks is worth nothing.
+    [ -z "$(calls ssh)" ] || return 1
+}
+
+@test "dr-go: it names the way to use the agent that is in there" {
+    export DRAUGR_AGENT=codex DR_MOCK_AGENT=claude
+    DR_MOCK_STATE=running run dr-go
+    [[ "$output" == *"DRAUGR_AGENT=claude dr-go"* ]]
+}
+
+@test "dr-go: the agent that is really in the mound still attaches" {
+    export DRAUGR_AGENT=codex DR_MOCK_AGENT=codex
+    go_pty
+    [ -n "$(calls ssh)" ]
+    [[ "$(decode_rc)" == *"codex"* ]]
+}
+
+@test "dr-go: an sbx that does not report the agent is not a refusal" {
+    # Unknown must not stop a session that was about to work. DR_MOCK_AGENT set
+    # and empty leaves the field out of the JSON, as an older sbx did.
+    export DRAUGR_AGENT=codex DR_MOCK_AGENT=
+    go_pty
+    [ -n "$(calls ssh)" ]
+}
+
+@test "dr-go: DRAUGR_AGENT=shell needs no agent in the mound" {
+    # shell means "no agent, only put me in there", so there is no binary to
+    # miss and nothing to refuse.
+    export DRAUGR_AGENT=shell DR_MOCK_AGENT=claude
+    go_pty
+    [ -n "$(calls ssh)" ]
+}
+
 # --- the session that --continue needs ---------------------------------------
 #
 # With --continue in DRAUGR_AGENT_ARGS, a new mound has no transcript to

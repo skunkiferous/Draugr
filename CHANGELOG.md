@@ -17,6 +17,15 @@ people reading the source, not for people calling it.
 ### Changed
 
 ### Fixed
+- `dr-go` refuses a mound that was built for another agent, instead of attaching into `bash: codex:
+  command not found`. sbx installs the agent when it CREATES a sandbox, so a changed `DRAUGR_AGENT`
+  never reaches a mound that already exists. The shell of the mound reported that, with a message
+  which named neither the cause nor the cure, and only after the session looked as if it had
+  started. `dr-go` now asks sbx which agent the sandbox holds, names both of them, and gives
+  `dr-up --recreate` together with the way to use the agent that IS in there for one session. The
+  answer comes from sbx and not from a probe of the PATH: a non-interactive shell reads a different
+  PATH than the attach, so a probe can call a working agent missing. An sbx that does not report
+  the field refuses nothing, because unknown must not stop a session that was about to work.
 - `dr-send` names a ref the clone cannot read, instead of asking whether the mound is running. A
   `git fetch` reads every ref before it transfers anything, so one unreadable ref inside the clone
   stops the send although the commits, the mound and the mount are all fine. It arrived that way: a

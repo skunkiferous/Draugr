@@ -206,6 +206,38 @@ if [ -n "$DRAUGR_MODEL" ]; then
     esac
 fi
 
+# sbx installs the agent when it CREATES the mound. Thus DRAUGR_AGENT is not a
+# value that a start can change, and a mound built for another agent does not
+# have the binary of this one. The attach then ends in
+#
+#   bash: codex: command not found
+#
+# which is the message of the shell of the mound. It names neither the cause nor
+# the cure, and it arrives after the session looked as if it had started. dr-up
+# reports the drift, but several lines earlier and among other output. This is
+# the same fact at the moment that it stops you.
+#
+# The answer comes from sbx and not from a probe of the PATH: the agent of a
+# sandbox is what sbx says it installed. A probe through `sh -c` reads a
+# different PATH than the interactive shell of the attach, so it can call a
+# working agent missing.
+#
+# Only when sbx SAYS which agent it installed. With no answer, nothing here
+# refuses: unknown is not a reason to stop a session.
+if [ "$DRAUGR_AGENT" != shell ]; then
+    _in_mound=$(dr_sandbox_agent "$DRAUGR_SANDBOX")
+    if [ -n "$_in_mound" ] && [ "$_in_mound" != "$DRAUGR_AGENT" ]; then
+        dr_die \
+            "$DRAUGR_SANDBOX has $_in_mound in it, and you asked for $DRAUGR_AGENT" \
+            "sbx installs the agent when it creates a mound, so a changed" \
+            "DRAUGR_AGENT needs a new mound:" \
+            "  dr-up --recreate" \
+            "Until then everything the agent did stays in the mound. dr-sync" \
+            "fetches its commits, and dr-status says what is not merged." \
+            "Or use what is in there for this session:  DRAUGR_AGENT=$_in_mound dr-go"
+    fi
+fi
+
 # An argument that needs a missing session does not start a session. The agent
 # refuses it. With --continue in DRAUGR_AGENT_ARGS, each new mound starts like
 # this: the agent prints one line and stops, and the attach does not happen.
