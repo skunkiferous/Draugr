@@ -85,9 +85,11 @@ else
     # The agent is NOT in the kit. sbx cannot compose a kit that pins an agent
     # with a different agent. If the current choice is in a committed file, a
     # different agent needs an edit, not a configuration change.
+    template="$DRAUGR_SHARE/kit.example/spec.yaml"
+    if dr_sbx_v3; then template="$DRAUGR_SHARE/kit-v3.example/spec.yaml"; fi
     sed -e "s|@SLUG@|$(dr_kit_slug "$name")|g" \
         -e "s|@NAME@|$name|g" \
-        "$DRAUGR_SHARE/kit.example/spec.yaml" > "$kitdir/spec.yaml"
+        "$template" > "$kitdir/spec.yaml"
     dr_ok "wrote ${kitdir#"$repo"/}/spec.yaml"
     wrote=$((wrote + 1))
 fi
@@ -159,8 +161,8 @@ cat >&2 <<EOF
 
   ${_DR_BOLD}Next${_DR_OFF}
     1. Edit ${_DR_BOLD}${kitdir#"$repo"/}/spec.yaml${_DR_OFF}. List the domains that your build needs
-       under network.allowedDomains, and your setup under commands.install.
-       The agent can connect only to what you list.
+       in its network capability, and add the setup commands your build needs.
+       Kit rules add to the network policy of the base agent.
     2. Commit the new files. A teammate then gets the same mound with one command.
     3. ${_DR_BOLD}dr-go${_DR_OFF}
 

@@ -64,9 +64,10 @@ make_skill() {
 
 @test "dr-skills list: states the reach of the store, every time" {
     run dr-skills list
-    # The reason for this command: read-write, shared, and lives longer than the
-    # mound.
-    [[ "$output" == *"each mound mounts it read-write"* ]]
+    # The reason for this command: shared, writable from an older mound, and
+    # lives longer than the mound.
+    [[ "$output" == *"all mounds share it"* ]]
+    [[ "$output" == *"read-only; one that an older sbx built mounts it read-write"* ]]
     [[ "$output" == *"stays after dr-rm"* ]]
 }
 

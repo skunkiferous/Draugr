@@ -7,27 +7,15 @@
 # scripts for the shell of the MOUND. The host must not expand them. See
 # dr_mound_sh in lib/common.sh for how the arguments get there.
 #
-# This comes from tests on the image that sbx ships (codex-cli 0.146.0,
+# This comes from tests on the image that sbx ships (codex-cli 0.167.2,
 # `sbx create codex`), not from a blog. Where a claim below is important, it
 # tells how it was tested.
 #
-# The memory of Codex differs from the memory of Claude Code in three ways.
-# Each is a trap for code that was written for the other agent:
-#
-#   1. It is NOT for each project. All of it is under $CODEX_HOME (the image
-#      sets CODEX_HOME=/home/agent/.codex), with no directory named after the
-#      workspace. There is nothing to translate, and translation is all of
-#      lib/agents/claude.sh. Draugr can treat it as the memory of this repo
-#      only because one mound holds one repository.
-#   2. It is half markdown and half SQLite. The generated memories are files
-#      under memories/ that you can read. The session history that
-#      `codex resume` reads is in state_*.sqlite next to them.
-#   3. It is OFF by default. In the EEA, the UK, and Switzerland, it is off on
-#      purpose, because it builds a profile of behavior, and the law controls
-#      that. Codex generates nothing until config.toml contains
-#      `[features] memories = true`. dr-mem import turns it on, because an
-#      import of memory is a clear request for memory. Nothing else in Draugr
-#      turns it on.
+# Codex state belongs to a home, not to a project. One repository per mound
+# makes exporting that state useful; a host home can span unrelated projects.
+# The recovery set includes generated memories, JSONL transcripts on older
+# images, and metadata plus paginated transcript databases on this image.
+# Restoring that set never enables memory generation or copies configuration.
 
 # --- the module interface ---------------------------------------------------
 
@@ -38,26 +26,53 @@ dr_agent_mem_label()     { printf 'Codex'; }
 # dr-mem uses the parent of dr_agent_mem_dir for the paths that it creates.
 # Thus memories/ here puts the transfer in .codex/, and not in a separate
 # directory.
-_dr_codex_home() { printf '%s/.codex' "$DR_MOUND_HOME"; }
+_dr_codex_home() { printf '%s' "${DR_CODEX_HOME:-$DR_MOUND_HOME/.codex}"; }
 
 dr_agent_mem_dir()    { printf '%s/memories' "$(_dr_codex_home)"; }
 dr_agent_mem_survey() { _dr_codex_home; }
 
-# The databases to copy, as shell globs in $CODEX_HOME.
-#
-# The number at the end is a schema version (state_5, memories_1). Thus these
-# are globs and not names. The number changes, and a fixed 5 stops matching
-# with no message. logs_*.sqlite is not in the list, on purpose. It holds
-# diagnostics, it was 7 MB on the machine where this was written, and nothing
-# reads it back.
-_DR_CODEX_DBS='state_*.sqlite memories_*.sqlite goals_*.sqlite queue_*.sqlite'
+# Read the effective image location once. Attach-only CODEX_HOME overrides
+# must also select the same context when dr-mem runs outside that session.
+dr_agent_mem_init() {
+    local home entry sql pairs layout_rc=0
+    local entries=()
+    home=$(dr_mound_sh 'printf "%s" "${CODEX_HOME:-/home/agent/.codex}"') || return 1
+    pairs=$(dr_env_pairs) || return 1
+    if [ -n "$pairs" ]; then mapfile -t entries <<< "$pairs"; fi
+    for entry in "${entries[@]}"; do
+        case "$entry" in CODEX_HOME=*) home=${entry#*=} ;; esac
+    done
+    case "$home" in /*) ;; *) dr_error "Codex home is not an absolute path"; return 1 ;; esac
+    DR_CODEX_HOME=$home
+    # A relocated database requires a different recovery layout. Refuse it
+    # instead of exporting an empty default directory as a complete backup.
+    sql=$(dr_mound_sh 'printf "%s" "${CODEX_SQLITE_HOME:-}"') || return 1
+    for entry in "${entries[@]}"; do
+        case "$entry" in CODEX_SQLITE_HOME=*) sql=${entry#*=} ;; esac
+    done
+    if [ -n "$sql" ] && [ "$sql" != "$home" ]; then
+        dr_error "a separate CODEX_SQLITE_HOME is not supported by context transfer"
+        return 1
+    fi
+    # Reject references conservatively, including quoted keys and profiles.
+    # This is not a TOML parser; a failed read is also an unknown layout.
+    case "${DRAUGR_AGENT_ARGS:-}" in
+        *sqlite_home*) dr_error "sqlite_home in Codex arguments is not supported by context transfer"; return 1 ;;
+    esac
+    dr_mound_sh '[ -e "$1/config.toml" ] || exit 1
+        grep -q sqlite_home "$1/config.toml"' "$home" || layout_rc=$?
+    case "$layout_rc" in
+        0) dr_error "custom sqlite_home needs a measured context transfer layout"; return 1 ;;
+        1) return 0 ;;
+        *) dr_error "could not inspect Codex configuration for its database location"; return 1 ;;
+    esac
+}
 
 # dr_agent_mem_quiesce: is it safe to copy the databases now?
 #
-# SQLite in WAL mode is two files that must agree. A copy while a process
-# writes can give a pair that does not agree. The image has no sqlite3 for a
-# correct .backup (a test showed this). Thus a copy is safe only when nothing
-# writes. The only correct test of that is: does the agent run?
+# SQLite's database and WAL must agree with each other and the transcripts.
+# Require a quiet Codex, then compare hashes before and after the copy. This
+# does not lock out an external launcher: do not attach during a transfer.
 #
 # Three answers, not two: 0 quiet, 1 running, 2 unknown. "Unknown" must not
 # mean "safe". Thus a missing pgrep has its own exit code, and does not become
@@ -82,52 +97,114 @@ dr_agent_mem_quiesce() {
 # Each half counts. If Codex ran one time but generated no memories, the
 # mound still holds session history. If dr-rm deletes it, that is a real loss.
 dr_agent_mem_present() {
-    dr_mound_sh 'test -d "$1/memories" && exit 0
-                 for db in "$1"/state_*.sqlite; do [ -f "$db" ] && exit 0; done
-                 exit 1' "$(_dr_codex_home)"
+    dr_mound_sh "$(_dr_codex_state_script)" present "$(_dr_codex_home)"
 }
 
 # dr_agent_mem_list <repo>: the copied files, with hashes, and with the names
 # that pack writes.
 #
-# Two finds, because the two halves need different names. '%p' from `memories`
-# gives "memories/MEMORY.md". The top-level loop gives "state_5.sqlite". That
-# is exactly the packed tree. Thus these names match the list of the store, and
-# neither side knows about the other.
+# Names match the packed tree, so comparisons use the same file selection on
+# both sides. Failed probes propagate rather than looking like empty state.
 dr_agent_mem_list() {
-    dr_mound_sh 'cd "$1" 2>/dev/null || exit 0
-                 { [ -d memories ] && find memories -type f -printf "%p\0"
-                   for db in '"$_DR_CODEX_DBS"'; do
-                       [ -f "$db" ] && printf "%s\0" "$db"
-                       [ -f "$db-wal" ] && printf "%s\0" "$db-wal"
-                   done
-                   :
-                 } | sort -z | xargs -0 -r sha256sum' "$(_dr_codex_home)"
+    dr_mound_sh "$(_dr_codex_state_script)" list "$(_dr_codex_home)"
+}
+
+# One file selection runs on either side of the boundary. It rejects links
+# before any copy and keeps credentials and arbitrary databases out of both.
+_dr_codex_state_script() {
+    cat <<'SH'
+set -eu
+action=$1; src=$2; dest=${3:-}
+if [ ! -d "$src" ]; then
+    [ "$action" = list ] && exit 0
+    exit 1
+fi
+[ ! -L "$src" ] || exit 1
+cd "$src"
+
+# These roots are private state in a one-repository mound. They are never a
+# license to import a host's multi-project home or its configuration.
+items() {
+    for dir in memories memories_v2 sessions archived_sessions; do
+        [ ! -e "$dir" ] && [ ! -L "$dir" ] || printf '%s\n' "$dir"
+    done
+    for db in state_*.sqlite thread_history_*.sqlite memories_*.sqlite goals_*.sqlite queue_*.sqlite; do
+        [ ! -e "$db" ] && [ ! -L "$db" ] && continue
+        # Validate before emitting a root, not after splitting the list.
+        case "$db" in *[!A-Za-z0-9_.-]*) exit 1 ;; esac
+        printf '%s\n' "$db"
+        [ ! -e "$db-wal" ] && [ ! -L "$db-wal" ] || printf '%s\n' "$db-wal"
+    done
+    for file in session_index.jsonl history.jsonl; do
+        [ ! -e "$file" ] && [ ! -L "$file" ] || printf '%s\n' "$file"
+    done
+    return 0
+}
+
+# Every selected root must have a simple name. Descendants can have spaces,
+# but line breaks and escaped hash names cannot enter the comparison protocol.
+paths=$(items)
+for path in $paths; do
+    case "$path" in *[!A-Za-z0-9_.-]*) exit 1 ;; esac
+    [ ! -L "$path" ] || exit 1
+    bad=$(find "$path" \( -type l -o ! -type f -a ! -type d \) -print -quit)
+    [ -z "$bad" ] || exit 1
+    bad=$(find "$path" -name '*[[:cntrl:]\\]*' -print -quit)
+    [ -z "$bad" ] || exit 1
+done
+
+case "$action" in
+    present) [ -n "$paths" ] ;;
+    list)
+        # NUL separates names until sha256sum; shell word splitting only sees
+        # the fixed roots above, never descendant names.
+        { for path in $paths; do find "$path" -type f -print0; done; } |
+            sort -z | xargs -0 -r sha256sum
+        ;;
+    pack)
+        mkdir -p "$dest"
+        for path in $paths; do cp -a "$path" "$dest/"; done
+        printf 'format=2\n' > "$dest/.draugr-codex-state"
+        ;;
+    unpack)
+        # A stale WAL belongs to the replaced database, never the new one.
+        [ ! -L "$dest" ] || exit 1
+        mkdir -p "$dest"
+        for path in $paths; do
+            case "$path" in
+                *.sqlite) rm -f "$dest/$path-wal" "$dest/$path-shm" ;;
+                memories|memories_v2|sessions|archived_sessions) rm -rf "$dest/$path" ;;
+            esac
+            # Replace a file's directory entry, not a symlink's target. A
+            # sandbox can leave links pointing into another mounted tree.
+            case "$path" in
+                memories|memories_v2|sessions|archived_sessions) ;;
+                *) rm -f "$dest/$path" ;;
+            esac
+            cp -a "$path" "$dest/"
+        done
+        ;;
+    *) exit 2 ;;
+esac
+SH
 }
 
 # dr_agent_mem_pack <repo> <stage>: collect the files to copy into <stage>.
 #
-# The markdown always goes. It is small, it is what you read, and its copy is
-# safe while the agent works. The databases go only when nothing writes them.
-# If they are missing, that is a warning and not a failure. This runs at each
-# detach, and a detach must not fail because of the difference between
-# "memory" and "memory and session history".
+# Publish the whole recovery set or fail without rotating the previous store.
+# A successful markdown-only copy cannot stand in for a conversation backup.
 dr_agent_mem_pack() {
     # $1 is the repo, and this agent does not use it. Codex stores nothing under
     # the name of the project. It is in the signature, because all modules
     # share one signature.
-    local stage=$2 home rc=0
+    local stage=$2 home before after packed rc=0
     home=$(_dr_codex_home)
 
-    dr_mound_run 'set -e
-                  rm -rf "$1"; mkdir -p "$1"
-                  if [ -d "$2/memories" ]; then cp -a "$2/memories" "$1/"; fi' \
-                 "$stage" "$home" || return 1
-
-    # Not a failure, and not fatal, on purpose. See the note above.
+    # A full recovery point needs every component from the same quiet agent.
+    # Never rotate a complete store away in favor of a successful partial copy.
     dr_agent_mem_quiesce || rc=$?
     if [ "$rc" -ne 0 ]; then
-        dr_warn "copying the memories of Codex, but not its session history"
+        dr_warn "Codex context was not exported; the previous store is unchanged"
         if [ "$rc" -eq 1 ]; then
             printf '  %scodex runs in %s. Its databases cannot be copied safely%s\n' \
                 "$_DR_DIM" "$DRAUGR_SANDBOX" "$_DR_OFF" >&2
@@ -139,71 +216,73 @@ dr_agent_mem_pack() {
             printf '  %sthe databases, because a copy could be incomplete.%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
         fi
-        return 0
+        return 1
     fi
 
     # The -wal file is half of the current state of the database. Thus it goes
     # with the database, or the copy is old. -shm does not go. It is a
     # shared-memory index that SQLite builds again, and an old one is worse
     # than none.
-    dr_mound_run 'set -e
-                  cd "$2"
-                  for db in '"$_DR_CODEX_DBS"'; do
-                      [ -f "$db" ] || continue
-                      cp -a "$db" "$1/"
-                      if [ -f "$db-wal" ]; then cp -a "$db-wal" "$1/"; fi
-                  done' "$stage" "$home"
+    before=$(dr_agent_mem_list) || return 1
+    dr_mound_run 'rm -rf "$1"; mkdir -p "$1"' "$stage" || return 1
+    dr_mound_run "$(_dr_codex_state_script)" pack "$home" "$stage" || return 1
+    # Catch an agent started during the copy. The caller publishes nothing
+    # after a failed pack, even if the temporary files already exist.
+    dr_agent_mem_quiesce || return 1
+    after=$(dr_agent_mem_list) || return 1
+    packed=$(dr_mound_sh "$(_dr_codex_state_script)" list "$stage") || return 1
+    # A writer that started and stopped between probes still changes hashes.
+    if [ "$before" != "$after" ] || [ "$before" != "$packed" ]; then
+        dr_error "Codex context changed during export; the store is unchanged"
+        return 1
+    fi
 }
 
 # dr_agent_mem_unpack <repo> <stage>: put the packed tree back.
 #
-# It selects files, on purpose. It copies the files that it knows, and ignores
-# all other files in <stage>. That makes `dr-mem import --source ~/.codex`
-# safe. A real CODEX_HOME also holds config.toml, which sbx wrote to put the
-# agent in yolo mode. If the import overwrites it, the approval prompts come
-# back, with no message.
+# The source was curated before upload. Select again on the target and keep
+# its sbx provider, permissions, login, and native feature choices untouched.
 dr_agent_mem_unpack() {
     # $1 is the repo. It is not used here, for the reason in pack.
     local stage=$2 home
     home=$(_dr_codex_home)
 
-    # The code removes the -shm next to each replaced database, and does not
-    # copy it. It is a shared-memory index that SQLite builds from the other
-    # two files. An old -shm from the overwritten database describes a
-    # different database.
-    dr_mound_run 'set -e
-                  mkdir -p "$2"
-                  if [ -d "$1/memories" ]; then
-                      rm -rf "$2/memories"
-                      cp -a "$1/memories" "$2/"
-                  fi
-                  cd "$1"
-                  for f in *.sqlite *.sqlite-wal; do
-                      [ -f "$f" ] || continue
-                      case "$f" in logs_*) continue ;; esac
-                      cp -a "$f" "$2/"
-                      rm -f "$2/${f%-wal}-shm"
-                  done' "$stage" "$home" || return 1
-
-    # The agent never reads memory that is not turned on. Without this step,
-    # an import looks as if it worked, but changes nothing. `codex features
-    # enable` changes config.toml in place, and does not touch the values of
-    # sbx. A test on the image showed this.
-    dr_mound_run 'codex features enable memories' >/dev/null 2>&1 || dr_warn \
-        "could not turn on the memories of Codex. The import is in place, but Codex does not read it" \
-        "Turn it on by hand:  dr-shell -- codex features enable memories"
-    return 0
+    # Restore sessions without changing consent to use or generate memories.
+    dr_agent_mem_import_ready || return 1
+    dr_mound_run "$(_dr_codex_state_script)" unpack "$stage" "$home"
 }
+
+# Host CODEX_HOME can contain every project and a login. Do not import that
+# home, even temporarily. An explicit source must already be curated.
+dr_agent_mem_prepare_source() {
+    local source=$1 dest=$2 mode=${3:-source}
+    if [ "$mode" = host ] || [ -e "$source/auth.json" ] || [ -e "$source/config.toml" ]; then
+        dr_error "a whole Codex home is not a project-scoped import"
+        dr_warn "Use dr-mem import --source with a curated context export."
+        return 1
+    fi
+    if [ -e "$source/.draugr-codex-state" ] || [ -L "$source/.draugr-codex-state" ]; then
+        [ ! -L "$source/.draugr-codex-state" ] || return 1
+        grep -qx 'format=2' "$source/.draugr-codex-state" || return 1
+    else
+        dr_warn "legacy or curated Codex source: conversation completeness is unknown"
+    fi
+    # Validate and copy through the same allowlist as export. This happens
+    # before any bytes enter repository staging or the sandbox.
+    sh -c "$(_dr_codex_state_script)" sh pack "$source" "$dest"
+}
+
+# A quiet target is required for markdown too: its background memory worker
+# can change both files and databases. Unknown is never the quiet answer.
+dr_agent_mem_import_ready() { dr_agent_mem_quiesce; }
 
 # dr_agent_mem_status_extra <repo>: is the feature on?
 #
-# For Codex, this is the first question, and nothing else asks it. With
-# memories off, all lines below always report zero files. Nothing on the
-# screen tells that the agent will never write any. The code asks only a mound
-# that exists. A status command must not start a stopped mound to answer.
+# Generated memory and saved conversations are separate. Ask the native CLI
+# whether generation is enabled, without starting a stopped mound for status.
 dr_agent_mem_status_extra() {
     local state
-    dr_sandbox_exists "$DRAUGR_SANDBOX" || return 0
+    [ "$(dr_sandbox_state "$DRAUGR_SANDBOX")" = running ] || return 0
 
     # `codex features list` prints "<name> <stage> <effective>". Thus the last
     # field is the answer. A question to Codex is better than a read of
@@ -214,7 +293,7 @@ dr_agent_mem_status_extra() {
     case "$state" in
         true)  printf '  %-6s %son%s: Codex writes memories in this mound\n' \
                    memories "$_DR_GREEN" "$_DR_OFF" ;;
-        false) printf '  %-6s %soff%s: Codex writes none. dr-mem import turns it on\n' \
+        false) printf '  %-6s %soff%s: memory generation is disabled; import preserves this choice\n' \
                    memories "$_DR_YELLOW" "$_DR_OFF" ;;
         *)     printf '  %-6s %sunknown%s: does the mound run?\n' \
                    memories "$_DR_DIM" "$_DR_OFF" ;;
@@ -223,36 +302,12 @@ dr_agent_mem_status_extra() {
 
 # --- the host side ----------------------------------------------------------
 
-# dr_agent_mem_host_dir <repo>: the CODEX_HOME of a host install, for --from-host.
-#
-# It is NOT for each repo, as with Claude Code. It is all that the install
-# remembers, about all projects. dr-mem asks before it imports a source that it
-# does not know. That is the correct question here.
-#
-# Windows first, for the same reason as in claude.sh. On a WSL host, $HOME is
-# ext4 and usually has no agent install. The Windows profile usually has one.
-dr_agent_mem_host_dir() {
-    local userprofile candidate
-    if command -v cmd.exe >/dev/null 2>&1; then
-        userprofile=$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')
-        if [ -n "$userprofile" ] && [ "$userprofile" != '%USERPROFILE%' ]; then
-            candidate="$(dr_path_from_win "$userprofile")/.codex"
-            [ -d "$candidate/memories" ] && { printf '%s' "$candidate"; return 0; }
-        fi
-    fi
+# Never scan or hash a global host home just to report project memory status.
+dr_agent_mem_host_dir() { return 1; }
 
-    candidate="$HOME/.codex"
-    [ -d "$candidate/memories" ] && { printf '%s' "$candidate"; return 0; }
-
-    return 1
-}
-
-# The hint names the directory AND the reason that it is empty. "Off by
-# default" is almost always the answer. A Codex install with no memories/
-# usually never had the feature on. It is not that nobody used it.
+# Project selection from multi-project databases has not been established.
 dr_agent_mem_host_hint() {
-    printf 'Looked for a memories/ directory in ~/.codex. Codex writes none until %s' \
-           '`[features] memories = true` is in its config.'
+    printf 'Codex host state can span projects. Use dr-mem import --source with a curated export, not a whole CODEX_HOME.'
 }
 
 # dr_agent_secret: the name under which sbx stores the credentials of this agent.
@@ -260,7 +315,10 @@ dr_agent_mem_host_hint() {
 # `sbx secret set -g openai --oauth` is the ChatGPT sign-in, and it is the one to
 # recommend. It uses the rights that a ChatGPT plan already has. An API key has
 # a separate bill. In both cases, the credential stays on the host.
-dr_agent_secret() { printf 'openai'; }
+dr_agent_secret() {
+    [ -z "${DRAUGR_MODEL:-}" ] || return 1
+    printf 'openai'
+}
 
 # dr_agent_signin: how to get the secret. This flow, unlike the flow of
 # Anthropic, can start from the host. `sbx secret set --help` gives
@@ -274,43 +332,97 @@ dr_agent_signin() {
 }
 
 # ---------------------------------------------------------------------------
-# Plugins: nobody tested them, so Draugr does not offer them.
-#
-# Codex has its own extension system, and it is not the system of Claude Code.
-# It has no .claude-plugin manifest and no marketplace catalog. Nobody found a
-# variable that moves a library, as CLAUDE_CODE_PLUGIN_CACHE_DIR does.
-# dr-plugin builds a directory that each mound on the machine mounts. A guess
-# here puts third-party code in a place where nobody reviewed it.
-#
-# If you test it, use docs/CLAUDE_PLUGINS.md as the model to fill in: a
-# writable build library, a read-only library for sessions, and a CLI with
-# verbs for add, install, update, and uninstall. If Codex has nothing like the
-# second item, option 4 does not apply to it, and that is the result.
+# Native Codex plugins use their own backend and published local marketplaces.
+# The Claude cache/seed variables below have no Codex equivalent.
 # ---------------------------------------------------------------------------
-dr_agent_plugin_supported() { return 1; }
+dr_agent_plugin_supported() { return 0; }
 dr_agent_plugin_cache_var() { return 1; }
 dr_agent_plugin_seed_var()  { return 1; }
 dr_agent_plugin_cli()       { return 1; }
 
 # ---------------------------------------------------------------------------
-# Send Codex to a different endpoint: nobody tested it, so Draugr does not offer it.
-#
-# Codex takes its provider from `model_provider` in the config.toml of the
-# mound, not from the environment. sbx writes that file at creation. Thus it is
-# not like the two variables of Claude Code. A guess is the failure that
-# DRAUGR_MODEL must not have: an agent that still calls its cloud while you
-# think that it does not. Thus the module refuses the value.
-#
-# If you test it, start with the model trap in the CHANGELOG. sbx sets
-# model_provider and no model. That is already one surprise in this file.
+# Native config arguments select the local provider for one invocation.
 # ---------------------------------------------------------------------------
-dr_agent_model_supported() { return 1; }
-dr_agent_model_env()       { return 1; }
+dr_agent_model_supported() {
+    local version major minor
+    version=$(dr_sbx --version 2>/dev/null) || return 1
+    if [[ "$version" =~ ([0-9]+)\.([0-9]+)\.[0-9]+ ]]; then
+        major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}
+        if [ "$major" -gt 0 ] || [ "$minor" -ge 53 ]; then return 0; fi
+    fi
+    # Older sbx can substitute the cloud provider when --model is selected.
+    dr_error "Codex local providers require sbx 0.53 or later; inspect sbx --version"
+    return 1
+}
+dr_agent_model_env()       { return 0; }
 
-# The session that an argument like --continue needs. Codex continues with a
-# SUBCOMMAND, `codex resume --last`, not with a flag that dr-go can drop.
-# Nobody measured where Codex keeps those sessions. Thus there is no argument
-# to drop, and no answer about the contents of the mound. A guess here can
-# start a new session in place of the one that you asked to continue.
+# A private provider replaces sandboxd for this invocation only. CLI config
+# preserves the rest of sbx's config and does not read host credentials.
+dr_agent_model_args() {
+    local url=${1%/} model=$2
+    dr_agent_model_supported || return 1
+    if [ -n "${DRAUGR_MODEL_FAST:-}" ] && [ "$DRAUGR_MODEL_FAST" != "$model" ]; then
+        dr_warn "Codex has no measured fast-tier mapping; this session uses $model"
+    fi
+    case "$url" in */v1) ;; *) url+=/v1 ;; esac
+    printf '%s\n' -c 'model_provider="draugr-local"' \
+        -c "model=$(jq -Rn --arg v "$model" '$v')" \
+        -c 'model_providers.draugr-local.name="Draugr local model"' \
+        -c "model_providers.draugr-local.base_url=$(jq -Rn --arg v "$url" '$v')" \
+        -c 'model_providers.draugr-local.wire_api="responses"' \
+        -c 'model_providers.draugr-local.requires_openai_auth=false'
+}
+
+# The kit registers packages. Apply reviewed enable decisions for this launch
+# without replacing any provider, permission, or authentication configuration.
+dr_agent_launch_args() {
+    local file="${DRAUGR_PLUGIN_STORE:-}/codex/seed/library.json"
+    [ -n "${DRAUGR_PLUGIN_STORE:-}" ] && [ -f "$file" ] || return 0
+    jq -r '(.plugins[] | "-c", ("plugins."+(.id|tojson)+".enabled="+(.enabled|tostring))),
+        ((.removed // [])[] | "-c", ("plugins."+(.|tojson)+".enabled=false"))' "$file"
+}
+
+# Codex continues with a subcommand. Keep native selection when database
+# contents or current-directory eligibility cannot be established safely.
 dr_agent_session_flags()   { return 0; }
-dr_agent_session_present() { printf 'unknown\n'; }
+dr_agent_session_present() {
+    dr_mound_sh 'command -v find >/dev/null 2>&1 || { printf "unknown\n"; exit 0; }
+        for dir in sessions archived_sessions threads; do
+            if [ -d "$1/$dir" ]; then
+                found=$(find "$1/$dir" -type f -print -quit) || exit 1
+                if [ -n "$found" ]; then printf "present\n"; exit 0; fi
+            fi
+        done
+        for db in "$1"/state_*.sqlite; do
+            if [ -f "$db" ]; then printf "unknown\n"; exit 0; fi
+        done
+        printf "none\n"' "$(_dr_codex_home)"
+}
+
+# Only the ordinary resume-last form can safely become a new session. An ID,
+# prompt, changed scope, or unknown option keeps the native request intact.
+# shellcheck disable=SC2034  # dr-go reads the prepared array and explanation.
+dr_agent_session_prepare() {
+    local repo=$1 state arg takes_value=
+    shift
+    DR_AGENT_SESSION_ARGS=("$@")
+    DR_AGENT_SESSION_DROPPED=
+    [ "${1:-}" = resume ] && [ "${2:-}" = --last ] || return 0
+    shift 2
+    for arg in "$@"; do
+        if [ -n "$takes_value" ]; then takes_value=; continue; fi
+        case "$arg" in
+            -m|--model|-c|--config|-p|--profile|-s|--sandbox|-a|--ask-for-approval|--enable|--disable) takes_value=1 ;;
+            --model=*|--config=*|--profile=*|--sandbox=*|--ask-for-approval=*) ;;
+            --search|--no-alt-screen|--no-daemon|--oss|--dangerously-bypass-approvals-and-sandbox) ;;
+            *) return 0 ;;
+        esac
+    done
+    [ -z "$takes_value" ] || return 0
+    dr_agent_mem_init || return 0
+    state=$(dr_agent_session_present "$repo") || return 0
+    if [ "$state" = none ]; then
+        DR_AGENT_SESSION_ARGS=("$@")
+        DR_AGENT_SESSION_DROPPED='resume --last'
+    fi
+}

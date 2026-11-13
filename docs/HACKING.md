@@ -399,9 +399,9 @@ An unknown verb gives near matches by substring, and does not only refuse.
 ## Pattern: agent modules
 
 `sbx` runs ten agents. Almost all that Draugr does is the same for each of them: the attach, the
-clone, kits, `dr-sync`, `dr-send`, `dr-data`, the path translation. Three things are different:
-where an agent keeps its **memory**, which credential service it signs in through, and whether it
-reads the skills store where `sbx` mounts it. That is exactly the knowledge that is most likely to
+clone, kits, `dr-sync`, `dr-send`, `dr-data`, the path translation. Native differences include
+context layout, session selection, authentication advice, model providers, plugins, and skill
+discovery. That is exactly the knowledge that is most likely to
 be wrong. The agents do not document it. It comes from measurement, and it changes with no notice.
 
 Thus it is in `lib/agents/<agent>.sh`, one file for each agent, and not in a `case` statement in
@@ -415,6 +415,13 @@ dr_agent_load() {
     . "$file"
 }
 ```
+
+The adapter interface also includes source preparation before staging, context-home discovery,
+import readiness, native launch/provider argument lines, and argument-vector session preparation.
+The latter returns `DR_AGENT_SESSION_ARGS` and `DR_AGENT_SESSION_DROPPED`; it must preserve unknown
+native requests. Native argument helpers emit one argument per line, not shell code. Codex plugins
+load `lib/plugins/codex.sh` only from `dr-plugin`; their receipt and published packages stay under
+`DRAUGR_PLUGIN_STORE/codex`, outside the legacy Claude layout. Lint that optional module too.
 
 Four facts about it are important:
 
@@ -776,10 +783,10 @@ tidiness. With `DRAUGR_REQUIRE_CLEAN=true`, an untracked state file **blocks `dr
 without them stops working the first time that Draugr builds a mound.
 
 **The full suite runs in there**, because none of it needs a hypervisor. CI proves that, because it
-runs all 983 tests on Ubuntu, with no sbx, no Windows and no WSL. The suite needs two things that
+runs the full test suite on Ubuntu, with no sbx, no Windows and no WSL. The suite needs two things that
 the mound does not have by default:
 
-- `bats`, `jq` and `shellcheck`, installed from the `commands.install` of the kit. Remember the
+- `bats`, `jq` and `shellcheck`, installed from the install commands of the kit. Remember the
   rule for each kit: install commands run **before** the repository is in the workspace, so they
   cannot read a file from it.
 - a writable `/mnt/c`. `dr_win_root` looks for `/mnt/c/Temp`, then `/mnt/c`. With neither, each
@@ -800,7 +807,7 @@ A mound has no `sbx`, no `powershell.exe` and no WSL interop. Thus three things 
 - **The live tier** in [Testing strategy](#testing-strategy), which needs a real mound, and thus a
   real sbx.
 
-All else runs in any place: the code, the 983 tests, the lints, shellcheck.
+All else runs in any place: the code, the Bats suite, the lints, shellcheck.
 
 ### Keep a live run off your own configuration
 
@@ -819,10 +826,14 @@ fault. Draugr exists to act on the host, so a test of it must run there. Two hab
 
 ## Running the checks
 
-```bash
-sudo apt install jq shellcheck bats     # jq is a runtime dependency; the others are for development
+The test helper sets a Git discovery boundary at the Windows fixture root. This matters when
+`DRAUGR_TEST_WINROOT` is inside a checkout: a plain-directory fixture must not inherit the real
+repository and let a mocked `dr-init` or `dr-up` write that checkout's setup files.
 
-shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh lib/forge/*.sh \
+```bash
+sudo apt install jq shellcheck bats python3  # Python's sqlite3 module verifies real WAL recovery
+
+shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh lib/plugins/*.sh lib/forge/*.sh \
     install.sh tests/mocks/* bin/* .githooks/* tests/executable-paths.sh \
     share/ollama-proxy/ollama-proxy
 ./tests/lint-comments.sh                # the comment-density rule, below
@@ -890,7 +901,7 @@ a recent toolchain. We write them under WSL on `/mnt/c`, with the toolchain of t
   place, it needs the UNC form, and that needs `WSL_DISTRO_NAME`, which WSL exports, and which is
   unset on a runner. `dr-forge gateway` probed the Windows side before the dispatch, failed to spell
   `lib/forge/probe.ps1`, and failed 24 of the 25 tests of `forge-gateway.bats` on each CI run for
-  four days, while all 983 passed here. Both conditions are true on a development machine, and
+  four days, while the full suite passed here. Both conditions are true on a development machine, and
   neither is true on the runner. Thus no local run was able to see it.
 
 When CI does not agree with a local run, **copy the runner, and do not guess**. A `git clone` into

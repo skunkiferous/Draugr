@@ -66,6 +66,24 @@ done
 
 dr_context
 
+# Configuration may already name the NEXT agent. Inspect the one that owns
+# the existing mound before selecting its adapter or its persistent store.
+installed=$(dr_sandbox_agent "$DRAUGR_SANDBOX")
+if [ -z "$installed" ] && dr_sandbox_exists "$DRAUGR_SANDBOX"; then
+    # A configured replacement is not evidence of the old mound's identity.
+    # Unknown ownership cannot authorize destruction or choose a backup store.
+    if [ "$action" = check ]; then
+        dr_error "sbx did not identify the installed agent; context was not inspected"
+        exit 2
+    fi
+    dr_die "sbx did not identify the installed agent" "Inspect: sbx ls --json"
+fi
+if [ -n "$installed" ] && [ "$installed" != "$DRAUGR_AGENT" ]; then
+    dr_info "$DRAUGR_SANDBOX holds $installed context; configuration asks for $DRAUGR_AGENT"
+    DRAUGR_AGENT=$installed
+    dr_agent_load
+fi
+
 # Each agent has its own memory layout, and Draugr knows only the layouts that
 # it tested (see lib/agents/). A refusal is better than a copy into a place that
 # the agent never reads. That copy looks like a success, but the agent still
@@ -75,7 +93,7 @@ dr_context
 if ! dr_agent_mem_supported; then
     [ "$action" = check ] && exit 0
     dr_die "Draugr does not know where $(dr_agent_mem_label) keeps its memory" \
-           "Memory is the one thing that differs for each agent. All else works." \
+           "Context transfer needs a measured layout for this agent." \
            "Known layouts:  $(dr_agent_known)" \
            "Turn the automatic export off with:  DRAUGR_MEM_SYNC=off"
 fi
@@ -83,6 +101,11 @@ fi
 # The directory that the agent reads, and its parent. The code creates the
 # parent and copies into it. The parent comes from the child, and the code does
 # not ask for both. Thus the two cannot differ.
+# Unknown layouts are not empty context. In particular they cannot satisfy
+# the loss guard used by dr-rm or by agent switching.
+if dr_sandbox_exists "$DRAUGR_SANDBOX" && { [ "$action" != status ] || [ "$(dr_sandbox_state "$DRAUGR_SANDBOX")" = running ]; }; then
+    dr_agent_mem_init || { [ "$action" = check ] && exit 2; dr_die "could not locate the agent's context"; }
+fi
 mem_dir=$(dr_agent_mem_dir "$DR_REPO")
 dr_mem_store_migrate "$DR_REPO"
 store_dir=$(dr_mem_store_dir "$DR_REPO")
@@ -119,7 +142,7 @@ require_mound() {
 list_local() {
     local dir=$1
     [ -d "$dir" ] || return 0
-    ( cd "$dir" && find . -type f -printf '%P\0' | sort -z | xargs -0 -r sha256sum )
+    ( cd "$dir" && find . -type f ! -path './.draugr-codex-state' -printf '%P\0' | sort -z | xargs -0 -r sha256sum )
 }
 
 # The half of the mound comes from the agent module, because only it knows what
@@ -167,11 +190,11 @@ status)
 
     # The same difference for the mound. Thus status never creates one. You run
     # this to decide what to do, not to make something happen.
-    if dr_sandbox_exists "$DRAUGR_SANDBOX"; then
+    if [ "$(dr_sandbox_state "$DRAUGR_SANDBOX")" = running ]; then
         printf '  %-6s %3s file(s)  %s\n' mound \
             "$(list_mound | count_lines)" "$mem_dir"
     else
-        printf '  %-6s %s\n' mound "$DRAUGR_SANDBOX does not exist"
+        printf '  %-6s %s\n' mound "$DRAUGR_SANDBOX is not running; context was not inspected"
     fi
 
     if [ -f "$marker" ]; then
@@ -187,7 +210,8 @@ export)
     # Nothing to export is a usual state, not a failure. With
     # DRAUGR_MEM_SYNC=auto, this runs at each detach, also before the agent
     # wrote its first memory.
-    if ! dr_agent_mem_present "$DR_REPO"; then
+    export_list=$(list_mound) || dr_die "could not inspect the agent's context" "Retry dr-mem export after checking the mound."
+    if [ -z "$export_list" ]; then
         dr_ok "no memory in $DRAUGR_SANDBOX yet. Nothing to export."
         printf '  %s%s creates it when it writes the first one.%s\n' \
             "$_DR_DIM" "$(dr_agent_mem_label)" "$_DR_OFF" >&2
@@ -254,22 +278,28 @@ import)
     # without a condition puts the store over memory that the agent wrote later.
     # The store is always the older copy. Thus the automatic path fills only a
     # mound that has nothing.
-    if [ -n "$if_empty" ] && [ -n "$(list_mound)" ]; then
-        dr_debug "$DRAUGR_SANDBOX already has memory; --if-empty declines to import"
-        exit 0
+    if [ -n "$if_empty" ]; then
+        existing=$(list_mound) || dr_die "could not inspect the import target" "Retry dr-mem import after checking the mound."
+        if [ -n "$existing" ]; then
+            dr_debug "$DRAUGR_SANDBOX already has memory; --if-empty declines to import"
+            exit 0
+        fi
     fi
 
     # Three sources, the most explicit first. --from-host is the migration for
     # "I ran the agent on this machine before, and the mound must know what it
     # knew".
     trusted=
+    source_mode=source
     if [ -n "$source_dir" ]; then
         :
     elif [ -n "$from_host" ]; then
+        source_mode=host
         source_dir=$(dr_agent_mem_host_dir "$DR_REPO") || dr_die \
             "no host $(dr_agent_mem_label) memory for this repo" \
             "$(dr_agent_mem_host_hint "$DR_REPO")"
     else
+        source_mode=store
         source_dir="$store_dir/memory"
         # Our own marker names this repo. Only in this case can we prove that
         # the content came from the agent of this project.
@@ -283,7 +313,7 @@ import)
     # first one printed "auto memory import failed". That message frightens and
     # tells nothing. For an explicit request, "there is nothing there" is still
     # useful.
-    if [ ! -d "$source_dir" ] || [ -z "$(list_local "$source_dir")" ]; then
+    if [ ! -d "$source_dir" ]; then
         if [ -n "$if_empty" ]; then
             dr_debug "nothing in $source_dir to import"
             exit 0
@@ -295,7 +325,23 @@ import)
         dr_die "$source_dir has no files"
     fi
 
-    n=$(list_local "$source_dir" | count_lines)
+    # Filter BEFORE staging. Neither a final-destination filter nor a later
+    # removal can undo a credential that already crossed the boundary.
+    dr_agent_mem_import_ready || dr_die "the agent's context is in use" \
+        "Leave the agent and its background server, then retry dr-mem import."
+    stage_name=$(basename "$DR_MOUND_STAGE")
+    dr_stage
+    trap 'rm -rf "$DR_STAGE"' EXIT
+    dr_agent_mem_prepare_source "$source_dir" "$DR_STAGE/$stage_name" "$source_mode" \
+        || dr_die "could not prepare a safe context import" \
+            "Use a curated source directory, not an agent home with credentials."
+    # Check the copied tree too, in case a source changed during preparation.
+    dr_mem_validate_tree "$DR_STAGE/$stage_name" || dr_die "prepared context contains unsafe paths"
+    n=$(list_local "$DR_STAGE/$stage_name" | count_lines)
+    if [ "$n" -eq 0 ]; then
+        [ -n "$if_empty" ] && exit 0
+        dr_die "$source_dir has no supported context files"
+    fi
 
     # Memory is not notes. An agent loads it into context, and mostly acts on
     # it. Thus the import of a directory is more like a run of a script than a
@@ -313,11 +359,6 @@ import)
     # The same packed tree that the export made, in the other direction. Its
     # name must be the name of the staging directory in the mound. sbx cp puts
     # the source INSIDE the destination, and does not rename it.
-    stage_name=$(basename "$DR_MOUND_STAGE")
-    dr_stage
-    trap 'rm -rf "$DR_STAGE"' EXIT
-    cp -a "$source_dir" "$DR_STAGE/$stage_name"
-
     # The parent of the staging directory must exist before cp puts anything in
     # it. Files from a stopped transfer must not look like part of this one.
     mound_run 'mkdir -p "$(dirname "$1")"' "$DR_MOUND_STAGE" \

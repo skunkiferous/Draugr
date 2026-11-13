@@ -57,14 +57,14 @@ you did not accept, all at once.
 Default `claude`. One of `claude`, `codex`, `copilot`, `cursor`, `docker-agent`, `droid`, `gemini`,
 `kiro`, `opencode`, `shell`. Draugr passes it to `sbx create` as the agent name.
 
-All except **memory** works the same for each agent: attach, Ctrl+Z, the clone, kits, `dr-sync`,
-`dr-send`, `dr-data`. Each agent has its own private memory layout. Thus Draugr keeps one file for
-each agent in `lib/agents/`, and only claims to know the agents that it measured:
+Attach, Ctrl+Z, the clone, Git, and data review share one workflow. Memory, resume, plugins,
+and model providers use native implementations. See the [support matrix](AGENT-SUPPORT.md).
+Draugr only claims memory layouts it measured:
 
 | | memory | `dr-mem` |
 |---|---|---|
 | `claude` | `~/.claude/projects/<PATH-KEY>/memory/`, for each project | full |
-| `codex` | `$CODEX_HOME/memories/` and its SQLite state, **not** for each project, **off by default** | full |
+| `codex` | `$CODEX_HOME` selected memories, transcripts, indexes, and databases; whole mound context | quiet snapshot |
 | other agents | not measured | refuses, and says so |
 
 An agent with no Draugr module still works. `dr-mem` refuses, and does not copy a directory into a
@@ -120,8 +120,18 @@ If the mound answers that it has no session, `dr-go` drops the argument. If `dr-
 answer, it keeps your arguments as you wrote them. A correct argument that `dr-go` drops loses the
 session that it was to continue. That is worse than the refusal of Claude Code.
 
-Draugr knows these arguments only for Claude Code. For each other agent, `dr-go` drops nothing and
-asks the mound nothing, because nobody measured where that agent keeps its sessions.
+Draugr also handles ordinary Codex `resume --last`. It preserves explicit IDs, changed scope,
+unfamiliar options, and unknown probes. With database-only history, Codex selects the eligible
+thread itself. Model and config arguments survive a known-empty fallback.
+
+Use native model and reasoning settings in the per-agent value, for a model your account offers:
+
+```bash
+DRAUGR_AGENT_ARGS_CODEX='resume --last --model gpt-6.1-sol -c model_reasoning_effort="xhigh"'
+```
+
+Check the model's supported reasoning values. These arguments do not select an alternative
+provider; `DRAUGR_MODEL` does that. No host `config.toml` or login is copied.
 
 > ### Codex on a ChatGPT plan usually needs a model named here
 >
@@ -312,8 +322,9 @@ toolchain" is a fact about you, not about one repo.
 `adopt` is the end of the loop to build your own kit, in
 [WORKFLOW.md](WORKFLOW.md#letting-the-agent-build-the-kit). It reads back the hosts that were
 opened for the mound. It skips the hosts that the kit already declares, and writes the rest into
-`caps.network.allow`. Thus you need to remember nothing while the loop runs. It edits only that one
-block. If it does not know the shape of a kit, it reports it, and does not change it.
+the runtime allow list of the kit: `caps.network.allow` on a v2 kit, and the `runtime.allow` of the
+network-policy capability on a v3 one. Thus you need to remember nothing while the loop runs. It
+edits only that one block. If it does not know the shape of a kit, it reports it, and does not change it.
 
 `save` copies, and does not make a symlink, so an edit on one side never silently changes the
 other. But an edit of the library copy puts each repo that uses it into drift, until
@@ -328,10 +339,15 @@ Default empty. `HOST:SANDBOX` pairs, separated by spaces, published to Windows l
 DRAUGR_PORTS="5173:5173 8080:8080"
 ```
 
-A kit can also declare `publishedPorts`, but it **cannot name the host port**. `spec.PublishedPort`
-has no such field. Thus `sbx` selects a random port, which changes on each recreate. Set each port
-that you want at a fixed URL here, for example a dev server in a browser tab. `dr-ports` does the
-same during a session, with no rebuild.
+A kit can also declare ports, and it **cannot name the host port**. Thus `sbx` selects a random
+one, which changes on each recreate. Set each port that you want at a fixed URL here, for example
+a dev server in a browser tab. `dr-ports` does the same during a session, with no rebuild.
+
+The field differs by kit format. A v2 kit lists `publishedPorts`, where `spec.PublishedPort` has no
+host-port field. A v3 kit declares one `com.docker.sandbox/port@1` capability for each port, and
+its field is `transport`, not the `protocol` of v2. v3 also has a `host-port@1` capability, which
+Draugr has not measured: whether that one can fix the host port is an open question, so this key
+stays the answer that is proven.
 
 They are on the **Windows** loopback, not that of WSL. Thus open them in a Windows browser. `curl`
 from inside WSL reaches the own loopback of the WSL VM, and does not connect.
@@ -485,7 +501,10 @@ without this paragraph.
 
 Draugr takes a value with a scheme literally, and never resolves it: a model on a different
 machine, or a company endpoint in front of several. It must speak the API that the configured agent
-expects. For `claude`, that is the Messages API of Anthropic at `/v1/messages`.
+expects. Claude uses Anthropic Messages at `/v1/messages`. Codex uses Responses streaming at
+`/v1/responses`, including tool calls; Draugr appends `/v1` to its base URL when absent.
+Codex local providers require sbx 0.53 or later because earlier releases could select OpenAI
+instead when `--model` was supplied. See [measured support](AGENT-SUPPORT.md#local-providers).
 
 **The own API of the vendor is a legal value, and there Draugr does nothing for the
 authentication.** The proxy of `sbx` rewrites the authorization header for the hosts of Anthropic,
@@ -496,6 +515,9 @@ cannot give a different credential. That is `sbx secret`, and
 [SECURITY.md](SECURITY.md#running-the-agent-on-a-local-model) says why.
 
 ### `DRAUGR_MODEL_FAST`
+For Codex, a separate fast tier has no measured equivalent. A different value produces a
+warning and the session uses `DRAUGR_MODEL`. The mapping below applies to Claude Code.
+
 Default: the value of `DRAUGR_MODEL`. The model for the cheap background calls of the agent. That is
 the Haiku tier of Claude Code, which it uses for summaries and titles, not for your work:
 
@@ -538,10 +560,12 @@ in [`lib/agents/`](../lib/agents/), beside the memory functions:
 |---|---|
 | `dr_agent_model_supported` | `0` when this agent can point at a different endpoint |
 | `dr_agent_model_env <url> <model> <fast>` | the `KEY=value` lines to export |
+| `dr_agent_model_args <url> <model>` | native argument lines, one argument per line |
 
 For `claude`, that is `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` (necessary, but Ollama ignores
-it) and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers. For `codex`, it is a fully different set. That
-is why this is a function of the module, and not a table in `common.sh`. If the module of an agent
+it) and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers. Codex uses native `-c` provider overrides
+with Responses and `requires_openai_auth=false`. Both attach transports use the same rcfile.
+If the module of an agent
 returns failure for `dr_agent_model_supported`, `DRAUGR_MODEL` is an error, not a value that
 silently does nothing.
 
@@ -819,6 +843,11 @@ because `sbx cp` is a Windows binary that cannot write to a WSL path.
 ## Plugins
 
 ### `DRAUGR_PLUGIN_STORE`
+Codex uses an independent `codex/seed` publication beneath this directory, with its own receipt,
+build lock, and rollback copy. Mount the `codex` parent read-only and install generated kits;
+Claude seed variables and `--settings` do not apply. See [Codex plugins](AGENT-SUPPORT.md#codex-plugins).
+The layout and three-key setup below describe the existing Claude library.
+
 Empty by default, and the feature is off until you set it. It names the directory that `dr-plugin`
 manages. That is the plugin library that each mound reads, on your host as inert files, and mounted
 **read-only**.

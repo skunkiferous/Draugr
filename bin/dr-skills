@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # dr-skills: watch and seed the one directory that a sandbox can write to.
 #
-# Each mound mounts the shared skills store READ-WRITE. All mounds share it, and
-# it stays after sbx rm. Thus it is the one exception to "the sandbox cannot
-# touch the host". Its contents are agent instructions. Thus this command treats
-# it as a thing to review, not as a cache. It shows what is there, shows what
-# changed, and lets you record your review.
+# All mounds share the skills store, and it stays after sbx rm. A mound that sbx
+# 0.53 built mounts it READ-ONLY. A mound that an older sbx built mounts it
+# READ-WRITE, and an upgrade does not change that: the mode is fixed when the
+# mound is created. Thus the store is still the one exception to "the sandbox
+# cannot touch the host", for every mound built before that. Its contents are
+# agent instructions either way. Thus this command treats it as a thing to
+# review, not as a cache. It shows what is there, shows what changed, and lets
+# you record your review.
 #
 # ONE host directory, because sbx does not split it for each agent. But sbx
 # mounts it at a path that depends on the agent: ~/.claude/skills in a claude
@@ -164,7 +167,8 @@ list)
     # and in a codex mound. Thus each mound on this machine can read a skill
     # here, for each agent.
     heading "reach"
-    printf '  each mound mounts it read-write, and all mounds share it\n'
+    printf '  all mounds share it. A mound that sbx 0.53 built mounts it\n'
+    printf '  read-only; one that an older sbx built mounts it read-write\n'
     printf '  claude: ~/.claude/skills    codex: ~/.agents/skills\n'
     printf '  each agent reads its path. One store, each mound\n'
     printf '  stays after dr-rm\n'

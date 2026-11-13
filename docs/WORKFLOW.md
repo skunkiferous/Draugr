@@ -259,32 +259,34 @@ not write.
 
 ### The same commands, a different shape: Codex
 
-`dr-mem` works the same for Codex, but almost nothing under it does. Know three differences, because
-each one changes what you can expect:
+`dr-mem` uses a native Codex recovery set. See [agent support](AGENT-SUPPORT.md#codex-context-recovery)
+for the allowlist, version baseline, and limits.
 
 **Memory is not for each project.** Codex keeps all under `$CODEX_HOME` (`/home/agent/.codex` in the
 mound), with no directory named after the workspace. There is no key, and nothing to translate.
 Draugr can still treat it as the memory of *this project* only because one mound holds one
 repository.
 
-**Half of it is a database.** The generated memories are markdown that you can read
-(`memories/MEMORY.md`, `memory_summary.md`, `raw_memories.md`, `rollout_summaries/`). The session
-history that `codex resume` reads is SQLite beside them, and `dr-mem` carries both. Thus a thread
-stays after `dr-rm`, and you can resume it in the rebuilt mound.
+**Sessions and generated memory are separate.** Draugr carries memory directories, transcript
+files on older images, selected indexes, and the metadata and transcript databases. On codex-cli
+0.167.2 the real conversation used `thread_history_1.sqlite` with `state_5.sqlite`. A native test
+exported a real thread and resumed it in a fresh mound after import.
 
-The image has no `sqlite3` for a correct backup. Thus Draugr can copy those files only while nothing
-writes to them. If Codex still runs at the export, `dr-mem` carries the markdown, skips the
-databases, and says so. Leave the agent, and run `dr-mem export` again.
+Leave Codex and its background server before import or export. An active or unknown writer fails
+the whole transfer and preserves the last complete export. Hash comparisons also catch changes
+during export. Do not attach while a transfer runs.
 
-**It is off by default.** Codex makes no memories until its configuration has
-`[features] memories = true`. That is on purpose in the EEA, the UK and Switzerland, where a
-behavioral profile needs a legal basis. Draugr does not secretly turn it on. `dr-mem status` reports
-whether it is on. `dr-mem import` enables it, because a request for memory to be there is a request
-to use it.
+**Import preserves feature choices.** Restoring a conversation does not enable memory generation.
+`dr-mem status` reports its native feature state when the mound runs. Enable generation separately
+if desired:
 
 ```bash
 dr-shell -- codex features enable memories    # or turn it on yourself
 ```
+
+Codex `--from-host` is refused because a host home can span unrelated projects. Use a dedicated,
+reviewed `--source` export instead. Credentials and config must never enter staging. Separate
+SQLite homes are currently unsupported and fail clearly.
 
 ### `AGENTS.md` and `CLAUDE.md` are not memory
 
@@ -301,9 +303,15 @@ version control, reviewed. Use it for project rules, and use memory only as memo
 
 ## Skills
 
-The shared skills store is mounted read-write into each mound, and stays after `sbx rm`. It is the
-one path by which a sandbox can leave something behind for a later one to read, and skills are
-instructions.
+The shared skills store stays after `sbx rm`. sbx 0.53 mounts it read-only by default; the older
+read-write behavior described in the measurements below applies to sbx 0.37.1.
+
+**The mount mode is fixed when the mound is created, not when you upgrade.** A test showed both
+sides of this: in a mound that 0.53 created, `~/.agents/skills` refuses a write, and in a mound
+that an older sbx created, the same store stays writable after the upgrade. Thus an upgrade alone
+does not close that channel. Recreate a mound to get the read-only store, and until then treat its
+shared skills as writable by the agent. Skills are instructions, and host-side changes still reach
+later mounds either way.
 
 It is one host directory, bind-mounted into each mound at a path that `sbx` selects:
 `~/.claude/skills` in a Claude mound, `~/.agents/skills` in a Codex one. Draugr does not select that
@@ -328,8 +336,8 @@ path, and does not need to. Each agent reads the path that it gets.
 > That works in both directions, and it is why `dr-skills` exists. There is one namespace, with no
 > partition for each agent. Thus your claude mounds read next what a codex mound leaves behind.
 
-None of this changes the security half. The sandbox can write to the mount, whether or not the agent
-reads it. That is why the store gets a review, and is not trusted. `dr-skills` also counts hidden
+On the older writable mount, a sandbox can change the store whether or not the agent reads it.
+That is why the store gets a review. `dr-skills` also counts hidden
 directories, because Claude loads a store entry named `.something` as each other skill. Measured: a
 `.hidden-probe` in the store shows in the own list of available skills of Claude.
 

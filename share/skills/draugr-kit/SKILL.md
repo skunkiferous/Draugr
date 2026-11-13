@@ -5,6 +5,31 @@ description: Find what a project needs to build in a Draugr sandbox, and write i
 
 # Build the kit of a project from inside the mound
 
+Check `sbx --version` and the existing kit before editing it. On sbx 0.53, built-in
+agents use v3 and require v3 mixins. `dr-init` writes that format on current sbx.
+The v2 command examples below describe the older sbx 0.37 baseline; do not combine
+them with a v3 workload. A v3 network/setup example is:
+
+```yaml
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow: [packages.example.com]
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: "apt-get update && apt-get install -y jq"
+          user: "0"
+          description: Install jq
+```
+
+Validate the actual kit with `dr-kit validate`. Keep existing user kits for an
+explicit migration; changing only the schema version does not translate fields.
+
 You run in a sandbox, a "mound", that Draugr created. It has its own kernel and a
 **default-deny network**. A build that works on the host can fail here only
 because a host that it needs is not allowed yet.

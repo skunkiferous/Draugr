@@ -254,6 +254,14 @@ fi
 # over the configuration" chooses the SOURCE of the arguments. No source can
 # continue a session that does not exist. The message below names the source,
 # so nothing happens in silence.
+# A native subcommand needs an argument-aware adapter. In particular, Codex's
+# -c takes a value and must never be mistaken for Claude's continue flag.
+dr_agent_session_prepare "$DR_REPO" ${agent_args[0]+"${agent_args[@]}"}
+agent_args=(${DR_AGENT_SESSION_ARGS[0]+"${DR_AGENT_SESSION_ARGS[@]}"})
+if [ -n "$DR_AGENT_SESSION_DROPPED" ]; then
+    dr_info "$DRAUGR_SANDBOX has no session to continue; starting fresh"
+    dr_info "dropped $DR_AGENT_SESSION_DROPPED for this run"
+fi
 sess_flags=(); sess_keep=(); sess_drop=()
 mapfile -t sess_flags < <(dr_agent_session_flags)
 if [ ${#agent_args[@]} -gt 0 ] && [ ${#sess_flags[@]} -gt 0 ]; then
@@ -334,8 +342,15 @@ if [ "$DRAUGR_ATTACH" = ssh ]; then
 else
     # For an empty array, ${arr[0]+-- "${arr[@]}"} expands to nothing, not to
     # one empty string. Thus no extra "--" goes to the agent.
-    dr_sbx run --name "$DRAUGR_SANDBOX" \
-        ${agent_args[0]+-- "${agent_args[@]}"} || rc=$?
+    if [ -n "$DRAUGR_MODEL$DRAUGR_ENV" ] || { [ "$DRAUGR_AGENT" = codex ] && [ -n "$DRAUGR_PLUGIN_STORE" ]; }; then
+        # Both transports must apply the same provider and environment setup.
+        mound=$(dr_path_mound "$DR_REPO")
+        remote=$(dr_attach_remote "$mound" "$DRAUGR_AGENT" ${agent_args[0]+"${agent_args[@]}"})
+        dr_sbx exec -it "$DRAUGR_SANDBOX" -- bash -c "$remote" || rc=$?
+    else
+        dr_sbx run --name "$DRAUGR_SANDBOX" \
+            ${agent_args[0]+-- "${agent_args[@]}"} || rc=$?
+    fi
 fi
 
 # An exit of the agent is normal, and a non-zero code from it is normal too.

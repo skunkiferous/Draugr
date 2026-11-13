@@ -1,5 +1,10 @@
 # Claude Code plugins
 
+The detailed measurements below use sbx 0.37.1. Current sbx built-in agents use v3
+kits; `dr-plugin kit` selects that format for current installations. Older generated
+kits and project mixins need a reviewed migration before composing with v3 agents.
+See [agent support and compatibility](AGENT-SUPPORT.md).
+
 A Claude Code *plugin* is a directory with a `.claude-plugin/plugin.json` manifest. It can hold
 `skills/`, `commands/`, `agents/`, `hooks/`, `.mcp.json`, `.lsp.json` and `bin/`. A *marketplace*
 is a repository with a `.claude-plugin/marketplace.json`, which lists one or more plugins. Normal

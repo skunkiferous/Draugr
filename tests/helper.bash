@@ -17,6 +17,12 @@ dr_test_setup() {
     export HOME="$DR_TMP/home"
     mkdir -p "$HOME" "$DRAUGR_CONFIG_HOME"
     : > "$DR_MOCK_LOG"
+    # A custom fixture root can be inside a checkout. Plain-directory tests
+    # must never discover or write the enclosing real repository.
+    local fixture_root
+    if fixture_root=$(dr_win_root 2>/dev/null); then
+        export GIT_CEILING_DIRECTORIES="$fixture_root${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}"
+    fi
 }
 
 dr_test_teardown() {

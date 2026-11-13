@@ -147,7 +147,8 @@ if sbx_path=$(dr_find_sbx 2>/dev/null); then
 
     # An 'ls' that works is the cheapest proof that the daemon runs.
     if "$sbx_path" ls --json >/dev/null 2>&1; then
-        count=$("$sbx_path" ls --json 2>/dev/null | jq '(.sandboxes // []) | length' 2>/dev/null || echo '?')
+        _list=$("$sbx_path" ls --json 2>/dev/null)
+        count=$(dr_sbx_json "$_list" | jq '(.sandboxes // []) | length' 2>/dev/null || echo '?')
         ok "sandbox daemon" "reachable, $count sandbox(es)"
     else
         bad "sandbox daemon" "not reachable" \

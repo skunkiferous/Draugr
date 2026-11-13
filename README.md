@@ -23,7 +23,7 @@ unless `DRAUGR_FORGE` names a VM**. Thus a machine that needs no forge works as 
 
 **WARNING:** [Claude Code](https://claude.ai) "vibe-coded" this full project.
 
-> **Status: 0.6.0, ready to use.** Each command in the tables below exists and has tests. The
+> **Status: 0.7.0, with changes under Unreleased.** Each command in the tables below exists and has tests. The
 > mechanics were tested with `sbx` v0.37.1 on Windows 11 + WSL2. Only its author used it until now, so
 > expect rough edges in the places that nobody tried.
 >
@@ -38,6 +38,7 @@ unless `DRAUGR_FORGE` names a VM**. Thus a machine that needs no forge works as 
 | [docs/WORKFLOW.md](docs/WORKFLOW.md) | The daily loop, review, data, memory, skills |
 | [docs/CONFIG.md](docs/CONFIG.md) | Each `DRAUGR_*` key, and what happens if you get it wrong |
 | [docs/CLAUDE_PLUGINS.md](docs/CLAUDE_PLUGINS.md) | Claude Code plugins in a mound, with no install on your host |
+| [docs/AGENT-SUPPORT.md](docs/AGENT-SUPPORT.md) | Claude/Codex support, native plugins, recovery, models, and compatibility |
 | [docs/FORGE.md](docs/FORGE.md) | The optional Windows VM: what it is for, and the boundary that it keeps |
 | [docs/SECURITY.md](docs/SECURITY.md) | What the agent can and cannot reach, and how we measured it |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptoms, causes, fixes |
@@ -523,7 +524,7 @@ only on Windows loopback. WSL cannot reach that across its NAT, and the port cha
 | `dr-plugin add <owner>/<repo>` | Register the **marketplace**, and install each plugin that it lists |
 | `dr-plugin add <owner>/<repo> <plugin>…` | The same, but install only the plugins that you name |
 | `dr-plugin update` | Refresh the catalogs and the plugins |
-| `dr-plugin remove <plugin>@<mkt>` | Uninstall, deregister, disable, and really free the space |
+| `dr-plugin remove <plugin>@<mkt>` | Remove it from the selected agent's library; use `clean` to reclaim retained Codex package versions |
 | `dr-plugin enable` / `disable` | Only the switch. No mound, instant |
 | `dr-plugin clean` | Remove old versions. Nothing else removes them |
 | `dr-plugin rollback` | Go back to the previous library |
@@ -603,7 +604,8 @@ A plugin is **code that runs**: hooks, MCP servers, and `bin/` on the `PATH` of 
 it is never installed on your host. `dr-plugin` builds the library inside a mound that it then
 removes. Your host only stores the result, mounted back read-only. Set `DRAUGR_PLUGIN_STORE`, then
 run `dr-plugin` with no arguments. It prints the next steps. Refer to
-[docs/CLAUDE_PLUGINS.md](docs/CLAUDE_PLUGINS.md).
+[docs/CLAUDE_PLUGINS.md](docs/CLAUDE_PLUGINS.md) for Claude and
+[docs/AGENT-SUPPORT.md](docs/AGENT-SUPPORT.md#codex-plugins) for Codex.
 `dr-mem import` refuses to run unattended on a store that Draugr did not write itself. Its own
 export has a marker that names the repo. Any other file holds the instructions of somebody else,
 and gets a prompt. With `DRAUGR_MEM_SYNC=auto`, the import happens on `dr-up`, and the export on
@@ -625,12 +627,10 @@ and must never overwrite what the agent learned after it.
 > after the copy. `sbx cp` writes files as `root:root`, but the agent runs as uid 1000, and cannot
 > write new memories without the fix.
 
-**Memory is the one thing that is different for each agent**, so it is in `lib/agents/<agent>.sh`.
-There is one file for each agent, and `lib/agents/default.sh` for an agent that nobody measured.
-Codex has a fully different shape. It does not file memory by project, it is half markdown and
-half SQLite, and it is off until you enable it. The same four commands cover it. All the other
-parts never knew which agent was in the mound, and still do not: attach, Ctrl+Z, the clone, kits,
-`dr-sync`, `dr-send`, `dr-data`. Refer to [docs/WORKFLOW.md](docs/WORKFLOW.md#memory).
+Memory, session selection, model providers, and plugins have native implementations for each
+agent. Codex context transfer includes sessions and selected databases, requires a quiet agent,
+and preserves memory-generation settings. The Git and data workflows stay shared. Refer to
+[agent support](docs/AGENT-SUPPORT.md) and [memory workflow](docs/WORKFLOW.md#memory).
 
 Both agents also read an instruction file from the repo: `AGENTS.md` for Codex, `CLAUDE.md` for
 Claude Code. They need nothing from Draugr. They are committed files, so they arrive with the clone,
@@ -711,6 +711,10 @@ data that must be at a specific path in the working tree.
 ---
 
 ## Safety model
+
+The detailed measurements below describe sbx 0.37.1. On sbx 0.53, new mounds mount shared skills
+read-only by default. Recheck permissions after an upgrade; see the
+[current compatibility notes](docs/AGENT-SUPPORT.md#compatibility-and-evidence).
 
 What the agent can and cannot see. A direct test showed each line:
 

@@ -19,6 +19,18 @@ fi
 
 sub=${1:-}
 
+# Version-sensitive generated kits can be tested without changing old fixtures.
+if [ "$sub" = --version ]; then
+    [ -z "${DR_MOCK_VERSION:-}" ] || printf 'sbx version %s\n' "$DR_MOCK_VERSION"
+    exit 0
+fi
+
+# Replay a captured native envelope independently of the legacy renderer.
+if [ "$sub" = ls ] && [ -n "${DR_MOCK_JSON:-}" ]; then
+    printf '%s\n' "$DR_MOCK_JSON"
+    exit 0
+fi
+
 # When DR_MOCK_DAEMON_ERR is set, a create writes it into a daemon.log, at the
 # path that dr_sbx_daemon_log gets from the location of this binary. The real
 # sandboxd records there the cause of a failure that sbx reports as a bare 500.
@@ -92,8 +104,8 @@ ls)
             # and EMPTY leaves the field out, as an older sbx did, so that "sbx
             # does not say" is testable and not only imaginable.
             _agent_line=
-            if [ -n "${DR_MOCK_AGENT-claude}" ]; then
-                _agent_line=$(printf '      "agent": "%s",' "${DR_MOCK_AGENT:-claude}")
+            if [ -n "${DR_MOCK_AGENT-${DRAUGR_AGENT:-claude}}" ]; then
+                _agent_line=$(printf '      "agent": "%s",' "${DR_MOCK_AGENT-${DRAUGR_AGENT:-claude}}")
             fi
             printf '%s' "$_sep"
             cat <<EOF
@@ -184,6 +196,11 @@ cp)
     src=$(translate "$1")
     dst=$(translate "$2")
     [ -e "$src" ] || { printf 'mock sbx: path %s not found\n' "$1" >&2; exit 1; }
+    # A boundary assertion must see what was uploaded, not only what survived import.
+    if [ -n "${DR_MOCK_CP_CAPTURE:-}" ]; then
+        mkdir -p "$DR_MOCK_CP_CAPTURE"
+        cp -a "$src" "$DR_MOCK_CP_CAPTURE/"
+    fi
     cp -a "$src" "$dst"
     ;;
 

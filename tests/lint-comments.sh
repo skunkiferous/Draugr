@@ -34,7 +34,7 @@ status=0
 # that CI lints, and you do not need to remember a long command.
 if [ $# -eq 0 ]; then
     root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-    set -- "$root"/lib/common.sh "$root"/lib/agents/*.sh "$root"/lib/forge/*.sh "$root"/install.sh \
+    set -- "$root"/lib/common.sh "$root"/lib/agents/*.sh "$root"/lib/plugins/*.sh "$root"/lib/forge/*.sh "$root"/install.sh \
            "$root"/bin/* "$root"/tests/mocks/sbx "$root"/tests/helper.bash \
            "$root"/tests/lint-comments.sh "$root"/tests/executable-paths.sh \
            "$root"/tests/lint-inverted.sh "$root"/tests/lint-native-stderr.sh \

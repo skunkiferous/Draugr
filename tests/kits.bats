@@ -829,6 +829,36 @@ make_named_kit() {
     [[ "$output" != *"composable with claude"* ]]
 }
 
+# --- which kit format dr-init writes -----------------------------------------
+#
+# sbx 0.51 moved the built-in agent names to published kits and the shell agent
+# to a v3 kit, and a v3 kit cannot compose with a v2 one. Thus the format comes
+# from the version of sbx. An sbx that says nothing gets the older format,
+# because unknown is not new, and a v3 kit on a v2 built-in cannot compose.
+
+@test "dr-init: an sbx with v3 built-in agents gets the v3 template" {
+    DR_MOCK_VERSION=0.51.0 run dr-init
+    [ "$status" -eq 0 ]
+    grep -qx 'schemaVersion: "3"' "$REPO/.draugr/kit/spec.yaml"
+    grep -q 'com.docker.sandbox/network-policy@1' "$REPO/.draugr/kit/spec.yaml"
+    # v3 has no slug rule, so the generator must not write the v2 field.
+    run grep -E '^name:' "$REPO/.draugr/kit/spec.yaml"
+    [ "$status" -ne 0 ]
+}
+
+@test "dr-init: an sbx older than those built-ins gets the v2 template" {
+    DR_MOCK_VERSION=0.50.0 run dr-init
+    [ "$status" -eq 0 ]
+    grep -qx 'schemaVersion: "2"' "$REPO/.draugr/kit/spec.yaml"
+    grep -qx 'caps:' "$REPO/.draugr/kit/spec.yaml"
+}
+
+@test "dr-init: an sbx that reports no version gets the v2 template" {
+    run dr-init
+    [ "$status" -eq 0 ]
+    grep -qx 'schemaVersion: "2"' "$REPO/.draugr/kit/spec.yaml"
+}
+
 @test "dr-init: the kit it generates is composable in a directory named claude" {
     # The regression, from end to end. dr-init made the slug from the directory
     # name with no change. Thus C:\Code\claude gave `name: claude`. That is

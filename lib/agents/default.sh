@@ -93,6 +93,12 @@ dr_agent_mem_list()    { return 0; }
 dr_agent_mem_pack()    { return 1; }
 dr_agent_mem_unpack()  { return 1; }
 
+# Filter a host source before it enters repository staging or the mound.
+# The mode is store, source, or host. Unknown agents must never copy a home.
+dr_agent_mem_prepare_source() { return 1; }
+dr_agent_mem_import_ready() { return 0; }
+dr_agent_mem_init() { return 0; }
+
 # There is nothing to add for this agent. Draugr cannot make its status report.
 dr_agent_mem_status_extra() { return 0; }
 
@@ -139,6 +145,18 @@ dr_agent_plugin_cli()       { return 1; }
 # changes a failure here into a refusal.
 dr_agent_model_supported() { return 1; }
 dr_agent_model_env()       { return 1; }
+
+# Native command arguments can configure providers that do not use env vars.
+dr_agent_model_args() { return 0; }
+dr_agent_launch_args() { return 0; }
+
+# The default preserves every argument, including unknown subcommands.
+# shellcheck disable=SC2034  # dr-go reads the prepared array and explanation.
+dr_agent_session_prepare() {
+    shift
+    DR_AGENT_SESSION_ARGS=("$@")
+    DR_AGENT_SESSION_DROPPED=
+}
 
 # There is also no known layout on the host. Thus --from-host has nothing to
 # give. The hint tells which of the two reasons it is: nothing is there, or

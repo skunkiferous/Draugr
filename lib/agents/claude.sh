@@ -133,6 +133,18 @@ dr_agent_mem_unpack() {
                   cp -a "$1/." "$2/"' "$stage" "$dir"
 }
 
+# Claude's source already is one project's memory directory. Reject links
+# before copying, since staging itself is visible through the source mount.
+dr_agent_mem_prepare_source() {
+    dr_mem_validate_tree "$1" || return 1
+    mkdir -p "$2"
+    cp -a "$1/." "$2/"
+}
+
+# Claude imports markdown, not a live database.
+dr_agent_mem_import_ready() { return 0; }
+dr_agent_mem_init() { return 0; }
+
 # dr_agent_mem_host_dir <repo>: the live Claude memory of the host for this repo,
 # if there is one. Two installs are possible, and they use different keys:
 # Claude Code on Windows, and Claude Code in WSL. The function prints the first
@@ -281,6 +293,18 @@ dr_agent_plugin_cli() {
 # ---------------------------------------------------------------------------
 
 dr_agent_model_supported() { return 0; }
+
+# Claude uses the environment contract below, with no extra provider flags.
+dr_agent_model_args() { return 0; }
+dr_agent_launch_args() { return 0; }
+
+# The existing flag-specific continuation handling remains in dr-go.
+# shellcheck disable=SC2034  # dr-go reads the prepared array and explanation.
+dr_agent_session_prepare() {
+    shift
+    DR_AGENT_SESSION_ARGS=("$@")
+    DR_AGENT_SESSION_DROPPED=
+}
 
 # dr_agent_model_env <url> <model> <fast>: one KEY=value on each line, for the rcfile.
 dr_agent_model_env() {

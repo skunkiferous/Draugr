@@ -109,15 +109,23 @@ Then edit the kit. Put `npm ci`, `uv sync` and `apt-get install -y libfoo-dev` t
 domains that your build needs:
 
 ```yaml
-caps:
-  network:
-    allow:
-      - internal-registry.example.com
-commands:
-  install:
-    - command: "npm ci"
-      user: "1000"
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          - internal-registry.example.com
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: "npm ci"
+          user: "1000"
+          description: Install the dependencies
 ```
+
+That is the v3 spelling, which current `sbx` reads. An older `sbx` reads the v2 spelling instead,
+with `caps:` and `commands:` at the top level. `dr-init` writes whichever one your `sbx` accepts,
+so copy the shape of the file that it wrote rather than this block if the two differ.
 
 > **Your kit is not the full allowlist.** `sbx` has ~190 machine allow rules. They cover package
 > managers, OS packages, the common code hosts and the AI endpoints. `npm`, `pip` and `github.com`

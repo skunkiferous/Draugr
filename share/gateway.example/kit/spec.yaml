@@ -1,11 +1,5 @@
-schemaVersion: "2"
-kind: mixin
-name: gateway
-displayName: Draugr gateway
-description: Allow-all forward proxy for the Unreal VM. The sbx policy is the allowlist.
+# syntax=docker/sandbox-kit:3
 
-caps:
-  network:
     # ONE allow is here, and the rule that kept this list empty still applies. Each
     # EGRESS HOST (each host that the tools of the guest connect to) is in a mixin. The
     # Unreal hosts are in kits/unreal. The hosts that each Windows VM needs for its
@@ -27,225 +21,234 @@ caps:
     # First, password authentication was turned off in the sshd of the guest (a test
     # showed that it now offers publickey only). That order is important. A mound that
     # can reach an sshd that accepts passwords can sit and guess one.
-    allow:
-      - localhost:18022
-    #
-    # The deny list narrows the machine-wide defaults of sbx (~190 allows, see
-    # `dr-policy --defaults`) to what the tools of the VM used in the tests. Each
-    # default that the VM never used is closed.
-    # Generated from the sbx 0.37.1 defaults. After an sbx upgrade, read
-    # `dr-policy --defaults` again for new rules.
-    #
-    # Left open on purpose:
-    #   default-cert-validation, all of it: revocation checks (D6)
-    #   archive.ubuntu.com, security.ubuntu.com: the own install of this gateway
-    #   **.docker.com: the sbx base image lists download.docker.com as an apt source,
-    #     so apt-get update fails without it (a test showed this). A push to Docker
-    #     Hub goes to docker.io, which stays denied
-    #   **.github.com, github.com, **.githubusercontent.com: kits/unreal needs them
-    #     (the Unreal plugin of Visual Studio, and Unreal source builds), and deny wins
-    #   **.visualstudio.com, visualstudio.com: the license check of kits/unreal is there
-    #   login.microsoftonline.com: the Visual Studio sign-in keeps the Community license
-    #   challenges.cloudflare.com, www.google.com, **.googleapis.com: seen in the tests
-    #     (sign-in challenge, the editor, browser background), except storage. below
-    #   **.astral.sh, pypi.org, files.pythonhosted.org: kits/base allows them, so that the
-    #     guest can install uv, a Windows Python, and the UIA MCP server. Deny wins.
-    #     Removed from the package-manager block below. All else there stays closed,
-    #     so this is only Python.
-    #   code.visualstudio.com, vscode.download.prss.microsoft.com: REMOVED from the deny
-    #     list, and allowed in kits/base. Unreal Angelscript needs VS Code and its
-    #     "Unreal Angelscript" extension. Deny wins over allow, so while these were
-    #     here, `dr-policy --allow` was not able to open them.
-    #   vscode.dev: REMOVED from the deny list. The reason for the deny was "that is the
-    #     browser editor, which nothing needs". That reason was WRONG. It judged the host
-    #     by its famous content, not by what the path does. vscode.dev/redirect is the
-    #     OAuth redirect broker of DESKTOP VS Code. A GitHub OAuth app must register one
-    #     fixed redirect URI. A random 127.0.0.1 port cannot be registered. Thus
-    #     Microsoft registered vscode.dev/redirect, which sends the browser to the
-    #     loopback URL in `state`. The deny broke GitHub sign-in in the guest AFTER the
-    #     password and the 2FA code were both accepted. It showed as
-    #     ERR_TUNNEL_CONNECTION_FAILED on a vscode.dev URL. That looks like a dead
-    #     website, not like a rule that you wrote. Now allowed in kits/base.
-    #   github.githubassets.com, **.gstatic.com: the asset hosts for the GitHub and Google
-    #     sign-in pages, allowed in kits/base. A blocked asset host gives no error. The
-    #     HTML arrives, but the CSS and JS do not. The page shows as plain text with no
-    #     style, and its buttons do nothing. A TEST SHOWED exactly that on the GitHub
-    #     login page. It looks like a broken or fake site.
-    #   nothing above the Microsoft-account hosts of kits/base. TESTED: no line below
-    #     matches "**.live.com", "**.msauth.net", "**.msftauth.net", or
-    #     lgincdnmsftuswe2.azureedge.net. Keep it that way. A deny of an apex above one
-    #     of them breaks each Microsoft sign-in in the guest. It shows as a *network*
-    #     error from inside a Windows dialog, and that costs a day to diagnose.
-    #
-    # deny wins over allow, in all places. `dr-policy --allow` can NOT open a host
-    # that is here. First delete its line. Then allow it in its mixin: kits/unreal for
-    # an Unreal host, kits/base for a host that each Windows VM needs.
-    # NEVER deny "**". It also blocks kits/unreal.
-    deny:
-      # default-ai-services: AI services. Nothing in the VM talks to a model. The agent does that from its own mound
-      - "**.chatgpt.com"
-      - "**.cursor.sh"
-      - "**.factory.ai"
-      - "**.oaistatic.com"
-      - "**.oaiusercontent.com"
-      - "**.openai.com"
-      - api.anthropic.com
-      - api.perplexity.ai
-      - api.workos.com
-      - cdn.openaimerge.com
-      - chatgpt.com
-      - claude.com
-      - cursor.com
-      - downloads.claude.ai
-      - factory.ai
-      - gemini.google.com
-      - generativelanguage.googleapis.com
-      - mcp-proxy.anthropic.com
-      - models.dev
-      - platform.claude.com
-      - play.googleapis.com
-      - statsig.anthropic.com
-      # default-package-managers: language package managers. The Epic, Unreal, and Visual Studio tools use none
-      - "**.bun.sh"
-      - "**.gradle.org"
-      - "**.packagist.org"
-      - "**.yarnpkg.com"
-      - apache.org
-      - bootstrap.pypa.io
-      - bun.sh
-      - cocoapods.org
-      - cpan.org
-      - crates.io
-      - dot.net
-      - dotnet.microsoft.com
-      - eclipse.org
-      - golang.org
-      - goproxy.io
-      - gradle.org
-      - haskell.org
-      - hex.pm
-      - index.crates.io
-      - java.com
-      - java.net
-      - maven.org
-      - metacpan.org
-      - nodejs.org
-      - nodesource.com
-      - npm.duckdb.org
-      - npmjs.com
-      - npmjs.org
-      - nuget.org
-      - packagist.com
-      - packagist.org
-      - pkg.go.dev
-      - proxy.golang.org
-      - pub.dev
-      - pypa.io
-      - pypi.python.org
-      - pythonhosted.org
-      - registry.npmjs.org
-      - repo.maven.apache.org
-      - ruby-lang.org
-      - rubygems.org
-      - rubyonrails.org
-      - rustup.rs
-      - rvm.io
-      - sh.rustup.rs
-      - spring.io
-      - static.crates.io
-      - static.rust-lang.org
-      - sum.golang.org
-      - swift.org
-      - tuf-repo-cdn.sigstore.dev
-      - yarnpkg.com
-      - ziglang.org
-      # default-code-and-containers: code hosts and container registries. GitHub and **.docker.com stay open, see above
-      - "**.data.mcr.microsoft.com"
-      - "**.docker.io"
-      - "**.gcr.io"
-      - "**.githubcopilot.com"
-      - "**.gitlab.com"
-      - "**.production.cloudflare.docker.com"
-      - "**.production.cloudfront.docker.com"
-      - bitbucket.org
-      - dhi.io
-      - docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com
-      - docker.com
-      - docker.io
-      - gcr.io
-      - ghcr.io
-      - gitlab.com
-      - k8s.io
-      - launchpad.net
-      - mcr.microsoft.com
-      - ppa.launchpad.net
-      - production.cloudflare.docker.com
-      - production.cloudfront.docker.com
-      - public.ecr.aws
-      - quay.io
-      - registry.k8s.io
-      - sourceforge.net
-      # default-cloud-infrastructure: cloud services, and some accept uploads. The tools use none
-      - "**.amazonaws.com"
-      - "**.blob.core.windows.net"
-      - "**.googleusercontent.com"
-      - "**.gvt1.com"
-      - "**.hashicorp.com"
-      - "**.public.blob.vercel-storage.com"
-      - apis.google.com
-      - app.daytona.io
-      - azure.com
-      - binaries.prisma.sh
-      - clerk.com
-      - csp.withgoogle.com
-      - dev.azure.com
-      - dl.google.com
-      - fastly.com
-      - figma.com
-      - hashicorp.com
-      - jsdelivr.net
-      - json-schema.org
-      - json.schemastore.org
-      - mise-versions.jdx.dev
-      - mise.run
-      - packages.microsoft.com
-      - play.google.com
-      - playwright.azureedge.net
-      - storage.googleapis.com
-      - supabase.com
-      - unpkg.com
-      - vercel.com
-      # default-os-packages: Linux package archives. The gateway installs only from Ubuntu (kept open)
-      - "**.debian.org"
-      - alpinelinux.org
-      - apt.llvm.org
-      - archlinux.org
-      - centos.org
-      - debian.org
-      - dl-cdn.alpinelinux.org
-      - fedoraproject.org
-      - packagecloud.io
-      - ports.ubuntu.com
-      - ubuntu.com
+schemaVersion: "3"
+kind: mixin
+displayName: Draugr gateway
+description: Allow-all forward proxy for the Unreal VM. The sbx policy is the allowlist.
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          - localhost:18022
+        #
+        # The deny list narrows the machine-wide defaults of sbx (~190 allows, see
+        # `dr-policy --defaults`) to what the tools of the VM used in the tests. Each
+        # default that the VM never used is closed.
+        # Generated from the sbx 0.37.1 defaults. After an sbx upgrade, read
+        # `dr-policy --defaults` again for new rules.
+        #
+        # Left open on purpose:
+        #   default-cert-validation, all of it: revocation checks (D6)
+        #   archive.ubuntu.com, security.ubuntu.com: the own install of this gateway
+        #   **.docker.com: the sbx base image lists download.docker.com as an apt source,
+        #     so apt-get update fails without it (a test showed this). A push to Docker
+        #     Hub goes to docker.io, which stays denied
+        #   **.github.com, github.com, **.githubusercontent.com: kits/unreal needs them
+        #     (the Unreal plugin of Visual Studio, and Unreal source builds), and deny wins
+        #   **.visualstudio.com, visualstudio.com: the license check of kits/unreal is there
+        #   login.microsoftonline.com: the Visual Studio sign-in keeps the Community license
+        #   challenges.cloudflare.com, www.google.com, **.googleapis.com: seen in the tests
+        #     (sign-in challenge, the editor, browser background), except storage. below
+        #   **.astral.sh, pypi.org, files.pythonhosted.org: kits/base allows them, so that the
+        #     guest can install uv, a Windows Python, and the UIA MCP server. Deny wins.
+        #     Removed from the package-manager block below. All else there stays closed,
+        #     so this is only Python.
+        #   code.visualstudio.com, vscode.download.prss.microsoft.com: REMOVED from the deny
+        #     list, and allowed in kits/base. Unreal Angelscript needs VS Code and its
+        #     "Unreal Angelscript" extension. Deny wins over allow, so while these were
+        #     here, `dr-policy --allow` was not able to open them.
+        #   vscode.dev: REMOVED from the deny list. The reason for the deny was "that is the
+        #     browser editor, which nothing needs". That reason was WRONG. It judged the host
+        #     by its famous content, not by what the path does. vscode.dev/redirect is the
+        #     OAuth redirect broker of DESKTOP VS Code. A GitHub OAuth app must register one
+        #     fixed redirect URI. A random 127.0.0.1 port cannot be registered. Thus
+        #     Microsoft registered vscode.dev/redirect, which sends the browser to the
+        #     loopback URL in `state`. The deny broke GitHub sign-in in the guest AFTER the
+        #     password and the 2FA code were both accepted. It showed as
+        #     ERR_TUNNEL_CONNECTION_FAILED on a vscode.dev URL. That looks like a dead
+        #     website, not like a rule that you wrote. Now allowed in kits/base.
+        #   github.githubassets.com, **.gstatic.com: the asset hosts for the GitHub and Google
+        #     sign-in pages, allowed in kits/base. A blocked asset host gives no error. The
+        #     HTML arrives, but the CSS and JS do not. The page shows as plain text with no
+        #     style, and its buttons do nothing. A TEST SHOWED exactly that on the GitHub
+        #     login page. It looks like a broken or fake site.
+        #   nothing above the Microsoft-account hosts of kits/base. TESTED: no line below
+        #     matches "**.live.com", "**.msauth.net", "**.msftauth.net", or
+        #     lgincdnmsftuswe2.azureedge.net. Keep it that way. A deny of an apex above one
+        #     of them breaks each Microsoft sign-in in the guest. It shows as a *network*
+        #     error from inside a Windows dialog, and that costs a day to diagnose.
+        #
+        # deny wins over allow, in all places. `dr-policy --allow` can NOT open a host
+        # that is here. First delete its line. Then allow it in its mixin: kits/unreal for
+        # an Unreal host, kits/base for a host that each Windows VM needs.
+        # NEVER deny "**". It also blocks kits/unreal.
+        deny:
+          # default-ai-services: AI services. Nothing in the VM talks to a model. The agent does that from its own mound
+          - "**.chatgpt.com"
+          - "**.cursor.sh"
+          - "**.factory.ai"
+          - "**.oaistatic.com"
+          - "**.oaiusercontent.com"
+          - "**.openai.com"
+          - api.anthropic.com
+          - api.perplexity.ai
+          - api.workos.com
+          - cdn.openaimerge.com
+          - chatgpt.com
+          - claude.com
+          - cursor.com
+          - downloads.claude.ai
+          - factory.ai
+          - gemini.google.com
+          - generativelanguage.googleapis.com
+          - mcp-proxy.anthropic.com
+          - models.dev
+          - platform.claude.com
+          - play.googleapis.com
+          - statsig.anthropic.com
+          # default-package-managers: language package managers. The Epic, Unreal, and Visual Studio tools use none
+          - "**.bun.sh"
+          - "**.gradle.org"
+          - "**.packagist.org"
+          - "**.yarnpkg.com"
+          - apache.org
+          - bootstrap.pypa.io
+          - bun.sh
+          - cocoapods.org
+          - cpan.org
+          - crates.io
+          - dot.net
+          - dotnet.microsoft.com
+          - eclipse.org
+          - golang.org
+          - goproxy.io
+          - gradle.org
+          - haskell.org
+          - hex.pm
+          - index.crates.io
+          - java.com
+          - java.net
+          - maven.org
+          - metacpan.org
+          - nodejs.org
+          - nodesource.com
+          - npm.duckdb.org
+          - npmjs.com
+          - npmjs.org
+          - nuget.org
+          - packagist.com
+          - packagist.org
+          - pkg.go.dev
+          - proxy.golang.org
+          - pub.dev
+          - pypa.io
+          - pypi.python.org
+          - pythonhosted.org
+          - registry.npmjs.org
+          - repo.maven.apache.org
+          - ruby-lang.org
+          - rubygems.org
+          - rubyonrails.org
+          - rustup.rs
+          - rvm.io
+          - sh.rustup.rs
+          - spring.io
+          - static.crates.io
+          - static.rust-lang.org
+          - sum.golang.org
+          - swift.org
+          - tuf-repo-cdn.sigstore.dev
+          - yarnpkg.com
+          - ziglang.org
+          # default-code-and-containers: code hosts and container registries. GitHub and **.docker.com stay open, see above
+          - "**.data.mcr.microsoft.com"
+          - "**.docker.io"
+          - "**.gcr.io"
+          - "**.githubcopilot.com"
+          - "**.gitlab.com"
+          - "**.production.cloudflare.docker.com"
+          - "**.production.cloudfront.docker.com"
+          - bitbucket.org
+          - dhi.io
+          - docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com
+          - docker.com
+          - docker.io
+          - gcr.io
+          - ghcr.io
+          - gitlab.com
+          - k8s.io
+          - launchpad.net
+          - mcr.microsoft.com
+          - ppa.launchpad.net
+          - production.cloudflare.docker.com
+          - production.cloudfront.docker.com
+          - public.ecr.aws
+          - quay.io
+          - registry.k8s.io
+          - sourceforge.net
+          # default-cloud-infrastructure: cloud services, and some accept uploads. The tools use none
+          - "**.amazonaws.com"
+          - "**.blob.core.windows.net"
+          - "**.googleusercontent.com"
+          - "**.gvt1.com"
+          - "**.hashicorp.com"
+          - "**.public.blob.vercel-storage.com"
+          - apis.google.com
+          - app.daytona.io
+          - azure.com
+          - binaries.prisma.sh
+          - clerk.com
+          - csp.withgoogle.com
+          - dev.azure.com
+          - dl.google.com
+          - fastly.com
+          - figma.com
+          - hashicorp.com
+          - jsdelivr.net
+          - json-schema.org
+          - json.schemastore.org
+          - mise-versions.jdx.dev
+          - mise.run
+          - packages.microsoft.com
+          - play.google.com
+          - playwright.azureedge.net
+          - storage.googleapis.com
+          - supabase.com
+          - unpkg.com
+          - vercel.com
+          # default-os-packages: Linux package archives. The gateway installs only from Ubuntu (kept open)
+          - "**.debian.org"
+          - alpinelinux.org
+          - apt.llvm.org
+          - archlinux.org
+          - centos.org
+          - debian.org
+          - dl-cdn.alpinelinux.org
+          - fedoraproject.org
+          - packagecloud.io
+          - ports.ubuntu.com
+          - ubuntu.com
 
-commands:
-  install:
-    - command: "apt-get update -qq"
-      user: "0"
-      description: Refresh package lists
-    - command: "env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tinyproxy"
-      user: "0"
-      description: Install tinyproxy
-    # Samba serves to the VM the directories that DRAUGR_MOUNTS gave this mound.
-    # SMB, not sftp, because the guest needs no install for it. Also, it reports
-    # a refused write correctly. A test showed that sshfs/WinFsp reported a
-    # refused delete as a success. .draugr/hooks/post-up configures and starts
-    # it, for the same reason as tinyproxy. Startup commands die at the next
-    # restart of sandboxd.
-    - command: "env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq samba"
-      user: "0"
-      description: Install the SMB server that shares the vault with the VM
-  # NO commands.startup, on purpose. A test on sbx 0.37.1 showed that after a
-  # restart of sandboxd, the startup commands of a sandbox never run again. Each
-  # Windows reboot restarts it. Thus .draugr/hooks/post-up starts tinyproxy at
-  # each dr-up.
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: "apt-get update -qq"
+          user: "0"
+          description: Refresh package lists
+        - command: "env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tinyproxy"
+          user: "0"
+          description: Install tinyproxy
+        # Samba serves to the VM the directories that DRAUGR_MOUNTS gave this mound.
+        # SMB, not sftp, because the guest needs no install for it. Also, it reports
+        # a refused write correctly. A test showed that sshfs/WinFsp reported a
+        # refused delete as a success. .draugr/hooks/post-up configures and starts
+        # it, for the same reason as tinyproxy. Startup commands die at the next
+        # restart of sandboxd.
+        - command: "env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq samba"
+          user: "0"
+          description: Install the SMB server that shares the vault with the VM
+      # NO commands.startup, on purpose. A test on sbx 0.37.1 showed that after a
+      # restart of sandboxd, the startup commands of a sandbox never run again. Each
+      # Windows reboot restarts it. Thus .draugr/hooks/post-up starts tinyproxy at
+      # each dr-up.

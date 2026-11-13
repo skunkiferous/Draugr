@@ -39,6 +39,7 @@ if [ "$format" = json ]; then
 fi
 
 if [ "$format" = names ]; then
+    json=$(dr_sbx_json "$json") || dr_die "sbx returned an invalid sandbox list"
     printf '%s' "$json" | jq -r '(.sandboxes // [])[].name'
     exit 0
 fi
@@ -56,6 +57,7 @@ fi
 # join("\t"), not the more usual @tsv, because @tsv escapes backslashes. Each
 # workspace here is a Windows path, and C:\Code becomes C:\\Code. These four
 # fields cannot hold a tab, so a plain join is safe.
+json=$(dr_sbx_json "$json") || dr_die "sbx returned an invalid sandbox list"
 rows=$(printf '%s' "$json" | jq -r \
     '(.sandboxes // [])[]
      | [(.name // "-"), (.agent // "-"), (.status // "-"),

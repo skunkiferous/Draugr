@@ -1,8 +1,16 @@
 # Safety model
 
-What the agent can and cannot reach, and how we found each claim. We measured all on this page with
-Docker Sandboxes `v0.37.1` on Windows 11 + WSL2. We ran the thing and read the result. We did not
-only read documentation.
+What the agent can and cannot reach, and how we found each claim. The original measurements below
+use Docker Sandboxes `v0.37.1` on Windows 11 + WSL2. They are version-specific. On **0.53.0**, a
+new mound has a read-only shared skills mount, measured for both a claude and a codex mound; the
+source mount remains read-only.
+The writable-store claims below describe the older baseline. See [current agent evidence](AGENT-SUPPORT.md#compatibility-and-evidence).
+
+Codex context transfer selects approved state before host staging or upload and refuses a global
+host home. It excludes authentication, native configuration, logs, and plugin connection data.
+Imports require a quiet target and preserve feature consent. Plugin publications contain inert
+package files; their private runtime data and hook trust remain in each consumer mound. These
+controls do not make imported instructions or third-party plugins trustworthy: review them.
 
 Draugr rests on one idea: the possible damage is so small that "let it run" is the *responsible*
 choice. That is worth something only if the boundary is where you think it is. Thus the two places
@@ -59,6 +67,12 @@ a permission.
 `…\DockerSandboxes\sandboxes\state\agent-skills\`, and is shared on purpose, so that skills stay
 after `sbx rm`, and each sandbox can use them. Tested: a file written inside the mound showed on
 the host at once.
+
+**sbx 0.53 closes this door, but only for a mound that it builds.** A write to the store fails in a
+new mound, measured in a claude mound at `~/.claude/skills` and in a codex mound at
+`~/.agents/skills`. The mode is fixed when the mound is created, so an upgrade alone changes
+nothing: a mound built by an older sbx keeps the writable store, and the rest of this section
+describes it. Recreate a mound to close the door for that mound.
 
 That is a useful feature with a real result. It is the one path by which a sandbox can put bytes on
 your machine. It is **shared by all your mounds**, and it **lives longer than the sandbox that wrote

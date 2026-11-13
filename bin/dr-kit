@@ -502,7 +502,11 @@ adopt)
                 if (s ~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) return s
                 return "\"" s "\""
             }
-            !done && /^[[:space:]]*network:[[:space:]]*$/ {
+            # v3 runtime permissions live under a network capability. A
+            # runtime block in another capability is not a network policy.
+            /^[[:space:]]*-[[:space:]]*type:/ { incap = ($0 ~ /com\.docker\.sandbox\/network-policy@1/); innet = 0 }
+            incap && /^[[:space:]]*install:[[:space:]]*$/ { innet = 0 }
+            !done && (/^[[:space:]]*network:[[:space:]]*$/ || (incap && /^[[:space:]]*runtime:[[:space:]]*$/)) {
                 match($0, /^[[:space:]]*/); netind = substr($0, 1, RLENGTH)
                 innet = 1
                 if (mode == "create") {

@@ -1,0 +1,135 @@
+# syntax=docker/sandbox-kit:3
+#
+# .draugr/kit/spec.yaml: what this project needs IN the mound. Commit it.
+#
+# This is a standard sbx kit, not a Draugr invention. It works with plain
+#   sbx run codex --kit .draugr/kit
+# To share it with other repositories, pack it and push it to a registry:
+#   sbx kit pack .draugr/kit && sbx kit push ...
+#
+# Full schema: https://docs.docker.com/ai/sandboxes/customize/
+# The v3 specification: https://github.com/docker/sandbox-kit-spec
+#
+# Make sure that it is correct before a failure tells you:  dr-kit validate
+# See the rules that really apply, defaults included:  dr-policy
+# A changed kit recreates the container. Thus dr-up reports the drift, and does
+# not do it without your knowledge.
+#
+# v3 is the format of the built-in agents of current sbx. It CANNOT compose
+# with a v1 or v2 kit: a v2 file that uses caps: or commands: is refused
+# outright by sbx 0.53, not merely left out. Draugr keeps kit.example for an
+# older sbx, and dr-init writes whichever format your sbx reads.
+#
+# Each spelling below was accepted by `sbx kit validate` on sbx 0.53.0.
+schemaVersion: "3"
+kind: mixin
+
+# Free text, and it keeps the original spelling of the project name. v3 needs
+# no slug: nothing here has the lowercase-and-hyphens rule that v2 `name:` had.
+displayName: @NAME@ development environment
+description: Network rules and setup for the @NAME@ project.
+
+# NO AGENT IS NAMED HERE, and v3 gives no way to name one. In v2 a kit could
+# say `requires: agent: codex`, and sbx then refused to compose it with another
+# agent. v3 `requires:` is a list of CAPABILITY constraints, so that protection
+# is gone. Nothing stops this kit being composed with a different agent now.
+# Keep the file free of anything that only one agent can use, or keep one kit
+# for each agent in a directory with the name of the agent at the end
+# (.draugr/kit.codex/). If that agent is configured, Draugr prefers it.
+
+capabilities:
+  # --- network ---------------------------------------------------------------
+  #
+  # ADDED TO the machine-wide defaults. It does not replace them. sbx ships a
+  # local policy of allow rules for package managers, OS packages, the usual
+  # code hosts, and the AI service endpoints. Thus npm, pip and github.com
+  # already work with nothing listed here.
+  #
+  # Default-deny still applies. sbx refuses each host that matches no rule.
+  # To test a specific host:  dr-policy --check <host>
+  #
+  # The two phases are SEPARATE in v3. `install:` egress is for the creation
+  # commands below; `runtime:` egress is for the agent's session. Access during
+  # the install does not grant access during the session, and Draugr counts
+  # only runtime rules as the permissions that a mound adopted.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow: []
+          # - internal-registry.example.com
+          # - files.example.org
+
+        # deny wins over allow. Use it to cut a hole in a wildcard, or to close
+        # something that the machine-wide defaults allow.
+        #deny:
+        #  - telemetry.example.com
+
+      # Only what the install needs to download. Leave it out if it needs
+      # nothing beyond the defaults.
+      #install:
+      #  allow:
+      #    - deb.debian.org
+
+  # --- setup -----------------------------------------------------------------
+  #
+  # install runs when the sandbox is created, and BEFORE your repository is in
+  # the workspace. At that moment the working directory is EMPTY, and the repo
+  # is read-only at /run/sandbox/source. Thus a command that reads a project
+  # file fails, also if it looks correct. Tests showed this in clone mode and
+  # in mount mode. Here, `uv pip install -r requirements.txt` gives only
+  # `error: File not found`.
+  #
+  # apt-get install can stay here with no change. A command that reads the
+  # project must name the read-only copy. It must put its result in a place
+  # that the agent session does not overwrite later. The workspace is not that
+  # place.
+  #
+  # MAKE EACH COMMAND IDEMPOTENT. It does not run only once. `sbx kit add`, and
+  # so `dr-kit apply`, recreates the container and replays the install commands
+  # of EVERY kit in the composition, not only of the kit being added. A test
+  # counted the lines. So a command that appends to a file, raises a counter, or
+  # clones into a fixed path does it again for each kit you add later. apt-get
+  # and uv are safe. `>>` is not.
+  #
+  # A failure here reaches sbx as a bare `500 ... failed to run sandbox
+  # container`. dr-up prints the real record of sandboxd below it.
+  #
+  # install runs as ROOT with no `user:`. startup runs as the agent (uid 1000).
+  # Thus a startup command that writes to something install made gets
+  # permission denied, in silence, with nothing reported anywhere. Give such a
+  # command `user: "0"`, or write where uid 1000 can.
+  #
+  # An install hook does NOT get the whole environment. It gets the basic
+  # process variables, the proxy settings and the certificate paths. To use
+  # another one, name it in the hook's own `env:` list, for example
+  # `env: [SBX_AGENT]`. A startup hook gets the full environment.
+  #
+  # `command` takes a string or a list. A list needs no quoting rules.
+  # startup runs at EVERY start, in the BACKGROUND, while the agent starts. Thus
+  # a `cat` in the same `dr-shell` that triggered the start can run before the
+  # file is there, and startup must be idempotent for the same reason.
+  #- type: com.docker.sandbox/lifecycle@1
+  #  config:
+  #    install:
+  #      - command: "uv venv /home/agent/.venv"
+  #        user: "1000"
+  #        description: Create the virtual environment
+  #      - command: [uv, pip, install, --python, /home/agent/.venv/bin/python,
+  #                  -r, /run/sandbox/source/requirements.txt]
+  #        user: "1000"
+  #        description: Install dependencies, from the read-only copy of the repo
+  #    startup:
+  #      - command: [sh, -c, "nohup npm run dev >/tmp/dev.log 2>&1 &"]
+  #        user: "1000"
+  #        description: Start the dev server
+
+  # --- ports -----------------------------------------------------------------
+  #
+  # Ports this project always serves. ONE capability for each port, and the
+  # field is `transport`, not the `protocol` of v2. For a temporary port, use
+  # dr-ports. An edit of the kit recreates the container.
+  #- type: com.docker.sandbox/port@1
+  #  config:
+  #    container: 5173
+  #    transport: tcp
+  #    name: dev-server

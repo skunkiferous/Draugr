@@ -12,11 +12,33 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- Native Codex plugin management through the existing `dr-plugin` verbs. Agent-specific builds
+  publish local marketplaces, generate install kits, retain rollback copies, and apply plugin
+  switches at attach without copying host authentication or native configuration.
+- Codex local/custom providers through `DRAUGR_MODEL`, using Responses and invocation-only
+  configuration in both attach transports. sbx 0.53 or later is required to avoid its older cloud
+  fallback bug. A separate fast model remains unsupported and produces a warning.
+- Codex resume-last fallback on known absence, preserving native model/config arguments, explicit
+  sessions, changed scope, and unknown probes. Public agent support and recovery documentation.
+
 ### Removed
 
 ### Changed
 
+- Codex context snapshots include transcript directories, indexes, newer memories, and selected
+  metadata/transcript databases with their WAL files. A quiet agent and stable copy are required;
+  partial exports no longer replace a complete store. Imports preserve memory feature choices.
+- Codex whole-home host imports are refused. Curated explicit sources are filtered before staging
+  or upload, with links and unsafe files refused. Legacy exports get a completeness warning.
+- New starter kits and Claude plugin kits select v3 on current sbx. Codex plugin kits use v3.
+  Existing user kits are left for a reviewed migration.
+
 ### Fixed
+- Test fixtures beneath a checkout now stop Git discovery at their configured root. A plain
+  directory fixture can no longer discover and write the enclosing real repository.
+- Context checks and exports use the agent installed in the old mound during agent switching.
+- Accept both sbx JSON listing envelopes and remove the obsolete plugin-builder `create -q` flag.
+- Failed context probes cannot authorize an empty-target import or a successful empty export.
 - `dr-go` refuses a mound that was built for another agent, instead of attaching into `bash: codex:
   command not found`. sbx installs the agent when it CREATES a sandbox, so a changed `DRAUGR_AGENT`
   never reaches a mound that already exists. The shell of the mound reported that, with a message
@@ -1072,7 +1094,8 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 390 tests run in CI.
   name instead.
 - One repository per mound.
 
-[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.7.0
 [0.6.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.6.0
 [0.5.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.5.0
 [0.4.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.4.0

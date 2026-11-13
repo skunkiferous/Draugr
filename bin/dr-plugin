@@ -102,6 +102,16 @@ done
 
 dr_context
 
+# Native plugin libraries differ in more than their CLI spelling. Keep their
+# formats out of the shared transaction and out of each other's directories.
+if [ "$DRAUGR_AGENT" = codex ]; then
+    # shellcheck source-path=SCRIPTDIR
+    # shellcheck source=../lib/plugins/codex.sh
+    . "$_dr_bin/../lib/plugins/codex.sh"
+    dr_codex_plugins "$action" ${args[0]+"${args[@]}"}
+    exit $?
+fi
+
 # The agent owns the library layout, not Draugr, and only the layout of Claude
 # Code was tested. A refusal is better than a directory in a layout that the
 # agent never reads. A wrong plugin library is worse than a wrong memory copy.
@@ -387,8 +397,11 @@ build_mound_start() {
     trap build_mound_stop EXIT INT TERM
     # Name the step, not only the sandbox. The creation of a microVM takes
     # seconds, and shows nothing during that time.
+    # No -q here. sbx 0.53 removed that flag from create, and an unknown flag
+    # fails the command. The output is a little louder on an older sbx, which
+    # is the cheaper half of the trade.
     dr_info "creating the build mound $BUILD_SANDBOX"
-    dr_sbx create --name "$BUILD_SANDBOX" -q "$DRAUGR_AGENT" "$(dr_path_win "$BUILD")" \
+    dr_sbx create --name "$BUILD_SANDBOX" "$DRAUGR_AGENT" "$(dr_path_win "$BUILD")" \
         || dr_die "could not create the build mound" \
                   "Make sure that sbx works:  dr-doctor"
     _dr_mound_up=1
@@ -606,6 +619,17 @@ commands:
       user: "1000"
       description: Install $_p from the seed, with no marketplace add and no clone
 YAML
+        # Current sbx built-in agents compose v3 mixins. Keep the legacy
+        # spelling above for older installations and existing Claude stores.
+        if dr_sbx_v3; then
+            _install="env HOME=/home/agent $(dr_shquote "$SEED_VAR=$_seed_mound") claude plugin install $(dr_shquote "$_p") -y"
+            {
+                printf '# syntax=docker/sandbox-kit:3\nschemaVersion: "3"\nkind: mixin\ncapabilities:\n'
+                printf '  - type: com.docker.sandbox/lifecycle@1\n    config:\n      install:\n'
+                printf '        - command: %s\n          user: "1000"\n' "$(jq -Rn --arg v "$_install" '$v')"
+                printf '          description: Install %s from the Claude seed\n' "$_p"
+            } > "$_dir/spec.yaml"
+        fi
         _made+=("$_slug")
         dr_ok "wrote $_dir/spec.yaml  ($_p $_ver)"
     done

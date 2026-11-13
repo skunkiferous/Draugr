@@ -19,7 +19,7 @@ jobs:
         # bin/* and tests/mocks/* have no extension, so a glob finds them. They
         # are not named. Thus a new mock gets linted, and nobody must remember
         # to add it here.
-        run: shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh lib/forge/*.sh install.sh tests/mocks/* bin/* .githooks/* tests/executable-paths.sh share/ollama-proxy/ollama-proxy
+        run: shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh lib/plugins/*.sh lib/forge/*.sh install.sh tests/mocks/* bin/* .githooks/* tests/executable-paths.sh share/ollama-proxy/ollama-proxy
 
       - name: Comment density
         # The premise of Draugr is that you can read a file before you trust
@@ -48,8 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install bats and jq
-        run: sudo apt-get update && sudo apt-get install -y bats jq
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y bats jq python3
       - name: Configure git for the fixtures
         run: |
           git config --global user.email ci@example.com

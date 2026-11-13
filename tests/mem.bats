@@ -522,7 +522,7 @@ seed_codex() {
     grep -q cmake "$CODEXDIR/memories/MEMORY.md"
 }
 
-@test "codex import: a source directory's config.toml is ignored" {
+@test "codex import: a whole agent home is refused before transfer" {
     setup_codex || skip "no writable Windows drive path"
     printf 'yolo\n' > "$CODEXDIR/config.toml"
 
@@ -534,10 +534,10 @@ seed_codex() {
     printf 'approvals on\n'    > "$src/config.toml"
 
     run dr-mem import --yes --source "$src"
-    [ "$status" -eq 0 ]
-    [ -f "$CODEXDIR/memories/MEMORY.md" ]
-    # The own configuration of the mound stays. unpack copies what it knows, not
-    # what it got.
+    [ "$status" -ne 0 ]
+    [ ! -f "$CODEXDIR/memories/MEMORY.md" ]
+    # Refusal happens before the upload, not only before the final copy.
+    ! grep -q '^cp ' "$DR_MOCK_LOG" || return 1
     grep -q yolo "$CODEXDIR/config.toml"
 }
 

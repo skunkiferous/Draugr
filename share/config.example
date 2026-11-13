@@ -39,6 +39,8 @@
 # EACH prompt fails with "... is not supported when using Codex with a ChatGPT
 # account". It looks like a login problem, but it is not. See docs/CONFIG.md.
 #DRAUGR_AGENT_ARGS="--model gpt-5.6-terra"
+# Native Codex reasoning stays in its own arguments, for a model your account offers.
+#DRAUGR_AGENT_ARGS_CODEX='resume --last --model gpt-6.1-sol -c model_reasoning_effort="xhigh"'
 #
 # To override for one run:  dr-go -- <other args>   (replaces, does not add)
 # To pass nothing for one run:  dr-go --bare
@@ -150,6 +152,7 @@
 # That port serves DELETE /api/delete through the same door as inference.
 #DRAUGR_MODEL_URL="11435"
 
+# Codex uses the main model and warns if a different fast tier is requested.
 # The cheap background tier. The default is DRAUGR_MODEL, because two models are
 # faster only if both stay on the card at the same time.
 #DRAUGR_MODEL_FAST="qwen3:8b"
@@ -250,6 +253,9 @@
 # library in a throwaway mound, and your host only stores the result. See
 # docs/CLAUDE_PLUGINS.md.
 #DRAUGR_PLUGIN_STORE="/mnt/c/Code/claude-plugins"
+# For Codex, use the independent codex/ publication under that store. Mount its
+# parent read-only and add generated plugin kits. Claude variables below do not
+# apply. See docs/AGENT-SUPPORT.md for the complete Codex setup.
 
 # The line above makes dr-plugin work. For the plugins to reach your mounds, you
 # need three more values. They are machine-wide, not for each project. Run

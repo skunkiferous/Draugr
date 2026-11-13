@@ -135,7 +135,8 @@ done
 # Show the workspaces, because people easily forget an extra read-only mount. It
 # is the most usual answer to "why can the agent see that?".
 if [ "$state" != absent ]; then
-    dr_sbx ls --json 2>/dev/null | jq -r --arg n "$DRAUGR_SANDBOX" \
+    _list=$(dr_sbx ls --json 2>/dev/null)
+    dr_sbx_json "$_list" | jq -r --arg n "$DRAUGR_SANDBOX" \
         '(.sandboxes // [])[] | select(.name == $n) | (.workspaces // [])[]' \
         | while read -r w; do row workspace "$w"; done
 fi

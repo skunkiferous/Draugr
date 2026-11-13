@@ -1607,8 +1607,16 @@ dr_env_pairs() {
 # Thus a plain `agent; exit` also ends the session on Ctrl-Z. A test showed
 # this, after the code was first written that way.
 dr_attach_rc() {
-    local cmd url k v model_keys='' envpairs
+    local cmd url k v model_keys='' envpairs native
+    local native_args=()
     cmd=$(dr_shquote "$@")
+
+    # Native plugin decisions are overrides, not a replacement config.toml.
+    native=$(dr_agent_launch_args) || return 1
+    if [ -n "$native" ]; then
+        mapfile -t native_args <<< "$native"
+        cmd=$(dr_shquote "$@" "${native_args[@]}")
+    fi
 
     # Collect the pairs before the loop, and do not pipe them into it.
     # dr_env_pairs stops on a bad item. A process substitution loses that exit.
@@ -1635,6 +1643,16 @@ dr_attach_rc() {
             "DRAUGR_MODEL is set, but Draugr could not find the address of this machine" \
             "The mound needs the address to connect to port ${DRAUGR_MODEL_URL:-}." \
             "Examine the network with:  dr-doctor"
+
+        # Providers such as Codex use native CLI configuration. Collect the
+        # result before mapfile, so a failed adapter cannot silently disappear.
+        native=$(dr_agent_model_args "$url" "$DRAUGR_MODEL") || return 1
+        if [ -n "$native" ]; then
+            local provider_args=()
+            mapfile -t provider_args <<< "$native"
+            native_args+=(${provider_args[0]+"${provider_args[@]}"})
+        fi
+        cmd=$(dr_shquote "$@" ${native_args[0]+"${native_args[@]}"})
 
         # Bash quotes the values with %q here, and bash reads them on the other
         # side. The same pair agrees about the command line above. IFS splits
@@ -1685,7 +1703,7 @@ dr_attach_remote() {
         return 0
     fi
 
-    b64=$(dr_attach_rc "$@" | base64 | tr -d '\n')
+    b64=$(dr_attach_rc "$@" | base64 | tr -d '\n') || return 1
     # The same again: each $ in this format string is for the other side.
     # shellcheck disable=SC2016
     printf 'mkdir -p $HOME/.cache/draugr && printf %%s %s | base64 -d > %s && cd %s && exec bash --rcfile %s -i' \
@@ -1698,7 +1716,7 @@ dr_attach_remote() {
 # the agent.
 dr_ssh_attach() {
     local dir=$1 remote; shift
-    remote=$(dr_attach_remote "$dir" "$@")
+    remote=$(dr_attach_remote "$dir" "$@") || return 1
     dr_debug "ssh -t $(dr_ssh_host) $remote"
     # Use -t, because there is a remote command. Without -t, ssh gives no pty,
     # and the agent has no terminal to draw on. The callers already went
@@ -1733,14 +1751,36 @@ dr_sandbox_name() {
 #
 # The output of `sbx ls --json` is not only JSON. When a newer sbx exists, sbx
 # writes an upgrade banner on stdout, around the document. All text before the
-# first "{" is that banner. jq fails on text after the document. Thus the
-# callers use the output that they got, and never the exit status of jq.
+# first JSON value is that banner. Read one value and ignore a trailing
+# banner, while still propagating a malformed list as a failed probe.
 dr_sbx_json() {
     local text=$1
-    case $text in
-        *'{'*) printf '%s' "${text#"${text%%\{*}"}" ;;
-        *)     printf '%s' "$text" ;;
-    esac
+    # Older versions wrap the list in an object; sbx 0.53 returns an array.
+    # Read only the first JSON value, so an old trailing upgrade banner stays
+    # outside the parser. Never discard the array's opening bracket.
+    text=$(printf '%s\n' "$text" | sed -n '/^[[:space:]]*[{[]/,$p')
+    printf '%s' "$text" | jq -cn 'input | if type == "array" then {sandboxes:.} else . end'
+}
+
+# New sbx built-in agents use v3 kits. Keep legacy kit generation usable on
+# older installations, without rewriting any kit the user already owns.
+#
+# 0.51 is the boundary, and it comes from the release notes of sbx: that
+# version made the built-in agent names resolve to published kits and moved
+# the shell agent to a v3 kit, and it told people to upgrade older mixins
+# before composing them with the new built-in kits. A v3 kit cannot compose
+# with a v2 one, so writing v3 any earlier would generate a kit that the
+# built-in agent of that sbx cannot use. Only 0.53 was measured here; the
+# boundary itself is from those notes.
+dr_sbx_v3() {
+    local version major minor
+    version=$(dr_sbx --version 2>/dev/null) || return 1
+    if [[ "$version" =~ ([0-9]+)\.([0-9]+)\.[0-9]+ ]]; then
+        major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}
+        [ "$major" -gt 0 ] || [ "$minor" -ge 51 ]
+    else
+        return 1
+    fi
 }
 
 # dr_sandbox_state <name> -> absent|stopped|running (whatever sbx reports)
@@ -1800,7 +1840,7 @@ dr_sandbox_state() {
                "elevated for AppSandbox, and before, it started a daemon. Now it refuses to."
     }
     rm -f "$_errf"
-    json=$(dr_sbx_json "$json")
+    json=$(dr_sbx_json "$json") || dr_die "sbx returned an invalid sandbox list" "Inspect: sbx ls --json"
 
     # The jq program, from left to right:
     #   (.sandboxes // [])   the sandboxes array, or an empty array if it is missing
@@ -1836,7 +1876,7 @@ dr_sandbox_state() {
 dr_sandbox_agent() {
     local name=$1 json agent
     json=$(dr_sbx ls --json 2>/dev/null) || return 0
-    json=$(dr_sbx_json "$json")
+    json=$(dr_sbx_json "$json") || return 0
 
     # The same reading as dr_sandbox_state, for the same reason: the code uses
     # the output and never the exit status of the pipeline, because sbx writes
@@ -2713,6 +2753,11 @@ dr_kit_allow_list() {
         /^[[:space:]]*allow:[[:space:]]*(\[\])?[[:space:]]*$/ && innet {
             match($0, /^[[:space:]]*/); allow_indent = RLENGTH; inallow = 1; next
         }
+        # v3 keeps phase rules in a capability. Only runtime rules count as
+        # adopted permissions; install access does not grant session egress.
+        /^[[:space:]]*-[[:space:]]*type:/ { incap = ($0 ~ /com\.docker\.sandbox\/network-policy@1/); innet = 0 }
+        /^[[:space:]]*runtime:[[:space:]]*$/ && incap { innet = 1 }
+        /^[[:space:]]*install:[[:space:]]*$/ && incap { innet = 0 }
         /^[[:space:]]*network:[[:space:]]*$/ { innet = 1 }
         inallow {
             # A list item deeper than the key belongs to it. All else ends it.
@@ -2887,6 +2932,7 @@ dr_skills_dir() {
 #
 # The output is sorted, so the order does not depend on the key order in the JSON.
 dr_plugin_skills() {
+    if [ "${DRAUGR_AGENT:-claude}" = codex ]; then dr_codex_plugin_skills "$1"; return; fi
     local seed=$1/seed
     [ -f "$seed/installed_plugins.json" ] || return 0
     {
@@ -2927,6 +2973,27 @@ dr_plugin_skills() {
 # form to name the part of each repo, for each agent.
 # ---------------------------------------------------------------------------
 
+# Published Codex packages have their own receipt. Reading it cannot execute
+# plugin code and cannot mistake a Claude registry for a Codex installation.
+dr_codex_plugin_skills() {
+    local seed=$1/codex/seed row id name m ver dir skill
+    [ -f "$seed/library.json" ] || return 0
+    while IFS= read -r row; do
+        read -r id name m ver <<< "$row"
+        # Each component is checked separately: concatenating them would hide
+        # an empty component or a traversal name inside otherwise safe text.
+        case "$name" in ''|.|..|*[!A-Za-z0-9_.+-]*) continue ;; esac
+        case "$m" in ''|.|..|*[!A-Za-z0-9_.+-]*) continue ;; esac
+        case "$ver" in ''|.|..|*[!A-Za-z0-9_.+-]*) continue ;; esac
+        for dir in "$seed/marketplaces/$m/packages/$name/$ver"/skills/*/; do
+            [ -f "${dir}SKILL.md" ] || continue
+            skill=$(sed -n 's/^name:[[:space:]]*//p' "${dir}SKILL.md" | head -1)
+            [ -n "$skill" ] || { skill=${dir%/}; skill=${skill##*/}; }
+            printf '%s %s %s\n' "$skill" "$id" "$ver"
+        done
+    done < <(jq -r '.plugins[] | [.id,.name,.marketplace,.version] | @tsv' "$seed/library.json")
+}
+
 # dr_mem_key <absolute-path>: encode a path as Claude Code names its directory.
 #
 # Change a Windows drive letter to lowercase. Then change each "/", "\", and ":"
@@ -2937,7 +3004,7 @@ dr_plugin_skills() {
 # Only those three characters are known to change. The rest of the path keeps
 # its case, as "c--Code-Draugr" shows. Nobody knows what occurs to a space or
 # other punctuation in a repo name. Thus dr-mem compares the answer with the
-# mound, and does not trust it.
+# mound, and does not trust it. Keep this encoding stable for existing stores.
 dr_mem_key() {
     local p=$1
     # Change only the drive letter to lowercase. "Code" and "Draugr" keep their
@@ -2990,6 +3057,18 @@ DR_MOUND_STAGE="$DR_MOUND_HOME/.cache/draugr/mem"
 dr_mem_store_dir() {
     printf '%s/%s/%s' "${DRAUGR_MEM_STORE%/}" "$(dr_mem_key_win "$1")" \
         "${DRAUGR_AGENT:-claude}"
+}
+
+# Staging is inside the read-only source mount. A link must be refused before
+# a copy can expose its target, including links inside an approved directory.
+dr_mem_validate_tree() {
+    local path=$1 bad
+    [ -d "$path" ] && [ ! -L "$path" ] || return 1
+    bad=$(find "$path" \( -type l -o ! -type f -a ! -type d \) -print -quit) || return 1
+    [ -z "$bad" ] || { dr_error "context contains a link or special file: $bad"; return 1; }
+    # sha256sum's escaped-name output cannot be compared by the line protocol.
+    bad=$(find "$path" -name '*[[:cntrl:]\\]*' -print -quit) || return 1
+    [ -z "$bad" ] || { dr_error "context contains an unsafe file name"; return 1; }
 }
 
 # dr_mem_store_migrate <repo>: move a store from before 0.2.0 under its agent.
