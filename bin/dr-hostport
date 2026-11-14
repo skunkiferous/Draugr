@@ -102,10 +102,11 @@ _all_rules() {
 
 # _write_host_env: tell the mound the address of this host, in a file.
 #
-# The mound cannot find it. The image has no `ip` command, and
-# host.docker.internal resolves to the OWN gateway of the mound, not to this
-# machine (a test showed this). Thus the process that knows must write it, and
-# that is this one, at each dr-up.
+# The mound cannot find it. `ip` is in the image again on sbx 0.53, and it
+# answers with the network of the mound: `ip -4 route get 1.1.1.1` in there
+# names the gateway of the mound, and host.docker.internal resolves to that same
+# gateway, not to this machine (a test showed this). Thus the process that knows
+# must write it, and that is this one, at each dr-up.
 #
 # A FILE, and nothing more. Draugr does not touch the dotfiles of the agent, so
 # nothing sources this for you. A project that wants the value reads it itself,

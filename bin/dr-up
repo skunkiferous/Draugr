@@ -446,6 +446,22 @@ absent)
     ;;
 esac
 
+# rsync inside the mound, before anything tries to use it.
+#
+# A mound that was just created always gets it, whatever this project does with
+# the data channel. Carrying data in and out of a mound is half of what Draugr
+# is for, and the base image of sbx ships no rsync, so a new mound would arrive
+# with that half missing. $state is still the state from BEFORE the case above,
+# and --recreate sets it to absent after the removal. Thus "absent" means
+# "created in this run", for a first create and a recreate alike.
+#
+# An older mound is probed only where DRAUGR_DATA says that this project really
+# uses the channel. That self-heals the mounds that exist today, at the moment
+# it matters, and costs one exec. A project that moves no data pays nothing.
+if [ "$state" = absent ] || [ -n "$DRAUGR_DATA" ]; then
+    dr_mound_ensure_rsync "$DRAUGR_SANDBOX" || true
+fi
+
 # Data goes in after the mound starts, but before the agent starts. Thus the
 # files are already there at its first look. In a push, the host wins. That is
 # the safe default direction, because you can get the host copy back from git or

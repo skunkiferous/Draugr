@@ -39,6 +39,16 @@ people reading the source, not for people calling it.
   work) and `draugr-recreate` (what a rebuild destroys, and the order that saves it first). Each one
   states what was measured rather than what seems likely. `dr-skills install` picks up every
   directory under `share/skills/`, so it needs no change, and its question now lists the whole set.
+- `dr-up` installs `rsync` in every mound it creates. The base image of sbx carries none, measured
+  in a claude mound on 0.53, and `dr-data` runs one rsync across the ssh, so the far end needs the
+  same tool. A new mound therefore arrived with half of the data channel missing, and nothing said
+  so until the first transfer failed. A mound that already has rsync is left alone, so the usual
+  case costs one probe and no network. A mound built before this is given one at its next `dr-up`,
+  but only where `DRAUGR_DATA` says the project uses the channel, so that nobody else pays for a
+  probe. An install that cannot work is a warning, not a failure: a mound with no rsync still
+  serves the agent, git and `dr-cp`, and `dr-data` refuses with the command to run by hand.
+  Measured against a real mound on sbx 0.53: the `dr-up` that installed it took 9 seconds in all,
+  rsync 3.5.0 arrived, and the next `dr-up` printed nothing, because the probe found it.
 
 ### Removed
 
@@ -81,8 +91,39 @@ people reading the source, not for people calling it.
   refuses before it rotates anything. `dr-cp` warns before it copies a host tree that holds a link.
   Both exist because of the `sbx cp` change above: the old failure was loud, and this one is a
   partial copy with a success message.
+- The comments, messages and docs that arrived after the 0.7.0 review are now in Simple English too.
+  The review covered 25 files. `docs/AGENT-SUPPORT.md` was a page of telegraphic notes, and is full
+  sentences now. The messages of `dr-doctor`, `dr-go`, `dr-mem` and `dr-plugin` have new words, and
+  so do the comments of both agent modules, the Codex plugin module and `lib/common.sh`. The
+  behavior is the same, and every test assertion still matches. The British spellings that came in
+  with the new code are American now, to match everything around them.
 
 ### Fixed
+- The test suite runs inside a mound. Each mound command refuses a repo that is not under
+  `/mnt/<letter>/`, and a mound has no `/mnt` at all, because its Windows drives are at `/c`. Thus
+  about a hundred tests skipped in there, and `tests/codex.bats` reported 28 failures where every
+  other suite skips. The harness makes the root for itself, with the two `sudo` commands that the CI
+  workflow uses, and only when `IS_SANDBOX=1` says the machine is a disposable microVM. A new suite,
+  `tests/harness.bats`, covers the parts that no host run can reach. Two more absences came out of
+  the same run, both of them a tool that the base image of sbx leaves out, and neither of them
+  anything that the suite is there to test:
+  - **no `script`**, which gives `dr-go` and `dr-shell` the terminal they refuse to start without.
+    That was 32 failures. `tests/pty_run.py` makes a pty with `python3`, which every place that
+    runs the suite has, and `dr_pty` is now the single way the suite asks for one. Measured against
+    the old way on the host: the same output, the same recorded argv, and both suites still green.
+  - **no `rsync`**, which `DRAUGR_DATA` needs at both ends. That was 7 failures, and one test that
+    passed on an empty list while asserting that `.git` must never travel. The eight tests that
+    move a real tree now skip where there is no rsync, and say so. The CI workflow installs rsync
+    by name as well, beside `bats`, `jq` and `python3`: the runner image has one, and a test that
+    needs a tool should name it.
+
+  A full run in a mound, from a cold mound with no `/mnt` at all, is now 1117 of 1117, with 18
+  skips: the 10 for PowerShell that CI already allows, and the 8 for rsync.
+- The README and the troubleshooting page said that `rsync` is in the claude image, that `dr-up`
+  installs it at creation where it is missing, and that `tar` over ssh is the fallback. None of the
+  three is true. A claude mound on sbx 0.53 has no `rsync`, no code in `bin/` or `lib/` installs
+  one, and `dr-data` has no tar path at all. Both pages now say what is really there, and give the
+  kit command, plus the `dr-shell` line that fixes a mound which is already running.
 - Test fixtures beneath a checkout now stop Git discovery at their configured root. A plain
   directory fixture can no longer discover and write the enclosing real repository.
 - Context checks and exports use the agent installed in the old mound during agent switching.

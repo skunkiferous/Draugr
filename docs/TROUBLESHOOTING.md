@@ -318,9 +318,33 @@ later, so all that is left in it is at risk.
 
 ### `rsync` is missing inside the mound
 
-It is in the `claude` image (`/usr/bin/rsync`), but possibly not in each agent image. If it is
-missing, `dr-up` installs it at creation. If that fails, it uses `tar` over ssh. `tar` is always
-present, but copies full files, not only changes.
+The base image of sbx has none. Measured in a claude mound on 0.53: `command -v rsync` answers
+nothing. It was in that image once, and it is not there now. `dr-data` runs one rsync across the
+ssh, and there is no fallback, so both ends need the same tool.
+
+`dr-up` installs it in every mound it creates, so a mound built by a current Draugr has one. You can
+still meet this message in three ways:
+
+- **The mound is older than that behaviour**, and this project has no `DRAUGR_DATA`. The healing
+  pass is deliberately limited to projects that use the channel, so nobody else pays for a probe.
+  Set `DRAUGR_DATA`, or run the command below.
+- **The install could not work** when the mound was created. `dr-up` warns at that moment and
+  carries on, because a mound with no rsync is still good for everything else. Look for
+  *"could not install rsync"* in the output of that `dr-up`.
+- **Someone built the mound with plain `sbx`**, which knows nothing about this.
+
+For a mound that is running now, with the sudo that the agent user already has:
+
+```bash
+dr-shell -- sudo -n apt-get install -y rsync
+```
+
+That lasts as long as the mound: a package survives stop and start, and a recreate throws it away
+with the rest of the filesystem. The recreate then installs it again. To have it earlier than
+`dr-up` does, for example because an install command of your own needs it, put the same line in
+your kit (`.draugr/kit/spec.yaml`) and remember that a changed kit recreates the mound.
+
+`dr-doctor` reports the rsync of the **host**, which is a different question.
 
 ---
 

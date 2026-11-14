@@ -39,7 +39,7 @@ decode_rc() {
 
 # dr-go does not attach without a terminal, so these go through a pty.
 go_pty() {
-    DR_MOCK_STATE=running script -qec "dr-go $*" /dev/null >/dev/null 2>&1 || true
+    DR_MOCK_STATE=running dr_pty "dr-go $*" >/dev/null 2>&1 || true
 }
 
 # --- the pieces --------------------------------------------------------------
@@ -154,7 +154,7 @@ go_pty() {
 }
 
 @test "dr-go: says how to get the shell" {
-    DR_MOCK_STATE=running run script -qec "dr-go" /dev/null
+    DR_MOCK_STATE=running run dr_pty "dr-go"
     [[ "$output" == *"Ctrl-Z"* ]]
 }
 
@@ -181,14 +181,14 @@ go_pty() {
     # agent. dr-go always passed it on, and still does.
     export DR_MOCK_SSH_RC=7
     rc=0
-    DR_MOCK_STATE=running script -qec "dr-go" /dev/null >/dev/null 2>&1 || rc=$?
+    DR_MOCK_STATE=running dr_pty "dr-go" >/dev/null 2>&1 || rc=$?
     [ "$rc" -eq 7 ]
 }
 
 @test "dr-go: a failed connection is not silently a successful session" {
     export DR_MOCK_FAIL=ssh
     rc=0
-    DR_MOCK_STATE=running script -qec "dr-go" /dev/null >/dev/null 2>&1 || rc=$?
+    DR_MOCK_STATE=running dr_pty "dr-go" >/dev/null 2>&1 || rc=$?
     [ "$rc" -ne 0 ]
 }
 
@@ -357,7 +357,7 @@ go_pty() {
 # --- dr-shell ----------------------------------------------------------------
 
 @test "dr-shell: interactive goes over ssh, with a terminal, in the clone" {
-    DR_MOCK_STATE=running script -qec "dr-shell" /dev/null >/dev/null 2>&1 || true
+    DR_MOCK_STATE=running dr_pty "dr-shell" >/dev/null 2>&1 || true
     [[ "$(calls ssh)" == "ssh -t "* ]]
     [[ "$(calls ssh)" == *"cd /c/"* ]]
     [[ "$(calls ssh)" == *"exec bash -i"* ]]
@@ -384,7 +384,7 @@ go_pty() {
 @test "dr-shell --root: interactive keeps the working directory" {
     # sudo -s, not -i. A login shell moves you to /root, and you are root here
     # to fix something in the clone.
-    DR_MOCK_STATE=running script -qec "dr-shell --root" /dev/null >/dev/null 2>&1 || true
+    DR_MOCK_STATE=running dr_pty "dr-shell --root" >/dev/null 2>&1 || true
     [[ "$(calls ssh)" == *"exec sudo -s"* ]]
     [[ "$(calls ssh)" != *"sudo -i"* ]]
 }

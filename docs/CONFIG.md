@@ -380,8 +380,9 @@ DRAUGR_HOST_ADDR=172.19.192.26
 DRAUGR_HOST_PORTS="11435"
 ```
 
-The mound cannot find it by itself. There is no `ip` command in the image, and
-`host.docker.internal` resolves to the own gateway of the mound, not to your machine. **Nothing
+The mound cannot find it by itself. `ip` is back in the image on sbx 0.53, but it answers with the
+network of the mound: `ip -4 route get 1.1.1.1` in there gives the gateway of the mound, not your
+machine, and `host.docker.internal` resolves to that same gateway. **Nothing
 sources that file for you.** Draugr does not touch the files of the agent inside the mound. Thus a
 project that needs the value reads it, in its own run script or a kit startup command:
 

@@ -131,6 +131,19 @@ EOF
 exec)
     if [ -z "${DR_MOCK_MOUND:-}" ]; then
         printf 'mock sbx: %s\n' "$*"
+        # The two steps of dr_mound_ensure_rsync. The DEFAULT is a mound that
+        # already has rsync, so a test about something else sees no install.
+        # DR_MOCK_NO_RSYNC=1 is the real base image of sbx, which has none, and
+        # takes the install. =stuck also fails the install itself, which is the
+        # warning path: no network, no mirror, or no apt-get at all.
+        case "$*" in
+            *'command -v rsync'*)
+                [ -n "${DR_MOCK_NO_RSYNC:-}" ] && exit 1
+                ;;
+            *'apt-get install -y rsync'*)
+                [ "${DR_MOCK_NO_RSYNC:-}" = stuck ] && exit 1
+                ;;
+        esac
         exit 0
     fi
     shift                              # "exec"

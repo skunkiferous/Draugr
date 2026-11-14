@@ -5,7 +5,10 @@ load helper
 setup() {
     dr_test_setup
     dr_load_common
-    REPO=$(dr_make_win_repo) || return 1
+    # skip, and not `return 1`. A machine with no writable /mnt/<letter>/ has
+    # nothing to say about Codex, and 28 failures say that it has. Each other
+    # suite skips here, and this one used to be the exception.
+    REPO=$(dr_make_win_repo) || skip "no writable Windows drive path"
     cd "$REPO" || return 1
     export DRAUGR_AGENT=codex DR_MOCK_AGENT=codex DR_MOCK_STATE=running
     export DRAUGR_MEM_STORE="$DR_TMP/store"

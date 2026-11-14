@@ -782,17 +782,39 @@ to `.gitignore`: `.draugr/kit.applied`, `.draugr/create.applied` and `.draugr/tm
 tidiness. With `DRAUGR_REQUIRE_CLEAN=true`, an untracked state file **blocks `dr-go`**. Thus a repo
 without them stops working the first time that Draugr builds a mound.
 
-**The full suite runs in there**, because none of it needs a hypervisor. CI proves that, because it
-runs the full test suite on Ubuntu, with no sbx, no Windows and no WSL. The suite needs two things that
-the mound does not have by default:
+**The full suite runs in there**, because none of it needs a hypervisor. CI proves most of that,
+because it runs the full test suite on Ubuntu, with no sbx, no Windows and no WSL. A measured run in
+a claude mound on sbx 0.53, from a cold mound with no `/mnt` at all, was **1117 of 1117, with 18
+skips and no failures**. That mound was built before `dr-up` started installing rsync, so 8 of those
+skips do not happen in a mound that a current `dr-up` creates. Getting there took four facts about a
+mound, and each one looked like a broken test suite first:
 
-- `bats`, `jq` and `shellcheck`, installed from the install commands of the kit. Remember the
-  rule for each kit: install commands run **before** the repository is in the workspace, so they
-  cannot read a file from it.
-- a writable `/mnt/c`. `dr_win_root` looks for `/mnt/c/Temp`, then `/mnt/c`. With neither, each
-  mound test **skips**, and does not fail. `sudo mkdir -p /mnt/c/Temp && sudo chmod 1777
-  /mnt/c/Temp` fixes it, and the agent user has sudo with no password. CI does exactly this, for
-  exactly this reason.
+- `bats`, `jq`, `shellcheck` and `python3` are in the base image already, and the Draugr kit
+  installs nothing. Where a tool is missing, an install command in the kit is the place for it.
+  Remember the rule for each kit: install commands run **before** the repository is in the
+  workspace, so they cannot read a file from it.
+- a writable `/mnt/c`, which the harness makes. `dr_win_root` looks for `/mnt/c/Temp`, then
+  `/mnt/c`, and a mound has neither: the Windows drives are at `/c` in there, and `/mnt` does not
+  exist at all. Thus `dr_win_root_make` runs `sudo -n mkdir -p /mnt/c/Temp` and `sudo -n chmod 1777
+  /mnt/c/Temp`, the same pair that the CI workflow runs, and only when `IS_SANDBOX=1`. A test run on
+  a real machine never creates `/mnt`. Where there is no root and no sandbox, each mound test
+  **skips**, and does not fail.
+- **no `script` binary**, which was 32 failures. `tests/attach.bats` and `tests/mound.bats` need a
+  pty, because `dr-go` and `dr-shell` refuse to start without a terminal, and `script` lives in
+  `bsdextrautils`, which the base image leaves out. `tests/pty_run.py` makes one with `python3`
+  instead, which every place that runs the suite has, and which CI already installs by name. `dr_pty`
+  in the helper is now the only way the suite asks for a terminal. **Do not rename that file to
+  `pty.py`**: python puts the directory of the script first on `sys.path`, so it imports itself, and
+  `pty.fork` then does not exist. The error says "partially initialized module", and names no file
+  of yours.
+- **no `rsync`**, which was 7 failures and one pass that proved nothing. The eight `data filters`
+  tests move a real tree with the real `DRAUGR_DATA` rules, so they need the binary, and
+  `need_rsync` now skips them where it is missing. Before that guard, `transferred` printed an empty
+  list, and each assertion that a file must **not** travel passed on it. This was never only a test
+  problem: `dr-data` runs one rsync across the ssh, so a mound without one cannot take a transfer at
+  all. Thus `dr-up` installs rsync in each mound it creates, and those eight tests run in such a
+  mound like everywhere else. The guard stays for the mounds that predate it, and for an image with
+  no `apt-get`. See the data channel in the README.
 
 ### What cannot happen in a mound
 

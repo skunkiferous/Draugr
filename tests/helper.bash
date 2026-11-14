@@ -68,38 +68,94 @@ dr_load_common() {
     . "$DR_ROOT/lib/common.sh"
 }
 
+# --- a terminal ---------------------------------------------------------------
+#
+# dr-go and dr-shell refuse to start without one, so a test of what they send
+# needs a pty. `script -qec "$*" /dev/null` was the way, and a mound has no
+# `script`: it lives in bsdextrautils, which the base image of sbx leaves out.
+# That cost 32 tests in a mound, on a tool that is not the thing they test.
+#
+# tests/pty_run.py does the same with python3, which the mound, CI and WSL all
+# have, and which CI already installs by name. One mechanism in each place, so
+# no branch here runs in only one of them. Measured against the old way on the
+# host: the same output, the same mock log, and both suites still green.
+#
+# The status of the command comes back, and a `DR_MOCK_STATE=running dr_pty ...`
+# prefix reaches the command, because bash exports an assignment that prefixes a
+# function call for the length of that call.
+dr_pty() {
+    python3 "$DR_ROOT/tests/pty_run.py" "$*"
+}
+
 # --- repos on a Windows drive ------------------------------------------------
 #
 # Each mound command calls dr_require_win_path. Thus a test of one needs a repo
 # whose path starts with /mnt/<letter>/. The test only matches strings, with no
 # hypervisor. Thus each writable directory under such a path works:
 #
-#   in WSL   /mnt/c is the real C: drive
-#   in CI    a plain directory that the workflow creates with sudo
-#   elsewhere  nothing, and the tests that need one skip, and do not fail
+#   in WSL      /mnt/c is the real C: drive
+#   in CI       a plain directory that the workflow creates with sudo
+#   in a mound  one that the suite makes for itself, see dr_win_root_make
+#   elsewhere   nothing, and the tests that need one skip, and do not fail
 #
 # $DRAUGR_TEST_WINROOT overrides the search, for people whose drives are in
 # another place.
+#
+# The places to look, in order. A list, and not two literals inside the loop, so
+# that a test can empty it and reach the fallback. /mnt/c/Temp comes first. On a
+# real machine it is a scratch directory, and the drive root is the C:\ of
+# somebody, which must not get test files.
+DR_WIN_ROOT_CANDIDATES=(/mnt/c/Temp /mnt/c)
+
+# Makes the root that the search did not find, inside a sandbox only.
+#
+# A mound has no /mnt at all. The drives of Windows are at /c in there, and each
+# mound command still demands /mnt/<letter>/. Thus the search finds nothing, and
+# about a hundred tests skip in the one place where an agent is most likely to
+# run them. A microVM is disposable, and its agent answers `sudo -n` with no
+# password, so the suite makes the same directory that the CI workflow makes,
+# for the same reason. The search then finds it, so this runs once per mound.
+#
+# Only inside a sandbox. On a real machine a test run must not create /mnt,
+# however much permission it holds. $1 is the path, and only the test of this
+# function passes one. shellcheck reads this file alone, and thus cannot see
+# that caller, which is tests/harness.bats.
+# shellcheck disable=SC2120
+dr_win_root_make() {
+    local target=${1:-/mnt/c/Temp}
+    [ "${IS_SANDBOX:-}" = 1 ] || return 1
+    sudo -n mkdir -p "$target" 2>/dev/null || return 1
+    # 1777, because root made it and the tests run as the agent.
+    sudo -n chmod 1777 "$target" 2>/dev/null || return 1
+    [ -d "$target" ] && [ -w "$target" ] || return 1
+    printf '%s' "$target"
+}
+
 dr_win_root() {
     local candidate
 
     # An explicit override replaces the search, and does not add to it. Thus you
-    # can point it at nothing, to exercise the skip path.
+    # can point it at nothing, to exercise the skip path. The fallback below
+    # must not rescue such a run either.
     if [ -n "${DRAUGR_TEST_WINROOT:-}" ]; then
         [ -d "$DRAUGR_TEST_WINROOT" ] && [ -w "$DRAUGR_TEST_WINROOT" ] || return 1
         printf '%s' "$DRAUGR_TEST_WINROOT"
         return 0
     fi
 
-    # /mnt/c/Temp first. On a real machine, it is a scratch directory. The drive
-    # root is the C:\ of somebody, and must not get test files.
-    for candidate in /mnt/c/Temp /mnt/c; do
+    # The search: the first candidate that is there and takes a write wins. A
+    # directory that exists but refuses one is not a root, and must not be
+    # reported as one, or every fixture fails later and somewhere else.
+    for candidate in "${DR_WIN_ROOT_CANDIDATES[@]}"; do
         if [ -d "$candidate" ] && [ -w "$candidate" ]; then
             printf '%s' "$candidate"
             return 0
         fi
     done
-    return 1
+
+    # Nothing on this machine. Inside a mound, make one. In each other place
+    # this answers 1, and the caller skips.
+    dr_win_root_make
 }
 
 # --- a stand-in for the git repository of the mound -------------------------

@@ -30,6 +30,15 @@ make_tree() {
           "$DR_TMP/src/scratch/cooked/c1"
 }
 
+# DRAUGR_DATA needs rsync at BOTH ends of the transfer, and a mound has none.
+# Without a guard, `transferred` prints nothing, every assertion about what must
+# NOT travel passes on an empty list, and the few that name a file that must
+# travel fail. In a mound that was seven failures and one pass for the wrong
+# reason. A skip says what happened.
+need_rsync() {
+    command -v rsync >/dev/null 2>&1 || skip "no rsync - DRAUGR_DATA needs it at both ends"
+}
+
 # What rsync really transfers, with the rules that DRAUGR_DATA makes.
 transferred() {
     local filters
@@ -41,6 +50,7 @@ transferred() {
 # --- internal files that must never travel, whatever DRAUGR_DATA says --------
 
 @test "data filters: .git never travels, even for DRAUGR_DATA=*" {
+    need_rsync
     make_tree
     # A real .git, because the bug is that rsync walks into it as into each
     # directory.
@@ -60,6 +70,7 @@ transferred() {
 }
 
 @test "data filters: an innocent extension pattern cannot reach into .git" {
+    need_rsync
     make_tree
     mkdir -p "$DR_TMP/src/.git/hooks"
     touch "$DR_TMP/src/.git/hooks/pre-commit.sample" "$DR_TMP/src/keep.sample"
@@ -86,6 +97,7 @@ transferred() {
 }
 
 @test "data filters: .gitignore is not caught by the .git exclusion" {
+    need_rsync
     make_tree
     touch "$DR_TMP/src/.gitignore"
 
@@ -99,6 +111,7 @@ transferred() {
 # --- the filter rules, against real rsync ------------------------------------
 
 @test "data filters: a directory entry takes its contents and nothing beside it" {
+    need_rsync
     make_tree
     DRAUGR_DATA="scratch/raw/"
     run transferred
@@ -106,6 +119,7 @@ transferred() {
 }
 
 @test "data filters: a ** pattern takes the whole subtree" {
+    need_rsync
     make_tree
     DRAUGR_DATA="tmp/**"
     run transferred
@@ -115,6 +129,7 @@ transferred() {
 }
 
 @test "data filters: a bare extension matches at every depth" {
+    need_rsync
     make_tree
     DRAUGR_DATA="*.parquet"
     run transferred
@@ -124,6 +139,7 @@ transferred() {
 }
 
 @test "data filters: source files are never swept up" {
+    need_rsync
     make_tree
     DRAUGR_DATA="tmp/** *.parquet scratch/raw/"
     run transferred
@@ -133,6 +149,7 @@ transferred() {
 }
 
 @test "data filters: all three shapes together" {
+    need_rsync
     make_tree
     DRAUGR_DATA="tmp/** *.parquet scratch/raw/"
     run transferred

@@ -69,6 +69,73 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [ "$(calls create | wc -l)" -eq 1 ]
 }
 
+# --- dr-up: rsync inside the mound -------------------------------------------
+#
+# dr-data runs ONE rsync across the ssh, and the base image of sbx carries none,
+# measured in a claude mound on 0.53. Moving data in and out is half of what
+# Draugr is for, so a new mound must not arrive without it. The mock answers the
+# probe as a mound that HAS rsync, unless DR_MOCK_NO_RSYNC says otherwise, so a
+# test about anything else sees no apt-get.
+
+@test "dr-up: a new mound gets rsync, because dr-data needs it at both ends" {
+    DR_MOCK_NO_RSYNC=1 DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$(calls exec)" == *"apt-get install -y rsync"* ]]
+    # Through sudo -n, because the install runs as the agent user, who has sudo
+    # with no password. Without -n, a mound with a password prompt hangs.
+    [[ "$(calls exec)" == *"sudo -n apt-get"* ]]
+    [[ "$output" == *"installing rsync"* ]]
+}
+
+@test "dr-up: a mound that already has rsync is never given apt-get" {
+    # The probe is one exec. The install reaches the network, so it must happen
+    # only where it is needed.
+    DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$(calls exec)" == *"command -v rsync"* ]]
+    [[ "$(calls exec)" != *"apt-get"* ]]
+    [[ "$output" != *"installing rsync"* ]]
+}
+
+@test "dr-up: an rsync install that cannot work warns, and the create stands" {
+    # A Debian mirror that is down must not destroy a mound that is otherwise
+    # fine. The agent, git and dr-cp all work without rsync. Only the data
+    # channel is missing, and dr-data refuses on its own.
+    DR_MOCK_NO_RSYNC=stuck DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"could not install rsync"* ]]
+    # The by-hand command, because the warning is useless without it.
+    [[ "$output" == *"dr-shell -- sudo -n apt-get install -y rsync"* ]]
+    [[ "$(calls create)" == *"--name $SANDBOX"* ]]
+}
+
+@test "dr-up: no rsync probe for an existing mound that moves no data" {
+    # Nobody pays for a probe they have no use for.
+    DR_MOCK_NO_RSYNC=1 DR_MOCK_STATE=running run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$(calls exec)" != *"rsync"* ]]
+}
+
+@test "dr-up: rsync reaches an existing mound where DRAUGR_DATA says data moves" {
+    # The mounds that exist today have no rsync, and a recreate to get one would
+    # cost the conversation of the agent. Thus the project that uses the channel
+    # gets the install at its next dr-up.
+    export DRAUGR_DATA="*.parquet" DRAUGR_DATA_PUSH=manual
+    DR_MOCK_NO_RSYNC=1 DR_MOCK_STATE=running run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$(calls exec)" == *"apt-get install -y rsync"* ]]
+}
+
+@test "dr-up: --recreate installs rsync again, because the new mound is new" {
+    # A recreate throws the filesystem away, so the package goes with it. The
+    # state variable is read before the removal, and the recreate path sets it
+    # to absent. A guard that tests the wrong one leaves every rebuilt mound
+    # without rsync, and nothing says so until the first transfer.
+    DR_MOCK_NO_RSYNC=1 DR_MOCK_STATE=running run dr-up --yes --recreate
+    [ "$status" -eq 0 ]
+    [[ "$(calls exec)" == *"apt-get install -y rsync"* ]]
+}
+
 # --- dr-up: turning config into a command line -------------------------------
 
 @test "dr-up: DRAUGR_CLONE=false drops --clone" {
@@ -354,7 +421,7 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 # head -1, because the attach is the first connection of a session. A later
 # auto-sync also fetches over ssh://, and git puts its own line here.
 go_rc() {
-    DR_MOCK_STATE=running script -qec "dr-go $*" /dev/null >/dev/null 2>&1 || true
+    DR_MOCK_STATE=running dr_pty "dr-go $*" >/dev/null 2>&1 || true
     calls ssh | head -1 | sed 's/.*printf %s //; s/ | base64.*//' | base64 -d
 }
 
@@ -396,7 +463,7 @@ go_rc() {
     export DRAUGR_ATTACH=sbx DRAUGR_AGENT_ARGS="--continue"
     # Auto-sync off. It fetches over ssh://, and puts a line in the same log.
     export DRAUGR_AUTO_SYNC=false DRAUGR_MEM_SYNC=off
-    DR_MOCK_STATE=running script -qec "dr-go" /dev/null >/dev/null 2>&1 || true
+    DR_MOCK_STATE=running dr_pty "dr-go" >/dev/null 2>&1 || true
     [[ "$(calls run)" == *"-- --continue"* ]]
     [ -z "$(calls ssh)" ]
 }
@@ -623,7 +690,7 @@ go_rc() {
 # dr-go needs a terminal before it attaches. Thus these go through a pty, as
 # go_argv does, but they keep the OUTPUT, not the recorded argv.
 go_output() {
-    DR_MOCK_STATE=running script -qec "dr-go $*" /dev/null 2>&1 || true
+    DR_MOCK_STATE=running dr_pty "dr-go $*" 2>&1 || true
 }
 
 @test "dr-go: leaves the mound to stop itself, and says so" {

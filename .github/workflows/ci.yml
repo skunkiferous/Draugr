@@ -49,7 +49,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install test dependencies
-        run: sudo apt-get update && sudo apt-get install -y bats jq python3
+        # rsync is named, although the runner image has it: the eight
+        # `data filters` tests move a real tree with it, and they skip without
+        # one. The skip guard below then fails the job for an unlisted reason,
+        # which is right, but installing it is better than discovering it.
+        run: sudo apt-get update && sudo apt-get install -y bats jq python3 rsync
       - name: Configure git for the fixtures
         run: |
           git config --global user.email ci@example.com

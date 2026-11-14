@@ -1977,6 +1977,46 @@ dr_sandboxes_running() {
 #   neither           a name or an extension, matched ANYWHERE in the tree
 # ---------------------------------------------------------------------------
 
+# dr_mound_ensure_rsync <sandbox>: rsync inside the mound, which dr-data needs.
+#
+# dr-data runs ONE rsync across the ssh, so the far end needs the same tool, and
+# the base image of sbx has none: `command -v rsync` in a claude mound on 0.53
+# answers nothing. Moving data in and out of a mound is half of what Draugr is
+# for, so a mound without rsync is a mound with a channel that cannot carry
+# anything. Thus Draugr installs it, instead of discovering the gap at the first
+# transfer.
+#
+# apt-get, because the image is Debian and the agent user answers `sudo -n` with
+# no password. It is idempotent: apt-get prints "already the newest version" and
+# exits 0, which is why the probe below is about speed, not about correctness.
+#
+# NOT fatal when it fails. A mound with no rsync is still a mound: the agent
+# works, git works, dr-cp works. Only the data channel is lost, and dr-data
+# refuses with its own message naming this exact command. A create that dies
+# because a Debian mirror is briefly down would be worse than the gap it guards.
+dr_mound_ensure_rsync() {
+    local name=$1
+
+    # Already there: no apt, no output. A probe is one exec, and the install is
+    # a package manager reaching the network.
+    if dr_sbx exec "$name" -- sh -c 'command -v rsync >/dev/null 2>&1'; then
+        return 0
+    fi
+
+    # The install. It says so first, because apt-get in a microVM takes seconds,
+    # and silence in the middle of a create reads as a mound that has hung.
+    dr_info "installing rsync in $name, because dr-data needs it at both ends"
+    if dr_sbx exec "$name" -- sh -c \
+           'sudo -n apt-get install -y rsync >/dev/null 2>&1'; then
+        dr_ok "rsync is in $name"
+        return 0
+    fi
+
+    dr_warn "could not install rsync in $name, so dr-data cannot transfer yet"
+    dr_warn "try it by hand:  dr-shell -- sudo -n apt-get install -y rsync"
+    return 1
+}
+
 # _dr_data_entries: split DRAUGR_DATA into an array WITHOUT globbing.
 #
 # `for entry in $DRAUGR_DATA` looks correct, but it is wrong. An expansion
