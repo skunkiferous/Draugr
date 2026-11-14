@@ -217,3 +217,34 @@ cp_line() { grep '^cp ' "$DR_MOCK_LOG" | tail -1; }
     [ "$status" -eq 0 ]
     ! grep -q '^exec ' "$DR_MOCK_LOG"
 }
+
+# --- the copy that stops at a link, measured on sbx 0.53 --------------------
+#
+# A tree with a link copies in PART on a current sbx, and sbx exits 0. Thus the
+# only moment to say something is before the copy. These two tests hold that
+# warning to the one case where Draugr can see the links: a host tree, on its
+# way into the mound.
+
+@test "dr-cp --to: a link in the host tree is named before the copy" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$REPO/tree"
+    printf 'real
+' > "$REPO/tree/a.txt"
+    ln -s a.txt "$REPO/tree/b.txt"
+
+    run dr-cp --to tree/ /tmp/dest
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"holds a link"* ]]
+    [[ "$output" == *"PART of the tree"* ]]
+}
+
+@test "dr-cp --to: a tree with no link says nothing about links" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$REPO/tree"
+    printf 'real
+' > "$REPO/tree/a.txt"
+
+    run dr-cp --to tree/ /tmp/dest
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"holds a link"* ]]
+}

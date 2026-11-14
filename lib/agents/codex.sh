@@ -276,6 +276,15 @@ dr_agent_mem_prepare_source() {
 # can change both files and databases. Unknown is never the quiet answer.
 dr_agent_mem_import_ready() { dr_agent_mem_quiesce; }
 
+# The conversation inside the packed tree. These are the names from the file
+# selection above that hold what was SAID, and not what the agent learned:
+# the sessions, the index that points into them, and the thread database.
+# dr-mem expands each one against the store, so a glob is allowed here.
+dr_agent_mem_transcript_paths() {
+    printf '%s\n' sessions archived_sessions session_index.jsonl \
+        history.jsonl 'thread_history_*.sqlite' 'thread_history_*.sqlite-wal'
+}
+
 # dr_agent_mem_status_extra <repo>: is the feature on?
 #
 # Generated memory and saved conversations are separate. Ask the native CLI

@@ -80,7 +80,7 @@ dr_agent_mem_present() {
     # No project directory is the important case. This repo never had a
     # session, or the key is wrong. A list of what IS there shows at once
     # which of the two it is.
-    if ! dr_mound_sh 'test -d "$1"' "$(dirname "$dir")"; then
+    if ! dr_mound_sh 'test -d "$1"' "$(dr_mem_mound_dir "$repo")"; then
         present=$(dr_mound_sh 'ls -1 "$1" 2>/dev/null' "$(dr_agent_mem_survey)" | head -20)
         if [ -n "$present" ]; then
             dr_warn "no project directory at $(dirname "$dir"), but the mound has:"
@@ -93,7 +93,237 @@ dr_agent_mem_present() {
         return 1
     fi
 
-    dr_mound_sh 'test -d "$1"' "$dir"
+    # The memory and the conversation both count. A mound where you talked and
+    # the agent wrote no memory still holds the conversation, and a recreate
+    # that throws it away is a real loss.
+    _dr_claude_state present "$repo"
+}
+
+# ---------------------------------------------------------------------------
+# The memory and the conversation
+#
+# Claude Code keeps them next to each other, and they are different things:
+#
+#   ~/.claude/projects/<key>/memory/        what the agent learned. Markdown
+#   ~/.claude/projects/<key>/<uuid>.jsonl   one transcript for each session
+#   ~/.claude/projects/<key>/<uuid>/        the files of that session
+#
+# --continue reads the NEWEST transcript. Thus a mound that gets only the
+# memory back has forgotten the conversation, and no amount of memory brings
+# it back. That is what DRAUGR_MEM_TRANSCRIPTS carries, and `newest` is its
+# default, because that is the one that --continue reads.
+#
+# They also differ in size by three orders of magnitude: in this project the
+# memory is 184 KB and one transcript is 180 MB. Thus the amount is a choice
+# of the user and not a fixed answer, and `off` is the behaviour from before
+# this key existed.
+#
+# THE PACKED TREE. The memory stays at the root, exactly where it was, and the
+# transcripts go in one directory beside it:
+#
+#   <packed>/MEMORY.md, <packed>/*.md …    the contents of memory/
+#   <packed>/transcripts/<uuid>.jsonl
+#   <packed>/transcripts/<uuid>/…
+#
+# A store from an older Draugr has no transcripts/ directory, and unpack reads
+# it unchanged. That is why the memory keeps the root: it makes every store
+# that you already have still an import, and not a special case in the code.
+# A memory file named `transcripts` would make the layout ambiguous, so pack
+# refuses it instead of writing a tree that unpack would read wrongly.
+# ---------------------------------------------------------------------------
+
+# One script for all four views of that tree, so that they cannot disagree.
+# It runs in the shell of the MOUND, which is POSIX sh and not bash.
+_dr_claude_state_script() {
+    cat <<'SH'
+set -eu
+action=$1; mode=$2; proj=$3; stage=${4:-}
+mem="$proj/memory"
+
+# The transcripts to carry, newest first, and the directory of each session
+# right after its file. A name with any other character is not a session of
+# Claude Code: leave it where it is rather than copy something unknown.
+names() {
+    if [ ! -d "$proj" ] || [ "$mode" = off ]; then return 0; fi
+    all=$(cd "$proj" && find . -maxdepth 1 -type f -name '*.jsonl' \
+          -printf '%T@\t%P\n' 2>/dev/null | sort -rn | cut -f2) || return 1
+    if [ "$mode" != all ]; then all=$(printf '%s\n' "$all" | head -1); fi
+    printf '%s\n' "$all" | while IFS= read -r f; do
+        if [ -z "$f" ]; then continue; fi
+        case "$f" in *[!A-Za-z0-9_.-]*) continue ;; esac
+        printf '%s\n' "$f"
+        d=${f%.jsonl}
+        if [ -d "$proj/$d" ]; then printf '%s\n' "$d"; fi
+    done
+}
+
+# Two probes, and neither matches a process NAME. That is measured, not
+# careful: in a mound the agent is an ELF binary at
+# ~/.local/share/claude/versions/<version>, so the name of the process is the
+# VERSION, and `pgrep -x claude` finds nothing while the agent runs. A name
+# that changes with each update is not a probe.
+#
+# Both answer 0 for quiet and 1 for a signal. The caller turns an unreadable
+# /proc into 2, because unknown must never mean quiet: that answer copies a
+# file while it grows and calls the result a backup.
+
+# 1. Does the AGENT run? The path of the executable answers it. /proc/<pid>/exe
+#    is a link to the real binary, and it is readable for the processes of this
+#    user. Measured in a mound: a stand-in binary under the version directory
+#    was found by the scan, a copy of it outside that directory was not, and
+#    after both exited the scan was quiet. The root daemons of the mound have
+#    an exe that this user cannot read, which is why an unreadable link is
+#    skipped and not an error.
+#
+#    The directory comes from the project path of THIS call, not from $HOME.
+#    In a mound the two are the same. In the test harness the project path is
+#    inside a stand-in tree, and then this cannot match a Claude Code that the
+#    person running the tests has installed on the machine itself.
+agent_running() {
+    home=${proj%/.claude/projects/*}
+    found=0
+    for d in /proc/[0-9]*; do
+        t=$(readlink "$d/exe" 2>/dev/null) || continue
+        case "$t" in "$home"/.local/share/claude/versions/*) found=1 ;; esac
+    done
+    if [ "$found" = 0 ]; then return 0; fi
+    return 1
+}
+
+# 2. Is anything holding a file of this conversation open? This one does not
+#    depend on where the agent is installed, so it still answers when the
+#    layout above changes, and it also catches a writer that is not the agent.
+#    A test in a mound found the holder of an open file and found nothing after
+#    that file was closed. A second test holds it up: one mound is ONE process
+#    view. A file held open by one session was found by a later, separate exec,
+#    with the same pid. Thus these probes can see the agent of your session,
+#    and are not a check that cannot fail.
+#
+#    For the writer that pauses between two probes, the caller compares hashes
+#    around the copy.
+writer() {
+    found=0
+    for d in /proc/[0-9]*/fd; do
+        for f in "$d"/*; do
+            if [ ! -e "$f" ]; then continue; fi
+            t=$(readlink "$f" 2>/dev/null) || continue
+            case "$t" in
+                "$proj"/*.jsonl) found=1 ;;
+                "$mem"/*)        found=1 ;;
+            esac
+        done
+    done
+    if [ "$found" = 0 ]; then return 0; fi
+    return 1
+}
+
+case "$action" in
+quiesce)
+    # /proc carries both answers. Without it there is no answer at all, and
+    # that is 2, not "quiet".
+    if [ ! -d /proc/self/fd ]; then exit 2; fi
+    rc=0
+    agent_running || rc=$?
+    if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+    writer || rc=$?
+    exit "$rc"
+    ;;
+present)
+    if [ -d "$mem" ] && [ -n "$(ls -A "$mem" 2>/dev/null)" ]; then exit 0; fi
+    if [ -n "$(names)" ]; then exit 0; fi
+    exit 1
+    ;;
+list)
+    if [ -d "$mem" ]; then
+        (cd "$mem" && find . -type f -printf '%P\0' | sort -z | xargs -0 -r sha256sum)
+    fi
+    names | while IFS= read -r n; do
+        if [ -d "$proj/$n" ]; then
+            (cd "$proj/$n" && find . -type f -printf '%P\n' | sort) |
+            while IFS= read -r p; do
+                printf '%s  transcripts/%s/%s\n' \
+                    "$(sha256sum < "$proj/$n/$p" | cut -d' ' -f1)" "$n" "$p"
+            done
+        else
+            printf '%s  transcripts/%s\n' \
+                "$(sha256sum < "$proj/$n" | cut -d' ' -f1)" "$n"
+        fi
+    done
+    ;;
+pack)
+    rm -rf "$stage"; mkdir -p "$stage"
+    # No link enters the packed tree. `sbx cp` on 0.53 STOPS at the first link
+    # it meets, drops everything after it, and exits 0. A measured copy of a
+    # tree with one link in the middle arrived with the files before it and
+    # nothing after. Thus a link here would not be a link in the store: it
+    # would be a store that is missing files, with a success message. The Codex
+    # module refuses links for its own reasons, and this is the second one.
+    if [ -d "$mem" ] && [ -n "$(find "$mem" -type l 2>/dev/null | head -1)" ]; then
+        printf 'the memory holds a link, and a copy would stop there\n' >&2
+        exit 4
+    fi
+    if [ -d "$mem" ]; then
+        if [ -e "$mem/transcripts" ]; then
+            printf 'the memory holds an entry named transcripts\n' >&2
+            exit 3
+        fi
+        cp -a "$mem/." "$stage/"
+    fi
+    names | while IFS= read -r n; do
+        if [ -L "$proj/$n" ] || [ -n "$(find "$proj/$n" -type l 2>/dev/null | head -1)" ]; then
+            printf 'the conversation holds a link, and a copy would stop there\n' >&2
+            exit 4
+        fi
+        mkdir -p "$stage/transcripts"
+        cp -a "$proj/$n" "$stage/transcripts/"
+    done
+    ;;
+unpack)
+    # The memory is REPLACED: an import means "make the mound look like this".
+    # A transcript is not. It is one conversation, and a uuid that this store
+    # never saw is not a reason to destroy it. Thus transcripts are added, and
+    # a name that the store also has is overwritten.
+    mkdir -p "$proj"
+    rm -rf "$mem"; mkdir -p "$mem"
+    (cd "$stage" && find . -maxdepth 1 -mindepth 1 ! -name transcripts \
+        -exec cp -a {} "$mem/" \;)
+    if [ -d "$stage/transcripts" ]; then
+        (cd "$stage/transcripts" && find . -maxdepth 1 -mindepth 1 \
+            -exec cp -a {} "$proj/" \;)
+    fi
+    ;;
+*) exit 64 ;;
+esac
+SH
+}
+
+# The value of the key, and a refusal for a word that is not one of the three.
+# A typing error must not silently become "carry nothing".
+_dr_claude_mode() {
+    case "${DRAUGR_MEM_TRANSCRIPTS:-newest}" in
+        off|newest|all) printf '%s' "${DRAUGR_MEM_TRANSCRIPTS:-newest}" ;;
+        *) dr_error "DRAUGR_MEM_TRANSCRIPTS is \"$DRAUGR_MEM_TRANSCRIPTS\"; use off, newest or all"
+           return 1 ;;
+    esac
+}
+
+# One entry to the script above: the action, the chosen amount, and the
+# project directory in the mound. Each caller then adds only its own argument.
+_dr_claude_state() {
+    local action=$1 repo=$2 mode
+    shift 2
+    mode=$(_dr_claude_mode) || return 1
+    dr_mound_sh "$(_dr_claude_state_script)" \
+        "$action" "$mode" "$(dr_mem_mound_dir "$repo")" "$@"
+}
+
+# dr_agent_mem_quiesce: 0 quiet, 1 a writer holds the conversation, 2 unknown.
+#
+# The contract has three answers for the reason that lib/agents/codex.sh gives
+# at the same function: a probe that could not answer must not give the quiet
+# answer, because that answer copies a growing file and calls it a backup.
+dr_agent_mem_quiesce() {
+    _dr_claude_state quiesce "$1"
 }
 
 # dr_agent_mem_list <repo>: the copied files, with hashes, and with the names
@@ -103,34 +333,54 @@ dr_agent_mem_present() {
 # are no files, xargs -r does not run sha256sum. Without -r, sha256sum reads
 # stdin and never stops for an empty directory.
 dr_agent_mem_list() {
-    local dir; dir=$(dr_agent_mem_dir "$1")
-    dr_mound_sh 'cd "$1" 2>/dev/null || exit 0
-                 find . -type f -printf "%P\0" | sort -z | xargs -0 -r sha256sum' "$dir"
+    _dr_claude_state list "$1"
 }
+
+# dr_agent_mem_transcript_paths: where the conversation is inside the packed
+# tree. dr-mem prints the command that deletes these from the host again.
+dr_agent_mem_transcript_paths() { printf 'transcripts\n'; }
 
 # dr_agent_mem_pack <repo> <stage>: copy all the data to keep into <stage>.
 #
-# The memory of Claude Code is one directory of markdown. Thus the packed tree
-# is its contents. "$2/." (not "$2") copies what is INSIDE the directory. Thus
-# the packed tree has the same format for each agent.
+# A quiet agent, then the copy, then the same two questions again. A writer
+# that started and stopped between the probes still changes a hash, and that
+# is what the comparison is for. On any failure the caller publishes nothing,
+# so the store keeps the complete copy that it already had.
 dr_agent_mem_pack() {
-    local repo=$1 stage=$2
-    dr_mound_run 'set -e
-                  rm -rf "$1"; mkdir -p "$1"
-                  cp -a "$2/." "$1/"' "$stage" "$(dr_agent_mem_dir "$repo")"
+    local repo=$1 stage=$2 before after rc=0
+    dr_agent_mem_quiesce "$repo" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        dr_warn "the context was not exported; the previous store is unchanged"
+        if [ "$rc" -eq 1 ]; then
+            printf '  %sClaude Code runs in %s, or something holds the%s\n' \
+                "$_DR_DIM" "$DRAUGR_SANDBOX" "$_DR_OFF" >&2
+            printf '  %sconversation open. A copy of a file that grows is not a backup.%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %sLeave the agent, then run:  dr-mem export%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+        else
+            printf '  %sDraugr could not find out whether the conversation is being%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %swritten. Thus it did not copy it, because the copy could be half of one.%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+        fi
+        return 1
+    fi
+    before=$(dr_agent_mem_list "$repo") || return 1
+    _dr_claude_state pack "$repo" "$stage" || return 1
+    dr_agent_mem_quiesce "$repo" || return 1
+    after=$(dr_agent_mem_list "$repo") || return 1
+    if [ "$before" != "$after" ]; then
+        dr_error "the context changed during the export; the store is unchanged"
+        return 1
+    fi
 }
 
 # dr_agent_mem_unpack <repo> <stage>: the copy in the other direction.
-#
-# The code replaces the destination, and does not merge. An import means "make
-# the mound look like this". A merge leaves files from an earlier session, and
-# the store has no record of them.
 dr_agent_mem_unpack() {
-    local repo=$1 stage=$2 dir
-    dir=$(dr_agent_mem_dir "$repo")
-    dr_mound_run 'set -e
-                  rm -rf "$2"; mkdir -p "$2"
-                  cp -a "$1/." "$2/"' "$stage" "$dir"
+    local repo=$1 stage=$2
+    dr_agent_mem_import_ready "$repo" || return 1
+    _dr_claude_state unpack "$repo" "$stage"
 }
 
 # Claude's source already is one project's memory directory. Reject links
@@ -141,8 +391,9 @@ dr_agent_mem_prepare_source() {
     cp -a "$1/." "$2/"
 }
 
-# Claude imports markdown, not a live database.
-dr_agent_mem_import_ready() { return 0; }
+# A quiet target for the conversation too. The agent appends to the transcript
+# of the session that runs, and an import replaces the memory under it.
+dr_agent_mem_import_ready() { dr_agent_mem_quiesce "${1:-$DR_REPO}"; }
 dr_agent_mem_init() { return 0; }
 
 # dr_agent_mem_host_dir <repo>: the live Claude memory of the host for this repo,

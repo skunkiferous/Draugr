@@ -20,6 +20,14 @@ people reading the source, not for people calling it.
   fallback bug. A separate fast model remains unsupported and produces a warning.
 - Codex resume-last fallback on known absence, preserving native model/config arguments, explicit
   sessions, changed scope, and unknown probes. Public agent support and recovery documentation.
+- `dr-mem` carries the conversation of Claude Code, and not only its memory.
+  `DRAUGR_MEM_TRANSCRIPTS` selects how much: `off`, `newest` (the default) or `all`. `newest` is the transcript that
+  `--continue` reads, so a recreate no longer loses the conversation. The two differ in size by
+  three orders of magnitude: in this project the memory is 184 KB and one transcript is 180 MB,
+  which is why the amount is a choice and not a fixed answer.
+- Each export says how much it moved, names where the conversation now is on the host, and prints
+  the command that deletes it again. Every agent can answer that through a new module function,
+  `dr_agent_mem_transcript_paths`.
 
 ### Removed
 
@@ -32,6 +40,31 @@ people reading the source, not for people calling it.
   or upload, with links and unsafe files refused. Legacy exports get a completeness warning.
 - New starter kits and Claude plugin kits select v3 on current sbx. Codex plugin kits use v3.
   Existing user kits are left for a reviewed migration.
+- `dr-rm` and `dr-up --recreate` also refuse while a conversation was never exported. `--force` is
+  unchanged.
+- `dr-mem export` for Claude Code requires a quiet agent, with the three-answer contract that the
+  Codex module already used: quiet, writing, or unknown, where unknown is never read as quiet. It
+  matches no process name, and that is measured: in a mound the agent is the binary
+  `~/.local/share/claude/versions/<version>`, so the name of the process is the version itself and
+  `pgrep -x claude` finds nothing. Two signals replace it. The path of the executable says whether
+  the AGENT runs, which is the same question `pgrep -x codex` answers for Codex; measured in a
+  mound, a stand-in binary under that directory was found and a copy of it elsewhere was not. An
+  open handle on the conversation says whether anything is writing, whoever it is, and that one
+  does not depend on where the agent is installed. Hashes are compared around the copy for a
+  writer that pauses between two probes.
+- The shared skills store is read-only in a mound that sbx 0.53 builds, measured for a claude mound
+  and for a codex mound. The mode is fixed when the mound is created, so an upgrade alone changes
+  nothing and an older mound keeps the writable store.
+- The measurements that Draugr carried from sbx 0.37.1 were taken again on 0.53. Eight held. Two
+  changed: `sbx cp` now stops at the first link in the tree, drops everything after it and still
+  exits 0, where `-L` used to follow every link; and `kit add` accepts a kit with startup commands,
+  which it used to refuse. One open question was answered: a kit still cannot fix the host port,
+  because `create` refuses the `host-port@1` capability that `kit validate` accepts. See the table
+  in [agent support](docs/AGENT-SUPPORT.md).
+- `dr-mem export` compares the list it made inside the mound with what arrived in the store, and
+  refuses before it rotates anything. `dr-cp` warns before it copies a host tree that holds a link.
+  Both exist because of the `sbx cp` change above: the old failure was loud, and this one is a
+  partial copy with a success message.
 
 ### Fixed
 - Test fixtures beneath a checkout now stop Git discovery at their configured root. A plain

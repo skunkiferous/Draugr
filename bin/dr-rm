@@ -84,7 +84,7 @@ if [ -z "$force" ] && [ -n "$repo" ] && [ "${DRAUGR_MEM_SYNC:-}" != off ] \
     "$_dr_bin/dr-mem" check || mcheck=$?
     case "$mcheck" in
         1) dr_die \
-               "$name has memory that you did not export" \
+               "$name has memory or a conversation that you did not export" \
                "Export it first with:  dr-mem export" \
                "Then run dr-rm again. To discard it:  dr-rm --force" ;;
         2) dr_warn "could not connect to $name to look for memory that is not exported" ;;

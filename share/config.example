@@ -238,6 +238,11 @@
 # auto | manual | off
 #DRAUGR_MEM_SYNC=auto
 
+# How much of the conversation travels with the memory: off | newest | all.
+# A transcript is much bigger than the memory, and `newest` is what --continue
+# reads. `all` grows the store, and WSL does not give the space back.
+#DRAUGR_MEM_TRANSCRIPTS=newest
+
 # The store is <project key>/<agent>/ under this. The memories of two agents for
 # one project are different things, with different shapes.
 #DRAUGR_MEM_STORE="$HOME/.local/share/draugr/memory"

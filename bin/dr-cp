@@ -26,10 +26,21 @@ _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # The direction is a flag. Draugr does not guess it from the paths. If a host
 # file has the same name as a sandbox path, a guess is wrong.
 #
-# -L goes to sbx without change, and it is not the -L of cp(1). sbx follows
-# links ANYWHERE in the tree, not only the source. A test with sbx 0.37.1 showed
-# this. A seed had a plugin with AGENTS.md as a symlink to CLAUDE.md. All 2262
-# files came out, with no link in them.
+# -L goes to sbx without change, and it is not the -L of cp(1). What it does
+# depends on the version of sbx, and the newer answer is the dangerous one:
+#
+#   0.37.1  it follows links ANYWHERE in the tree, not only the source. A seed
+#           with AGENTS.md as a symlink to CLAUDE.md came out as 2262 real
+#           files, with no link left in them.
+#   0.53.0  the copy STOPS at the first link in the walk, drops everything after
+#           it, and exits 0. Measured with three trees and the same command: a
+#           tree whose link sorted first arrived EMPTY, a tree whose link sorted
+#           last arrived with the files before it, and a link inside a
+#           subdirectory left that subdirectory empty. -L changed none of them.
+#
+# The old failure was loud. This one looks like a success. Thus the check below
+# warns before such a copy, and dr-mem compares what it listed in the mound
+# with what arrived in the store.
 to_mound=
 raw=
 follow=()
@@ -102,6 +113,18 @@ else
         "not on a Windows drive: ${args[1]}" \
         "sbx.exe cannot reach it. Copy to somewhere under /mnt/<drive>/, or use" \
         "a relative path. Interop resolves it against the Windows directory."
+fi
+
+# A link in a host tree makes a partial copy on a current sbx, with no error.
+# A warning before the copy is all that Draugr can do here: the same flag is
+# still correct on an older sbx, and the files are the ones that you named.
+if [ -n "$to_mound" ] && [ -d "${args[0]}" ] \
+   && [ -n "$(find "${args[0]}" -type l 2>/dev/null | head -1)" ]; then
+    dr_warn "${args[0]} holds a link, and sbx 0.53 stops a copy at the first one"
+    printf '  %sWhat arrives is then a PART of the tree, and sbx still exits 0.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %sCopy the targets yourself, or remove the link first.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
 fi
 
 dr_info "$src -> $dst"

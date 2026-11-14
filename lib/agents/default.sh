@@ -30,6 +30,12 @@
 #                                 when it found nothing
 #   dr_agent_mem_status_extra <repo>  extra `dr-mem status` sections for this
 #                                 agent, with a heading, or nothing
+#   dr_agent_mem_transcript_paths  the places INSIDE the packed tree that hold
+#                                 the conversation itself, one glob on each
+#                                 line, or nothing. A conversation is bigger
+#                                 and more private than a memory, so dr-mem
+#                                 prints what the export put on the host, and
+#                                 the command that deletes it again
 #   dr_agent_secret               the service name under which sbx stores the
 #                                 credentials of this agent. 1 when unknown
 #   dr_agent_signin               how to get that secret, one hint on each line.
@@ -101,6 +107,10 @@ dr_agent_mem_init() { return 0; }
 
 # There is nothing to add for this agent. Draugr cannot make its status report.
 dr_agent_mem_status_extra() { return 0; }
+
+# An agent whose layout nobody tested moves nothing, so there is nothing on the
+# host to name. An empty answer is correct here, and not a missing case.
+dr_agent_mem_transcript_paths() { return 0; }
 
 # sbx knows a fixed set of credential services. The name of an agent does not
 # tell which service it uses. "droid" and "cursor" have their own services, and

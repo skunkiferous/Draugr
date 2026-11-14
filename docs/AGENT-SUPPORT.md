@@ -11,8 +11,8 @@ layouts are not claimed as supported.
 | Create, attach, shell; suspend/resume through SSH | Shared workflow | Shared workflow |
 | Native arguments and per-agent defaults | Supported | Supported, including model and reasoning settings |
 | Continue on first use | Drops `--continue` only on known absence | Drops ordinary `resume --last` only on known absence |
-| Memory transfer | Project memory directory | Quiet snapshot of memories, transcripts, indexes, and selected databases |
-| Conversation recovery after recreation | Transcript backup is outside `dr-mem` | Supported for the measured Codex layout |
+| Memory transfer | Project memory directory, and the conversation that `DRAUGR_MEM_TRANSCRIPTS` selects | Quiet snapshot of memories, transcripts, indexes, and selected databases |
+| Conversation recovery after recreation | Supported: the newest transcript travels by default | Supported for the measured Codex layout |
 | Import from a host installation | Project memory directory | Curated explicit source; global home refused |
 | Plugin lifecycle | Existing Claude seed library | Native CLI build and published local marketplaces |
 | Plugin enablement and skills report | Claude settings and registry | Codex receipt and invocation overrides |
@@ -212,6 +212,31 @@ format; existing project kits need a reviewed migration, not an automatic rewrit
 See [Docker's kit compatibility guide](https://docs.docker.com/ai/sandboxes/customize/).
 Shared skills are read-only by default on this sbx baseline; earlier measurements
 of writable shared skills apply to 0.37.1.
+
+### The older measurements, re-checked on this baseline
+
+Draugr recorded most of what it knows about `sbx` on 0.37.1. Each claim below was measured again on
+0.53.0, in disposable mounds. Eight held. Two changed, and one question that was never measured now
+has an answer.
+
+| Claim as Draugr recorded it | On 0.53.0 |
+|---|---|
+| the ssh proxy ignores `AcceptEnv`, so `SendEnv` carries nothing, not even `LANG` | holds |
+| the agent is in the sudo group with no password | holds |
+| a `localhost:<port>` rule reaches the Windows loopback, and a denied host answers 403 through the proxy | holds, both halves |
+| `kit add` replays the install commands of every kit, so each must be idempotent | holds |
+| sandboxd stops a mound 30 s after its last session | holds (stopped between +28 s and +33 s) |
+| a kit directory on the ext4 of WSL is refused | holds |
+| `--kit` is accepted more than one time | holds |
+| `sbx cp -L` follows links anywhere in the tree | **changed.** The copy stops at the first link, drops the rest, and exits 0. `-L` changes nothing. See [plugins](CLAUDE_PLUGINS.md) |
+| `kit add` refuses a kit that declares startup commands | **changed.** It is accepted now, so such a project can take a kit change in place |
+| can a kit fix the host port? (never measured) | **answered: no.** `kit validate` accepts `host-port@1` and `create` refuses it as an unsupported capability |
+
+Two facts that no claim predicted came out of the same session. `sbx kit validate` is **not** a
+complete check: it accepted a capability that `sbx create` then refused, which is the third member
+of the family that already holds the duplicate kit name and `requires: agent:`. And **one mound is
+one process view**: a file held open by one `sbx exec` session is visible, with the same pid, to a
+later and separate one. That is what lets `dr-mem` see whether the agent is writing.
 
 To repeat a compatibility check, use a disposable committed project and separate
 configuration, memory, plugin, and kit stores. Create a new named mound rather

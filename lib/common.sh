@@ -597,7 +597,7 @@ DR_KEYS=(
     DRAUGR_DATA_DIFF_MAX
     DRAUGR_BRANCH DRAUGR_REMOTE DRAUGR_REQUIRE_CLEAN DRAUGR_AUTO_SYNC DRAUGR_ON_MISSING_REPO
     DRAUGR_STOP_ON_EXIT
-    DRAUGR_MEM_SYNC DRAUGR_MEM_STORE
+    DRAUGR_MEM_SYNC DRAUGR_MEM_STORE DRAUGR_MEM_TRANSCRIPTS
     DRAUGR_PLUGIN_STORE
     DRAUGR_REQUIRES DRAUGR_EXCLUSIVE DRAUGR_LINGER
     DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL
@@ -737,6 +737,18 @@ _dr_defaults() {
 
     DRAUGR_MEM_SYNC=auto
     DRAUGR_MEM_STORE="${XDG_DATA_HOME:-$HOME/.local/share}/draugr/memory"
+    # How much of the CONVERSATION goes with the memory. The two are different
+    # things. The memory is what the agent learned, and it is small. The
+    # transcript is the conversation itself, and it is not: in this project one
+    # transcript measured 180 MB against 184 KB of memory. A recreate without
+    # the transcript loses the conversation, and the memory cannot bring it
+    # back. Thus the amount is a choice, and not a fixed answer.
+    #   off      the memory only. What Draugr did before this key existed
+    #   newest   the memory, the newest transcript, and the files of that
+    #            session. That is the one that `--continue` reads
+    #   all      the memory and every transcript
+    # `all` grows the store, and the disk of WSL does not give the space back.
+    DRAUGR_MEM_TRANSCRIPTS=newest
 
     # The plugin library that dr-plugin manages. It is on a Windows drive, so
     # that a mound can mount it. The default is empty, and then the feature is

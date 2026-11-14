@@ -614,3 +614,401 @@ seed_codex() {
     [ "$status" -eq 0 ]
     [[ "$output" != *"auto memory import failed"* ]]
 }
+
+# --- the conversation, and not only the memory ------------------------------
+#
+# The memory is what the agent learned. The transcript is what was said, and
+# --continue reads the newest one. A mound that gets only the memory back has
+# forgotten the conversation, and that is the loss these tests are about.
+#
+# The project directory of the mock mound is the parent of $MEMDIR, which is
+# where Claude Code puts both.
+
+# One transcript, with the time set, so that "the newest" has one answer and
+# not a race. Each sidecar file goes in the directory of that session.
+make_transcript() {
+    local uuid=$1 epoch=$2 proj
+    proj=$(dirname "$MEMDIR")
+    mkdir -p "$proj"
+    printf '{"session":"%s"}\n' "$uuid" > "$proj/$uuid.jsonl"
+    touch -d "@$epoch" "$proj/$uuid.jsonl"
+}
+
+make_sidecar() {
+    local uuid=$1 proj
+    proj=$(dirname "$MEMDIR")
+    mkdir -p "$proj/$uuid/tool-results"
+    printf 'a tool result\n' > "$proj/$uuid/tool-results/r1.txt"
+}
+
+# A separate process that holds a transcript open, as the agent does while it
+# writes. Not an fd of this shell: that one is inherited by the probe itself,
+# and then the probe finds its own handle and the test proves nothing.
+hold_transcript_open() {
+    local uuid=$1 proj
+    proj=$(dirname "$MEMDIR")
+    rm -f "$DR_TMP/holding"
+    setsid sh -c "exec 9>>\"$proj/$uuid.jsonl\"; : > \"$DR_TMP/holding\"; sleep 30" \
+        >/dev/null 2>&1 &
+    HOLDER=$!
+    local i=0
+    while [ ! -f "$DR_TMP/holding" ] && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.05; done
+    [ -f "$DR_TMP/holding" ]
+}
+
+release_transcript() {
+    [ -n "${HOLDER:-}" ] || return 0
+    pkill -P "$HOLDER" 2>/dev/null || :
+    kill "$HOLDER" 2>/dev/null || :
+    HOLDER=
+}
+
+@test "dr-mem export: newest carries the newest transcript and its files" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'learned\n' > "$MEMDIR/a.md"
+    make_transcript old 1700000000
+    make_transcript new 1800000000
+    make_sidecar new
+
+    DRAUGR_MEM_TRANSCRIPTS=newest run dr-mem export
+    [ "$status" -eq 0 ]
+    local store; store=$(dr_mem_store_dir "$REPO")
+    [ -f "$store/memory/a.md" ]
+    [ -f "$store/memory/transcripts/new.jsonl" ]
+    [ -f "$store/memory/transcripts/new/tool-results/r1.txt" ]
+    # The older conversation is not the one that --continue reads.
+    [ ! -e "$store/memory/transcripts/old.jsonl" ]
+}
+
+@test "dr-mem export: off carries the memory and no conversation" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'learned\n' > "$MEMDIR/a.md"
+    make_transcript new 1800000000
+
+    DRAUGR_MEM_TRANSCRIPTS=off run dr-mem export
+    [ "$status" -eq 0 ]
+    local store; store=$(dr_mem_store_dir "$REPO")
+    [ -f "$store/memory/a.md" ]
+    [ ! -e "$store/memory/transcripts" ]
+}
+
+@test "dr-mem export: all carries every transcript" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    make_transcript old 1700000000
+    make_transcript new 1800000000
+
+    DRAUGR_MEM_TRANSCRIPTS=all run dr-mem export
+    [ "$status" -eq 0 ]
+    local store; store=$(dr_mem_store_dir "$REPO")
+    [ -f "$store/memory/transcripts/old.jsonl" ]
+    [ -f "$store/memory/transcripts/new.jsonl" ]
+}
+
+@test "dr-mem export: names the conversation on the host, and how to delete it" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    make_transcript new 1800000000
+
+    run dr-mem export
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the conversation is now on this host"* ]]
+    [[ "$output" == *"Delete it again with"* ]]
+    [[ "$output" == *"rm -rf"*"transcripts"* ]]
+}
+
+@test "dr-mem export: with no transcript it says nothing about deleting one" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'learned\n' > "$MEMDIR/a.md"
+
+    run dr-mem export
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Delete it again with"* ]]
+}
+
+@test "dr-mem check: a conversation that was never exported is a loss" {
+    setup_mound || skip "no writable Windows drive path"
+    # No memory at all. The agent wrote nothing down, and you still talked for
+    # an hour. Before the transcripts, this mound looked empty and a recreate
+    # threw the conversation away without a word.
+    make_transcript new 1800000000
+
+    run dr-mem check
+    [ "$status" -eq 1 ]
+}
+
+@test "dr-up --recreate: refuses while the conversation is not exported" {
+    setup_mound || skip "no writable Windows drive path"
+    make_transcript new 1800000000
+
+    run dr-up --recreate --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"did not export"* ]]
+}
+
+@test "dr-up --recreate --force: proceeds anyway" {
+    setup_mound || skip "no writable Windows drive path"
+    make_transcript new 1800000000
+
+    run dr-up --recreate --force --yes
+    [ "$status" -eq 0 ]
+}
+
+@test "dr-mem import: the conversation comes back, and a mound-only one lives" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'learned\n' > "$MEMDIR/a.md"
+    make_transcript exported 1800000000
+    dr-mem export >/dev/null 2>&1
+
+    # A mound that lost its disk: the memory is gone, and another session that
+    # the store never saw is there.
+    rm -rf "$MEMDIR"
+    rm -f "$(dirname "$MEMDIR")/exported.jsonl"
+    make_transcript mound-only 1810000000
+
+    run dr-mem import --yes
+    [ "$status" -eq 0 ]
+    [ -f "$MEMDIR/a.md" ]
+    [ -f "$(dirname "$MEMDIR")/exported.jsonl" ]
+    # A uuid that this store never held is one conversation, and an import is
+    # not a reason to destroy it.
+    [ -f "$(dirname "$MEMDIR")/mound-only.jsonl" ]
+}
+
+@test "dr-mem export: a writer holding the transcript stops the export" {
+    setup_mound || skip "no writable Windows drive path"
+    command -v setsid >/dev/null 2>&1 || skip "no setsid"
+    mkdir -p "$MEMDIR"
+    printf 'first\n' > "$MEMDIR/a.md"
+    make_transcript live 1800000000
+    dr-mem export >/dev/null 2>&1
+
+    # Now the agent writes again, and the export must not copy a growing file.
+    printf 'second\n' > "$MEMDIR/a.md"
+    hold_transcript_open live || { release_transcript; skip "could not hold the file open"; }
+    run dr-mem export
+    release_transcript
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"was not exported"* ]]
+    # The complete copy from before is still the store. A failed export never
+    # rotates it away.
+    local store; store=$(dr_mem_store_dir "$REPO")
+    [ "$(cat "$store/memory/a.md")" = first ]
+}
+
+@test "dr_agent_mem_quiesce: quiet with nothing holding the conversation" {
+    setup_mound || skip "no writable Windows drive path"
+    make_transcript new 1800000000
+    DRAUGR_AGENT=claude dr_agent_load
+    run dr_agent_mem_quiesce "$REPO"
+    [ "$status" -eq 0 ]
+}
+
+@test "dr_agent_mem_quiesce: a holder of the transcript is not quiet" {
+    setup_mound || skip "no writable Windows drive path"
+    command -v setsid >/dev/null 2>&1 || skip "no setsid"
+    make_transcript new 1800000000
+    DRAUGR_AGENT=claude dr_agent_load
+    hold_transcript_open new || { release_transcript; skip "could not hold the file open"; }
+    run dr_agent_mem_quiesce "$REPO"
+    release_transcript
+    [ "$status" -eq 1 ]
+}
+
+@test "dr-mem export: a memory entry named transcripts is refused, not packed" {
+    setup_mound || skip "no writable Windows drive path"
+    # The packed tree puts the memory at the root and the conversation in
+    # transcripts/. A memory file of that name would make the tree ambiguous,
+    # and unpack would read it as a conversation.
+    mkdir -p "$MEMDIR/transcripts"
+    printf 'not a conversation\n' > "$MEMDIR/transcripts/x.md"
+
+    run dr-mem export
+    [ "$status" -ne 0 ]
+}
+
+@test "dr-mem: an unknown DRAUGR_MEM_TRANSCRIPTS is refused, not read as off" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'learned\n' > "$MEMDIR/a.md"
+
+    DRAUGR_MEM_TRANSCRIPTS=newst run dr-mem export
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"DRAUGR_MEM_TRANSCRIPTS"* ]]
+}
+
+@test "agents: an agent that moves nothing names no conversation on the host" {
+    DRAUGR_AGENT=nosuchagent dr_agent_load
+    run dr_agent_mem_transcript_paths
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "agents: codex names its sessions, so the delete line can reach them" {
+    DRAUGR_AGENT=codex dr_agent_load
+    run dr_agent_mem_transcript_paths
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"sessions"* ]]
+    [[ "$output" == *"session_index.jsonl"* ]]
+}
+
+@test "dr_agent_mem_present: a conversation and no memory is still data" {
+    setup_mound || skip "no writable Windows drive path"
+    # The contract of this function is "the mound holds something to export".
+    # Only dr-mem diff calls it today, and it discards the answer, so this is
+    # the only place that holds the contract to its word.
+    make_transcript new 1800000000
+    DRAUGR_AGENT=claude dr_agent_load
+    run dr_agent_mem_present "$REPO"
+    [ "$status" -eq 0 ]
+}
+
+@test "dr_agent_mem_present: an empty project directory is nothing to export" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$(dirname "$MEMDIR")"
+    DRAUGR_AGENT=claude dr_agent_load
+    run dr_agent_mem_present "$REPO"
+    [ "$status" -eq 1 ]
+}
+
+# --- a copy that stops at a link, measured on sbx 0.53 ----------------------
+#
+# `sbx cp` walks the tree and stops at the first link it meets. It drops
+# everything after that point and exits 0. Thus "the export worked" and "the
+# store holds the conversation" were two different claims, with nothing
+# between them. These three tests are that something.
+
+@test "dr-mem export: a link in the memory is refused before anything moves" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'real\n' > "$MEMDIR/a.md"
+    ln -s a.md "$MEMDIR/b.md"
+
+    run dr-mem export
+    [ "$status" -ne 0 ]
+    local store; store=$(dr_mem_store_dir "$REPO")
+    [ ! -e "$store/memory" ]
+}
+
+@test "dr-mem export: a link in the conversation is refused too" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'real\n' > "$MEMDIR/a.md"
+    make_transcript new 1800000000
+    make_sidecar new
+    ln -s r1.txt "$(dirname "$MEMDIR")/new/tool-results/r2.txt"
+
+    run dr-mem export
+    [ "$status" -ne 0 ]
+}
+
+@test "dr-mem export: an incomplete copy out leaves the store as it was" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'first\n' > "$MEMDIR/a.md"
+    printf 'also\n'  > "$MEMDIR/b.md"
+    dr-mem export >/dev/null 2>&1
+
+    # The mound now holds more, and the copy out loses one file on the way.
+    printf 'second\n' > "$MEMDIR/a.md"
+    DR_MOCK_CP_TRUNCATE=b.md run dr-mem export
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not complete"* ]]
+    local store; store=$(dr_mem_store_dir "$REPO")
+    # The complete store from before is still there, and not as a leftover.
+    [ "$(cat "$store/memory/a.md")" = first ]
+    [ -f "$store/memory/b.md" ]
+    [ ! -e "$store/memory.incoming" ]
+}
+
+# --- the agent itself, found by the path of its executable ------------------
+#
+# The handle scan above answers "is something writing right now". Between two
+# turns the agent holds nothing open, and it is still about to write. Thus the
+# stronger question is "does the agent run at all", which is what the Codex
+# module asks with pgrep. Here the answer is the PATH of the executable: in a
+# mound the agent is ~/.local/share/claude/versions/<version>, measured.
+#
+# The probe derives that directory from the project path it was given, so in
+# these tests it can only match inside the stand-in tree. A Claude Code that
+# the person running the suite has installed in WSL cannot make them fail.
+
+# A stand-in for the agent: a real binary at the path the agent would have.
+# /bin/sleep, because the probe reads the path and never the program.
+run_fake_agent() {
+    local dir=$DR_MOCK_MOUND/home/agent/.local/share/claude/versions
+    mkdir -p "$dir"
+    cp /bin/sleep "$dir/9.9.9"
+    rm -f "$DR_TMP/agent-up"
+    setsid sh -c ": > \"$DR_TMP/agent-up\"; exec \"$dir/9.9.9\" 30" >/dev/null 2>&1 &
+    FAKE_AGENT=$!
+    local i=0
+    while [ ! -f "$DR_TMP/agent-up" ] && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.05; done
+    [ -f "$DR_TMP/agent-up" ]
+}
+
+# The same binary, from a directory that is not the agent's. It must not count.
+run_decoy() {
+    local dir=$DR_TMP/elsewhere
+    mkdir -p "$dir"
+    cp /bin/sleep "$dir/9.9.9"
+    rm -f "$DR_TMP/decoy-up"
+    setsid sh -c ": > \"$DR_TMP/decoy-up\"; exec \"$dir/9.9.9\" 30" >/dev/null 2>&1 &
+    DECOY=$!
+    local i=0
+    while [ ! -f "$DR_TMP/decoy-up" ] && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.05; done
+    [ -f "$DR_TMP/decoy-up" ]
+}
+
+stop_fakes() {
+    for p in ${FAKE_AGENT:-} ${DECOY:-}; do
+        pkill -P "$p" 2>/dev/null || :
+        kill "$p" 2>/dev/null || :
+    done
+    pkill -f "/.local/share/claude/versions/9.9.9" 2>/dev/null || :
+    pkill -f "$DR_TMP/elsewhere/9.9.9" 2>/dev/null || :
+    FAKE_AGENT=; DECOY=
+}
+
+@test "dr_agent_mem_quiesce: an agent that runs is not quiet, even if it writes nothing" {
+    setup_mound || skip "no writable Windows drive path"
+    command -v setsid >/dev/null 2>&1 || skip "no setsid"
+    make_transcript new 1800000000
+    DRAUGR_AGENT=claude dr_agent_load
+    run_fake_agent || { stop_fakes; skip "could not start the stand-in"; }
+    run dr_agent_mem_quiesce "$REPO"
+    stop_fakes
+    [ "$status" -eq 1 ]
+}
+
+@test "dr_agent_mem_quiesce: a binary of the same name elsewhere is not the agent" {
+    setup_mound || skip "no writable Windows drive path"
+    command -v setsid >/dev/null 2>&1 || skip "no setsid"
+    make_transcript new 1800000000
+    DRAUGR_AGENT=claude dr_agent_load
+    run_decoy || { stop_fakes; skip "could not start the stand-in"; }
+    run dr_agent_mem_quiesce "$REPO"
+    stop_fakes
+    [ "$status" -eq 0 ]
+}
+
+@test "dr-mem export: refuses while the agent runs, and keeps the old store" {
+    setup_mound || skip "no writable Windows drive path"
+    command -v setsid >/dev/null 2>&1 || skip "no setsid"
+    mkdir -p "$MEMDIR"
+    printf 'first\n' > "$MEMDIR/a.md"
+    dr-mem export >/dev/null 2>&1
+
+    printf 'second\n' > "$MEMDIR/a.md"
+    run_fake_agent || { stop_fakes; skip "could not start the stand-in"; }
+    run dr-mem export
+    stop_fakes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"was not exported"* ]]
+    local store; store=$(dr_mem_store_dir "$REPO")
+    [ "$(cat "$store/memory/a.md")" = first ]
+}

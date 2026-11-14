@@ -229,7 +229,24 @@ import on `dr-up`. Thus you never need to think about it. The import only fills 
 *no* memory. The store is always the older copy, and must not overwrite what the agent learned after
 it.
 
-`dr-rm` refuses to destroy unexported memory, as it refuses to destroy unfetched commits.
+`dr-rm` refuses to destroy unexported memory, as it refuses to destroy unfetched commits. So does
+`dr-up --recreate`. With a transcript in the mound, that refusal covers the conversation too, and
+`--force` still proceeds.
+
+**The memory and the conversation are two things.** The memory is what the agent learned, and it is
+small. The transcript is what was said, and `--continue` reads the newest one. A mound that gets
+only the memory back has forgotten the conversation. Thus `dr-mem` carries the newest transcript as
+well, and [`DRAUGR_MEM_TRANSCRIPTS`](CONFIG.md#draugr_mem_transcripts) chooses the amount: `off`,
+`newest` (the default) or `all`. They differ in size by three orders of magnitude, so each export
+says how much it moved, where the conversation now is on your host, and the command that deletes it
+again.
+
+**An export needs a quiet agent.** Both agents write their conversation continuously, and a copy of
+a growing file is not a backup. `dr-mem export` refuses while the agent runs in the mound, and also
+while anything else holds the conversation open. Between two turns the agent holds nothing open and
+is still about to write, which is why the first of those two questions is the important one. It
+compares hashes around the copy as well, for a writer that pauses between two probes. A refused
+export leaves the store exactly as it was. Leave the agent, then export.
 > ### The project-key trap, handled
 > Claude Code makes the name of its memory folder from the **absolute path** of the project. Thus
 > the same repository has a different key on each side of the boundary:

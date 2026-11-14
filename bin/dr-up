@@ -211,7 +211,7 @@ if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
         "$_dr_bin/dr-mem" check || _mcheck=$?
         case "$_mcheck" in
             1) dr_die \
-                   "$DRAUGR_SANDBOX has memory that you did not export" \
+                   "$DRAUGR_SANDBOX has memory or a conversation that you did not export" \
                    "A recreate destroys it. Export it first with:  dr-mem export" \
                    "Then run dr-up --recreate again. To discard it:  dr-up --recreate --force" ;;
             2) dr_warn "could not connect to $DRAUGR_SANDBOX to look for memory that is not exported" ;;

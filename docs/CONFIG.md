@@ -345,9 +345,12 @@ a dev server in a browser tab. `dr-ports` does the same during a session, with n
 
 The field differs by kit format. A v2 kit lists `publishedPorts`, where `spec.PublishedPort` has no
 host-port field. A v3 kit declares one `com.docker.sandbox/port@1` capability for each port, and
-its field is `transport`, not the `protocol` of v2. v3 also has a `host-port@1` capability, which
-Draugr has not measured: whether that one can fix the host port is an open question, so this key
-stays the answer that is proven.
+its field is `transport`, not the `protocol` of v2.
+
+v3 also names a `host-port@1` capability, and it does not work on this baseline: `sbx kit validate`
+accepts a kit that declares it, and `sbx create` then refuses the same file with "unsupported
+capability type com.docker.sandbox/host-port@1". So a kit still cannot fix the host port, this key
+is still the answer, and `sbx kit validate` is one more check that is not complete.
 
 They are on the **Windows** loopback, not that of WSL. Thus open them in a Windows browser. `curl`
 from inside WSL reaches the own loopback of the WSL VM, and does not connect.
@@ -815,6 +818,28 @@ Default `auto`.
 | `auto` | Import on `dr-up`, export when you leave the agent. The import only fills a mound with **no** memory, because the store is always the older copy. |
 | `manual` | No automatic transfers. But `dr-rm` still refuses to destroy unexported memory, and `dr-status` still reports it. |
 | `off` | You keep no agent memory: no transfers, no refusal, no memory section. |
+
+### `DRAUGR_MEM_TRANSCRIPTS`
+Default `newest`. How much of the conversation travels with the memory.
+
+| Value | |
+|---|---|
+| `off` | The memory only. That is what Draugr carried before this key existed. |
+| `newest` | The memory, the newest transcript, and the files of that session. `--continue` reads the newest transcript, so this is the amount that makes a recreate invisible to you. |
+| `all` | The memory and every transcript of this project. |
+
+The memory and the conversation are different things, and they differ in size by three orders of
+magnitude. In this project the memory is 184 KB of markdown, and one transcript is 180 MB. Thus
+`all` grows the store on each export, and the disk of WSL does not give that space back when you
+delete from it.
+
+Each export prints the size that it moved, and where it put the transcripts, with the command that
+deletes them from this host again. `dr-mem export` also keeps the copy from the export before as
+`memory.previous`, so a store can hold two transcripts while you have one.
+
+With a transcript in the store, `dr-mem check` sees it. Thus `dr-rm` and `dr-up --recreate` refuse
+while a conversation is not exported, the same way they already refuse for the memory.
+`dr-up --recreate --force` and `dr-rm --force` still proceed.
 
 ### `DRAUGR_MEM_STORE`
 Default `~/.local/share/draugr/memory`. Where `dr-mem export` writes: by the host form of the

@@ -250,6 +250,26 @@ export)
     mkdir -p "$store_dir"
     rm -rf "$store_dir/memory.incoming"
     mv "$packed" "$store_dir/memory.incoming"
+
+    # "sbx cp exited 0" is not "the copy is complete". On sbx 0.53 a cp of a
+    # tree that holds a link STOPS at that link and still exits 0, so the
+    # files after it are missing with no message. The agent module already
+    # listed the mound side with hashes, and the names of the packed tree are
+    # the same names by contract. Thus one comparison answers it. Sorted,
+    # because the module may group its lines while a walk of the store is
+    # alphabetic, and the ORDER is not part of the contract.
+    #
+    # This runs BEFORE the rotation. Thus a copy that is not complete leaves
+    # the store exactly as it was, instead of replacing a good store with an
+    # incomplete one and keeping the good one only as memory.previous.
+    incoming_list=$(list_local "$store_dir/memory.incoming")
+    if [ "$(printf '%s\n' "$incoming_list" | sort)" != "$(printf '%s\n' "$export_list" | sort)" ]; then
+        rm -rf "$store_dir/memory.incoming"
+        dr_die "the copy out of $DRAUGR_SANDBOX is not complete; the store is unchanged" \
+               "$(printf '%s\n' "$export_list" | grep -c .) file(s) in the mound, $(printf '%s\n' "$incoming_list" | grep -c .) arrived" \
+               "A link in the tree stops sbx cp without an error. Look with:  dr-mem diff"
+    fi
+
     if [ -d "$store_dir/memory" ]; then
         rm -rf "$store_dir/memory.previous"
         mv "$store_dir/memory" "$store_dir/memory.previous"
@@ -267,7 +287,33 @@ export)
         printf 'files:   %s\n' "$n"
     } > "$marker"
 
-    dr_ok "exported $n file(s) to $store_dir/memory"
+    dr_ok "exported $n file(s), $(du -sh "$store_dir/memory" | cut -f1), to $store_dir/memory"
+
+    # A conversation is not a memory. It is bigger, it is the whole thing that
+    # was said, and the export just put it on your host, outside the mound.
+    # Thus name it, and name the command that removes it again. The store also
+    # keeps the copy from the export before, so both are in the list.
+    mapfile -t _tr_paths < <(dr_agent_mem_transcript_paths)
+    _tr_found=()
+    for _pat in ${_tr_paths[@]+"${_tr_paths[@]}"}; do
+        for _dir in "$store_dir/memory" "$store_dir/memory.previous"; do
+            # Unquoted on purpose: the agent module may give a glob, and
+            # `thread_history_*.sqlite` must match the real file names.
+            # shellcheck disable=SC2086
+            for _hit in "$_dir"/$_pat; do
+                [ -e "$_hit" ] && _tr_found+=("$_hit")
+            done
+        done
+    done
+    if [ ${#_tr_found[@]} -gt 0 ]; then
+        heading "the conversation is now on this host"
+        printf '  %s in:\n' "$(du -ch "${_tr_found[@]}" | tail -1 | cut -f1)"
+        printf '    %s\n' "${_tr_found[@]}"
+        printf '  %sDelete it again with:%s\n' "$_DR_DIM" "$_DR_OFF"
+        printf '    rm -rf'
+        printf ' %q' "${_tr_found[@]}"
+        printf '\n'
+    fi
     ;;
 
 # --- import -----------------------------------------------------------------
@@ -383,7 +429,12 @@ import)
         || dr_die "could not place the memory in $DRAUGR_SANDBOX"
     mound_sh 'rm -rf "$1"' "$DR_MOUND_STAGE" || :
 
-    dr_ok "imported $n file(s) into $mem_dir"
+    # The PARENT, not the memory directory. The packed tree can hold more than
+    # the memory (the conversation of Claude Code goes beside it), and the
+    # contract in lib/agents/default.sh is that dr-mem creates this parent and
+    # the module places the tree under it. Thus the parent is the one name that
+    # is correct for every agent.
+    dr_ok "imported $n file(s) into $(dirname "$mem_dir")"
     ;;
 
 # --- diff -------------------------------------------------------------------

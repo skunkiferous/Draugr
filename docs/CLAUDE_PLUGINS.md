@@ -298,9 +298,16 @@ normal account does not have it, unless Developer Mode is on. **A failure here l
 tree.** Remove it before you try again. Do not mount a half-copied seed.
 
 `-L` copies the target of each link. `cp -L` and `docker cp -L` follow only a link named as the
-source. But `sbx` follows links **in all places in the tree**. A test on sbx 0.37.1 showed this. A
-seed of three marketplaces came out complete, with 2262 files. `AGENTS.md` arrived as a real
-8873-byte file, with no link left in it.
+source. On sbx 0.37.1, `sbx` followed links **in all places in the tree**: a seed of three
+marketplaces came out complete, with 2262 files, and `AGENTS.md` arrived as a real 8873-byte file
+with no link left in it.
+
+> **On sbx 0.53 that is no longer true, and the new answer is silent.** A copy stops at the first
+> link in the walk, drops everything after it, and exits 0. Measured: a tree whose link sorted
+> first arrived empty; the same tree with the link last arrived without the link; a link inside a
+> subdirectory left that subdirectory empty. `-L` changed nothing. Thus a seed that holds a link
+> gives a partial tree with a success message, and the warning below about not mounting a partial
+> tree has no failure to warn you first. `dr-cp` now says so before it copies such a tree.
 
 To follow the links is the right answer here, not a compromise. `AGENTS.md` becomes a copy of
 `CLAUDE.md`, not a link to it, and for a plugin that is the same. It also avoids a later question:
@@ -981,12 +988,13 @@ to a file. Thus each run left one line, and we counted the lines. The test gave 
    clones into a fixed path. Each of them does that again for each kit that you add later.
 3. **If the sandbox only stops and starts, install does not run.** Three start cycles gave one
    install line. Only the creation and the recreate of `sbx kit add` run it.
-4. **`sbx kit add` refuses a kit that declares `commands.startup`.** It says that
-   "the kit-add recreate flow does not yet apply" to it, and tells you to use `sbx rm` and
-   `sbx create --kit`. It exits with 1, and does not change the sandbox. This test looks only at the
-   kit that you add. A startup command in a kit that the sandbox already has does not block it. Thus
-   a kit that you apply in place must have install commands only. `dr-plugin kit` makes that type
-   of kit.
+4. **`sbx kit add` refused a kit that declares startup commands, and 0.53 accepts it.** On
+   0.37.1 it said that "the kit-add recreate flow does not yet apply" to such a kit, told you to
+   use `sbx rm` and `sbx create --kit`, exited with 1, and changed nothing. On 0.53 the same add
+   is accepted. Thus a project whose kit has startup commands can take a kit change in place, and
+   no longer needs a recreate for that reason alone. Not measured: whether a startup hook added
+   this way runs at the next start. `dr-plugin kit` generates install commands only, which worked
+   on both versions.
 
 The same test gave two more facts. Each of them can cost you an afternoon:
 
