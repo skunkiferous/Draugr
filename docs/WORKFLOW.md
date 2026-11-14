@@ -366,11 +366,44 @@ directories, because Claude loads a store entry named `.something` as each other
 | `dr-skills import` | fill the store from your own host skill directories |
 | `dr-skills install` | put the skills of Draugr into the store |
 
+### What Draugr ships, and why
+
+An agent inside a mound cannot see Draugr. The `dr-*` commands run on the host, `sbx` is not
+installed in the mound either, and the agent has no way to learn any of this from the code. Thus it
+guesses: it reads a 403 from the proxy as a dead service, it calls work finished while the work sits
+in an uncommitted tree that a rebuild erases, or it asks you for something in words that do not name
+a command. These skills exist so that it knows the shape of its own situation, and can hand you the
+exact line to run.
+
+| skill | what it teaches |
+|---|---|
+| `draugr` | where the agent is, what only you can change, and how to ask for it in four lines |
+| `draugr-kit` | the network allow list and the install commands of the project, in either kit format |
+| `draugr-handoff` | moving work, files and ports across the boundary, and why a push cannot work |
+| `draugr-recreate` | what a rebuild destroys, and the order that saves each thing first |
+
+`dr-skills install` puts all of them in the store, after it lists them and asks. They are
+instructions in reach of every mound on the machine, so they get the same review as any other
+entry: `dr-skills diff` reports a change to them as it reports any other.
+
+`dr-doctor` reports both halves of that, because the store belongs to the machine and not to a
+project:
+
+```text
+  ! skills store                       2 entr(ies), a change is not reviewed
+  · draugr skills                      1 of 4 in the store
+```
+
+The first is a **warning**: every mound reads the store, so a change nobody looked at is worth
+one. The second is a **note**, which counts toward nothing and disappears under `--quiet`.
+Draugr never installs these skills on its own, so a machine that does not have them is not a
+machine with a problem.
+
 ### Letting the agent build the kit
 
 The kit of a new project is the one thing that you cannot write in advance. You do not know what a
-build needs until it fails. Draugr ships a skill, `draugr-kit`, that teaches the agent to find that
-out, and `dr-skills install` puts it where each mound can read it.
+build needs until it fails. The `draugr-kit` skill teaches the agent to find that out, and
+`dr-skills install` puts it where each mound can read it.
 
 The loop rests on one measured fact: **a host opened with `dr-policy --allow` applies at once on the
 running mound.** Thus you fix the build by repeated tries inside one session, not by a recreate for

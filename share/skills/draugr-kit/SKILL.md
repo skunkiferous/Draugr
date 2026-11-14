@@ -5,10 +5,35 @@ description: Find what a project needs to build in a Draugr sandbox, and write i
 
 # Build the kit of a project from inside the mound
 
-Check `sbx --version` and the existing kit before editing it. On sbx 0.53, built-in
-agents use v3 and require v3 mixins. `dr-init` writes that format on current sbx.
-The v2 command examples below describe the older sbx 0.37 baseline; do not combine
-them with a v3 workload. A v3 network/setup example is:
+You run in a sandbox, a "mound", that Draugr created. It has its own kernel and a
+**default-deny network**. A build that works on the host can fail here only
+because a host that it needs is not allowed yet. The **draugr** skill describes
+the rest of your situation, and **draugr-recreate** describes what applying a kit
+costs.
+
+## Read the format of the kit. Do not choose one
+
+A kit has two formats, and `sbx` is **not installed in the mound**, so you cannot
+ask this machine which one it wants. Read the first lines of
+`.draugr/kit/spec.yaml` and write what is already there. `dr-init` wrote whichever
+format the local `sbx` accepts.
+
+| | v2 | v3 |
+|---|---|---|
+| how it starts | `schemaVersion: "2"` | `# syntax=docker/sandbox-kit:3`, then `schemaVersion: "3"` |
+| hosts at run time | `caps.network.allow` | `network-policy@1`, under `config.runtime.allow` |
+| hosts during install | the same list | a separate `config.install.allow` |
+| setup commands | `commands.install` | `lifecycle@1`, under `config.install` |
+| commands at each start | `commands.startup` | `lifecycle@1`, under `config.startup` |
+| a published port | `publishedPorts` | one `port@1` for each port, and the field is `transport` |
+| require one agent | `requires: agent:` | no equivalent. A v3 kit cannot pin the agent |
+
+**Do not change the schema version.** A current `sbx` refuses a v2 kit outright,
+and a v3 kit cannot be composed with a v2 one, but the fix is a migration with a
+translator and it belongs to the operator. Changing the version line alone leaves
+every field in the old spelling, and that kit fails at create.
+
+The same rules in v3 look like this:
 
 ```yaml
 # syntax=docker/sandbox-kit:3
@@ -27,12 +52,10 @@ capabilities:
           description: Install jq
 ```
 
-Validate the actual kit with `dr-kit validate`. Keep existing user kits for an
-explicit migration; changing only the schema version does not translate fields.
-
-You run in a sandbox, a "mound", that Draugr created. It has its own kernel and a
-**default-deny network**. A build that works on the host can fail here only
-because a host that it needs is not allowed yet.
+Two measured rules for v3: a `lifecycle@1` entry that declares no hook is refused,
+so leave the capability out instead of writing it empty; and an empty
+`allow: []` is accepted. Only the operator can check a kit, with
+`dr-kit validate`.
 
 Your job: find what the project needs, and write down the part that you own. You
 cannot do this alone. The parts that you cannot do are not obstacles to go
@@ -74,9 +97,9 @@ you need one of them, stop and ask.
 
 | | |
 |---|---|
-| `caps.network.allow` | **Not yours.** The operator runs `dr-kit adopt`. It writes the hosts that were really opened, from the own record of the daemon. |
-| `commands.install` | **Yours.** You just found how to build this project. |
-| `publishedPorts`, `environment` | You can propose them. |
+| the run-time allow list (`caps.network.allow`, or `config.runtime.allow`) | **Not yours.** The operator runs `dr-kit adopt`. It writes the hosts that were really opened, from the own record of the daemon. |
+| the install commands (`commands.install`, or `config.install`) | **Yours.** You just found how to build this project. |
+| ports and environment | You can propose them. |
 
 If you edit the allow list by hand, the edits conflict. `dr-kit adopt` writes to
 the same block on the host, and your copy of the repo is a clone. Report the
@@ -84,16 +107,31 @@ hosts, and let that command put them in place.
 
 ## Write the install commands
 
-`commands.install` runs **once, when the mound is created**. It is the setup
-that a teammate otherwise does by hand. `commands.startup` runs at **each
-start**, and must be idempotent (safe to run twice).
+The install commands run **once, when the mound is created**. They are the setup
+that a teammate otherwise does by hand. The startup commands run at **each
+start**, and must be idempotent (safe to run twice). The same is true when the
+operator applies a kit to a running mound: measured on the current `sbx`,
+`dr-kit apply` re-runs the install commands of **every** kit, not only of the new
+one.
 
 ```yaml
+# v2
 commands:
   install:
     - command: "npm ci"
       user: "1000"
       description: Install dependencies
+```
+
+```yaml
+# v3, the same thing
+capabilities:
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: "npm ci"
+          user: "1000"
+          description: Install dependencies
 ```
 
 **Install commands cannot see your repository.** They run *before* it is in the
@@ -121,7 +159,9 @@ the operator runs `dr-up --recreate`. A failure there shows as a bare
 `500 ... failed to run sandbox container`, unless their Draugr is new enough to
 read the log of the daemon. Say clearly that these commands are untested.
 
-**A `PATH` in `environment.variables` can lock the operator out of the mound.**
+**A `PATH` for the whole mound can lock the operator out of it.** In v2 that is
+`environment.variables`. A v3 mixin has no environment block at all, and names a
+variable in the `env:` list of one hook instead, which is narrower and safer.
 The value REPLACES the value of the image, and does not extend it. Thus a PATH
 that looks like a correct, standard Linux one silently drops all that the image
 added. That includes the directory of the agent binary itself.
@@ -149,9 +189,11 @@ opening.
 
 Important rules:
 
-- Use `schemaVersion: "2"` spellings. v1 still validates, but warns.
-- `commands.install` takes `command` as a string. `commands.startup` requires the
-  list form, `["sh", "-c", "…"]`, and refuses a string.
+- Write the spellings of the format that the file already uses. See the table at
+  the top. v1 still validates, and warns.
+- In v2, an install command takes `command` as a string, and a startup command
+  requires the list form, `["sh", "-c", "…"]`, and refuses a string. In v3,
+  measured, both accept a string and a list.
 - `user: "1000"` is the agent. Use `"0"` only for something that really needs
   root, such as `apt-get install`.
 - Give each command one job, with a `description`. People read the list.

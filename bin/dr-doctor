@@ -51,6 +51,18 @@ soft() {
     for l in "$@"; do printf '      %s%s%s\n' "$_DR_DIM" "$l" "$_DR_OFF"; done
 }
 
+# A third level, and the reason it exists: a feature that you CHOSE not to use
+# is not a warning. `soft` counts, and then the verdict says "Ready, with 1
+# warning(s)" for ever on a machine whose owner declined something optional.
+# That teaches people to ignore the colour. A note states the fact and the
+# command, and counts nothing. Like `ok`, --quiet hides it: it is not a problem.
+note() {
+    [ -n "$quiet" ] && return 0
+    printf '  %s·%s %-34s %s\n' "$_DR_DIM" "$_DR_OFF" "$1" "${2:-}"
+    shift 2 || shift $#
+    for l in "$@"; do printf '      %s%s%s\n' "$_DR_DIM" "$l" "$_DR_OFF"; done
+}
+
 # version_ge 0.37.1 0.37  ->  true
 #
 # Print both versions, and sort them with `sort -V` (a version sort: 0.10 is
@@ -160,6 +172,58 @@ else
         "sbx is a Windows binary. By default, it is not on the PATH of WSL." \
         "Install:  winget install Docker.sbx" \
         "Or tell Draugr where it is:  export DRAUGR_SBX=/mnt/c/path/to/sbx.exe"
+fi
+
+# The shared skills store belongs to sbx, and not to this project: one store for
+# the whole machine, mounted into each mound of each project, for both agents.
+# Its contents are instructions that an agent loads and mostly trusts. Thus two
+# facts belong in a report that answers "is this machine set up": whether a
+# change to it is still unreviewed, and whether the skills that Draugr ships are
+# in it.
+#
+# Draugr never fills that store without being asked. See bin/dr-skills for why.
+# Thus a missing skill is a NOTE and not a warning: it is a feature that you
+# choose. An unreviewed change is a warning, because every mound reads it.
+if _skills_dir=$(dr_skills_dir 2>/dev/null); then
+    _store_n=0
+    [ -d "$_skills_dir" ] && _store_n=$(find "$_skills_dir" -mindepth 1 -maxdepth 1 \
+        \( -type d -o -type l \) 2>/dev/null | wc -l)
+
+    if [ "$_store_n" -eq 0 ]; then
+        note "skills store" "empty" \
+            "Nothing is in reach of a mound from here, and nothing to review."
+    elif [ -x "$_dr_bin/dr-skills" ] && ! "$_dr_bin/dr-skills" diff >/dev/null 2>&1; then
+        # The exit code is the contract of that command: 1 means the store
+        # changed since the last accept. A command that failed for its own
+        # reason reads the same here, and that errs toward "look at it", which
+        # is the safe direction for instructions that each mound reads.
+        soft "skills store" "$_store_n entr(ies), a change is not reviewed" \
+            "Every mound on this machine reads them, for both agents." \
+            "See what changed:  dr-skills diff" \
+            "Then record it:    dr-skills accept"
+    else
+        ok "skills store" "$_store_n entr(ies), reviewed"
+    fi
+
+    # And the ones that this checkout ships. A count, so that a new skill in a
+    # later version shows as missing rather than staying invisible.
+    _want=0
+    _have=0
+    for _d in "$DRAUGR_ROOT"/share/skills/*/; do
+        [ -d "$_d" ] || continue
+        _want=$((_want + 1))
+        [ -f "$_skills_dir/$(basename "$_d")/SKILL.md" ] && _have=$((_have + 1))
+    done
+    if [ "$_want" -eq 0 ]; then
+        :
+    elif [ "$_have" -lt "$_want" ]; then
+        note "draugr skills" "$_have of $_want in the store" \
+            "They tell an agent inside a mound what it cannot see: where it is," \
+            "which commands only you can run, and what a rebuild destroys." \
+            "They are instructions, so it lists them and asks:  dr-skills install"
+    else
+        ok "draugr skills" "$_have of $_want in the store"
+    fi
 fi
 
 # --- the WSL ssh bridge ----------------------------------------------------

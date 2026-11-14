@@ -28,6 +28,17 @@ people reading the source, not for people calling it.
 - Each export says how much it moved, names where the conversation now is on the host, and prints
   the command that deletes it again. Every agent can answer that through a new module function,
   `dr_agent_mem_transcript_paths`.
+- `dr-doctor` reports the shared skills store: how many entries it holds, whether a change to it
+  was never reviewed, and how many of the skills that Draugr ships are installed. The first is a
+  warning, because every mound on the machine reads that store. The second is a new third level of
+  report, a note, which counts toward no verdict and is hidden by `--quiet`: Draugr never installs
+  those skills on its own, so a machine without them has made a choice and not a mistake.
+- Three more skills in `share/skills/`, so that an agent inside a mound knows the shape of its own
+  situation instead of guessing it: `draugr` (where it is, what only the operator can change, and
+  how to ask), `draugr-handoff` (work, files and ports across the boundary, and why a push cannot
+  work) and `draugr-recreate` (what a rebuild destroys, and the order that saves it first). Each one
+  states what was measured rather than what seems likely. `dr-skills install` picks up every
+  directory under `share/skills/`, so it needs no change, and its question now lists the whole set.
 
 ### Removed
 
@@ -52,6 +63,11 @@ people reading the source, not for people calling it.
   open handle on the conversation says whether anything is writing, whoever it is, and that one
   does not depend on where the agent is installed. Hashes are compared around the copy for a
   writer that pauses between two probes.
+- The `draugr-kit` skill no longer contradicts itself. It told the agent to run `sbx --version`,
+  which is not installed in a mound, while its own body said so; and its rules still required the
+  v2 spelling under a v3 heading. It now reads the format from the kit that the project already has,
+  names both spellings side by side, and says that changing the schema version alone produces a kit
+  that fails at create.
 - The shared skills store is read-only in a mound that sbx 0.53 builds, measured for a claude mound
   and for a codex mound. The mode is fixed when the mound is created, so an upgrade alone changes
   nothing and an older mound keeps the writable store.

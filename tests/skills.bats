@@ -218,6 +218,54 @@ make_skill() {
     [[ "$output" == *"description:"* ]]
 }
 
+# --- the shipped set, not one skill by name ----------------------------------
+#
+# Draugr ships several skills now. A test that names only one of them passes
+# while a new skill has no frontmatter at all, and an agent then ignores it with
+# no message. These two cover the set, whatever it holds.
+
+@test "share/skills: each shipped skill has frontmatter that names its directory" {
+    local d name bad=0
+    for d in "$DR_ROOT"/share/skills/*/; do
+        name=${d%/}; name=${name##*/}
+        if [ ! -f "$d/SKILL.md" ]; then
+            printf 'no SKILL.md in %s\n' "$name"
+            bad=1
+            continue
+        fi
+        # The first line must open the frontmatter, and the name must be the
+        # directory: that is how both agents find a skill in the store.
+        if [ "$(head -1 "$d/SKILL.md")" != "---" ]; then
+            printf '%s does not open with ---\n' "$name"
+            bad=1
+        fi
+        if ! head -6 "$d/SKILL.md" | grep -q "^name: $name\$"; then
+            printf '%s has no matching name: line\n' "$name"
+            bad=1
+        fi
+        if ! head -6 "$d/SKILL.md" | grep -q '^description: '; then
+            printf '%s has no description\n' "$name"
+            bad=1
+        fi
+    done
+    [ "$bad" -eq 0 ]
+}
+
+@test "dr-skills install: names every shipped skill before the question" {
+    local d name count=0
+    for d in "$DR_ROOT"/share/skills/*/; do count=$((count + 1)); done
+    [ "$count" -gt 1 ]            # the test is worthless with only one
+
+    run dr-skills install
+    [ "$status" -ne 0 ]           # no terminal and no --yes: it must refuse
+    # Each name, so the operator reads the whole list before they accept it.
+    for d in "$DR_ROOT"/share/skills/*/; do
+        name=${d%/}; name=${name##*/}
+        [[ "$output" == *"$name"* ]]
+    done
+    [[ "$output" == *"$count skill(s)"* ]]
+}
+
 # --- the skills your plugins ship ---------------------------------------------
 #
 # The skills of a plugin load from the plugin, never from this store. Thus they

@@ -712,9 +712,10 @@ data that must be at a specific path in the working tree.
 
 ## Safety model
 
-The detailed measurements below describe sbx 0.37.1. On sbx 0.53, new mounds mount shared skills
-read-only by default. Recheck permissions after an upgrade; see the
-[current compatibility notes](docs/AGENT-SUPPORT.md#compatibility-and-evidence).
+The detailed measurements below describe sbx 0.37.1. On sbx 0.53, a new mound mounts the shared
+skills store read-only, measured for a claude mound and for a codex mound. The mode is fixed when
+the mound is created, so an upgrade alone changes nothing and an older mound keeps the writable
+store. See the [current compatibility notes](docs/AGENT-SUPPORT.md#compatibility-and-evidence).
 
 What the agent can and cannot see. A direct test showed each line:
 
