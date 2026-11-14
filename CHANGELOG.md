@@ -12,6 +12,16 @@ people reading the source, not for people calling it.
 
 ### Added
 
+### Removed
+
+### Changed
+
+### Fixed
+
+## [0.8.0] — 2026-11-14
+
+### Added
+
 - Native Codex plugin management through the existing `dr-plugin` verbs. Agent-specific builds
   publish local marketplaces, generate install kits, retain rollback copies, and apply plugin
   switches at attach without copying host authentication or native configuration.
@@ -49,8 +59,6 @@ people reading the source, not for people calling it.
   serves the agent, git and `dr-cp`, and `dr-data` refuses with the command to run by hand.
   Measured against a real mound on sbx 0.53: the `dr-up` that installed it took 9 seconds in all,
   rsync 3.5.0 arrived, and the next `dr-up` printed nothing, because the probe found it.
-
-### Removed
 
 ### Changed
 
@@ -1184,7 +1192,8 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 390 tests run in CI.
   name instead.
 - One repository per mound.
 
-[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.8.0
 [0.7.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.7.0
 [0.6.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.6.0
 [0.5.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.5.0
