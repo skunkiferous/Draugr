@@ -18,6 +18,14 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- The release check in `tests/docs.bats` compares `DRAUGR_VERSION` with the newest released heading
+  in this file. It used to ask whether that version appears anywhere in the file, which every past
+  release answers, so the check could not fail in the one case it existed for: 0.8.0 was released
+  and tagged with the constant still reading 0.7.0, and the test passed on the heading of 0.7.0. A
+  run against that exact mistake confirms both halves. The old form answers `ok`, and the new one
+  fails and prints `CHANGELOG says 0.8.0, lib/common.sh says 0.7.0`. It catches a bump with no
+  heading as well, and `[Unreleased]` is skipped because work in progress is not a release.
+
 ## [0.8.0] — 2026-11-14
 
 ### Added

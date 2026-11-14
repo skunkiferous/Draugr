@@ -148,8 +148,30 @@ teardown() { dr_test_teardown; }
 
 # --- the release itself ---------------------------------------------------------
 
-@test "docs: the CHANGELOG has an entry for the current version" {
-    grep -qF "[$DRAUGR_VERSION]" "$DR_ROOT/CHANGELOG.md"
+@test "docs: the newest released CHANGELOG heading IS DRAUGR_VERSION" {
+    # This used to be `grep -qF "[$DRAUGR_VERSION]"`, which asked whether the
+    # version appears ANYWHERE in the file. Every past release is in there, so
+    # the answer was yes whatever DRAUGR_VERSION said. Version 0.8.0 shipped and
+    # was tagged with the constant still reading 0.7.0, and this test passed on
+    # the heading of the release before it. A check that cannot fail in the one
+    # case it exists for is not a check.
+    #
+    # The newest heading that is a VERSION, so [Unreleased] is skipped: work in
+    # progress belongs there, and it is not a release. The three digit groups
+    # are what skip it, and a heading of any other shape is not a release
+    # either.
+    local newest
+    newest=$(grep -m1 -E '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$DR_ROOT/CHANGELOG.md" \
+             | sed -E 's/^## \[([0-9.]+)\].*/\1/')
+    [ -n "$newest" ]
+
+    # Both directions are caught here. A bump with no heading fails, and a
+    # heading with no bump fails, which is the one that shipped.
+    if [ "$newest" != "$DRAUGR_VERSION" ]; then
+        printf 'CHANGELOG says %s, lib/common.sh says %s\n' \
+               "$newest" "$DRAUGR_VERSION" >&2
+        return 1
+    fi
 }
 
 @test "docs: no unimplemented-command markers are left in the README" {
