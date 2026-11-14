@@ -2,15 +2,15 @@
 
 What the agent can and cannot reach, and how we found each claim. The original measurements below
 use Docker Sandboxes `v0.37.1` on Windows 11 + WSL2. They are version-specific. On **0.53.0**, a
-new mound has a read-only shared skills mount, measured for both a claude and a codex mound; the
+new mound has a read-only shared skills mount, measured for both a claude and a codex mound. The
 source mount remains read-only.
 The writable-store claims below describe the older baseline. See [current agent evidence](AGENT-SUPPORT.md#compatibility-and-evidence).
 
 Codex context transfer selects approved state before host staging or upload and refuses a global
 host home. It excludes authentication, native configuration, logs, and plugin connection data.
 Imports require a quiet target and preserve feature consent. Plugin publications contain inert
-package files; their private runtime data and hook trust remain in each consumer mound. These
-controls do not make imported instructions or third-party plugins trustworthy: review them.
+package files. Their private runtime data and hook trust remain in each consumer mound. These
+controls do not make imported instructions or third-party plugins trustworthy, so review them.
 
 Draugr rests on one idea: the possible damage is so small that "let it run" is the *responsible*
 choice. That is worth something only if the boundary is where you think it is. Thus the two places

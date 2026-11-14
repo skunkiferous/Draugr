@@ -10,7 +10,7 @@
 #   a change nobody reviewed     a warning. Every mound reads it
 #   a shipped skill not installed  a NOTE. Draugr never installs them unasked
 #
-# The second one is why `note` exists. With `soft`, the verdict would say
+# The second one is why `note` exists. With `soft`, the verdict says
 # "Ready, with 1 warning(s)" for ever on a machine whose owner declined an
 # optional feature, and that teaches people to ignore the colour.
 
@@ -27,7 +27,7 @@ setup() {
 teardown() { dr_test_teardown; }
 
 # One skill in the store that Draugr did not ship, as `sbx skills import` or
-# another agent would leave it.
+# another agent leaves it.
 foreign_skill() {
     mkdir -p "$DR_SKILLS_DIR/somebody-else"
     printf -- '---\nname: somebody-else\ndescription: not from Draugr\n---\n\nbody\n' \
@@ -65,7 +65,7 @@ foreign_skill() {
     [[ "$output" == *"draugr skills"* ]]
     [[ "$output" == *"0 of"* ]]
     [[ "$output" == *"dr-skills install"* ]]
-    # This is the whole reason for the third level. A warning here would never
+    # This is the whole reason for the third level. A warning here does not
     # go away for somebody who does not want the skills.
     [[ "$output" == *"· draugr skills"* ]]
     [[ "$output" != *"! draugr skills"* ]]

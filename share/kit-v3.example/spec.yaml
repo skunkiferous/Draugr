@@ -16,7 +16,7 @@
 # not do it without your knowledge.
 #
 # v3 is the format of the built-in agents of current sbx. It CANNOT compose
-# with a v1 or v2 kit: a v2 file that uses caps: or commands: is refused
+# with a v1 or v2 kit. A v2 file that uses caps: or commands: is refused
 # outright by sbx 0.53, not merely left out. Draugr keeps kit.example for an
 # older sbx, and dr-init writes whichever format your sbx reads.
 #
@@ -32,7 +32,7 @@ description: Network rules and setup for the @NAME@ project.
 # NO AGENT IS NAMED HERE, and v3 gives no way to name one. In v2 a kit could
 # say `requires: agent: codex`, and sbx then refused to compose it with another
 # agent. v3 `requires:` is a list of CAPABILITY constraints, so that protection
-# is gone. Nothing stops this kit being composed with a different agent now.
+# is gone. Nothing stops sbx from composing this kit with a different agent now.
 # Keep the file free of anything that only one agent can use, or keep one kit
 # for each agent in a directory with the name of the agent at the end
 # (.draugr/kit.codex/). If that agent is configured, Draugr prefers it.
@@ -49,8 +49,8 @@ capabilities:
   # To test a specific host:  dr-policy --check <host>
   #
   # The two phases are SEPARATE in v3. `install:` egress is for the creation
-  # commands below; `runtime:` egress is for the agent's session. Access during
-  # the install does not grant access during the session, and Draugr counts
+  # commands below. `runtime:` egress is for the session of the agent. Access
+  # during the install does not grant access during the session, and Draugr counts
   # only runtime rules as the permissions that a mound adopted.
   - type: com.docker.sandbox/network-policy@1
     config:
@@ -75,7 +75,7 @@ capabilities:
   # install runs when the sandbox is created, and BEFORE your repository is in
   # the workspace. At that moment the working directory is EMPTY, and the repo
   # is read-only at /run/sandbox/source. Thus a command that reads a project
-  # file fails, also if it looks correct. Tests showed this in clone mode and
+  # file fails, even if it looks correct. Tests showed this in clone mode and
   # in mount mode. Here, `uv pip install -r requirements.txt` gives only
   # `error: File not found`.
   #
@@ -101,7 +101,7 @@ capabilities:
   #
   # An install hook does NOT get the whole environment. It gets the basic
   # process variables, the proxy settings and the certificate paths. To use
-  # another one, name it in the hook's own `env:` list, for example
+  # another one, name it in the `env:` list of that hook, for example
   # `env: [SBX_AGENT]`. A startup hook gets the full environment.
   #
   # `command` takes a string or a list. A list needs no quoting rules.

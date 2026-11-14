@@ -64,7 +64,7 @@ Draugr only claims memory layouts it measured:
 | | memory | `dr-mem` |
 |---|---|---|
 | `claude` | `~/.claude/projects/<PATH-KEY>/memory/`, for each project | full |
-| `codex` | `$CODEX_HOME` selected memories, transcripts, indexes, and databases; whole mound context | quiet snapshot |
+| `codex` | `$CODEX_HOME` selected memories, transcripts, indexes, and databases, and the context of the whole mound | quiet snapshot |
 | other agents | not measured | refuses, and says so |
 
 An agent with no Draugr module still works. `dr-mem` refuses, and does not copy a directory into a
@@ -130,8 +130,8 @@ Use native model and reasoning settings in the per-agent value, for a model your
 DRAUGR_AGENT_ARGS_CODEX='resume --last --model gpt-6.1-sol -c model_reasoning_effort="xhigh"'
 ```
 
-Check the model's supported reasoning values. These arguments do not select an alternative
-provider; `DRAUGR_MODEL` does that. No host `config.toml` or login is copied.
+Check the reasoning values that the model supports. These arguments do not select an alternative
+provider. `DRAUGR_MODEL` does that. No host `config.toml` or login is copied.
 
 > ### Codex on a ChatGPT plan usually needs a model named here
 >
@@ -505,9 +505,9 @@ without this paragraph.
 Draugr takes a value with a scheme literally, and never resolves it: a model on a different
 machine, or a company endpoint in front of several. It must speak the API that the configured agent
 expects. Claude uses Anthropic Messages at `/v1/messages`. Codex uses Responses streaming at
-`/v1/responses`, including tool calls; Draugr appends `/v1` to its base URL when absent.
-Codex local providers require sbx 0.53 or later because earlier releases could select OpenAI
-instead when `--model` was supplied. See [measured support](AGENT-SUPPORT.md#local-providers).
+`/v1/responses`, including tool calls. Draugr appends `/v1` to its base URL when absent.
+Codex local providers require sbx 0.53 or later. When `--model` was supplied, earlier releases
+selected OpenAI instead. See [measured support](AGENT-SUPPORT.md#local-providers).
 
 **The own API of the vendor is a legal value, and there Draugr does nothing for the
 authentication.** The proxy of `sbx` rewrites the authorization header for the hosts of Anthropic,
@@ -869,7 +869,7 @@ because `sbx cp` is a Windows binary that cannot write to a WSL path.
 
 ### `DRAUGR_PLUGIN_STORE`
 Codex uses an independent `codex/seed` publication beneath this directory, with its own receipt,
-build lock, and rollback copy. Mount the `codex` parent read-only and install generated kits;
+build lock, and rollback copy. Mount the `codex` parent read-only and install generated kits.
 Claude seed variables and `--settings` do not apply. See [Codex plugins](AGENT-SUPPORT.md#codex-plugins).
 The layout and three-key setup below describe the existing Claude library.
 

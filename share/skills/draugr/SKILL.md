@@ -16,7 +16,7 @@ A **mound** is a small virtual machine with its own kernel, made by `sbx` (Docke
 Sandboxes) on a Windows machine. **Draugr** is a set of `dr-*` commands that the
 operator runs on that machine, in WSL, outside this mound. You cannot see them.
 They are not installed here, and neither is `sbx`. Do not look for them, do not
-try them, and never write out what you think their output would be.
+try them, and never write out what you think their output is.
 
 That is the whole shape of your situation: you can see everything that is wrong,
 and you can change almost none of it. What you can do instead is name the one
@@ -102,6 +102,6 @@ costs. The last part matters most for anything that destroys state. See the
 
 ## The rest of the set
 
-- **draugr-kit** — the network allow list and the install commands of this project.
-- **draugr-handoff** — moving work, files and ports across the boundary.
-- **draugr-recreate** — what a rebuild destroys, and the order that saves it first.
+- **draugr-kit**: the network allow list and the install commands of this project.
+- **draugr-handoff**: moving work, files and ports across the boundary.
+- **draugr-recreate**: what a rebuild destroys, and the order that saves it first.

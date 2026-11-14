@@ -320,7 +320,7 @@ version control, reviewed. Use it for project rules, and use memory only as memo
 
 ## Skills
 
-The shared skills store stays after `sbx rm`. sbx 0.53 mounts it read-only by default; the older
+The shared skills store stays after `sbx rm`. sbx 0.53 mounts it read-only by default. The older
 read-write behavior described in the measurements below applies to sbx 0.37.1.
 
 **The mount mode is fixed when the mound is created, not when you upgrade.** A test showed both

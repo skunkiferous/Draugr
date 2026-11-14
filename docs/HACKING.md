@@ -418,9 +418,9 @@ dr_agent_load() {
 
 The adapter interface also includes source preparation before staging, context-home discovery,
 import readiness, native launch/provider argument lines, and argument-vector session preparation.
-The latter returns `DR_AGENT_SESSION_ARGS` and `DR_AGENT_SESSION_DROPPED`; it must preserve unknown
+The latter returns `DR_AGENT_SESSION_ARGS` and `DR_AGENT_SESSION_DROPPED`. It must preserve unknown
 native requests. Native argument helpers emit one argument per line, not shell code. Codex plugins
-load `lib/plugins/codex.sh` only from `dr-plugin`; their receipt and published packages stay under
+load `lib/plugins/codex.sh` only from `dr-plugin`. Their receipt and published packages stay under
 `DRAUGR_PLUGIN_STORE/codex`, outside the legacy Claude layout. Lint that optional module too.
 
 Four facts about it are important:
@@ -828,10 +828,10 @@ fault. Draugr exists to act on the host, so a test of it must run there. Two hab
 
 The test helper sets a Git discovery boundary at the Windows fixture root. This matters when
 `DRAUGR_TEST_WINROOT` is inside a checkout: a plain-directory fixture must not inherit the real
-repository and let a mocked `dr-init` or `dr-up` write that checkout's setup files.
+repository and let a mocked `dr-init` or `dr-up` write the setup files of that checkout.
 
 ```bash
-sudo apt install jq shellcheck bats python3  # Python's sqlite3 module verifies real WAL recovery
+sudo apt install jq shellcheck bats python3  # the sqlite3 module of Python verifies real WAL recovery
 
 shellcheck --external-sources --shell=bash lib/common.sh lib/agents/*.sh lib/plugins/*.sh lib/forge/*.sh \
     install.sh tests/mocks/* bin/* .githooks/* tests/executable-paths.sh \

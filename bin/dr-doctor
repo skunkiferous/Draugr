@@ -53,8 +53,8 @@ soft() {
 
 # A third level, and the reason it exists: a feature that you CHOSE not to use
 # is not a warning. `soft` counts, and then the verdict says "Ready, with 1
-# warning(s)" for ever on a machine whose owner declined something optional.
-# That teaches people to ignore the colour. A note states the fact and the
+# warning(s)" forever on a machine whose owner declined something optional.
+# That teaches people to ignore the color. A note states the fact and the
 # command, and counts nothing. Like `ok`, --quiet hides it: it is not a problem.
 note() {
     [ -n "$quiet" ] && return 0

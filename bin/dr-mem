@@ -70,16 +70,16 @@ dr_context
 # the existing mound before selecting its adapter or its persistent store.
 installed=$(dr_sandbox_agent "$DRAUGR_SANDBOX")
 if [ -z "$installed" ] && dr_sandbox_exists "$DRAUGR_SANDBOX"; then
-    # A configured replacement is not evidence of the old mound's identity.
+    # A configured replacement is not evidence of the identity of the old mound.
     # Unknown ownership cannot authorize destruction or choose a backup store.
     if [ "$action" = check ]; then
-        dr_error "sbx did not identify the installed agent; context was not inspected"
+        dr_error "sbx did not identify the installed agent, so context was not inspected"
         exit 2
     fi
     dr_die "sbx did not identify the installed agent" "Inspect: sbx ls --json"
 fi
 if [ -n "$installed" ] && [ "$installed" != "$DRAUGR_AGENT" ]; then
-    dr_info "$DRAUGR_SANDBOX holds $installed context; configuration asks for $DRAUGR_AGENT"
+    dr_info "$DRAUGR_SANDBOX holds $installed context, and configuration asks for $DRAUGR_AGENT"
     DRAUGR_AGENT=$installed
     dr_agent_load
 fi
@@ -104,7 +104,7 @@ fi
 # Unknown layouts are not empty context. In particular they cannot satisfy
 # the loss guard used by dr-rm or by agent switching.
 if dr_sandbox_exists "$DRAUGR_SANDBOX" && { [ "$action" != status ] || [ "$(dr_sandbox_state "$DRAUGR_SANDBOX")" = running ]; }; then
-    dr_agent_mem_init || { [ "$action" = check ] && exit 2; dr_die "could not locate the agent's context"; }
+    dr_agent_mem_init || { [ "$action" = check ] && exit 2; dr_die "could not locate the context of the agent"; }
 fi
 mem_dir=$(dr_agent_mem_dir "$DR_REPO")
 dr_mem_store_migrate "$DR_REPO"
@@ -194,7 +194,7 @@ status)
         printf '  %-6s %3s file(s)  %s\n' mound \
             "$(list_mound | count_lines)" "$mem_dir"
     else
-        printf '  %-6s %s\n' mound "$DRAUGR_SANDBOX is not running; context was not inspected"
+        printf '  %-6s %s\n' mound "$DRAUGR_SANDBOX is not running, so context was not inspected"
     fi
 
     if [ -f "$marker" ]; then
@@ -210,7 +210,7 @@ export)
     # Nothing to export is a usual state, not a failure. With
     # DRAUGR_MEM_SYNC=auto, this runs at each detach, also before the agent
     # wrote its first memory.
-    export_list=$(list_mound) || dr_die "could not inspect the agent's context" "Retry dr-mem export after checking the mound."
+    export_list=$(list_mound) || dr_die "could not inspect the context of the agent" "Retry dr-mem export after checking the mound."
     if [ -z "$export_list" ]; then
         dr_ok "no memory in $DRAUGR_SANDBOX yet. Nothing to export."
         printf '  %s%s creates it when it writes the first one.%s\n' \
@@ -265,7 +265,7 @@ export)
     incoming_list=$(list_local "$store_dir/memory.incoming")
     if [ "$(printf '%s\n' "$incoming_list" | sort)" != "$(printf '%s\n' "$export_list" | sort)" ]; then
         rm -rf "$store_dir/memory.incoming"
-        dr_die "the copy out of $DRAUGR_SANDBOX is not complete; the store is unchanged" \
+        dr_die "the copy out of $DRAUGR_SANDBOX is not complete, and the store is unchanged" \
                "$(printf '%s\n' "$export_list" | grep -c .) file(s) in the mound, $(printf '%s\n' "$incoming_list" | grep -c .) arrived" \
                "A link in the tree stops sbx cp without an error. Look with:  dr-mem diff"
     fi
@@ -327,7 +327,7 @@ import)
     if [ -n "$if_empty" ]; then
         existing=$(list_mound) || dr_die "could not inspect the import target" "Retry dr-mem import after checking the mound."
         if [ -n "$existing" ]; then
-            dr_debug "$DRAUGR_SANDBOX already has memory; --if-empty declines to import"
+            dr_debug "$DRAUGR_SANDBOX already has memory, so --if-empty declines to import"
             exit 0
         fi
     fi
@@ -373,7 +373,7 @@ import)
 
     # Filter BEFORE staging. Neither a final-destination filter nor a later
     # removal can undo a credential that already crossed the boundary.
-    dr_agent_mem_import_ready || dr_die "the agent's context is in use" \
+    dr_agent_mem_import_ready || dr_die "the context of the agent is in use" \
         "Leave the agent and its background server, then retry dr-mem import."
     stage_name=$(basename "$DR_MOUND_STAGE")
     dr_stage

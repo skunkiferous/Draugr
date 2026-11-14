@@ -13,7 +13,7 @@ _dr_cp_native() {
     dr_sbx exec "$_cp_mound" -- env "CODEX_HOME=$_cp_work/home" codex plugin "$@" --json </dev/null
 }
 
-# Clean up only this transaction's resources. A failed build never touches
+# Clean up only the resources of this transaction. A failed build never touches
 # the live library; a collision refuses before the trap is installed.
 _dr_cp_cleanup() {
     if [ -n "${_cp_created:-}" ]; then
@@ -38,18 +38,18 @@ _dr_cp_begin() {
     if [ ! -f "$_cp_json" ]; then printf '{"format":1,"marketplaces":{},"plugins":[]}\n' > "$_cp_json"; fi
 }
 
-# The version/command probe runs in the build mound, never on the host.
+# The probe for the version and the command runs in the build mound, never on the host.
 _dr_cp_start() {
     [ -z "${_cp_created:-}" ] || return 0
-    dr_sandbox_exists "$_cp_mound" && dr_die "$_cp_mound already exists" "Inspect and remove that test/build mound first."
+    dr_sandbox_exists "$_cp_mound" && dr_die "$_cp_mound already exists" "Inspect and remove that test or build mound first."
     _cp_created=1
     dr_sbx create --name "$_cp_mound" --memory "${DRAUGR_MEMORY:-4g}" codex "$(dr_path_win "$_cp_build")" || dr_die "could not create the Codex plugin build mound"
     dr_sbx exec "$_cp_mound" -- mkdir -p "$_cp_work/home" || dr_die "could not prepare plugin home"
-    dr_sbx exec "$_cp_mound" -- codex plugin --help >/dev/null || dr_die "this mound's Codex has no native plugin CLI" "Use a template with Codex plugin support."
+    dr_sbx exec "$_cp_mound" -- codex plugin --help >/dev/null || dr_die "the Codex in this mound has no native plugin CLI" "Use a template with Codex plugin support."
 }
 
-# Export only the installed package. The CLI's config, auth and writable
-# plugin data never cross the boundary with it.
+# Export only the installed package. The config, the auth and the writable
+# plugin data of the CLI never cross the boundary with it.
 _dr_cp_install() {
     local id=$1 result path ver plug mkt dest tmp
     plug=${id%@*}; mkt=${id#*@}
@@ -76,7 +76,7 @@ _dr_cp_install() {
 }
 
 # Native local source paths stay within one published marketplace root.
-# All content is read-only on consumers; their caches and auth remain private.
+# All content is read-only on consumers. Their caches and auth remain private.
 _dr_cp_catalogs() {
     local m dir
     while IFS= read -r m; do
@@ -107,7 +107,7 @@ _dr_cp_register() {
     _dr_cp_start
     if [ -d "$source" ]; then
         # A local marketplace must be a dedicated package source. Copy it to
-        # this build mound; do not expose any additional host workspace.
+        # this build mound. Do not expose any additional host workspace.
         dr_mem_validate_tree "$source" || dr_die "local marketplace contains links or special files"
         key=$(printf '%s' "$source" | sha256sum | cut -c1-16)
         dr_sbx exec "$_cp_mound" -- mkdir -p "$_cp_work/sources/$key" || dr_die "could not stage marketplace"
@@ -142,7 +142,7 @@ dr_codex_plugins() {
         if [ "$action" = status ]; then
             dr_info "Codex library: $_cp_seed"
             dr_info "Mount it read-only: DRAUGR_MOUNTS=\"$_cp_root:ro\""
-            dr_info "Use dr-plugin kit to install it in each mound; switches apply at dr-go."
+            dr_info "Use dr-plugin kit to install it in each mound. Switches apply at dr-go."
         fi
         ;;
     skills) dr_codex_plugin_skills "$DRAUGR_PLUGIN_STORE" ;;
@@ -185,7 +185,7 @@ dr_codex_plugins() {
             if [ "$action" = remove ]; then
                 jq --arg id "$id" '.plugins |= map(select(.id!=$id)) |
                     .removed = (((.removed // []) + [$id]) | unique)' "$_cp_json" > "$tmp"
-                dr_warn "generated kits may still install $id; remove them from DRAUGR_KIT"
+                dr_warn "generated kits can still install $id; remove them from DRAUGR_KIT"
             else
                 state=false; [ "$action" != enable ] || state=true
                 jq --arg id "$id" --argjson v "$state" '(.plugins[] | select(.id==$id)).enabled=$v' "$_cp_json" > "$tmp"
@@ -241,7 +241,7 @@ dr_codex_plugins() {
         ;;
     *) dr_die "unsupported Codex plugin action: $action" ;;
     esac
-    # Finish while the transaction's local paths and ownership are in scope.
+    # Finish while the local paths and the ownership of the transaction are in scope.
     # EXIT still handles a failed command that ended the shell earlier.
     _dr_cp_cleanup
     trap - EXIT

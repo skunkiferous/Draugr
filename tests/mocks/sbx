@@ -204,10 +204,10 @@ cp)
     cp -a "$src" "$dst"
     # A copy that exits 0 and is not complete. sbx 0.53 does that: a cp of a
     # tree with a link STOPS at the link, drops the rest, and reports success.
-    # The mock copies a link without trouble, so the check in dr-mem would
-    # never be exercised. This knob removes one named entry after the copy.
+    # The mock copies a link without trouble, so the check in dr-mem does not
+    # test that path. This knob removes one named entry after the copy.
     if [ -n "${DR_MOCK_CP_TRUNCATE:-}" ]; then
-        # :? on each part, because this is an rm -rf. An empty $dst would make
+        # :? on each part, because this is an rm -rf. An empty $dst makes
         # it "/", and shellcheck is right to insist (SC2115).
         rm -rf "${dst:?}/$(basename "${src:?}")/${DR_MOCK_CP_TRUNCATE:?}" \
                "${dst:?}/${DR_MOCK_CP_TRUNCATE:?}" 2>/dev/null || :

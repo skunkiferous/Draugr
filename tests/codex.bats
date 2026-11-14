@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Codex context is a recovery set, not a copy of the user's agent home.
+# Codex context is a recovery set, not a copy of the agent home of the user.
 load helper
 
 setup() {
@@ -83,8 +83,8 @@ teardown() { dr_test_teardown; }
     ! grep -q '^cp ' "$DR_MOCK_LOG" || return 1
 }
 
-# A newer configured agent must not hide the old mound's unexported memory.
-@test "agent switch: checks use the installed agent's context" {
+# A newer configured agent must not hide the unexported memory of the old mound.
+@test "agent switch: checks use the context of the installed agent" {
     dr_mound_memory_dir "$REPO"
     mkdir -p "$DR_MEMDIR"
     printf 'Claude context\n' > "$DR_MEMDIR/MEMORY.md"
@@ -245,7 +245,7 @@ notice after JSON"
 # Unknown target state must never authorize an automatic restore.
 @test "codex import: a failed target probe is refused by if-empty" {
     # A link makes only the context listing fail; home discovery still works.
-    # The old if-empty expression discarded that failed listing's exit code.
+    # The old if-empty expression discarded the exit code of that failed listing.
     mkdir -p "$CODEXDIR/memories" "$DR_TMP/source/memories"
     ln -s "$DR_TMP/private" "$CODEXDIR/memories/unsafe"
     printf 'incoming\n' > "$DR_TMP/source/memories/safe.md"
@@ -325,7 +325,7 @@ notice after JSON"
     [[ "$output" == *'could not inspect Codex configuration'* ]]
 }
 
-# Global host homes may contain unrelated projects and credentials.
+# Global host homes can contain unrelated projects and credentials.
 @test "codex host status: global state is not scanned or imported" {
     mkdir -p "$HOME/.codex/memories"
     printf 'private\n' > "$HOME/.codex/auth.json"
@@ -354,7 +354,7 @@ notice after JSON"
     [ "$(grep -c 'opened.example.com' "$kit/spec.yaml")" = 1 ]
 }
 
-# Without a native identity, the requested agent could be the replacement.
+# Without a native identity, the requested agent can be the replacement.
 @test "codex loss check: unknown installed agent cannot authorize removal" {
     export DR_MOCK_AGENT=
     run dr-mem check

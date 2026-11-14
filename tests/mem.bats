@@ -822,8 +822,8 @@ release_transcript() {
 @test "dr-mem export: a memory entry named transcripts is refused, not packed" {
     setup_mound || skip "no writable Windows drive path"
     # The packed tree puts the memory at the root and the conversation in
-    # transcripts/. A memory file of that name would make the tree ambiguous,
-    # and unpack would read it as a conversation.
+    # transcripts/. A memory file of that name makes the tree ambiguous,
+    # and unpack reads it as a conversation.
     mkdir -p "$MEMDIR/transcripts"
     printf 'not a conversation\n' > "$MEMDIR/transcripts/x.md"
 
@@ -937,7 +937,7 @@ release_transcript() {
 # these tests it can only match inside the stand-in tree. A Claude Code that
 # the person running the suite has installed in WSL cannot make them fail.
 
-# A stand-in for the agent: a real binary at the path the agent would have.
+# A stand-in for the agent: a real binary at the path the agent has.
 # /bin/sleep, because the probe reads the path and never the program.
 run_fake_agent() {
     local dir=$DR_MOCK_MOUND/home/agent/.local/share/claude/versions

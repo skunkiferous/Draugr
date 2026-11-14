@@ -53,7 +53,7 @@ capabilities:
 ```
 
 Two measured rules for v3: a `lifecycle@1` entry that declares no hook is refused,
-so leave the capability out instead of writing it empty; and an empty
+so leave the capability out instead of writing it empty. And an empty
 `allow: []` is accepted. Only the operator can check a kit, with
 `dr-kit validate`.
 

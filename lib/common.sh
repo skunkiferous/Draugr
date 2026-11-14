@@ -739,7 +739,7 @@ _dr_defaults() {
     DRAUGR_MEM_STORE="${XDG_DATA_HOME:-$HOME/.local/share}/draugr/memory"
     # How much of the CONVERSATION goes with the memory. The two are different
     # things. The memory is what the agent learned, and it is small. The
-    # transcript is the conversation itself, and it is not: in this project one
+    # transcript is the conversation itself, and it is large. In this project one
     # transcript measured 180 MB against 184 KB of memory. A recreate without
     # the transcript loses the conversation, and the memory cannot bring it
     # back. Thus the amount is a choice, and not a fixed answer.
@@ -1769,7 +1769,7 @@ dr_sbx_json() {
     local text=$1
     # Older versions wrap the list in an object; sbx 0.53 returns an array.
     # Read only the first JSON value, so an old trailing upgrade banner stays
-    # outside the parser. Never discard the array's opening bracket.
+    # outside the parser. Never discard the opening bracket of the array.
     text=$(printf '%s\n' "$text" | sed -n '/^[[:space:]]*[{[]/,$p')
     printf '%s' "$text" | jq -cn 'input | if type == "array" then {sandboxes:.} else . end'
 }
@@ -1781,8 +1781,8 @@ dr_sbx_json() {
 # version made the built-in agent names resolve to published kits and moved
 # the shell agent to a v3 kit, and it told people to upgrade older mixins
 # before composing them with the new built-in kits. A v3 kit cannot compose
-# with a v2 one, so writing v3 any earlier would generate a kit that the
-# built-in agent of that sbx cannot use. Only 0.53 was measured here; the
+# with a v2 one, so writing v3 any earlier generates a kit that the
+# built-in agent of that sbx cannot use. Only 0.53 was measured here. The
 # boundary itself is from those notes.
 dr_sbx_v3() {
     local version major minor
@@ -1883,8 +1883,8 @@ dr_sandbox_state() {
 # of the agent you asked for is not in there.
 #
 # Nothing, and not a failure, when sbx cannot be reached or leaves the field
-# out. An older sbx did not report it. Unknown must not become a refusal: that
-# would stop a session which was about to work.
+# out. An older sbx did not report it. Unknown must not become a refusal. A
+# refusal stops a session that was about to work.
 dr_sandbox_agent() {
     local name=$1 json agent
     json=$(dr_sbx ls --json 2>/dev/null) || return 0
@@ -2992,7 +2992,7 @@ dr_codex_plugin_skills() {
     [ -f "$seed/library.json" ] || return 0
     while IFS= read -r row; do
         read -r id name m ver <<< "$row"
-        # Each component is checked separately: concatenating them would hide
+        # Each component is checked separately. Concatenating them hides
         # an empty component or a traversal name inside otherwise safe text.
         case "$name" in ''|.|..|*[!A-Za-z0-9_.+-]*) continue ;; esac
         case "$m" in ''|.|..|*[!A-Za-z0-9_.+-]*) continue ;; esac
@@ -3078,7 +3078,7 @@ dr_mem_validate_tree() {
     [ -d "$path" ] && [ ! -L "$path" ] || return 1
     bad=$(find "$path" \( -type l -o ! -type f -a ! -type d \) -print -quit) || return 1
     [ -z "$bad" ] || { dr_error "context contains a link or special file: $bad"; return 1; }
-    # sha256sum's escaped-name output cannot be compared by the line protocol.
+    # The escaped-name output of sha256sum cannot be compared by the line protocol.
     bad=$(find "$path" -name '*[[:cntrl:]\\]*' -print -quit) || return 1
     [ -z "$bad" ] || { dr_error "context contains an unsafe file name"; return 1; }
 }

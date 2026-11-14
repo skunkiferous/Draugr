@@ -304,7 +304,7 @@ with no link left in it.
 
 > **On sbx 0.53 that is no longer true, and the new answer is silent.** A copy stops at the first
 > link in the walk, drops everything after it, and exits 0. Measured: a tree whose link sorted
-> first arrived empty; the same tree with the link last arrived without the link; a link inside a
+> first arrived empty. The same tree with the link last arrived without the link. A link inside a
 > subdirectory left that subdirectory empty. `-L` changed nothing. Thus a seed that holds a link
 > gives a partial tree with a success message, and the warning below about not mounting a partial
 > tree has no failure to warn you first. `dr-cp` now says so before it copies such a tree.

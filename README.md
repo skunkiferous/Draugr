@@ -524,7 +524,7 @@ only on Windows loopback. WSL cannot reach that across its NAT, and the port cha
 | `dr-plugin add <owner>/<repo>` | Register the **marketplace**, and install each plugin that it lists |
 | `dr-plugin add <owner>/<repo> <plugin>…` | The same, but install only the plugins that you name |
 | `dr-plugin update` | Refresh the catalogs and the plugins |
-| `dr-plugin remove <plugin>@<mkt>` | Remove it from the selected agent's library; use `clean` to reclaim retained Codex package versions |
+| `dr-plugin remove <plugin>@<mkt>` | Remove it from the library of the selected agent. Use `clean` to reclaim retained Codex package versions |
 | `dr-plugin enable` / `disable` | Only the switch. No mound, instant |
 | `dr-plugin clean` | Remove old versions. Nothing else removes them |
 | `dr-plugin rollback` | Go back to the previous library |

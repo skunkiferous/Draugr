@@ -103,7 +103,7 @@ done
 dr_context
 
 # Native plugin libraries differ in more than their CLI spelling. Keep their
-# formats out of the shared transaction and out of each other's directories.
+# formats out of the shared transaction and out of the directories of the others.
 if [ "$DRAUGR_AGENT" = codex ]; then
     # shellcheck source-path=SCRIPTDIR
     # shellcheck source=../lib/plugins/codex.sh

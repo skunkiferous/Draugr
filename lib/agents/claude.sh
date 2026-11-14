@@ -115,7 +115,7 @@ dr_agent_mem_present() {
 #
 # They also differ in size by three orders of magnitude: in this project the
 # memory is 184 KB and one transcript is 180 MB. Thus the amount is a choice
-# of the user and not a fixed answer, and `off` is the behaviour from before
+# of the user and not a fixed answer, and `off` is the behavior from before
 # this key existed.
 #
 # THE PACKED TREE. The memory stays at the root, exactly where it was, and the
@@ -128,8 +128,8 @@ dr_agent_mem_present() {
 # A store from an older Draugr has no transcripts/ directory, and unpack reads
 # it unchanged. That is why the memory keeps the root: it makes every store
 # that you already have still an import, and not a special case in the code.
-# A memory file named `transcripts` would make the layout ambiguous, so pack
-# refuses it instead of writing a tree that unpack would read wrongly.
+# A memory file named `transcripts` makes the layout ambiguous, so pack
+# refuses it instead of writing a tree that unpack reads wrongly.
 # ---------------------------------------------------------------------------
 
 # One script for all four views of that tree, so that they cannot disagree.
@@ -255,11 +255,11 @@ pack)
     # No link enters the packed tree. `sbx cp` on 0.53 STOPS at the first link
     # it meets, drops everything after it, and exits 0. A measured copy of a
     # tree with one link in the middle arrived with the files before it and
-    # nothing after. Thus a link here would not be a link in the store: it
-    # would be a store that is missing files, with a success message. The Codex
+    # nothing after. Thus a link here does not become a link in the store. It
+    # becomes a store that is missing files, with a success message. The Codex
     # module refuses links for its own reasons, and this is the second one.
     if [ -d "$mem" ] && [ -n "$(find "$mem" -type l 2>/dev/null | head -1)" ]; then
-        printf 'the memory holds a link, and a copy would stop there\n' >&2
+        printf 'the memory holds a link, and a copy stops there\n' >&2
         exit 4
     fi
     if [ -d "$mem" ]; then
@@ -271,7 +271,7 @@ pack)
     fi
     names | while IFS= read -r n; do
         if [ -L "$proj/$n" ] || [ -n "$(find "$proj/$n" -type l 2>/dev/null | head -1)" ]; then
-            printf 'the conversation holds a link, and a copy would stop there\n' >&2
+            printf 'the conversation holds a link, and a copy stops there\n' >&2
             exit 4
         fi
         mkdir -p "$stage/transcripts"
@@ -302,7 +302,7 @@ SH
 _dr_claude_mode() {
     case "${DRAUGR_MEM_TRANSCRIPTS:-newest}" in
         off|newest|all) printf '%s' "${DRAUGR_MEM_TRANSCRIPTS:-newest}" ;;
-        *) dr_error "DRAUGR_MEM_TRANSCRIPTS is \"$DRAUGR_MEM_TRANSCRIPTS\"; use off, newest or all"
+        *) dr_error "DRAUGR_MEM_TRANSCRIPTS is \"$DRAUGR_MEM_TRANSCRIPTS\". Use off, newest or all"
            return 1 ;;
     esac
 }
@@ -320,7 +320,7 @@ _dr_claude_state() {
 # dr_agent_mem_quiesce: 0 quiet, 1 a writer holds the conversation, 2 unknown.
 #
 # The contract has three answers for the reason that lib/agents/codex.sh gives
-# at the same function: a probe that could not answer must not give the quiet
+# at the same function: a probe that cannot answer must not give the quiet
 # answer, because that answer copies a growing file and calls it a backup.
 dr_agent_mem_quiesce() {
     _dr_claude_state quiesce "$1"
@@ -350,7 +350,7 @@ dr_agent_mem_pack() {
     local repo=$1 stage=$2 before after rc=0
     dr_agent_mem_quiesce "$repo" || rc=$?
     if [ "$rc" -ne 0 ]; then
-        dr_warn "the context was not exported; the previous store is unchanged"
+        dr_warn "the context was not exported. The previous store is unchanged"
         if [ "$rc" -eq 1 ]; then
             printf '  %sClaude Code runs in %s, or something holds the%s\n' \
                 "$_DR_DIM" "$DRAUGR_SANDBOX" "$_DR_OFF" >&2
@@ -361,7 +361,7 @@ dr_agent_mem_pack() {
         else
             printf '  %sDraugr could not find out whether the conversation is being%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
-            printf '  %swritten. Thus it did not copy it, because the copy could be half of one.%s\n' \
+            printf '  %swritten. Thus it did not copy it, because the copy can be half of one.%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
         fi
         return 1
@@ -371,7 +371,7 @@ dr_agent_mem_pack() {
     dr_agent_mem_quiesce "$repo" || return 1
     after=$(dr_agent_mem_list "$repo") || return 1
     if [ "$before" != "$after" ]; then
-        dr_error "the context changed during the export; the store is unchanged"
+        dr_error "the context changed during the export. The store is unchanged"
         return 1
     fi
 }
@@ -383,7 +383,7 @@ dr_agent_mem_unpack() {
     _dr_claude_state unpack "$repo" "$stage"
 }
 
-# Claude's source already is one project's memory directory. Reject links
+# The source of Claude already is the memory directory of one project. Reject links
 # before copying, since staging itself is visible through the source mount.
 dr_agent_mem_prepare_source() {
     dr_mem_validate_tree "$1" || return 1

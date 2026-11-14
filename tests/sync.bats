@@ -568,7 +568,7 @@ fake_mound_source() {
 
 @test "dr-send: a ref the clone cannot read is named, with the file to remove" {
     # Not clone=$(fake_mound_clone main). The helper EXPORTS DR_MOCK_MOUND, and a
-    # command substitution is a subshell, so that export would be lost here.
+    # command substitution is a subshell, so that export is lost here.
     fake_mound_clone main >/dev/null
     clone="$DR_MOCK_MOUND${REPO#/mnt}"
     host_commit
@@ -579,7 +579,7 @@ fake_mound_source() {
     run dr-send
     [ "$status" -ne 0 ]
     [[ "$output" == *"refs/tags/v0.7.0"* ]]
-    # The path of the MOUND, which is what you would type, and not the path of
+    # The path of the MOUND, which is what you type, and not the path of
     # the stand-in tree that only the test knows about.
     [[ "$output" == *"rm ${REPO#/mnt}/.git/refs/tags/v0.7.0"* ]]
     # And the old advice is gone, because here it sends the reader nowhere.
@@ -603,7 +603,7 @@ fake_mound_source() {
 @test "dr-send: a fetch that fails for another reason keeps the plain advice" {
     # Every ref of the clone is readable, and there is no /run/sandbox/source
     # in the tree, so the fetch fails for a reason this branch knows nothing
-    # about. The broken-ref answer must not fire, because it would be a guess.
+    # about. The broken-ref answer must not fire, because that is a guess.
     fake_mound_clone main >/dev/null
     host_commit
     run dr-send

@@ -254,12 +254,13 @@ fi
 # over the configuration" chooses the SOURCE of the arguments. No source can
 # continue a session that does not exist. The message below names the source,
 # so nothing happens in silence.
-# A native subcommand needs an argument-aware adapter. In particular, Codex's
-# -c takes a value and must never be mistaken for Claude's continue flag.
+# A native subcommand needs an argument-aware adapter. In particular, the
+# -c of Codex takes a value and must never be mistaken for the continue flag
+# of Claude.
 dr_agent_session_prepare "$DR_REPO" ${agent_args[0]+"${agent_args[@]}"}
 agent_args=(${DR_AGENT_SESSION_ARGS[0]+"${DR_AGENT_SESSION_ARGS[@]}"})
 if [ -n "$DR_AGENT_SESSION_DROPPED" ]; then
-    dr_info "$DRAUGR_SANDBOX has no session to continue; starting fresh"
+    dr_info "$DRAUGR_SANDBOX has no session to continue, so it starts fresh"
     dr_info "dropped $DR_AGENT_SESSION_DROPPED for this run"
 fi
 sess_flags=(); sess_keep=(); sess_drop=()

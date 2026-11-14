@@ -74,9 +74,9 @@ of their machine, not on yours:
 - No rebuild is needed for any of that.
 
 Two traps. The host port that `sbx` picks **changes at every rebuild**, so a URL
-in a bookmark goes stale; a port that must stay the same belongs in the
+in a bookmark goes stale. A port that must stay the same belongs in the
 configuration of the project, which the operator keeps. And a kit cannot name the
-host port at all: measured, `sbx create` refuses the capability that would do it.
+host port at all. Measured: `sbx create` refuses the capability for that.
 
 The other direction: `localhost` inside the mound is the mound. A service on the
 machine of the operator is `host.docker.internal:<port>`, and it answers only

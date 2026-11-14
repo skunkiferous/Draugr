@@ -68,7 +68,7 @@ configuration key `DRAUGR_MEM_TRANSCRIPTS` decides how much: `off`, `newest` or
 conversation works in the new mound.
 
 An export refuses while the agent runs. If the operator reports that, the answer
-is simply: leave the agent first, then export. A copy of a file that is being
+is: leave the agent first, then export. A copy of a file that is being
 written is not a backup, which is why it refuses rather than warns. The export
 also prints where the conversation now sits on their machine and the command that
 deletes it again, because it leaves the sandbox when it is exported.
@@ -78,8 +78,8 @@ deletes it again, because it leaves the sandbox when it is exported.
 Measured on the current sbx: about 30 seconds after the last session ends. An
 earlier measurement, not repeated, also found that traffic through a published
 port does not count as a session. A build or a server that must outlive
-your session needs a session that stays open, which the operator arranges; for a
-service that other repositories depend on, that is what `dr-dep` manages.
+your session needs a session that stays open, which the operator arranges. For a
+service that other repositories depend on, `dr-dep` manages that.
 
 If a long job of yours was killed and you do not know why, this is the first thing
 to check, before you blame the job.
@@ -89,7 +89,7 @@ to check, before you blame the job.
 > This needs a rebuild: the kit now adds a package at install time, and
 > `dr-kit apply` cannot do that for a running mound.
 > Before it: I committed my work, so `dr-sync` is enough for the code.
-> `dr-mem export` keeps the memory and this conversation; without it they are gone.
+> `dr-mem export` keeps the memory and this conversation. Without it they are gone.
 > `dr-kit adopt` keeps the two hosts we opened by hand.
 > Then `dr-up --recreate`, and `dr-mem import` afterwards.
 > The one thing with no copy is the `jq` I installed by hand, which the kit now holds.

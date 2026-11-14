@@ -1,98 +1,100 @@
 # Agent support
 
 Draugr uses one workflow for Claude Code and Codex. Agent adapters handle native
-state, arguments, authentication advice, and model providers. Plugins have native
+state, arguments, advice about authentication, and model providers. Plugins have native
 backends. Git, data review, mounts, ports, dependencies, and forge transport stay
-shared. Other sbx agents can use that shared workflow; their memory and plugin
-layouts are not claimed as supported.
+shared. Other sbx agents can use that shared workflow. Draugr does not claim that it
+supports their memory and plugin layouts.
 
 | Capability | Claude Code | Codex |
 |---|---|---|
-| Create, attach, shell; suspend/resume through SSH | Shared workflow | Shared workflow |
+| Create, attach, shell, and suspend/resume through SSH | Shared workflow | Shared workflow |
 | Native arguments and per-agent defaults | Supported | Supported, including model and reasoning settings |
 | Continue on first use | Drops `--continue` only on known absence | Drops ordinary `resume --last` only on known absence |
 | Memory transfer | Project memory directory, and the conversation that `DRAUGR_MEM_TRANSCRIPTS` selects | Quiet snapshot of memories, transcripts, indexes, and selected databases |
 | Conversation recovery after recreation | Supported: the newest transcript travels by default | Supported for the measured Codex layout |
-| Import from a host installation | Project memory directory | Curated explicit source; global home refused |
+| Import from a host installation | Project memory directory | Curated explicit source. Draugr refuses a global home |
 | Plugin lifecycle | Existing Claude seed library | Native CLI build and published local marketplaces |
 | Plugin enablement and skills report | Claude settings and registry | Codex receipt and invocation overrides |
-| Local/custom provider | Anthropic Messages API | Responses API, native provider overrides |
-| Separate fast model | Haiku tier mapping | No measured mapping; main model used with a warning |
-| MCP and hooks | Native configuration/plugins | Native configuration/plugins; hook review remains required |
+| Local or custom provider | Anthropic Messages API | Responses API, native provider overrides |
+| Separate fast model | Haiku tier mapping | No measured mapping. Draugr uses the main model and prints a warning |
+| MCP and hooks | Native configuration and plugins | Native configuration and plugins. You must still review hooks |
 | Repository instructions | Optional `CLAUDE.md` | Optional `AGENTS.md` |
 
 ## Choose native models and reasoning
 
-Keep cloud model selection in native arguments. `DRAUGR_MODEL` selects a different
-provider and has a different purpose. For example, with a model your account offers:
+Keep the selection of a cloud model in the native arguments. `DRAUGR_MODEL` selects a
+different provider and has a different purpose. This example uses a model that your
+account offers:
 
 ```bash
 DRAUGR_AGENT=codex
 DRAUGR_AGENT_ARGS_CODEX='resume --last --model gpt-6.1-sol -c model_reasoning_effort="xhigh"'
 ```
 
-The reasoning value must be supported by the chosen model. A successful sign-in
-does not prove that your account can use every model. An unsupported-model error
-needs another available model; an expired login needs another sign-in. For provider
-or network failures, inspect `dr-doctor` and the native error before changing either.
+The chosen model must support the reasoning value. A successful sign-in does not
+prove that your account can use every model. If Codex reports an unsupported model,
+choose another available model. If the login expired, sign in again. If a provider or
+the network fails, read the output of `dr-doctor` and the native error before you change
+either.
 See [native configuration](https://learn.chatgpt.com/docs/config-file/config-reference).
 
-Explicit session IDs, `--all`, fork, prompts, and unfamiliar options retain native
+Explicit session IDs, `--all`, fork, prompts, and unfamiliar options keep their native
 meaning. A failed probe preserves the request. Draugr does not parse session
-databases to guess current-directory eligibility; when that is unknown, Codex makes
-the selection. `dr-go --bare` clears configured agent arguments for one launch.
+databases to guess which sessions belong to the current directory. If that is unknown,
+Codex makes the selection. `dr-go --bare` clears the configured agent arguments for one launch.
 
 ## Codex context recovery
 
-Use one repository per Codex mound. Its home can contain state from every working
-directory used there. Export is a recovery snapshot of that whole mound's selected
-context, not a cross-project database filter.
+Use one repository for each Codex mound. The home of Codex can contain state from every working
+directory that the mound used. An export is a recovery snapshot of the selected
+context of the whole mound. It is not a filter for one project in a database.
 
 The format-2 export selects `memories/`, `memories_v2/`, `sessions/`,
 `archived_sessions/`, `session_index.jsonl`, `history.jsonl`, and these databases
 with their matching WAL files: `state_*`, `thread_history_*`, `memories_*`,
-`goals_*`, and `queue_*`. Database names end in `.sqlite`. It excludes shared-memory
-indexes, logs, credentials, configuration, plugin caches, and connection secrets.
-Selected links and special files are refused before staging or upload.
+`goals_*`, and `queue_*`. Database names end in `.sqlite`. The export excludes the indexes
+of shared memory, logs, credentials, configuration, plugin caches, and connection secrets.
+Draugr refuses selected links and special files before staging or upload.
 
 Leave Codex and its background server before either transfer. An active or unknown
-writer fails the transfer; an export failure preserves the last complete store.
+writer fails the transfer. A failed export preserves the last complete store.
 Draugr also compares hashes around the copy. These probes cannot lock an external
-launcher: do not attach during import/export. Import removes stale database WAL and
-shared-memory indexes before restoring the supplied pair.
+launcher, so do not attach during an import or an export. An import removes the stale
+database WAL files and shared-memory indexes before it restores the supplied pair.
 
-`CODEX_HOME` from the mound and `DRAUGR_ENV` is respected. A separate
-`CODEX_SQLITE_HOME` or an explicit `sqlite_home` setting is currently refused.
-The check conservatively refuses `sqlite_home` references, including quoted keys,
-profiles, and configured agent arguments; failed configuration reads are unknown.
-State-location overrides passed through independent native commands are outside
-Draugr's observations. Back those up explicitly rather than relying on `dr-mem`.
-Cross-version database migration is Codex's responsibility; use a compatible image.
-Unversioned older exports remain importable with a completeness warning: they may
-lack transcripts. Re-export from the old mound before removing it when possible.
+Draugr respects `CODEX_HOME` from the mound and from `DRAUGR_ENV`. Draugr refuses a separate
+`CODEX_SQLITE_HOME` or an explicit `sqlite_home` setting. The check refuses every
+`sqlite_home` reference that it can find, including quoted keys,
+profiles, and configured agent arguments. If Draugr cannot read the configuration, the answer is unknown.
+Draugr cannot observe an override of the state location that an independent native command receives.
+Back up that state explicitly. Do not rely on `dr-mem` for it.
+Codex must migrate its own databases between versions, so use a compatible image.
+Draugr can still import an older export that has no version. It warns that the export is
+incomplete, because it can lack transcripts. If possible, export again from the old mound before you remove it.
 
-`--from-host` is refused for Codex. First create a dedicated, reviewed context
-directory with only the project data you intend to transfer, then use
+Draugr refuses `--from-host` for Codex. First create a dedicated, reviewed context
+directory with only the project data that you intend to transfer. Then run
 `dr-mem import --source DIRECTORY`. Do not supply a complete host `.codex` home.
-Filtering a database after upload would already expose its unrelated contents.
+Draugr cannot filter a database after the upload, because the upload already exposes its unrelated contents.
 
-Import preserves the target's configuration and memory feature choices. Restoring
-a conversation does not require enabling new memory generation. Inspect
-`dr-mem status`; enable generation separately with
-`dr-shell -- codex features enable memories` if desired. Automatic import only fills
-an empty target. A database created by native startup counts as existing state;
-review and use an explicit import if that blocks recovery of a fresh mound.
+An import preserves the configuration and the memory feature choices of the target. Restoring
+a conversation does not enable the generation of new memory. Read the output of
+`dr-mem status`. If you want generation, enable it separately with
+`dr-shell -- codex features enable memories`. An automatic import only fills
+an empty target. A database that native startup created counts as existing state.
+If that blocks the recovery of a fresh mound, review the state and use an explicit import.
 
-When switching agents, the loss check and export follow the agent installed in the
-old mound. Stores stay separated by project and agent. Two named mounds for the
-same project need a native agent identity; if sbx cannot report it, context
-operations refuse rather than guessing from the replacement configuration. Mounds for the
-same project and agent share that recovery store; serialize exports to it.
+When you switch agents, the loss check and the export follow the agent that runs in the
+old mound. Draugr keeps a separate store for each project and agent. Two named mounds for the
+same project need a native agent identity. If sbx cannot report it, the context
+operations refuse and do not guess from the replacement configuration. Mounds for the
+same project and agent share one recovery store, so run their exports one at a time.
 
 ## Codex plugins
 
-Keep the existing `dr-plugin` verbs. Select `DRAUGR_AGENT=codex` to manage the Codex
-corner of `DRAUGR_PLUGIN_STORE`; the legacy Claude library remains at its root.
+Keep the existing `dr-plugin` verbs. Set `DRAUGR_AGENT=codex` to manage the Codex
+part of `DRAUGR_PLUGIN_STORE`. The legacy Claude library stays at the root of the store.
 
 ```bash
 DRAUGR_PLUGIN_STORE=/mnt/c/Code/agent-plugins
@@ -102,67 +104,67 @@ dr-plugin skills
 dr-plugin kit my-plugin@my-marketplace
 ```
 
-A local source must be a dedicated marketplace directory. Git sources are passed
-to the native marketplace CLI. Builds use a disposable, agent-specific mound and
-an empty Codex home. The host receives package files and a receipt, never the build
-home's authentication, native settings, or writable plugin data. A failed build
-leaves the published library intact. Inspect a leftover `.build` before retrying
+A local source must be a dedicated marketplace directory. Draugr passes Git sources
+to the native marketplace CLI. A build uses a disposable mound for that agent and
+an empty Codex home. The host receives package files and a receipt. It never receives the
+authentication, the native settings, or the writable plugin data of the build home.
+A failed build leaves the published library intact. Inspect a leftover `.build` before you retry
 with `--force`.
 
-Mount the **parent** Codex directory read-only, then add generated kits:
+Mount the parent Codex directory read-only, then add the generated kits:
 
 ```bash
 DRAUGR_MOUNTS='/mnt/c/Code/agent-plugins/codex:ro'
 DRAUGR_KIT='.draugr/kit plugin-codex-my-marketplace-my-plugin'
 ```
 
-Validate the generated kit with `dr-kit validate`, then create or apply it through
+Validate the generated kit with `dr-kit validate`. Then create or apply it through
 the usual kit workflow. Each consumer registers the mounted local marketplace and
-installs into its private native cache. Installation needs no upstream download.
-The parent mount keeps child-directory publication swaps visible. Kits are
-install-only and repeatable; current sbx kits use the v3 lifecycle capability.
+installs into its private native cache. The installation needs no upstream download.
+The parent mount keeps the swaps of child directories visible. The kits only install
+and are safe to repeat. Current sbx kits use the v3 lifecycle capability.
 
-`update` refreshes selected packages from their original sources. `enable` and
+`update` refreshes the selected packages from their original sources. `enable` and
 `disable` publish switches that apply on the next `dr-go`, in both attach modes.
-These switches do not prove a plugin has authenticated or loaded. `remove` drops
-its catalog entry and records a disabled override for stale consumer installs.
-Remove its generated kit from `DRAUGR_KIT` too. `clean` removes unreferenced package
-versions from the next publication. `rollback` swaps `seed` and `seed.old`; applying
-the install kit again refreshes a consumer's cache. Running sessions keep their
-already loaded content until restarted.
+These switches do not prove that a plugin authenticated or loaded. `remove` drops
+the catalog entry of the plugin and records a disabled override for stale consumer installs.
+Also remove its generated kit from `DRAUGR_KIT`. `clean` removes the unreferenced package
+versions from the next publication. `rollback` swaps `seed` and `seed.old`.
+To refresh the cache of a consumer, apply the install kit again. Running sessions keep their
+loaded content until they restart.
 
-`dr-plugin skills` reports packaged skills. Use native `codex plugin list --json`
-inside the mound to inspect installation and enablement. Service authentication,
-dependencies, and runtime errors remain native concerns. Packages can contain
-skills, MCP servers, and hooks, but Claude-specific components are not translated.
+`dr-plugin skills` reports the packaged skills. To see the installation and the enablement,
+run the native `codex plugin list --json` inside the mound. Authentication of services,
+dependencies, and runtime errors stay native concerns. A package can contain
+skills, MCP servers, and hooks. Draugr does not translate components that are specific to Claude.
 On the measured Codex, a bundled stdio MCP server can use `cwd: "."` and a relative
-script argument. `${PLUGIN_ROOT}` in MCP arguments remained literal; hook path
-expansion is a separate native behavior.
-Review hooks with `/hooks` in Codex. Draugr never accepts hook trust for you, and
+script argument. `${PLUGIN_ROOT}` in MCP arguments stayed literal. The expansion of paths in hooks
+is a separate native behavior.
+Review hooks with `/hooks` in Codex. Draugr never accepts trust for a hook on your behalf, and
 does not export trust or service credentials between mounds. See
 [plugin packaging](https://developers.openai.com/plugins/build/plugins) and
 [hook review](https://learn.chatgpt.com/docs/hooks).
 
 ## Local providers
 
-Codex receives invocation-only `-c` values selecting `draugr-local`, the model,
+Codex receives `-c` values for one invocation only. They select `draugr-local`, the model,
 `wire_api="responses"`, and `requires_openai_auth=false`. The base URL ends in
-`/v1`; Draugr appends that suffix if absent. The existing sbx cloud configuration
-stays available when `DRAUGR_MODEL` is cleared. Both attach transports apply the
-same settings. Draugr's provider selection takes precedence over native model and
-provider arguments for that launch.
+`/v1`. If the suffix is absent, Draugr appends it. If `DRAUGR_MODEL` is empty, the existing sbx cloud configuration
+stays available. Both attach transports apply the
+same settings. For that launch, the provider selection of Draugr takes precedence over the native model and
+provider arguments.
 
 The endpoint must implement Responses streaming and tool calls. A working Messages
-or Chat Completions endpoint is insufficient. The shared reachability probe does
-not certify protocol or model compatibility. Keep the query-only proxy boundary;
-model discovery and administration are not required by this custom provider.
+or Chat Completions endpoint is not enough. The shared reachability probe does
+not prove that the protocol or the model is compatible. Keep the query-only proxy boundary.
+This custom provider does not need model discovery or administration.
 See [local model setup](CONFIG.md#running-the-agent-on-a-local-model) and
 [its network limits](SECURITY.md#running-the-agent-on-a-local-model).
 
 ## Native configuration and optional workflows
 
-Use a reviewed project `.codex/config.toml`, or native commands inside the mound,
-for extra MCP servers. For the optional forge, configure its existing bridge URL:
+To add MCP servers, use a reviewed project `.codex/config.toml` or the native commands inside the mound.
+For the optional forge, configure its existing bridge URL:
 
 ```toml
 [mcp_servers.forge]
@@ -170,53 +172,52 @@ url = "http://GATEWAY:PORT/mcp"
 ```
 
 Use the actual endpoint from the forge configuration and its network policy. Never
-pass AppSandbox's host control token to Codex. The forge remains optional and has
-no dependency on the default path. Native MCP configuration is described in the
+pass the host control token of AppSandbox to Codex. The forge stays optional, and the
+default path does not depend on it. The native MCP configuration is described in the
 [Codex MCP reference](https://learn.chatgpt.com/docs/extend/mcp).
 
 Repository instructions are optional shared files. Keep personal instructions in
-ignored local files and opt into them explicitly; Draugr does not copy global host
-instructions or translate `CLAUDE.md` into `AGENTS.md`.
+ignored local files and opt into them explicitly. Draugr does not copy global host
+instructions and does not translate `CLAUDE.md` into `AGENTS.md`.
 
-Native `codex review`, `fork`, and `exec --json` can be useful inside a mound.
-`dr-shell -- codex ...` runs the native command directly: supply its model/provider
-configuration explicitly, since it does not build the `dr-go` attach environment.
-Native review is advisory; use the normal `dr-diff` and sync boundary for changes.
+The native commands `codex review`, `fork`, and `exec --json` are useful inside a mound.
+`dr-shell -- codex ...` runs the native command directly. It does not build the `dr-go` attach
+environment, so supply the model and provider configuration explicitly.
+Native review gives advice only. For changes, use the normal `dr-diff` and the sync boundary.
 
 ## Compatibility and evidence
 
-The native baseline is sbx **0.53.0** and codex-cli **0.167.2**. sbx was upgraded
-from 0.37.1 because 0.53 fixes local model selection falling back to OpenAI with
-`--model`. Use that release or later for Codex local providers. See the
+The native baseline is sbx **0.53.0** and codex-cli **0.167.2**. We upgraded sbx
+from 0.37.1 because 0.53 fixes a fault: local model selection fell back to OpenAI with
+`--model`. For Codex local providers, use that release or a later one. See the
 [sbx release notes](https://github.com/docker/sbx-releases/releases/tag/v0.53.0).
 
-Measured in disposable mounds: native launches through SSH and sbx attach, a real OAuth-backed conversation, context export,
-fresh-mound import and resume of the same thread; native local-marketplace plugin
-installation from a read-only relocated publication; and a deterministic Responses
-endpoint completing a real shell-tool round trip without an Authorization header.
-A missing model failed at that endpoint. Plugin add/update, kit replay, read-only
-mounts, failed publication, enable/disable, removal, clean, and rollback were also
-exercised. A packaged skill appeared in the native prompt, a bundled stdio MCP
+We measured these items in disposable mounds. Native launches through SSH and sbx attach worked.
+A real conversation that used OAuth worked. Context export, and the import and resume of the same
+thread in a fresh mound, worked. A native installation of a local-marketplace plugin worked
+from a read-only relocated publication. A deterministic Responses
+endpoint completed a real shell-tool round trip without an Authorization header.
+A missing model failed at that endpoint. We also tested plugin add and update, kit replay, read-only
+mounts, failed publication, enable and disable, removal, clean, and rollback. A packaged skill appeared in the native prompt, a bundled stdio MCP
 tool returned its marker, and an untrusted hook stayed skipped. The reviewed
-synthetic hook ran with an explicit one-invocation authorization in the probe;
+synthetic hook ran in the probe with an explicit authorization for one invocation.
 Draugr does not persist or bypass that trust. Claude Code 2.1.323 completed a real
-request and a project-memory round trip in a separate disposable mound.
+request and a round trip of project memory in a separate disposable mound.
 
-This protocol test does not establish
-the quality or compatibility of any particular Ollama model.
+This protocol test does not show the quality or the compatibility of any particular Ollama model.
 
-sbx 0.53 returns an array from `ls --json`; Draugr accepts that and the older object
-envelope. It removed `create -q`. Its built-in agents use v3 kits, which cannot
+sbx 0.53 returns an array from `ls --json`. Draugr accepts that and the older object
+envelope. sbx 0.53 removed `create -q`. Its built-in agents use v3 kits, which cannot
 compose with older v2 mixins. New starter kits and plugin kits select the current
-format; existing project kits need a reviewed migration, not an automatic rewrite.
+format. Existing project kits need a reviewed migration, not an automatic rewrite.
 See [Docker's kit compatibility guide](https://docs.docker.com/ai/sandboxes/customize/).
-Shared skills are read-only by default on this sbx baseline; earlier measurements
+Shared skills are read-only by default on this sbx baseline. The earlier measurements
 of writable shared skills apply to 0.37.1.
 
-### The older measurements, re-checked on this baseline
+### The older measurements, checked again on this baseline
 
-Draugr recorded most of what it knows about `sbx` on 0.37.1. Each claim below was measured again on
-0.53.0, in disposable mounds. Eight held. Two changed, and one question that was never measured now
+Draugr recorded most of what it knows about `sbx` on 0.37.1. We measured each claim below again on
+0.53.0, in disposable mounds. Eight claims held. Two changed. One question that we never measured now
 has an answer.
 
 | Claim as Draugr recorded it | On 0.53.0 |
@@ -229,26 +230,26 @@ has an answer.
 | a kit directory on the ext4 of WSL is refused | holds |
 | `--kit` is accepted more than one time | holds |
 | `sbx cp -L` follows links anywhere in the tree | **changed.** The copy stops at the first link, drops the rest, and exits 0. `-L` changes nothing. See [plugins](CLAUDE_PLUGINS.md) |
-| `kit add` refuses a kit that declares startup commands | **changed.** It is accepted now, so such a project can take a kit change in place |
+| `kit add` refuses a kit that declares startup commands | **changed.** It accepts such a kit now, so such a project can take a kit change in place |
 | can a kit fix the host port? (never measured) | **answered: no.** `kit validate` accepts `host-port@1` and `create` refuses it as an unsupported capability |
 
 Two facts that no claim predicted came out of the same session. `sbx kit validate` is **not** a
-complete check: it accepted a capability that `sbx create` then refused, which is the third member
+complete check. It accepted a capability that `sbx create` then refused. This is the third member
 of the family that already holds the duplicate kit name and `requires: agent:`. And **one mound is
-one process view**: a file held open by one `sbx exec` session is visible, with the same pid, to a
-later and separate one. That is what lets `dr-mem` see whether the agent is writing.
+one process view**: a file that one `sbx exec` session holds open is visible, with the same pid, to a
+later and separate session. That is how `dr-mem` can see whether the agent is writing.
 
 To repeat a compatibility check, use a disposable committed project and separate
-configuration, memory, plugin, and kit stores. Create a new named mound rather
-than changing a working one. Record `sbx --version`, `codex --version`, native
-plugin help, selected provider keys, and state filenames. Send a synthetic marker
-conversation, leave the agent, export and check context, then import into a second
-fresh mound with the same CLI layout and resume that thread by ID. Package a local
-marker plugin, generate its kit, install it from a read-only parent mount, and
-check the native skill/MCP/hook behavior. For local providers, use an isolated
-Responses fixture and inspect only route, model, credential-header presence, and
-tool outcomes; repeat with a missing model and an unavailable endpoint.
+stores for configuration, memory, plugins, and kits. Create a new named mound. Do not
+change a working one. Record `sbx --version`, `codex --version`, the native
+plugin help, the selected provider keys, and the state filenames. Send a synthetic marker
+conversation and leave the agent. Export and check the context, then import it into a second
+fresh mound with the same CLI layout, and resume that thread by ID. Package a local
+marker plugin, generate its kit, and install it from a read-only parent mount. Then
+check the native behavior of the skill, the MCP server, and the hook. For local providers, use an isolated
+Responses fixture. Inspect only the route, the model, whether a credential header is present, and the
+tool outcomes. Repeat the test with a missing model and with an unavailable endpoint.
 
-Live forge command/image acceptance and a real Ollama model are unmeasured here:
-no configured disposable forge or model server was used. Existing working VMs
-are not acceptance fixtures. The default path has no forge dependency.
+We did not measure the live acceptance of the forge command and image, or a real Ollama model.
+We used no configured disposable forge and no model server. Existing working VMs
+are not acceptance fixtures. The default path has no dependency on the forge.

@@ -12,7 +12,7 @@
 # tells how it was tested.
 #
 # Codex state belongs to a home, not to a project. One repository per mound
-# makes exporting that state useful; a host home can span unrelated projects.
+# makes exporting that state useful. A host home can span unrelated projects.
 # The recovery set includes generated memories, JSONL transcripts on older
 # images, and metadata plus paginated transcript databases on this image.
 # Restoring that set never enables memory generation or copies configuration.
@@ -55,7 +55,7 @@ dr_agent_mem_init() {
         return 1
     fi
     # Reject references conservatively, including quoted keys and profiles.
-    # This is not a TOML parser; a failed read is also an unknown layout.
+    # This is not a TOML parser. A failed read is also an unknown layout.
     case "${DRAUGR_AGENT_ARGS:-}" in
         *sqlite_home*) dr_error "sqlite_home in Codex arguments is not supported by context transfer"; return 1 ;;
     esac
@@ -70,7 +70,7 @@ dr_agent_mem_init() {
 
 # dr_agent_mem_quiesce: is it safe to copy the databases now?
 #
-# SQLite's database and WAL must agree with each other and the transcripts.
+# The SQLite database and its WAL must agree with each other and the transcripts.
 # Require a quiet Codex, then compare hashes before and after the copy. This
 # does not lock out an external launcher: do not attach during a transfer.
 #
@@ -123,7 +123,7 @@ fi
 cd "$src"
 
 # These roots are private state in a one-repository mound. They are never a
-# license to import a host's multi-project home or its configuration.
+# license to import the multi-project home of a host or its configuration.
 items() {
     for dir in memories memories_v2 sessions archived_sessions; do
         [ ! -e "$dir" ] && [ ! -L "$dir" ] || printf '%s\n' "$dir"
@@ -156,7 +156,7 @@ done
 case "$action" in
     present) [ -n "$paths" ] ;;
     list)
-        # NUL separates names until sha256sum; shell word splitting only sees
+        # NUL separates names until sha256sum. Shell word splitting only sees
         # the fixed roots above, never descendant names.
         { for path in $paths; do find "$path" -type f -print0; done; } |
             sort -z | xargs -0 -r sha256sum
@@ -175,7 +175,7 @@ case "$action" in
                 *.sqlite) rm -f "$dest/$path-wal" "$dest/$path-shm" ;;
                 memories|memories_v2|sessions|archived_sessions) rm -rf "$dest/$path" ;;
             esac
-            # Replace a file's directory entry, not a symlink's target. A
+            # Replace the directory entry of a file, not the target of a symlink. A
             # sandbox can leave links pointing into another mounted tree.
             case "$path" in
                 memories|memories_v2|sessions|archived_sessions) ;;
@@ -204,7 +204,7 @@ dr_agent_mem_pack() {
     # Never rotate a complete store away in favor of a successful partial copy.
     dr_agent_mem_quiesce || rc=$?
     if [ "$rc" -ne 0 ]; then
-        dr_warn "Codex context was not exported; the previous store is unchanged"
+        dr_warn "Codex context was not exported. The previous store is unchanged"
         if [ "$rc" -eq 1 ]; then
             printf '  %scodex runs in %s. Its databases cannot be copied safely%s\n' \
                 "$_DR_DIM" "$DRAUGR_SANDBOX" "$_DR_OFF" >&2
@@ -233,7 +233,7 @@ dr_agent_mem_pack() {
     packed=$(dr_mound_sh "$(_dr_codex_state_script)" list "$stage") || return 1
     # A writer that started and stopped between probes still changes hashes.
     if [ "$before" != "$after" ] || [ "$before" != "$packed" ]; then
-        dr_error "Codex context changed during export; the store is unchanged"
+        dr_error "Codex context changed during export. The store is unchanged"
         return 1
     fi
 }
@@ -302,7 +302,7 @@ dr_agent_mem_status_extra() {
     case "$state" in
         true)  printf '  %-6s %son%s: Codex writes memories in this mound\n' \
                    memories "$_DR_GREEN" "$_DR_OFF" ;;
-        false) printf '  %-6s %soff%s: memory generation is disabled; import preserves this choice\n' \
+        false) printf '  %-6s %soff%s: memory generation is disabled. Import preserves this choice\n' \
                    memories "$_DR_YELLOW" "$_DR_OFF" ;;
         *)     printf '  %-6s %sunknown%s: does the mound run?\n' \
                    memories "$_DR_DIM" "$_DR_OFF" ;;
@@ -360,18 +360,18 @@ dr_agent_model_supported() {
         if [ "$major" -gt 0 ] || [ "$minor" -ge 53 ]; then return 0; fi
     fi
     # Older sbx can substitute the cloud provider when --model is selected.
-    dr_error "Codex local providers require sbx 0.53 or later; inspect sbx --version"
+    dr_error "Codex local providers require sbx 0.53 or later. Inspect sbx --version"
     return 1
 }
 dr_agent_model_env()       { return 0; }
 
 # A private provider replaces sandboxd for this invocation only. CLI config
-# preserves the rest of sbx's config and does not read host credentials.
+# preserves the rest of the config of sbx and does not read host credentials.
 dr_agent_model_args() {
     local url=${1%/} model=$2
     dr_agent_model_supported || return 1
     if [ -n "${DRAUGR_MODEL_FAST:-}" ] && [ "$DRAUGR_MODEL_FAST" != "$model" ]; then
-        dr_warn "Codex has no measured fast-tier mapping; this session uses $model"
+        dr_warn "Codex has no measured fast-tier mapping. This session uses $model"
     fi
     case "$url" in */v1) ;; *) url+=/v1 ;; esac
     printf '%s\n' -c 'model_provider="draugr-local"' \
