@@ -789,11 +789,11 @@ skips and no failures**. That mound was built before `dr-up` started installing 
 skips do not happen in a mound that a current `dr-up` creates. Getting there took four facts about a
 mound, and each one looked like a broken test suite first:
 
-- `bats`, `jq`, `shellcheck` and `python3` are in the base image already, and the Draugr kit
+- **`bats`, `jq`, `shellcheck` and `python3` are in the base image already**, and the Draugr kit
   installs nothing. Where a tool is missing, an install command in the kit is the place for it.
   Remember the rule for each kit: install commands run **before** the repository is in the
   workspace, so they cannot read a file from it.
-- a writable `/mnt/c`, which the harness makes. `dr_win_root` looks for `/mnt/c/Temp`, then
+- **a writable `/mnt/c`**, which the harness makes. `dr_win_root` looks for `/mnt/c/Temp`, then
   `/mnt/c`, and a mound has neither: the Windows drives are at `/c` in there, and `/mnt` does not
   exist at all. Thus `dr_win_root_make` runs `sudo -n mkdir -p /mnt/c/Temp` and `sudo -n chmod 1777
   /mnt/c/Temp`, the same pair that the CI workflow runs, and only when `IS_SANDBOX=1`. A test run on
@@ -804,7 +804,7 @@ mound, and each one looked like a broken test suite first:
   `bsdextrautils`, which the base image leaves out. `tests/pty_run.py` makes one with `python3`
   instead, which every place that runs the suite has, and which CI already installs by name. `dr_pty`
   in the helper is now the only way the suite asks for a terminal. **Do not rename that file to
-  `pty.py`**: python puts the directory of the script first on `sys.path`, so it imports itself, and
+  `pty.py`**: Python puts the directory of the script first on `sys.path`, so it imports itself, and
   `pty.fork` then does not exist. The error says "partially initialized module", and names no file
   of yours.
 - **no `rsync`**, which was 7 failures and one pass that proved nothing. The eight `data filters`

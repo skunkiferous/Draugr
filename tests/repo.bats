@@ -164,7 +164,7 @@ want_executable() {
     done
 
     # The glob covers a kit that somebody adds later, which is the case that a
-    # list of three names would miss.
+    # list of three names misses.
     if [ ${#bad[@]} -gt 0 ]; then
         printf 'dr-forge writes these into a gateway, and they are not v3:\n' >&2
         printf '  %s\n' "${bad[@]}" >&2
@@ -175,8 +175,8 @@ want_executable() {
 @test "the two kit examples keep their formats, which are a deliberate pair" {
     # share/kit.example is v2 ON PURPOSE. dr-init writes whichever format the
     # sbx of this machine reads, so an older sbx still needs the v2 spelling.
-    # A well-meant migration of that file would break every such machine, and
-    # a migration of the v3 one would leave current sbx with nothing.
+    # A well-meant migration of that file breaks every such machine, and
+    # a migration of the v3 one leaves current sbx with nothing.
     grep -q '^schemaVersion: "2"' "$DR_ROOT/share/kit.example/spec.yaml"
     grep -q '^schemaVersion: "3"' "$DR_ROOT/share/kit-v3.example/spec.yaml"
 }

@@ -81,7 +81,7 @@ capabilities:
 
       # ONLY a host that the create needs and the agent must NOT have. A host
       # that both want belongs in `runtime:` alone, which already covers the
-      # install - see the measurement above. Leave this out entirely if the
+      # install (see the measurement above). Leave this out entirely if the
       # install needs nothing beyond the defaults, which is the common case.
       #install:
       #  allow:

@@ -44,7 +44,7 @@ row branch "$(dr_repo_branch "$DR_REPO")"
 
 # What the branch name cannot tell you: what you last did here. It is the first
 # thing you want after a month away, and the host revision is the one this
-# command may read - see dr_last_commit_line. A repo with no commit yet prints
+# command can read (see dr_last_commit_line). A repo with no commit yet prints
 # no row at all, rather than an empty one.
 if _dr_last=$(dr_last_commit_line HEAD); then
     row "last commit" "$_dr_last"

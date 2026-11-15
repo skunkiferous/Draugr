@@ -94,7 +94,7 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     # The lock that actually bites is the LISTS lock, which that option does not
     # cover, so the command retries on exactly that message and on nothing else.
     # Only the TEXT can be asserted here: the retry runs inside the mound, and
-    # the mock never executes it. The behaviour was measured in a real create.
+    # the mock never executes it. The behavior was measured in a real create.
     [[ "$(calls exec)" == *"Could not get lock"* ]]
     [[ "$output" == *"installing rsync"* ]]
 }
@@ -120,7 +120,7 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [[ "$output" == *"dr-shell -- sudo -n apt-get install -y rsync"* ]]
     # And what apt SAID. The first version captured the output and dropped it,
     # so a real failure in a real mound named no cause, and the cause was the
-    # one nobody would guess: no package index yet. The mock echoes its argv,
+    # one that nobody can guess: no package index yet. The mock echoes its argv,
     # and that argv only reaches the operator if the capture is printed.
     #
     # The string has to be one that ONLY the capture carries. "install -y rsync"
@@ -138,7 +138,7 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 }
 
 @test "dr-up: rsync reaches an existing mound where DRAUGR_DATA says data moves" {
-    # The mounds that exist today have no rsync, and a recreate to get one would
+    # The mounds that exist today have no rsync, and a recreate to get one will
     # cost the conversation of the agent. Thus the project that uses the channel
     # gets the install at its next dr-up.
     export DRAUGR_DATA="*.parquet" DRAUGR_DATA_PUSH=manual
@@ -211,7 +211,7 @@ stale_tracking_ref() {
 
 @test "dr-up: a tracking ref holding commits of its own is left alone" {
     # Unmerged work of an agent, fetched by dr-sync. This ref is the only thing
-    # that reaches those commits, so moving it would make them collectable. The
+    # that reaches those commits, so moving it makes them collectable. The
     # wrong number is the lesser evil, and the warning says what to run.
     local base agent
     base=$(git rev-parse HEAD)
@@ -231,7 +231,7 @@ stale_tracking_ref() {
 
 @test "dr-up: no tracking ref is created where none existed" {
     # With no ref, dr-status says "never synced", which is true and useful. A
-    # ref written here would replace it with "none at your last dr-sync", and no
+    # ref written here replaces it with "none at your last dr-sync", and no
     # sync has happened.
     DR_MOCK_STATE=absent run dr-up
     [ "$status" -eq 0 ]
@@ -278,7 +278,7 @@ stale_tracking_ref() {
     [[ "$output" == *"does not ignore"* ]]
     [[ "$output" == *".draugr/create.applied"* ]]
     [[ "$output" == *"dr-init"* ]]
-    # It warns and changes NOTHING. Writing .gitignore is dr-init's job, not the
+    # It warns and changes NOTHING. Writing .gitignore is the job of dr-init, not the
     # job of the command that starts a mound.
     [ ! -e "$REPO/.gitignore" ]
 }

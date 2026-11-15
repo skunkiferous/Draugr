@@ -553,7 +553,7 @@ dr_repo_is_clean() {
 # It exists for the reminder in dr-status. Coming back to a project after a
 # month, the question is "where was I", and a branch name does not answer it.
 #
-# THE HOST REVISION, and that is the whole choice. dr-status may not ask the
+# THE HOST REVISION, and that is the whole choice. dr-status must not ask the
 # mound: a question starts a stopped one, and a report must not act. What this
 # repository knows about the mound is <remote>/<branch>, which is only true as
 # of the last dr-sync, and the unmerged and unsent rows already report that
@@ -2020,7 +2020,7 @@ dr_sandboxes_running() {
 # NOT fatal when it fails. A mound with no rsync is still a mound: the agent
 # works, git works, dr-cp works. Only the data channel is lost, and dr-data
 # refuses with its own message naming this exact command. A create that dies
-# because a Debian mirror is briefly down would be worse than the gap it guards.
+# because a Debian mirror is briefly down is worse than the gap it guards.
 dr_mound_ensure_rsync() {
     local name=$1 out
 
@@ -2055,7 +2055,7 @@ dr_mound_ensure_rsync() {
     local apt_once='sudo -n apt-get -o DPkg::Lock::Timeout=120 update 2>&1 && sudo -n apt-get -o DPkg::Lock::Timeout=120 install -y rsync 2>&1'
     # The single quotes are the point: $out, $i and the command substitution
     # must expand in the SHELL OF THE MOUND, not here. Expanding them on this
-    # side would send an empty loop that installs nothing.
+    # side sends an empty loop that installs nothing.
     # shellcheck disable=SC2016
     local script='i=1; while :; do out=$('"$apt_once"') && break; case "$out" in *"Could not get lock"*) : ;; *) printf "%s\n" "$out" >&2; exit 1 ;; esac; [ "$i" -ge 20 ] && { printf "%s\n" "$out" >&2; exit 1; }; i=$((i + 1)); sleep 3; done'
 
@@ -2064,7 +2064,7 @@ dr_mound_ensure_rsync() {
 
     # What apt said, and only the end of it. The first version of this threw the
     # output away, so the warning named no cause, and the cause was the one
-    # thing nobody would have guessed.
+    # thing nobody expected.
     dr_warn "could not install rsync in $name, so dr-data cannot transfer yet"
     printf '%s\n' "$out" | tail -3 | sed 's/^/  /' >&2
     dr_warn "try it by hand:  dr-shell -- sudo -n apt-get install -y rsync"
@@ -2986,7 +2986,7 @@ dr_create_stamp() {
 #
 # dr-up writes .draugr/create.applied, and .draugr/kit.applied for a mound with
 # kits, into YOUR repository at each create. Both describe this checkout and not
-# the project, so dr-init puts them in .gitignore - but dr-init runs ONCE, at the
+# the project, so dr-init puts them in .gitignore, but dr-init runs ONCE, at the
 # start. A project set up before one of those entries joined that list never got
 # it, and the file then shows as an untracked file for ever. That is not merely
 # untidy: with DRAUGR_REQUIRE_CLEAN=true it blocks dr-go, and the refusal there
@@ -3438,9 +3438,9 @@ dr_tracking_ref() {
 # IT CREATES NOTHING. Only dr-sync makes this remote and this ref. With no ref,
 # the mound was never synced, dr-status says exactly that, and there is no wrong
 # number to correct. The first test below states that, and does not only rely on
-# it: rev-list also fails on a ref that is not there, so the count would return
+# it: rev-list also fails on a ref that is not there, so the count returns
 # as well. A mutation run proved that pair. Removing the test alone changes
-# nothing; removing it AND forgiving the count writes a ref that no sync earned.
+# nothing. Removing it AND forgiving the count writes a ref that no sync earned.
 #
 # IT ALSO NEEDS HEAD TO BE THE TIP OF THE TRACKED BRANCH. HEAD is what the new
 # mound starts from, and $DRAUGR_BRANCH is what this ref is about. They are the
@@ -3479,7 +3479,7 @@ dr_tracking_ref_follow_head() {
     # A failure here warns and does not stop. The mound exists and works. Only
     # one row of one report is wrong, and dr-sync corrects it by itself.
     git -C "$DR_REPO" update-ref -m "dr-up: the new mound starts at this commit" "$full" "$head" \
-        || { dr_warn "could not point $(dr_tracking_ref) at HEAD, so dr-status may call your commits unsent"; return 0; }
+        || { dr_warn "could not point $(dr_tracking_ref) at HEAD, so dr-status can call your commits unsent"; return 0; }
     dr_debug "pointed $full at HEAD ($head), the commit that the new mound starts from"
 }
 

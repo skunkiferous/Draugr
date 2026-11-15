@@ -462,7 +462,7 @@ esac
 #
 # A mound that was just created always gets it, whatever this project does with
 # the data channel. Carrying data in and out of a mound is half of what Draugr
-# is for, and the base image of sbx ships no rsync, so a new mound would arrive
+# is for, and the base image of sbx ships no rsync, so a new mound arrives
 # with that half missing. $state is still the state from BEFORE the case above,
 # and --recreate sets it to absent after the removal. Thus "absent" means
 # "created in this run", for a first create and a recreate alike.

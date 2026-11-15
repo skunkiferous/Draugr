@@ -102,7 +102,7 @@ capabilities:
           # THREE PACKAGE HOSTS ARE NOT DENIED HERE, and the only reason is that
           # this kit has to install tinyproxy and samba. Nothing else about this
           # gateway wants them reachable: each was denied with every other package
-          # manager below, so that the VM behind this proxy could fetch no
+          # manager below, so that the VM behind this proxy had no way to fetch
           # tooling, and all three belong in that list. The entries that had to
           # go:
           #
@@ -110,8 +110,8 @@ capabilities:
           #
           # A deny beats an allow, and it carries no port, so a denied
           # `**.debian.org` also closes 443, which is the one port the machine-wide
-          # policy allows. While Debian was denied, the install commands could
-          # reach nothing and this gateway could not be built at all. On sbx 0.37.1
+          # policy allows. While Debian was denied, the install commands
+          # reached nothing and this gateway could not be built at all. On sbx 0.37.1
           # it worked with the deny in place, so that version did not apply a kit
           # deny to the install phase, and 0.53 does.
           #
@@ -222,7 +222,7 @@ capabilities:
           - "**.production.cloudflare.docker.com"
           - "**.production.cloudfront.docker.com"
           - bitbucket.org
-          # dhi.io WOULD BE HERE. It is not denied, because this kit installs
+          # dhi.io BELONGS HERE. It is not denied, because this kit installs
           # packages and the base image resolves its own against that repository.
           # The long note at the head of this deny list says why, and says to put
           # it back when the installs go.

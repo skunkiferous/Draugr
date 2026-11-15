@@ -17,11 +17,11 @@
 #    the keeper holds the mound.
 #
 # And one fact measured on sbx 0.53, which cost an evening: only a SIMPLE
-# command may be backgrounded in a command sent through `sbx exec`. The old
+# command can be backgrounded in a command sent through `sbx exec`. The old
 # `pgrep -x tinyproxy >/dev/null || setsid tinyproxy … &` backgrounded a LIST,
 # so bash forked a subshell, that subshell waited for tinyproxy, and the exec
 # around it never returned. dr-up then hung for ever, with the proxy running and
-# the work already done. Three runs timed out at 45 s and 66 s; the if-form
+# the work already done. Three runs timed out at 45 s and 66 s. The if-form
 # below answers in 1 s, and is still idempotent.
 set -euo pipefail
 

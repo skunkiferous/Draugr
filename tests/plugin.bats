@@ -526,7 +526,7 @@ make_plugin_skill() {
     # v3 has no slug field, and no version may be pinned here either.
     # `|| return 1` on both, not only on the one the lint named: bats discards an
     # inverted command that is not the last of its test, so the first of these
-    # was dead until the lint said so, and the second would die the moment
+    # was dead until the lint said so, and the second dies the moment
     # anything is appended below it.
     ! grep -q '^name:' "$spec" || return 1
     ! grep -q '1\.0\.0' "$spec" || return 1
@@ -534,7 +534,7 @@ make_plugin_skill() {
 
 @test "dr-plugin kit: the v3 kit says what it installs and who wrote it" {
     # Without these, dr-kit shows the directory name and nothing else, and the
-    # file does not say that it is generated - so somebody edits it, and the
+    # file does not say that it is generated. Thus somebody edits it, and the
     # next dr-plugin kit throws the edit away.
     setup_store || skip "no writable Windows drive path"
     export DRAUGR_KIT_STORE="$DR_TMP/kits" DR_MOCK_VERSION=0.53.0
@@ -544,7 +544,7 @@ make_plugin_skill() {
     spec="$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml"
     # THE FORMAT IS ASSERTED FIRST, and that is not decoration: the v2 file
     # carries the same two fields, so without this line the test passes even
-    # when the v3 branch never runs - which is the very gap that let the fields
+    # when the v3 branch never runs, which is the very gap that let the fields
     # go missing.
     grep -qx 'schemaVersion: "3"' "$spec"
     grep -qx 'displayName: Install plug-a@mkt-a into the mound' "$spec"

@@ -696,10 +696,10 @@ Two things are less simple than they look. First, **rsync must exist inside the 
 base image of sbx has none: `command -v rsync` in a claude mound on 0.53 answers nothing. Draugr
 runs one rsync across the ssh, so it has to be at both ends. Thus **`dr-up` installs it in every
 mound it creates**, with `sudo -n apt-get install -y rsync`, because the agent user has sudo with no
-password. A mound that already has it is left alone. A mound that was built before this, by an older
-Draugr or by `sbx` itself, is given one at its next `dr-up` where `DRAUGR_DATA` says that the project
-uses the channel. If the install cannot work, because a mirror is down or the image has no `apt-get`,
-`dr-up` warns and carries on: the mound is still good for everything that is not a transfer, and
+password. A mound that already has it is left alone. An older mound, built by an older Draugr or by
+`sbx` itself, gets rsync at its next `dr-up`, if `DRAUGR_DATA` says that the project uses the
+channel. The install can fail, for example because a mirror is down or the image has no `apt-get`.
+Then `dr-up` warns and carries on. The mound still works for everything that is not a transfer, and
 `dr-data` refuses with the command to run by hand. Note that `dr-doctor` reports the rsync of the
 **host**, which is a different question. Second, **the first transfer takes time**. A push of tens of
 gigabytes into a microVM is a real wait. By default, it happens inside `dr-up`, when you expect a
