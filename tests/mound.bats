@@ -157,6 +157,114 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [[ "$(calls exec)" == *"install -y rsync"* ]]
 }
 
+# --- dr-up: the tracking ref after a create ----------------------------------
+#
+# draugr/<branch> lives in the HOST repository, so a removed mound leaves it
+# behind. The create then starts a mound at HEAD while that ref still names the
+# commit of the old one, and dr-status subtracts the two.
+
+# The ref as it is after a sync, and then one commit on top, which is the shape
+# that a recreate leaves behind.
+stale_tracking_ref() {
+    git update-ref "refs/remotes/draugr/$(git rev-parse --abbrev-ref HEAD)" "$(git rev-parse HEAD)"
+    printf 'more\n' >> README.md
+    git commit -qam "a commit the old mound never saw"
+}
+
+@test "dr-up: a create points the tracking ref at HEAD, because that is where the mound starts" {
+    stale_tracking_ref
+    DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [ "$(git rev-parse refs/remotes/draugr/main)" = "$(git rev-parse HEAD)" ]
+}
+
+@test "dr-up: the tracking ref move names itself in the reflog" {
+    # update-ref with no -m leaves an EMPTY reflog message, and the reflog is
+    # what gets asked later. A live create in another project left a jump of
+    # several months showing as a blank line between two fetch entries.
+    stale_tracking_ref
+    DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    run git reflog show refs/remotes/draugr/main
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"dr-up: the new mound starts at this commit"* ]]
+}
+
+@test "dr-up: and then dr-status calls nothing unsent" {
+    # The payoff, and the reason the ref is moved at all. Asserted through the
+    # screen that was wrong, not only through the ref underneath it.
+    stale_tracking_ref
+    DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    DR_MOCK_STATE=running run dr-status
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"not in draugr/main"* ]]
+    [[ "$output" == *"none at your last dr-sync"* ]]
+}
+
+@test "dr-up: a recreate moves it too, which is the case that found this" {
+    stale_tracking_ref
+    DR_MOCK_STATE=running run dr-up --yes --recreate
+    [ "$status" -eq 0 ]
+    [ "$(git rev-parse refs/remotes/draugr/main)" = "$(git rev-parse HEAD)" ]
+}
+
+@test "dr-up: a tracking ref holding commits of its own is left alone" {
+    # Unmerged work of an agent, fetched by dr-sync. This ref is the only thing
+    # that reaches those commits, so moving it would make them collectable. The
+    # wrong number is the lesser evil, and the warning says what to run.
+    local base agent
+    base=$(git rev-parse HEAD)
+    printf 'agent\n' > agent.txt
+    git add -A
+    git commit -qm "work of the agent"
+    agent=$(git rev-parse HEAD)
+    git reset -q --hard "$base"
+    git update-ref refs/remotes/draugr/main "$agent"
+
+    DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [ "$(git rev-parse refs/remotes/draugr/main)" = "$agent" ]
+    [[ "$output" == *"left draugr/main where it was"* ]]
+    [[ "$output" == *"dr-diff"* ]]
+}
+
+@test "dr-up: no tracking ref is created where none existed" {
+    # With no ref, dr-status says "never synced", which is true and useful. A
+    # ref written here would replace it with "none at your last dr-sync", and no
+    # sync has happened.
+    DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    run git rev-parse --verify --quiet refs/remotes/draugr/main
+    [ "$status" -ne 0 ]
+}
+
+@test "dr-up: a configured branch that is not the checked-out one is left alone" {
+    # HEAD is what the mound starts from, and this ref is about $DRAUGR_BRANCH.
+    # Where those are two different branches, nothing here knows what the mound
+    # holds for the configured one, so HEAD must not be written into it.
+    git branch other
+    git update-ref refs/remotes/draugr/other "$(git rev-parse HEAD)"
+    printf 'more\n' >> README.md
+    git commit -qam "one more on main, and none on other"
+
+    DRAUGR_BRANCH=other DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [ "$(git rev-parse refs/remotes/draugr/other)" = "$(git rev-parse other)" ]
+    [ "$(git rev-parse refs/remotes/draugr/other)" != "$(git rev-parse HEAD)" ]
+}
+
+@test "dr-up: starting an existing mound leaves the tracking ref alone" {
+    # Only a create puts the mound at HEAD. A start changes nothing about what
+    # it holds, so the ref must keep saying what the last sync saw.
+    stale_tracking_ref
+    local before
+    before=$(git rev-parse refs/remotes/draugr/main)
+    DR_MOCK_STATE=stopped run dr-up
+    [ "$status" -eq 0 ]
+    [ "$(git rev-parse refs/remotes/draugr/main)" = "$before" ]
+}
+
 # --- dr-up: turning config into a command line -------------------------------
 
 @test "dr-up: DRAUGR_CLONE=false drops --clone" {

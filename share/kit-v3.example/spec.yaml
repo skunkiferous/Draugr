@@ -48,10 +48,25 @@ capabilities:
   # Default-deny still applies. sbx refuses each host that matches no rule.
   # To test a specific host:  dr-policy --check <host>
   #
-  # The two phases are SEPARATE in v3. `install:` egress is for the creation
-  # commands below. `runtime:` egress is for the session of the agent. Access
-  # during the install does not grant access during the session, and Draugr counts
-  # only runtime rules as the permissions that a mound adopted.
+  # THE TWO PHASES ARE NOT SYMMETRIC, and the direction matters when you write
+  # a kit. `install:` egress is for the creation commands below. `runtime:`
+  # egress is for the session of the agent. Measured on sbx 0.53 with four
+  # one-command kits, each fetching the same host and recording the HTTP code
+  # (the proxy of a mound answers a refused host with 403):
+  #
+  #   no rule at all                 install 403
+  #   runtime allow only             install 200, session 200
+  #   install allow only             install 200, session 403
+  #   install allow + runtime deny   install 403
+  #
+  # So a RUNTIME ALLOW ALSO COVERS THE INSTALL. An install allow does not reach
+  # the session. A deny closes both, whatever the other half says. Most kits
+  # therefore want `runtime:` and nothing else, and naming a host in both halves
+  # is redundant rather than careful.
+  #
+  # Draugr counts only runtime rules as the permissions that a mound adopted,
+  # which the same measurement supports: a host allowed for the install alone is
+  # refused to the agent.
   - type: com.docker.sandbox/network-policy@1
     config:
       runtime:
@@ -64,8 +79,10 @@ capabilities:
         #deny:
         #  - telemetry.example.com
 
-      # Only what the install needs to download. Leave it out if it needs
-      # nothing beyond the defaults.
+      # ONLY a host that the create needs and the agent must NOT have. A host
+      # that both want belongs in `runtime:` alone, which already covers the
+      # install - see the measurement above. Leave this out entirely if the
+      # install needs nothing beyond the defaults, which is the common case.
       #install:
       #  allow:
       #    - deb.debian.org

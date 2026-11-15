@@ -16,8 +16,38 @@ people reading the source, not for people calling it.
 
 ### Changed
 
+- The v3 kit template records what the two halves of a `network-policy@1` really do, because
+  "the two phases are SEPARATE" read as symmetry and is not. Measured on sbx 0.53 with four
+  one-command kits, each fetching one host during its install phase and recording the HTTP code:
+  with no rule the install is refused (403); with a **runtime** allow alone both the install and
+  the session reach it (200/200); with an **install** allow alone the install reaches it and the
+  session is refused (200/403); and an install allow under a runtime deny is refused (403). So a
+  runtime allow also covers the creation commands, an install allow never reaches the agent, and a
+  deny closes both halves whatever the other says. Most kits therefore want `runtime:` and nothing
+  else, and the `install:` example now says it is for a host the create needs and the agent must
+  not have. The same measurement supports what `dr_kit_allow_list` already does, counting only
+  runtime rules as the permissions a mound adopted. This came out of migrating a project kit, where
+  the old wording produced one host listed in both halves and a comment asserting a mechanism that
+  no one had tested.
+
 ### Fixed
 
+- A created mound no longer looks behind the host repository. `draugr/<branch>` lives in your
+  repository rather than in the mound, so removing a mound leaves it behind, and the new mound starts
+  at your current commit while that ref still names the commit of the one that went. `dr-status`
+  subtracted the two and reported your own commits as unsent, under advice to `dr-send` them into a
+  mound that already had every one. A user asked why a mound recreated a minute earlier was five
+  commits behind; `git ls-remote` showed the mound's `refs/heads/main` identical to the host's, and
+  the ref underneath it dated from the day the first mound of that project was made, two and a half
+  months earlier. `dr-up` now points that ref at HEAD after a create, which is where the new mound
+  starts. It refuses to move a ref that holds commits HEAD does not have: those are the fetched and
+  unmerged work of an agent, and that ref is the only thing in the repository that reaches them, so
+  moving it would leave them to the next `gc`. It also creates no ref where none existed, since only
+  `dr-sync` earns one and "never synced" is the honest screen, and it leaves a configured
+  `DRAUGR_BRANCH` alone when that is not the checked-out branch, because then nothing here knows
+  what the mound holds for it. The move carries a reflog message, so that the one line explaining a
+  jump of months does not read as a blank between two `fetch --prune draugr` entries. Eight tests
+  cover it, and six mutations of the fix were each caught by a named one.
 - The `post-up` hook of the generated gateway no longer hangs `dr-up` for ever. It started tinyproxy
   with `pgrep -x tinyproxy >/dev/null || setsid tinyproxy … &`, which backgrounds a **list**: bash
   forks a subshell for it, that subshell waits for tinyproxy, and the `sbx exec` carrying the script

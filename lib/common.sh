@@ -3360,6 +3360,72 @@ dr_tracking_ref() {
     printf '%s/%s' "$DRAUGR_REMOTE" "$DRAUGR_BRANCH"
 }
 
+# dr_tracking_ref_follow_head: after a create, point <remote>/<branch> at HEAD.
+#
+# THE HOST KEEPS THIS REF WHEN THE MOUND GOES. It lives in your repository, not
+# in the mound, so a removal takes the mound and leaves the ref at whatever the
+# old one had. A create then makes it false: the new mound starts at your
+# current commit, as a clone of it or as your working tree itself, while the ref
+# still names the commit of a mound that no longer exists. dr-status compares
+# the two, reports your own commits as unsent, and prints "Use dr-send" under
+# them. dr-send then delivers what the mound already has. A user asked why a
+# mound recreated one minute ago was five commits behind, which is how this was
+# found.
+#
+# IT REFUSES TO MOVE A REF THAT HOLDS WHAT HEAD DOES NOT. Those commits are the
+# fetched and unmerged work of an agent, and this ref is the ONLY thing in the
+# repository that reaches them. Move it, and they are unreachable, and git
+# collects them at its next gc. Thus the guard is not politeness. It is the
+# difference between a wrong number and lost work.
+#
+# IT CREATES NOTHING. Only dr-sync makes this remote and this ref. With no ref,
+# the mound was never synced, dr-status says exactly that, and there is no wrong
+# number to correct. The first test below states that, and does not only rely on
+# it: rev-list also fails on a ref that is not there, so the count would return
+# as well. A mutation run proved that pair. Removing the test alone changes
+# nothing; removing it AND forgiving the count writes a ref that no sync earned.
+#
+# IT ALSO NEEDS HEAD TO BE THE TIP OF THE TRACKED BRANCH. HEAD is what the new
+# mound starts from, and $DRAUGR_BRANCH is what this ref is about. They are the
+# same branch unless a configuration names another one, and in that case this
+# code knows nothing about what the mound holds for it. Then it says nothing.
+#
+# refs/draugr/sent/<branch> stays as it is, on purpose. dr_send_state calls a
+# stale one "unmerged" only while it still CONTAINS HEAD, and in that case this
+# ref now equals HEAD too, so dr-status prints no unsent row at all and never
+# asks. After one more commit on the host, HEAD is no longer in it, and the
+# state is not-sent, which is the truth.
+dr_tracking_ref_follow_head() {
+    local full head tip behind
+    full="refs/remotes/$DRAUGR_REMOTE/$DRAUGR_BRANCH"
+
+    # The three conditions of the comment above, in its order: a ref to correct,
+    # a commit to correct it to, and one branch rather than two.
+    git -C "$DR_REPO" rev-parse --verify --quiet "$full" >/dev/null || return 0
+    head=$(git -C "$DR_REPO" rev-parse --verify --quiet HEAD) || return 0
+    tip=$(git -C "$DR_REPO" rev-parse --verify --quiet "refs/heads/$DRAUGR_BRANCH") || return 0
+    [ "$head" = "$tip" ] || return 0
+
+    # The one case where a wrong number is better than the alternative.
+    behind=$(git -C "$DR_REPO" rev-list --count "HEAD..$full") || return 0
+    if [ "$behind" -gt 0 ]; then
+        dr_warn "left $(dr_tracking_ref) where it was: it holds $behind commit(s) that $DRAUGR_BRANCH does not"
+        dr_warn "  read them before anything else:  dr-diff"
+        return 0
+    fi
+
+    # -m, because the reflog is what gets asked later. Without it, update-ref
+    # leaves an EMPTY message, and the one line that explains a jump of several
+    # months reads as nothing at all between two `fetch --prune draugr` entries.
+    # A live create in another project showed exactly that gap.
+    #
+    # A failure here warns and does not stop. The mound exists and works. Only
+    # one row of one report is wrong, and dr-sync corrects it by itself.
+    git -C "$DR_REPO" update-ref -m "dr-up: the new mound starts at this commit" "$full" "$head" \
+        || { dr_warn "could not point $(dr_tracking_ref) at HEAD, so dr-status may call your commits unsent"; return 0; }
+    dr_debug "pointed $full at HEAD ($head), the commit that the new mound starts from"
+}
+
 # dr_other_branches: fetched branches of the mound with commits that your HEAD
 # does not have.
 #

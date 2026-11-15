@@ -435,6 +435,13 @@ absent)
     fi
     dr_create_facts > "$(dr_create_stamp)"
 
+    # The new mound starts at HEAD, and <remote>/<branch> in THIS repository
+    # still names the commit of the mound that went. Without this line,
+    # dr-status subtracts the two and calls your own commits unsent, under advice
+    # to dr-send them into a mound that already has them. It runs before the
+    # hook, so that a post-create hook reads a true ref.
+    dr_tracking_ref_follow_head
+
     dr_hook post-create "$DR_REPO"
     ;;
 
