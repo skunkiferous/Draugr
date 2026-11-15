@@ -42,6 +42,18 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `dr-plugin kit` gives a v3 kit the same identity as a v2 one. The v3 branch wrote
+  `schemaVersion`, `kind` and `capabilities` and nothing else, so the file carried no
+  `displayName` and no `description`: `dr-kit` showed a bare directory name, and the file itself
+  did not say that `dr-plugin` generated it or that editing it is pointless, which it is — the next
+  `dr-plugin kit` overwrites it. `name` stays gone, since v3 has no slug field. The cause was a
+  gap in the tests rather than in the thinking: `tests/mocks/sbx` reports no version unless
+  `DR_MOCK_VERSION` asks it to, and `dr_sbx_v3` needs 0.51 or later, so every existing test of
+  that verb exercised the v2 branch while the codex generator had a v3 test of its own all along.
+  Three tests now cover the v3 branch, one of them asserting that both formats carry the same
+  identity, and the mutation that forces `dr_sbx_v3` false — writing v2 where v3 belongs — fails
+  all three. The first version of the identity test did not: the v2 file carries those same two
+  fields, so it passed with the v3 branch disabled until it was pinned to `schemaVersion: "3"`.
 - `dr-up` says so when git ignores neither stamp it writes. It puts `.draugr/create.applied`, and
   `.draugr/kit.applied` for a mound with kits, into your repository at every create. Both describe
   that checkout rather than the project, so `dr-init` gitignores them — but `dr-init` runs once, at

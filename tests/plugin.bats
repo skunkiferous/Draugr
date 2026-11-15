@@ -504,6 +504,73 @@ make_plugin_skill() {
     ! grep -q '1\.0\.0' "$spec"
 }
 
+# The two formats are two branches of the generator, and only one of them was
+# ever exercised. tests/mocks/sbx reports NO version unless DR_MOCK_VERSION says
+# so, and dr_sbx_v3 needs 0.51 or later, so every test above writes the v2 file.
+# The v3 branch shipped without its displayName and description because of that
+# gap, and the codex generator has had a test of its own all along.
+
+@test "dr-plugin kit: on a v3 sbx it writes the v3 spelling" {
+    setup_store || skip "no writable Windows drive path"
+    export DRAUGR_KIT_STORE="$DR_TMP/kits" DR_MOCK_VERSION=0.53.0
+
+    run dr-plugin kit -y
+    [ "$status" -eq 0 ]
+    spec="$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml"
+    [ -f "$spec" ]
+    grep -qx '# syntax=docker/sandbox-kit:3' "$spec"
+    grep -qx 'schemaVersion: "3"' "$spec"
+    grep -q 'com.docker.sandbox/lifecycle@1' "$spec"
+    grep -q 'claude plugin install plug-a@mkt-a -y' "$spec"
+    grep -q 'CLAUDE_CODE_PLUGIN_SEED_DIR=/c/' "$spec"
+    # v3 has no slug field, and no version may be pinned here either.
+    # `|| return 1` on both, not only on the one the lint named: bats discards an
+    # inverted command that is not the last of its test, so the first of these
+    # was dead until the lint said so, and the second would die the moment
+    # anything is appended below it.
+    ! grep -q '^name:' "$spec" || return 1
+    ! grep -q '1\.0\.0' "$spec" || return 1
+}
+
+@test "dr-plugin kit: the v3 kit says what it installs and who wrote it" {
+    # Without these, dr-kit shows the directory name and nothing else, and the
+    # file does not say that it is generated - so somebody edits it, and the
+    # next dr-plugin kit throws the edit away.
+    setup_store || skip "no writable Windows drive path"
+    export DRAUGR_KIT_STORE="$DR_TMP/kits" DR_MOCK_VERSION=0.53.0
+
+    run dr-plugin kit -y
+    [ "$status" -eq 0 ]
+    spec="$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml"
+    # THE FORMAT IS ASSERTED FIRST, and that is not decoration: the v2 file
+    # carries the same two fields, so without this line the test passes even
+    # when the v3 branch never runs - which is the very gap that let the fields
+    # go missing.
+    grep -qx 'schemaVersion: "3"' "$spec"
+    grep -qx 'displayName: Install plug-a@mkt-a into the mound' "$spec"
+    grep -qx 'description: >-' "$spec"
+    grep -q 'dr-plugin kit made this file' "$spec"
+}
+
+@test "dr-plugin kit: both formats carry the same identity" {
+    # The two branches must not drift. Whatever the sbx version, the file says
+    # which plugin it installs and that dr-plugin generated it.
+    setup_store || skip "no writable Windows drive path"
+    export DRAUGR_KIT_STORE="$DR_TMP/kits"
+
+    run dr-plugin kit -y
+    [ "$status" -eq 0 ]
+    v2="$DRAUGR_KIT_STORE/plugin-plug-a/spec.yaml"
+    grep -qx 'displayName: Install plug-a@mkt-a into the mound' "$v2"
+    grep -q 'dr-plugin kit made this file' "$v2"
+
+    DR_MOCK_VERSION=0.53.0 run dr-plugin kit -y --force
+    [ "$status" -eq 0 ]
+    grep -qx 'schemaVersion: "3"' "$v2"
+    grep -qx 'displayName: Install plug-a@mkt-a into the mound' "$v2"
+    grep -q 'dr-plugin kit made this file' "$v2"
+}
+
 @test "dr-plugin kit: refuses a plugin that is not installed" {
     setup_store || skip "no writable Windows drive path"
     export DRAUGR_KIT_STORE="$DR_TMP/kits"

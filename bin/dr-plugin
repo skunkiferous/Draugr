@@ -624,7 +624,19 @@ YAML
         if dr_sbx_v3; then
             _install="env HOME=/home/agent $(dr_shquote "$SEED_VAR=$_seed_mound") claude plugin install $(dr_shquote "$_p") -y"
             {
-                printf '# syntax=docker/sandbox-kit:3\nschemaVersion: "3"\nkind: mixin\ncapabilities:\n'
+                printf '# syntax=docker/sandbox-kit:3\nschemaVersion: "3"\nkind: mixin\n'
+                # THE SAME IDENTITY AS THE v2 FILE ABOVE. v3 drops `name:`,
+                # which had the slug rule, and keeps these two as free text.
+                # They were missing here at first, and nothing noticed, because
+                # this branch had no test: dr-kit then shows a bare directory
+                # name, and the file itself does not say that dr-plugin wrote it
+                # or that editing it is pointless.
+                printf 'displayName: Install %s into the mound\n' "$_p"
+                printf 'description: >-\n'
+                printf '  dr-plugin kit made this file. At the creation of the mound, it installs the\n'
+                printf '  plugin below from the seed. No version is pinned. It resolves against the\n'
+                printf '  seed, so after dr-plugin update you do not have to make it again.\n'
+                printf 'capabilities:\n'
                 printf '  - type: com.docker.sandbox/lifecycle@1\n    config:\n      install:\n'
                 printf '        - command: %s\n          user: "1000"\n' "$(jq -Rn --arg v "$_install" '$v')"
                 printf '          description: Install %s from the Claude seed\n' "$_p"
