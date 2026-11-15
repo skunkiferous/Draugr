@@ -12,6 +12,16 @@ people reading the source, not for people calling it.
 
 ### Added
 
+### Removed
+
+### Changed
+
+### Fixed
+
+## [0.9.0] — 2026-11-15
+
+### Added
+
 - `dr-status` names the last commit: `last commit  a561d60 (re) created mounds, start at git HEAD`.
   Coming back to a project after a month, "where was I" is the first question, and a branch name
   does not answer it. It is the **host** revision, and that is a constraint rather than a
@@ -21,8 +31,6 @@ people reading the source, not for people calling it.
   rows already report that difference. The subject is the first line only and is cut to 80 columns,
   ending in one ellipsis so the row stays one terminal line and says that it was cut; a repository
   with no commit prints no row rather than an empty one.
-
-### Removed
 
 ### Changed
 
@@ -1300,7 +1308,8 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 390 tests run in CI.
   name instead.
 - One repository per mound.
 
-[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.9.0
 [0.8.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.8.0
 [0.7.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.7.0
 [0.6.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.6.0
