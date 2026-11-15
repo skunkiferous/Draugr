@@ -140,7 +140,7 @@ exec)
             *'command -v rsync'*)
                 [ -n "${DR_MOCK_NO_RSYNC:-}" ] && exit 1
                 ;;
-            *'apt-get install -y rsync'*)
+            *'install -y rsync'*)
                 [ "${DR_MOCK_NO_RSYNC:-}" = stuck ] && exit 1
                 ;;
         esac

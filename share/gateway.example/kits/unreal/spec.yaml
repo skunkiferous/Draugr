@@ -1,4 +1,12 @@
 # syntax=docker/sandbox-kit:3
+#
+# Generated gateway file. `dr-forge gateway` writes it from
+# share/gateway.example/ in the Draugr checkout, and a gateway tracks nothing in
+# git, on purpose. Thus the copy in a gateway needs no saving: generate it
+# again. An edit of that copy does survive, because dr-forge leaves a file that
+# differs from its template and says so, but nothing backs it up. Thus a change
+# worth keeping belongs in share/gateway.example/, here in Draugr.
+#
 
 # Wildcards, tested on sbx 0.37.1 for rules from the CLI and from a kit:
 #   "*.example.com"   matches exactly ONE label, and NOT example.com itself

@@ -1995,7 +1995,7 @@ dr_sandboxes_running() {
 # refuses with its own message naming this exact command. A create that dies
 # because a Debian mirror is briefly down would be worse than the gap it guards.
 dr_mound_ensure_rsync() {
-    local name=$1
+    local name=$1 out
 
     # Already there: no apt, no output. A probe is one exec, and the install is
     # a package manager reaching the network.
@@ -2006,13 +2006,40 @@ dr_mound_ensure_rsync() {
     # The install. It says so first, because apt-get in a microVM takes seconds,
     # and silence in the middle of a create reads as a mound that has hung.
     dr_info "installing rsync in $name, because dr-data needs it at both ends"
-    if dr_sbx exec "$name" -- sh -c \
-           'sudo -n apt-get install -y rsync >/dev/null 2>&1'; then
-        dr_ok "rsync is in $name"
-        return 0
-    fi
 
+    # THE INDEX FIRST, and that is not belt and braces. At create time the kit
+    # of the agent is updating the apt cache IN THE BACKGROUND, and until that
+    # finishes the mound has no package list, so an install answers "unable to
+    # locate package rsync". Measured in a mound that had just been created: the
+    # attempt left no entry in /var/log/apt/history.log at all, because it never
+    # started a transaction, and the same command minutes later worked. Thus
+    # Draugr fetches the list itself instead of racing that job, and the lock
+    # timeout is for the moment when the two meet at the dpkg lock.
+    # The lock that really bites is the LISTS lock, and DPkg::Lock::Timeout does
+    # not cover it. The first live create answered:
+    #
+    #   E: Could not get lock /var/lib/apt/lists/lock. It is held by process 491
+    #
+    # which is that background update. Thus Draugr retries, and ONLY for a lock:
+    # a mound with no network fails at the first attempt, with its own message,
+    # instead of repeating for a minute. The whole thing is one line, because
+    # the mock records argv, and an argument with newlines in it becomes several
+    # lines in the log that no assertion can read.
+    local apt_once='sudo -n apt-get -o DPkg::Lock::Timeout=120 update 2>&1 && sudo -n apt-get -o DPkg::Lock::Timeout=120 install -y rsync 2>&1'
+    # The single quotes are the point: $out, $i and the command substitution
+    # must expand in the SHELL OF THE MOUND, not here. Expanding them on this
+    # side would send an empty loop that installs nothing.
+    # shellcheck disable=SC2016
+    local script='i=1; while :; do out=$('"$apt_once"') && break; case "$out" in *"Could not get lock"*) : ;; *) printf "%s\n" "$out" >&2; exit 1 ;; esac; [ "$i" -ge 20 ] && { printf "%s\n" "$out" >&2; exit 1; }; i=$((i + 1)); sleep 3; done'
+
+    out=$(dr_sbx exec "$name" -- sh -c "$script" 2>&1) \
+        && { dr_ok "rsync is in $name"; return 0; }
+
+    # What apt said, and only the end of it. The first version of this threw the
+    # output away, so the warning named no cause, and the cause was the one
+    # thing nobody would have guessed.
     dr_warn "could not install rsync in $name, so dr-data cannot transfer yet"
+    printf '%s\n' "$out" | tail -3 | sed 's/^/  /' >&2
     dr_warn "try it by hand:  dr-shell -- sudo -n apt-get install -y rsync"
     return 1
 }

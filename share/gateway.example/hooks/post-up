@@ -15,6 +15,14 @@
 #    again. Each Windows reboot restarts it. Thus tinyproxy starts here.
 #  - A process started with setsid from an exec stays after that exec, while
 #    the keeper holds the mound.
+#
+# And one fact measured on sbx 0.53, which cost an evening: only a SIMPLE
+# command may be backgrounded in a command sent through `sbx exec`. The old
+# `pgrep -x tinyproxy >/dev/null || setsid tinyproxy … &` backgrounded a LIST,
+# so bash forked a subshell, that subshell waited for tinyproxy, and the exec
+# around it never returned. dr-up then hung for ever, with the proxy running and
+# the work already done. Three runs timed out at 45 s and 66 s; the if-form
+# below answers in 1 s, and is still idempotent.
 set -euo pipefail
 
 name=${DRAUGR_SANDBOX:?post-up runs from dr-up, which exports DRAUGR_SANDBOX}
@@ -47,7 +55,12 @@ ensure=$(cat <<'SH'
 conf=/tmp/tinyproxy-gateway.conf
 printf '%s\n' 'Port 8888' 'Listen 0.0.0.0' 'Timeout 600' 'MaxClients 200' \
     'LogFile "/tmp/tinyproxy.log"' 'LogLevel Connect' > "$conf"
-pgrep -x tinyproxy >/dev/null || setsid tinyproxy -d -c "$conf" </dev/null >/tmp/tinyproxy.out 2>&1 &
+# An `if`, and not `pgrep … || setsid … &`. See the note at the top: the second
+# form backgrounds a LIST, and the subshell that bash forks for it holds the
+# exec open for as long as tinyproxy lives.
+if ! pgrep -x tinyproxy >/dev/null; then
+    setsid tinyproxy -d -c "$conf" </dev/null >/tmp/tinyproxy.out 2>&1 &
+fi
 sleep 1
 pgrep -x tinyproxy >/dev/null
 SH

@@ -80,10 +80,22 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 @test "dr-up: a new mound gets rsync, because dr-data needs it at both ends" {
     DR_MOCK_NO_RSYNC=1 DR_MOCK_STATE=absent run dr-up
     [ "$status" -eq 0 ]
-    [[ "$(calls exec)" == *"apt-get install -y rsync"* ]]
+    [[ "$(calls exec)" == *"install -y rsync"* ]]
     # Through sudo -n, because the install runs as the agent user, who has sudo
     # with no password. Without -n, a mound with a password prompt hangs.
     [[ "$(calls exec)" == *"sudo -n apt-get"* ]]
+    # The index comes FIRST, in that order. At create time the kit of the agent
+    # is still fetching the package list in the background, and an install
+    # before it lands answers "unable to locate package rsync". A glob with two
+    # parts pins the order, which a test for each part alone does not.
+    [[ "$(calls exec)" == *update*"install -y rsync"* ]]
+    # And it waits for the dpkg lock rather than failing when the two meet.
+    [[ "$(calls exec)" == *"DPkg::Lock::Timeout"* ]]
+    # The lock that actually bites is the LISTS lock, which that option does not
+    # cover, so the command retries on exactly that message and on nothing else.
+    # Only the TEXT can be asserted here: the retry runs inside the mound, and
+    # the mock never executes it. The behaviour was measured in a real create.
+    [[ "$(calls exec)" == *"Could not get lock"* ]]
     [[ "$output" == *"installing rsync"* ]]
 }
 
@@ -106,6 +118,15 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [[ "$output" == *"could not install rsync"* ]]
     # The by-hand command, because the warning is useless without it.
     [[ "$output" == *"dr-shell -- sudo -n apt-get install -y rsync"* ]]
+    # And what apt SAID. The first version captured the output and dropped it,
+    # so a real failure in a real mound named no cause, and the cause was the
+    # one nobody would guess: no package index yet. The mock echoes its argv,
+    # and that argv only reaches the operator if the capture is printed.
+    #
+    # The string has to be one that ONLY the capture carries. "install -y rsync"
+    # is not: the by-hand hint below says that too, so the assertion passed with
+    # the capture thrown away, and the mutation went unnoticed.
+    [[ "$output" == *"DPkg::Lock::Timeout"* ]]
     [[ "$(calls create)" == *"--name $SANDBOX"* ]]
 }
 
@@ -123,7 +144,7 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     export DRAUGR_DATA="*.parquet" DRAUGR_DATA_PUSH=manual
     DR_MOCK_NO_RSYNC=1 DR_MOCK_STATE=running run dr-up
     [ "$status" -eq 0 ]
-    [[ "$(calls exec)" == *"apt-get install -y rsync"* ]]
+    [[ "$(calls exec)" == *"install -y rsync"* ]]
 }
 
 @test "dr-up: --recreate installs rsync again, because the new mound is new" {
@@ -133,7 +154,7 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     # without rsync, and nothing says so until the first transfer.
     DR_MOCK_NO_RSYNC=1 DR_MOCK_STATE=running run dr-up --yes --recreate
     [ "$status" -eq 0 ]
-    [[ "$(calls exec)" == *"apt-get install -y rsync"* ]]
+    [[ "$(calls exec)" == *"install -y rsync"* ]]
 }
 
 # --- dr-up: turning config into a command line -------------------------------

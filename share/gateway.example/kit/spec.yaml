@@ -1,4 +1,12 @@
 # syntax=docker/sandbox-kit:3
+#
+# Generated gateway file. `dr-forge gateway` writes it from
+# share/gateway.example/ in the Draugr checkout, and a gateway tracks nothing in
+# git, on purpose. Thus the copy in a gateway needs no saving: generate it
+# again. An edit of that copy does survive, because dr-forge leaves a file that
+# differs from its template and says so, but nothing backs it up. Thus a change
+# worth keeping belongs in share/gateway.example/, here in Draugr.
+#
 
     # ONE allow is here, and the rule that kept this list empty still applies. Each
     # EGRESS HOST (each host that the tools of the guest connect to) is in a mixin. The
@@ -28,6 +36,13 @@ description: Allow-all forward proxy for the Unreal VM. The sbx policy is the al
 capabilities:
   - type: com.docker.sandbox/network-policy@1
     config:
+      # NO install: section. It does not help, and that was measured rather
+      # than assumed: with `install: allow:` naming deb.debian.org and dhi.io,
+      # the install commands still answered 403. The refusal was never about
+      # the HOST. The machine-wide policy allows port 443 only, and the apt
+      # sources of this image are http://, so the proxy refused the port. The
+      # install commands at the end of this file ask for https instead, which
+      # needs no allow of its own.
       runtime:
         allow:
           - localhost:18022
@@ -84,6 +99,43 @@ capabilities:
         # an Unreal host, kits/base for a host that each Windows VM needs.
         # NEVER deny "**". It also blocks kits/unreal.
         deny:
+          # THREE PACKAGE HOSTS ARE NOT DENIED HERE, and the only reason is that
+          # this kit has to install tinyproxy and samba. Nothing else about this
+          # gateway wants them reachable: each was denied with every other package
+          # manager below, so that the VM behind this proxy could fetch no
+          # tooling, and all three belong in that list. The entries that had to
+          # go:
+          #
+          #     - "**.debian.org"        - debian.org        - dhi.io
+          #
+          # A deny beats an allow, and it carries no port, so a denied
+          # `**.debian.org` also closes 443, which is the one port the machine-wide
+          # policy allows. While Debian was denied, the install commands could
+          # reach nothing and this gateway could not be built at all. On sbx 0.37.1
+          # it worked with the deny in place, so that version did not apply a kit
+          # deny to the install phase, and 0.53 does.
+          #
+          # dhi.io is the apt repository of the Docker Hardened Images, and the
+          # base image of this mound IS one: its packages carry a `+dhiN` suffix
+          # and are built there. Deleting its source file instead, to keep the
+          # deny, was tried and was WRONG: apt then resolved everything against
+          # plain Debian, REMOVED the hardened base of the image ("Removing
+          # python-3.14 ..."), and the installs died anyway, tinyproxy in its
+          # postinst and samba on libncurses6/libtinfo6 conflicts. An image built
+          # from that repository needs it to resolve its own dependencies.
+          #
+          # The widening is as small as it can be:
+          #   * All three are PACKAGE REPOSITORIES, reachable for the length of a
+          #     create and for whatever the hook installs afterwards.
+          #   * The guest is WINDOWS. A Windows VM has no use for a Debian or a
+          #     Docker Hardened Images package.
+          #   * Every other package manager below stays denied: npm, maven,
+          #     rubygems, rustup, pypi and the rest. docker.io, ghcr.io and every
+          #     other registry stay denied too: dhi.io serves apt packages, not
+          #     images.
+          #
+          # PUT ALL THREE BACK if this kit ever stops installing packages. They
+          # are removed for that reason alone.
           # default-ai-services: AI services. Nothing in the VM talks to a model. The agent does that from its own mound
           - "**.chatgpt.com"
           - "**.cursor.sh"
@@ -170,7 +222,10 @@ capabilities:
           - "**.production.cloudflare.docker.com"
           - "**.production.cloudfront.docker.com"
           - bitbucket.org
-          - dhi.io
+          # dhi.io WOULD BE HERE. It is not denied, because this kit installs
+          # packages and the base image resolves its own against that repository.
+          # The long note at the head of this deny list says why, and says to put
+          # it back when the installs go.
           - docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com
           - docker.com
           - docker.io
@@ -218,24 +273,54 @@ capabilities:
           - unpkg.com
           - vercel.com
           # default-os-packages: Linux package archives. The gateway installs only from Ubuntu (kept open)
-          - "**.debian.org"
           - alpinelinux.org
           - apt.llvm.org
           - archlinux.org
           - centos.org
-          - debian.org
           - dl-cdn.alpinelinux.org
           - fedoraproject.org
           - packagecloud.io
           - ports.ubuntu.com
           - ubuntu.com
-
   - type: com.docker.sandbox/lifecycle@1
     config:
       install:
+        # HTTPS FIRST, and that is not a preference. The apt sources of this
+        # image are http://, and the network policy of this machine allows
+        # `**.debian.org:443` and NOT port 80. The proxy answers a port-80 fetch
+        # with 403, so `apt-get update` fails, every install after it fails, and
+        # the create dies AFTER the old mound was removed. Measured on sbx 0.53.
+        #
+        # A claude mound does not need this, because the kit of that agent adds
+        # `debian.org:80` to its own policy. The shell image has no such kit, so
+        # the gateway has to ask for the port that the machine already allows.
+        - command: "sed -i 's|http://|https://|g' /etc/apt/sources.list.d/debian.sources"
+          user: "0"
+          description: Use https for Debian, because only 443 is allowed
+        # THE SAME CHANGE for the second source, and this one must not be
+        # dropped. dhi.io is the apt repository of the Docker Hardened Images,
+        # and the base image of this mound is one of them: `rsync` in here is
+        # 3.5.0+ds1-0+deb13u1+dhi1, not the Debian build. Deleting the file was
+        # tried, to keep dhi.io denied, and apt then resolved everything against
+        # plain Debian and REMOVED the hardened base ("Removing python-3.14
+        # ..."). Both installs below failed after that. So the source stays, over
+        # https, and dhi.io is not denied. The note in the deny list above has
+        # the whole story.
+        - command: "sed -i 's|http://|https://|g' /etc/apt/sources.list.d/dhi.sources"
+          user: "0"
+          description: Use https for the hardened-image repository too
         - command: "apt-get update -qq"
           user: "0"
           description: Refresh package lists
+        # BEFORE tinyproxy, and it is not optional. The postinst of tinyproxy
+        # chowns its log directory to `tinyproxy:adm`, and this hardened image
+        # ships NO adm group, so the install dies with
+        # `chown: invalid group 'tinyproxy:adm'` and the create fails after the
+        # old mound was already removed. -f, so that a re-run of this kit is
+        # still fine.
+        - command: "groupadd -f adm"
+          user: "0"
+          description: Create the adm group, which this hardened image lacks
         - command: "env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tinyproxy"
           user: "0"
           description: Install tinyproxy

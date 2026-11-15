@@ -144,3 +144,67 @@ want_executable() {
         return 1
     fi
 }
+
+# --- the kits that this repository ships ------------------------------------
+#
+# Two of these are templates that dr-forge WRITES into a generated gateway, so
+# their format is not a matter of taste: sbx 0.53 refuses a v2 kit at create,
+# and dr-up removes a mound before it tries to create one. A v2 file here is a
+# gateway that cannot be built, and a recreate that cannot come back.
+#
+# This is not hypothetical. The migration to v3 covered kit/ and kits/unreal/
+# and missed kits/base/, and nothing anywhere said so for weeks.
+
+@test "every gateway kit that Draugr ships is v3" {
+    local k bad=()
+    for k in "$DR_ROOT"/share/gateway.example/kit/spec.yaml \
+             "$DR_ROOT"/share/gateway.example/kits/*/spec.yaml; do
+        [ -f "$k" ] || continue
+        grep -q '^schemaVersion: "3"' "$k" || bad+=("${k#$DR_ROOT/}")
+    done
+
+    # The glob covers a kit that somebody adds later, which is the case that a
+    # list of three names would miss.
+    if [ ${#bad[@]} -gt 0 ]; then
+        printf 'dr-forge writes these into a gateway, and they are not v3:\n' >&2
+        printf '  %s\n' "${bad[@]}" >&2
+        return 1
+    fi
+}
+
+@test "the two kit examples keep their formats, which are a deliberate pair" {
+    # share/kit.example is v2 ON PURPOSE. dr-init writes whichever format the
+    # sbx of this machine reads, so an older sbx still needs the v2 spelling.
+    # A well-meant migration of that file would break every such machine, and
+    # a migration of the v3 one would leave current sbx with nothing.
+    grep -q '^schemaVersion: "2"' "$DR_ROOT/share/kit.example/spec.yaml"
+    grep -q '^schemaVersion: "3"' "$DR_ROOT/share/kit-v3.example/spec.yaml"
+}
+
+@test "no script backgrounds a compound list in a command sent to a mound" {
+    # `cmd1 || cmd2 &` backgrounds the LIST, so bash forks a subshell, and that
+    # subshell waits for whatever cmd2 started. When the list travels through
+    # `sbx exec`, the exec waits for that subshell and never returns: dr-up then
+    # hangs for ever, with the work already done and nothing to see.
+    #
+    # That is not a theory. The post-up hook of the gateway had
+    #   pgrep -x tinyproxy >/dev/null || setsid tinyproxy -d … &
+    # and three measured runs on sbx 0.53 timed out at 45 s and 66 s, while the
+    # same script with an `if` answered in 1 s. Only a SIMPLE command may be
+    # backgrounded. An `if` costs two lines and cannot do this.
+    # The pattern, and why each piece is there. `[^;]*` and NOT `[^&|]*`: the
+    # real line ends in `2>&1 &`, so a class that forbids `&` cannot reach the
+    # final one, and the first version of this test MISSED the exact line it
+    # was written for. `;` stays forbidden, because `a && b; c &` backgrounds
+    # only `c`, which is safe. `[^&]&$` is a lone trailing `&`, not `&&`.
+    local hits
+    hits=$(grep -rnE '(\|\||&&)[^;]*[^&]&[[:space:]]*$' \
+               "$DR_ROOT"/bin/* "$DR_ROOT"/lib/*.sh "$DR_ROOT"/lib/*/*.sh \
+               "$DR_ROOT"/share/*/hooks/* "$DR_ROOT"/.githooks/* 2>/dev/null || true)
+
+    if [ -n "$hits" ]; then
+        printf 'a backgrounded compound list, which holds an sbx exec open:\n' >&2
+        printf '%s\n' "$hits" >&2
+        return 1
+    fi
+}

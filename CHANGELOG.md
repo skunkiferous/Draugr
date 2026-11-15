@@ -18,6 +18,35 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- The `post-up` hook of the generated gateway no longer hangs `dr-up` for ever. It started tinyproxy
+  with `pgrep -x tinyproxy >/dev/null || setsid tinyproxy … &`, which backgrounds a **list**: bash
+  forks a subshell for it, that subshell waits for tinyproxy, and the `sbx exec` carrying the script
+  waits for the subshell. Measured on sbx 0.53, three runs timed out at 45 s and 66 s, with the
+  proxy already running and the work already done, while an `if` around a simple `setsid … &`
+  answers in 1 s and stays idempotent. `tests/repo.bats` now refuses a backgrounded compound list
+  in `bin/`, `lib/`, a shipped hook or a git hook. The first version of that guard missed the very
+  line it was written for, because its character class could not cross the `&` in `2>&1`.
+- A generated gateway can be created again on sbx 0.53. Its kit let apt use the `http://` sources of
+  the image, while the machine-wide policy of a mound allows `**.debian.org:443` and no port 80, so
+  the proxy answered every fetch with `403 Forbidden` and the create died — after the old mound had
+  already been removed. The kit now rewrites both apt sources to `https://`, the port that policy
+  already allows. A claude mound hides this, because the kit of that agent adds `debian.org:80` for
+  itself; the shell image behind a gateway has no such kit. Three hosts also had to leave the deny
+  list of that kit: `**.debian.org`, `debian.org` and `dhi.io`. A deny beats an allow and carries no
+  port, so a denied `**.debian.org` closes 443 as well, and on sbx 0.37.1 the same deny left the
+  install phase alone while 0.53 applies it there too. `dhi.io` is the apt repository of the Docker
+  Hardened Images, and the base image is one of them: deleting its source file to keep the deny made
+  apt resolve against plain Debian, remove the hardened base of the image (`Removing python-3.14 …`)
+  and fail both installs anyway. So the kit keeps that source, over https, and creates an `adm`
+  group before it installs, because the postinst of tinyproxy chowns its log directory to
+  `tinyproxy:adm` and this image ships no such group. The deny list says at both places why each
+  host is missing and when to put it back.
+- `share/gateway.example/kits/base/spec.yaml` is v3. Its two neighbours were migrated and it was
+  not, so `dr-forge gateway` wrote a v2 kit into every new gateway, and sbx 0.53 refuses such a kit
+  at create. `tests/repo.bats` now asserts that every gateway kit Draugr ships is v3, and that the
+  `kit.example` and `kit-v3.example` pair keeps its deliberate v2 and v3 split, so a migration
+  cannot skip one again. Each of the three gateway kit templates also says where the file comes
+  from, and that the copy inside a gateway needs no saving.
 - The release check in `tests/docs.bats` compares `DRAUGR_VERSION` with the newest released heading
   in this file. It used to ask whether that version appears anywhere in the file, which every past
   release answers, so the check could not fail in the one case it existed for: 0.8.0 was released
@@ -66,7 +95,14 @@ people reading the source, not for people calling it.
   probe. An install that cannot work is a warning, not a failure: a mound with no rsync still
   serves the agent, git and `dr-cp`, and `dr-data` refuses with the command to run by hand.
   Measured against a real mound on sbx 0.53: the `dr-up` that installed it took 9 seconds in all,
-  rsync 3.5.0 arrived, and the next `dr-up` printed nothing, because the probe found it.
+  rsync 3.5.0 arrived, and the next `dr-up` printed nothing, because the probe found it. A create
+  needed two more things, and a live create found both. The kit of the agent fetches the apt package
+  list **in the background** as the mound starts, so the first attempt had no list to read and no
+  entry in `/var/log/apt/history.log`, because it never began a transaction: Draugr fetches the list
+  itself now. The second attempt then met `Could not get lock /var/lib/apt/lists/lock`, held by that
+  same background job, which `DPkg::Lock::Timeout` does not cover, so the command retries for that
+  message and for nothing else: a mound with no network still fails at once, with its own words. A
+  failure prints the last lines of what apt said, which is how both causes were found at all.
 
 ### Changed
 

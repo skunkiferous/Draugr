@@ -330,7 +330,12 @@ still meet this message in three ways:
   Set `DRAUGR_DATA`, or run the command below.
 - **The install could not work** when the mound was created. `dr-up` warns at that moment and
   carries on, because a mound with no rsync is still good for everything else. Look for
-  *"could not install rsync"* in the output of that `dr-up`.
+  *"could not install rsync"* in the output of that `dr-up`, with the last lines of what `apt`
+  itself said under it. Two causes are already handled, and both came from a real create: the kit
+  of the agent fetches the package list in the background as the mound starts, so Draugr fetches
+  the list itself rather than reading one that is not there yet, and it retries while that same
+  job holds `/var/lib/apt/lists/lock`. Any other message fails at once, which is why the lines
+  from `apt` are worth reading.
 - **Someone built the mound with plain `sbx`**, which knows nothing about this.
 
 For a mound that is running now, with the sudo that the agent user already has:
