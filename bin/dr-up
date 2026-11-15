@@ -435,6 +435,11 @@ absent)
     fi
     dr_create_facts > "$(dr_create_stamp)"
 
+    # Both stamps were just written into the repo of the user. dr-init adds the
+    # ignore rules, but only at init, so a project older than one of those rules
+    # never got it and keeps an untracked file that eventually refuses dr-go.
+    dr_stamps_warn_untracked
+
     # The new mound starts at HEAD, and <remote>/<branch> in THIS repository
     # still names the commit of the mound that went. Without this line,
     # dr-status subtracts the two and calls your own commits unsent, under advice

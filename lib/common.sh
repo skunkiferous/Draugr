@@ -548,6 +548,33 @@ dr_repo_is_clean() {
     [ -z "$(git -C "${1:-$PWD}" status --porcelain 2>/dev/null)" ]
 }
 
+# dr_last_commit_line: "<short hash> <subject>" for one revision, cut to fit.
+#
+# It exists for the reminder in dr-status. Coming back to a project after a
+# month, the question is "where was I", and a branch name does not answer it.
+#
+# THE HOST REVISION, and that is the whole choice. dr-status may not ask the
+# mound: a question starts a stopped one, and a report must not act. What this
+# repository knows about the mound is <remote>/<branch>, which is only true as
+# of the last dr-sync, and the unmerged and unsent rows already report that
+# difference. HEAD is free, always true, and the place where you commit.
+#
+# 80 COLUMNS OF SUBJECT, and the first line only. `%s` is already the first line
+# of the message, so a body cannot reach this however long it is. A longer
+# subject is cut to 79 and ends in one ellipsis, so the whole stays 80, it is
+# still one line in a terminal, and it says that it was cut. The cut counts
+# characters and not bytes under a UTF-8 locale, which every caller has.
+#
+# A repository with no commit prints nothing and returns 1. dr-init makes such a
+# repo in its create modes, and a status screen must not show an error there.
+dr_last_commit_line() {
+    local rev=${1:-HEAD} dir=${2:-$DR_REPO} short subject
+    short=$(git -C "$dir" rev-parse --short --verify --quiet "$rev") || return 1
+    subject=$(git -C "$dir" log -1 --format=%s "$rev" 2>/dev/null) || return 1
+    [ "${#subject}" -le 80 ] || subject="${subject:0:79}…"
+    printf '%s %s' "$short" "$subject"
+}
+
 # ---------------------------------------------------------------------------
 # Configuration
 #
@@ -2953,6 +2980,36 @@ dr_create_facts() {
 # same reason: it describes the mound of this checkout, not the project.
 dr_create_stamp() {
     printf '%s/.draugr/create.applied' "$DR_REPO"
+}
+
+# dr_stamps_warn_untracked: say so when git ignores neither stamp.
+#
+# dr-up writes .draugr/create.applied, and .draugr/kit.applied for a mound with
+# kits, into YOUR repository at each create. Both describe this checkout and not
+# the project, so dr-init puts them in .gitignore - but dr-init runs ONCE, at the
+# start. A project set up before one of those entries joined that list never got
+# it, and the file then shows as an untracked file for ever. That is not merely
+# untidy: with DRAUGR_REQUIRE_CLEAN=true it blocks dr-go, and the refusal there
+# talks about an uncommitted file rather than about a missing ignore rule. A real
+# project hit exactly that, two months after its kit was written.
+#
+# `??` FROM git status IS THE WHOLE TEST, because it is the symptom itself. An
+# ignored stamp prints nothing. A stamp that somebody chose to commit prints
+# nothing or " M", which is a different matter and must not be nagged about.
+#
+# It warns and changes nothing. Writing to .gitignore belongs to dr-init, not to
+# the command whose job is to start a mound.
+dr_stamps_warn_untracked() {
+    local f missing=()
+    for f in "$(dr_create_stamp)" "$(dr_kit_stamp)"; do
+        [ -f "$f" ] || continue
+        case "$(git -C "$DR_REPO" status --porcelain -- "$f" 2>/dev/null)" in
+            '??'*) missing+=("${f#"$DR_REPO"/}") ;;
+        esac
+    done
+    [ ${#missing[@]} -gt 0 ] || return 0
+    dr_warn "git does not ignore: ${missing[*]}"
+    dr_warn "  of this checkout, not of the project. Untracked, it blocks dr-go. Add the rules:  dr-init"
 }
 
 # dr_create_drift: names the keys that differ from the values of the build.

@@ -265,6 +265,46 @@ stale_tracking_ref() {
     [ "$(git rev-parse refs/remotes/draugr/main)" = "$before" ]
 }
 
+# --- dr-up: the stamps it writes into your repo ------------------------------
+#
+# dr-init adds the ignore rules for them, but dr-init runs once, at the start. A
+# project older than one of those rules keeps an untracked stamp, and with
+# DRAUGR_REQUIRE_CLEAN=true that eventually refuses dr-go with a message about
+# an uncommitted file rather than about a missing rule.
+
+@test "dr-up: a stamp that git neither ignores nor tracks is reported, with the fix" {
+    DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"does not ignore"* ]]
+    [[ "$output" == *".draugr/create.applied"* ]]
+    [[ "$output" == *"dr-init"* ]]
+    # It warns and changes NOTHING. Writing .gitignore is dr-init's job, not the
+    # job of the command that starts a mound.
+    [ ! -e "$REPO/.gitignore" ]
+}
+
+@test "dr-up: an ignored stamp is not mentioned" {
+    printf '%s\n' '.draugr/create.applied' '.draugr/kit.applied' > "$REPO/.gitignore"
+    git -C "$REPO" add -A
+    git -C "$REPO" commit -qm "ignore the stamps of this checkout"
+    DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"does not ignore"* ]]
+}
+
+@test "dr-up: a stamp somebody chose to commit is not nagged about" {
+    # `??` is the whole test, which is why a TRACKED stamp says nothing, changed
+    # or not. Without that precision, such a repo gets this warning at every
+    # create and the advice does not apply to it.
+    mkdir -p "$REPO/.draugr"
+    printf 'stale=1\n' > "$REPO/.draugr/create.applied"
+    git -C "$REPO" add -f .draugr/create.applied
+    git -C "$REPO" commit -qm "a stamp in git, on purpose"
+    DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"does not ignore"* ]]
+}
+
 # --- dr-up: turning config into a command line -------------------------------
 
 @test "dr-up: DRAUGR_CLONE=false drops --clone" {
@@ -735,6 +775,74 @@ go_rc() {
       -lt "$(grep -n '  repo ' "$DR_TMP/out" | cut -d: -f1)" ]
     [ "$(grep -n '^mound$' "$DR_TMP/out" | cut -d: -f1)" \
       -lt "$(grep -n '  name ' "$DR_TMP/out" | cut -d: -f1)" ]
+}
+
+@test "dr-status: names the last commit, which is what you want after a month away" {
+    DR_MOCK_STATE=running run dr-status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"last commit"* ]]
+    [[ "$output" == *"first"* ]]
+    # The short hash, next to the subject, so it can be fed to git.
+    [[ "$output" == *"$(git -C "$REPO" rev-parse --short HEAD)"* ]]
+}
+
+@test "dr-status: the last-commit row takes the subject, not the body" {
+    printf 'two\n' > "$REPO/two.txt"
+    git -C "$REPO" add -A
+    git -C "$REPO" commit -qm "the subject line" -m "the body, which must not appear"
+    DR_MOCK_STATE=running run dr-status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the subject line"* ]]
+    [[ "$output" != *"must not appear"* ]]
+}
+
+@test "dr-status: a subject longer than 80 columns is cut, and says so" {
+    local long
+    long=$(printf 'x%.0s' $(seq 1 200))
+    printf 'three\n' > "$REPO/three.txt"
+    git -C "$REPO" add -A
+    git -C "$REPO" commit -qm "$long"
+
+    DR_MOCK_STATE=running run dr-status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"…"* ]]
+    # The whole 200 characters must NOT be there, and the kept part must.
+    [[ "$output" != *"$long"* ]]
+    [[ "$output" == *"${long:0:79}…"* ]]
+}
+
+@test "dr_last_commit_line: 80 characters pass whole, 81 are cut" {
+    # The boundary, tested from both sides. An off-by-one here shows as a line
+    # that wraps in a terminal, which nobody reports as a bug.
+    dr_load_common
+    local at80 at81 out
+    at80=$(printf 'y%.0s' $(seq 1 80))
+    at81=$(printf 'y%.0s' $(seq 1 81))
+    DR_REPO="$REPO"
+
+    # EXACT equality on the subject half, not a suffix match. With a subject of
+    # one repeated character, `*<79 of them>…` also matches a cut at 80, so a
+    # suffix test cannot see an off-by-one. ${out#* } drops the hash.
+    git -C "$REPO" commit -q --allow-empty -m "$at80"
+    out=$(dr_last_commit_line HEAD)
+    [ "${out#* }" = "$at80" ]
+    [[ "$out" != *"…"* ]]
+
+    git -C "$REPO" commit -q --allow-empty -m "$at81"
+    out=$(dr_last_commit_line HEAD)
+    [ "${out#* }" = "${at81:0:79}…" ]
+}
+
+@test "dr_last_commit_line: a repo with no commit prints nothing and fails" {
+    # dr-init makes such a repo in its create modes, and a status screen must
+    # show no row rather than an error.
+    dr_load_common
+    local empty
+    empty="$DR_TMP/fresh"
+    git init -q -b main "$empty"
+    run dr_last_commit_line HEAD "$empty"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
 }
 
 @test "dr-status: an absent mound names the command that makes one" {

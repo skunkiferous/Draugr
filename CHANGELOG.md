@@ -12,6 +12,16 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- `dr-status` names the last commit: `last commit  a561d60 (re) created mounds, start at git HEAD`.
+  Coming back to a project after a month, "where was I" is the first question, and a branch name
+  does not answer it. It is the **host** revision, and that is a constraint rather than a
+  preference: this command may not ask the mound, because a question starts a stopped one and a
+  report must not act, so a mound's own tip is unknowable here. What the repository knows about the
+  mound is `<remote>/<branch>`, true only as of the last `dr-sync`, and the `unmerged` and `unsent`
+  rows already report that difference. The subject is the first line only and is cut to 80 columns,
+  ending in one ellipsis so the row stays one terminal line and says that it was cut; a repository
+  with no commit prints no row rather than an empty one.
+
 ### Removed
 
 ### Changed
@@ -32,6 +42,18 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- `dr-up` says so when git ignores neither stamp it writes. It puts `.draugr/create.applied`, and
+  `.draugr/kit.applied` for a mound with kits, into your repository at every create. Both describe
+  that checkout rather than the project, so `dr-init` gitignores them — but `dr-init` runs once, at
+  the start, and a project set up before one of those entries joined its list never received it.
+  The stamp then shows as an untracked file indefinitely, and with `DRAUGR_REQUIRE_CLEAN=true` it
+  eventually refuses `dr-go` with a message about an uncommitted file rather than about a missing
+  rule. A real project hit exactly that, two months after its kit was written, and the fix was one
+  `dr-init` away in a command nobody had reason to re-run. The test is `??` from `git status` and
+  nothing else, because that is the symptom itself: an ignored stamp is silent, and a stamp somebody
+  chose to commit is a different matter that this must not nag about. It warns and changes nothing,
+  since writing to your `.gitignore` is `dr-init`'s job and not that of the command which starts a
+  mound.
 - A created mound no longer looks behind the host repository. `draugr/<branch>` lives in your
   repository rather than in the mound, so removing a mound leaves it behind, and the new mound starts
   at your current commit while that ref still names the commit of the one that went. `dr-status`
