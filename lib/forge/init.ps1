@@ -48,9 +48,10 @@ param(
     # only reason for a floor.
     [int]   $PageFileInitialMb = 512,
     [int]   $PageFileMaxMb     = 0,
-    # A FILE of guest paths, one on each line, to exclude from Defender. A path,
-    # not a list argument, because the paths have spaces, and this value goes
-    # through four parsers.
+    # A FILE of guest paths, one on each line, that the person declares Defender
+    # does not scan. It is CHECKED in the guest, and never applied. A file, not
+    # a list argument, because the paths have spaces and this value goes through
+    # four parsers.
     [string]$NoScanFile        = '',
     [switch]$NoTune,
     [switch]$Restart,
@@ -388,7 +389,7 @@ if ($NoTune) {
             $null = Copy-ToGuest $NoScanFile 'draugr_noscan.txt'
             $churnArgs += ' -NoScanFile C:\Windows\Temp\draugr_noscan.txt'
         } else {
-            Warn "no Defender exclusion list at $NoScanFile. That step is skipped"
+            Warn "no Defender list at $NoScanFile. That check is skipped"
         }
     }
     $rc = Invoke-GuestScript 'reduce-churn.ps1' $churnArgs

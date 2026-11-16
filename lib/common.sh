@@ -821,12 +821,16 @@ _dr_defaults() {
     # tunnel supervisor. See docs/FORGE.md.
     DRAUGR_FORGE=
 
-    # Guest paths that dr-forge init excludes from Defender. SEMICOLONS go
-    # between the paths. A Windows path can contain spaces but not
-    # semicolons. For the same reason, Windows uses semicolons in PATH. Empty
-    # means that Defender stays as it is, and that is the correct default.
-    # init is general. Only the project knows which directories are build
-    # output and do not need a scan.
+    # The Defender state that you declare for the guest, and that dr-forge
+    # init CHECKS and reports. SEMICOLONS go between the paths. A Windows path
+    # can contain spaces but not semicolons. For the same reason, Windows uses
+    # semicolons in PATH. Empty declares nothing, and that is the correct
+    # default. init is general. Only the project knows which directories are
+    # build output and do not need a scan.
+    #
+    # DRAUGR NEVER CHANGES DEFENDER, and no file here holds a command that
+    # would. lib/forge/guest/reduce-churn.ps1 has the measured reason, and
+    # docs/CONFIG.md says how to make the change yourself.
     DRAUGR_FORGE_NOSCAN=
     # Where dr-layer keeps the disk layers of the forge. Empty means
     # C:\ForgeLayers, which is the default of layer.ps1. The two values must
@@ -2692,6 +2696,10 @@ dr_kit_spec_name() {
 # nothing else) still gives a correct drift. With the lines for each kit,
 # dr-kit apply can tell "a kit was added at the end" from "a kit changed".
 # sbx can do the first in place, but not the second.
+#
+# THE NAME IS EMPTY for a v3 kit, which has no `name:` field, and for a remote
+# reference, whose spec.yaml is not here to read. Such a line carries two tabs
+# together, and dr_kit_stamp_split below is the only correct way to read one.
 dr_kit_stamp_write() {
     local ref
     {
@@ -2718,6 +2726,37 @@ dr_kit_stamp_hash() {
 # an answer that the callers must handle, and must not hide.
 dr_kit_stamp_kits() {
     sed -n 's/^kit\t//p' "$(dr_kit_stamp)" 2>/dev/null
+}
+
+# dr_kit_stamp_split <line>: the three fields of one such line, into
+# DR_KIT_REF, DR_KIT_NAME and DR_KIT_HASH. Nothing, and a failure, for a line
+# with fewer than three fields.
+#
+# NOT `IFS=$'\t' read -r ref name hash`. A tab is IFS WHITESPACE, so bash
+# treats a RUN of tabs as one separator, whatever IFS holds. A v3 kit has no
+# `name:` field, and a remote reference has no name either, so those lines
+# carry two tabs together. read then puts the hash in `name` and leaves `hash`
+# empty, and every comparison with it fails. That made `dr-kit apply` report
+# "changed after" for an untouched v3 kit, and send you to the one command that
+# destroys the clone and the home of the agent. The split below reads the same
+# line correctly, and a test covers the empty name.
+#
+# It reads exactly the first three fields. A fourth, from a later Draugr, is
+# left out rather than read as the hash.
+# shellcheck disable=SC2034  # bin/dr-kit reads all three, as the only way out of a
+# function that must hand back three values
+dr_kit_stamp_split() {
+    local rest
+    DR_KIT_REF=''; DR_KIT_NAME=''; DR_KIT_HASH=''
+    case $1 in
+        *$'\t'*$'\t'*) ;;
+        *) return 1 ;;
+    esac
+    DR_KIT_REF=${1%%$'\t'*}
+    rest=${1#*$'\t'}
+    DR_KIT_NAME=${rest%%$'\t'*}
+    rest=${rest#*$'\t'}
+    DR_KIT_HASH=${rest%%$'\t'*}
 }
 
 # ---------------------------------------------------------------------------

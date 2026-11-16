@@ -2081,8 +2081,8 @@ drafted for it: *if you enable it, the mound still cannot reach your machine. It
 machine that you own, over one port, with no network of its own except through the same policy that
 controls the mound*. It also has the four warnings that a reader needs **before** the decision:
 the spending power of the Epic account, the wider attack surface of the host from GPU-PV, the
-desktop camera, and `DRAUGR_FORGE_NOSCAN=*`, which fully disables Defender on a path that nobody
-tested. The own refusals of the forge went into the refusals table of that page, with the others.
+desktop camera, and `DRAUGR_FORGE_NOSCAN=*`, which declares that the guest runs with real-time
+protection off. The own refusals of the forge went into the refusals table of that page, with the others.
 
 ---
 
@@ -2127,8 +2127,9 @@ New keys, by the standing rule that Draugr sets up the boundary, and never the i
 
 ```bash
 DRAUGR_FORGE=                        # BUILT. VM name. EMPTY = no forge, invisible
-DRAUGR_FORGE_NOSCAN=                 # BUILT. guest paths init excludes from Defender,
-                                     # separated by SEMICOLONS. Empty leaves Defender alone
+DRAUGR_FORGE_NOSCAN=                 # BUILT. the Defender state you declare for the guest,
+                                     # separated by SEMICOLONS. init CHECKS it, and never
+                                     # changes Defender. Empty declares nothing
 DRAUGR_FORGE_DIR=                    # planned. where the clone lives in the guest. D:\work\MyGame
                                      # keeps it on the VM's own disk, out of the agent's reach
                                      # on the host; S:\... puts it in your tree. See above.
@@ -2458,19 +2459,24 @@ cost of the **own** layer mechanism of Draugr. Thus the part that pays for them 
 the pagefile change needs a reboot, and hibernation applies at once. Thus the guest script reports
 the two separately, and `init` advises a restart only for the change that needs one.
 
-**Defender is not disabled, and the paths are yours.** Real-time protection reads each file that a
-build writes and reads back. A 2 MB block suffers most from that pattern. But `init` is generic, and
-cannot know which trees are output that you can make again, and which hold something to scan. Thus
-`DRAUGR_FORGE_NOSCAN` holds the paths, and Draugr holds the mechanism. Empty leaves Defender alone.
-It only **adds** an exclusion. A setup script must not remove an exclusion that somebody made by
-hand, only because a configuration file does not list it now.
+**Defender is read, and never written.** Real-time protection reads each file that a build writes
+and reads back, and a 2 MB block suffers most from that pattern. But `init` is generic, and cannot
+know which trees are output that you can make again, and which hold something to scan. Thus
+`DRAUGR_FORGE_NOSCAN` declares the state that you want, and `init` reports whether the guest matches
+it. An empty key declares nothing.
 
-A lone **`*`** in that list fully disables Defender. The list is also the switch, because one key
-with a special value is easier to keep correct than two keys that can disagree, and `*` cannot be a
-path. Draugr tests it **by effect**. Tamper Protection is on by default on Windows 11, and refuses
-the change while the cmdlet returns with no error. Thus a report of success because the call
-returned is exactly the false green that this family of scripts often suffers from. Refer to
-[`DRAUGR_FORGE_NOSCAN`](CONFIG.md#draugr_forge_noscan) for when that is defensible. *(decided)*
+**Draugr makes that change nowhere, and holds no command that would.** Defender's own signature for
+a real-time-protection-off command matches the **text** of it in any file: it quarantined the
+session transcript of an agent that had only **read** the earlier version of that script block, a
+data file that nothing executes. The signature is right about what the line does, so Draugr stopped
+shipping the line rather than argue with it. `tests/repo.bats` keeps it out, docs included, because
+an agent copies what it reads into files that this project does not control. You make the change in
+the guest, in Windows Security, which needs no command;
+[`DRAUGR_FORGE_NOSCAN`](CONFIG.md#draugr_forge_noscan) says where, and when a lone **`*`** —
+which declares that real-time protection is off — is defensible. Tamper Protection would have
+refused the scripted change anyway, while the call returned with no error: a success reported
+because a call returned is exactly the false green that this family of scripts suffers from.
+*(decided)*
 
 **Considered and not done: reserved storage.** Windows 11 enables it, and the published VDI lists
 suggest that you disable it. *Measured* with `fsutil storagereserve query C:` inside the guest: the

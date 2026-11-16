@@ -241,74 +241,106 @@ if ($PageFileInitialMb -le 0) {
     }
 }
 
-# --- Defender exclusions -------------------------------------------------------------------
-# This script does NOT decide this. Real-time protection reads each file that a
-# build writes and reads back. That is the scattered-write pattern that a 2 MB
-# differencing block punishes most. But only the project knows which trees are
-# build output, and which need a scan. Thus the paths come from
-# DRAUGR_FORGE_NOSCAN, and an empty list does not change Defender.
+# --- Defender: read it, report it, change nothing -------------------------------------------
+# NOTHING HERE CHANGES DEFENDER, and no file in Draugr holds a command that
+# would. A test keeps it that way (tests/repo.bats).
 #
-# IT ONLY ADDS. It does not touch exclusions that it did not create. A setup
-# script must not remove an exclusion that somebody added, only because a
-# configuration file does not have it.
+# THE REASON IS MEASURED, not caution. Defender's own signature
+# Trojan:PowerShell/Killav.VDA matches the TEXT of a real-time-protection-off
+# command, in any file, and does not care whether anything ever runs it. It
+# removed the session transcript of an agent that had only READ the earlier
+# version of this block: a data file that nothing executes. The signature is
+# right about what that line does. A project that ships the line hands the same
+# incident to everybody who clones it, and to every agent whose log, patch or
+# transcript then quotes what it read.
+#
+# THE REASON TO WANT THE CHANGE IS UNCHANGED. Real-time protection reads each
+# file that a build writes and reads back, and that scattered pattern is what a
+# 2 MB differencing block punishes most. So DRAUGR_FORGE_NOSCAN now DECLARES
+# the state that you want, this reads the state of the guest, and the two are
+# compared. You make the change yourself, once, in the guest. Windows Security
+# > Virus & threat protection > Manage settings has both settings, and needs no
+# command at all. docs/CONFIG.md says it in full.
+#
+# A DIFFERENCE IS NOT A FAILURE. The build works either way. It is slower, and
+# the disk grows faster. Thus this never fails the step, and never reports a
+# change: there is nothing here to apply.
 if (-not $NoScanFile) {
-    Say 'defender exclusions: none requested'
+    Say 'defender: nothing declared, nothing checked'
 } elseif (-not (Test-Path -LiteralPath $NoScanFile)) {
-    Say "defender exclusions: no list at $NoScanFile"
+    Say "defender: no list at $NoScanFile"
 } else {
-    # Filtered, because in PowerShell @($null).Count is 1. Thus an EMPTY
-    # exclusion list looks like one blank entry. A test showed this: a probe
-    # reported "1 exclusion" for a guest with none. Without the filter, the code
-    # compares with that false entry, and a missing real path can look
-    # present.
+    # Filtered, because in PowerShell @($null).Count is 1. Thus an EMPTY list
+    # looks like one blank entry. A test showed this: a probe reported
+    # "1 exclusion" for a guest with none. Without the filter, a missing path
+    # can look present.
     $wanted = @(Get-Content -LiteralPath $NoScanFile | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $have = @((Get-MpPreference).ExclusionPath | Where-Object { $_ })
+    $rtp = $null
+    try { $rtp = (Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled }
+    catch { Say "defender: cannot read the state. $($_.Exception.Message)" }
+
     if ($wanted.Count -eq 0) {
-        Say 'defender exclusions: the list is empty'
+        Say 'defender: the list is empty, nothing to check'
     } elseif ($wanted -contains '*') {
-        # OFF, not narrower. The list is also the switch. One key with a special
-        # value is easier to keep correct than two keys that can disagree, and
-        # "*" cannot be a path.
+        # "*" declares OFF, not narrower. The list is also the switch, because
+        # one key with a special value is easier to keep correct than two keys
+        # that can disagree, and "*" cannot be a path.
         if ($wanted.Count -gt 1) {
-            Say 'defender: the list contains "*", so the other entries have nothing more to exclude'
+            Say 'defender: the list contains "*", so the other entries declare nothing more'
         }
-        $st = Get-MpComputerStatus
-        if (-not $st.RealTimeProtectionEnabled) {
-            Say 'defender: real-time protection already off'
+        if ($null -eq $rtp) {
+            Say 'defender: "*" declares real-time protection off, and the state is unreadable here'
+        } elseif ($rtp) {
+            Say 'defender: real-time protection is ON. Your list declares it off'
+            Say '  Nothing here changes that, by design. In the guest: Windows Security >'
+            Say '  Virus & threat protection > Manage settings. See docs/CONFIG.md'
         } else {
-            try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop }
-            catch { Say "defender: the call failed. $($_.Exception.Message)" }
-            # BY EFFECT, and that is important. On Windows 11, Tamper Protection
-            # is ON by default and refuses this change, but the cmdlet can
-            # return with no error. A report of "disabled" only because the call
-            # returned is exactly the false green that this family of scripts
-            # often has.
-            $st = Get-MpComputerStatus
-            if ($st.RealTimeProtectionEnabled) {
-                Say 'defender: STILL ON. The call had no effect'
-                Say "defender: IsTamperProtected=$($st.IsTamperProtected). If true, that is the reason"
-                Say '  turn off Tamper Protection inside the guest, then run dr-forge init again'
-            } else {
-                $changed = $true
-                Say 'defender: real-time protection DISABLED for the whole guest'
-                # Said once, here, because later this looks like a bug.
-                Say '  Windows can turn it on again after an update. Run init again to turn it off'
-            }
+            Say 'defender: real-time protection is off, as the list declares'
         }
     } else {
-        $added = 0
-        foreach ($p in $wanted) {
-            if ($have -contains $p) { Say "defender: already excluded $p"; continue }
-            try {
-                Add-MpPreference -ExclusionPath $p -ErrorAction Stop
-                $added++
-                Say "defender: excluded $p"
-            } catch {
-                Say "defender: could NOT exclude $p. $($_.Exception.Message)"
+        # READING THE EXCLUSIONS NEEDS ADMINISTRATOR RIGHTS, AND A SHELL WITHOUT
+        # THEM DOES NOT FAIL. Measured, and the first version of this block had
+        # it wrong: the call RETURNS, and ExclusionPath holds one entry that is a
+        # MESSAGE and not a path - "N/A: Must be an administrator to view
+        # exclusions". A comparison against that reports every declared path as
+        # missing, which is a false alarm and not a report.
+        #
+        # An exclusion is a path, so it has a separator in it, also when it holds
+        # an environment variable or a wildcard. A message does not. Thus the
+        # test is for the separator, and it needs no English. An ssh session into
+        # the guest is elevated, so the normal case reads the real list.
+        $have = $null
+        $unreadable = $false
+        try { $have = @((Get-MpPreference -ErrorAction Stop).ExclusionPath | Where-Object { $_ }) }
+        catch { Say "defender: cannot read the exclusions. $($_.Exception.Message)" }
+        foreach ($e in $have) { if ($e -notmatch '\\') { $unreadable = $true } }
+        if ($null -eq $have -or $unreadable) {
+            Say "defender: $($wanted.Count) path(s) declared, and this shell cannot read the exclusions"
+            Say '  That needs administrator rights. An ssh session into the guest has them'
+        } else {
+            # Compared without case, and without a trailing separator, because
+            # Windows treats those as the same path and a report must too.
+            $haveKeys = @($have | ForEach-Object { $_.TrimEnd('\').ToLowerInvariant() })
+            $missing = 0
+            foreach ($p in $wanted) {
+                if ($haveKeys -contains $p.TrimEnd('\').ToLowerInvariant()) {
+                    Say "defender: excluded, as declared: $p"
+                } else {
+                    $missing++
+                    Say "defender: NOT excluded: $p"
+                }
+            }
+            if ($missing -gt 0) {
+                Say "defender: $missing of $($wanted.Count) declared path(s) are not excluded"
+                Say '  Add them in the guest: Windows Security > Virus & threat protection >'
+                Say '  Manage settings > Exclusions. See docs/CONFIG.md'
+            } else {
+                Say "defender: all $($wanted.Count) declared path(s) are excluded"
             }
         }
-        if ($added -gt 0) { $changed = $true }
-        Say "defender exclusions: $added added, $($wanted.Count - $added) already there"
+        if ($null -ne $rtp -and -not $rtp) {
+            Say 'defender: real-time protection is off here, so the exclusions change nothing'
+        }
     }
 }
 

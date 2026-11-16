@@ -418,27 +418,33 @@ if [ "$action" = init ]; then
     # forge usable, and unmaking it".
     if [ -n "$no_tune" ]; then init_args+=(-NoTune); fi
 
-    # DEFENDER EXCLUSIONS GO AS A FILE, one path on each line, not as an
-    # argument. The value is Windows paths with semicolons between them, so it
-    # has spaces. The route to the guest goes through bash, powershell.exe, ssh,
-    # and the PowerShell of the guest, and each one removes a layer of quotes.
-    # That is how --screen failed silently in vm.ps1. A file has no quotes.
+    # THE DECLARED DEFENDER STATE GOES AS A FILE, one path on each line, not as
+    # an argument. The value is Windows paths with semicolons between them, so
+    # it has spaces. The route to the guest goes through bash, powershell.exe,
+    # ssh, and the PowerShell of the guest, and each one removes a layer of
+    # quotes. That is how --screen failed silently in vm.ps1. A file has no
+    # quotes.
+    #
+    # DRAUGR DOES NOT CHANGE DEFENDER. init READS the state in the guest and
+    # compares it with this list. lib/forge/guest/reduce-churn.ps1 has the
+    # measured reason, and docs/CONFIG.md says how to make the change by hand.
     noscan_file=
     if [ -n "${DRAUGR_FORGE_NOSCAN:-}" ]; then
         noscan_file=$(mktemp)
         printf '%s' "$DRAUGR_FORGE_NOSCAN" | tr ';' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
             | grep -v '^$' > "$noscan_file"
         init_args+=(-NoScanFile "$(dr_forge_win_path "$noscan_file")")
-        # A "*" alone means the whole guest. That is different from a smaller
-        # scan. Thus the code tells it before the change, not after.
+        # A "*" alone declares the whole guest unprotected. That is a different
+        # statement from a smaller scan, so the output says which one it read.
         if grep -qx '\*' "$noscan_file"; then
-            dr_warn "DRAUGR_FORGE_NOSCAN is '*': Defender will be DISABLED in the guest."
-            dr_info "  Not smaller: off. This guest still downloads from the Launcher and Fab."
+            dr_info "  DRAUGR_FORGE_NOSCAN is '*': it declares real-time protection OFF in the guest."
+            dr_info "  init CHECKS that and reports it. It changes nothing, and no other part of"
+            dr_info "  Draugr does either. This guest still downloads from the Launcher and Fab."
             if [ "$(wc -l < "$noscan_file")" -gt 1 ]; then
-                dr_info "  The other entries have nothing more to exclude."
+                dr_info "  The other entries declare nothing more."
             fi
         else
-            dr_info "  Defender exclusions to apply: $(wc -l < "$noscan_file")"
+            dr_info "  Defender exclusions to check: $(wc -l < "$noscan_file")"
         fi
     fi
 

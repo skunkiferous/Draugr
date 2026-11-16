@@ -288,13 +288,14 @@
 # you do not know what this is, you do not want it. See docs/FORGE.md.
 #DRAUGR_FORGE=layer-3-myproject
 
-# Guest paths that dr-forge init excludes from Defender, separated by SEMICOLONS
-# (a Windows path has spaces, and no semicolons). Empty does not touch Defender.
-# It only adds. It does not remove an exclusion that you made by hand.
+# The Defender state that you DECLARE for the guest, separated by SEMICOLONS (a
+# Windows path has spaces, and no semicolons). dr-forge init reads the state of
+# the guest, compares it with this, and reports. Draugr never changes Defender:
+# CONFIG.md says why, and how to make the change yourself. Empty declares nothing.
 #DRAUGR_FORGE_NOSCAN="C:\UE_4.27;D:\work\MyGame"
 #
-# A single "*" disables all of Defender in the guest, and excludes no paths.
-# Before you use it, read the CONFIG.md section.
+# A single "*" declares that real-time protection is OFF in the guest, and
+# declares no path. Before you turn it off, read the CONFIG.md section.
 #DRAUGR_FORGE_NOSCAN="*"
 
 # Where dr-layer keeps the disk layers of the forge. Empty by default: C:\ForgeLayers.

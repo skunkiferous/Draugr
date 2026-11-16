@@ -331,7 +331,17 @@ apply)
     # name), and it cannot take out a removed one. add is its only verb.
     i=0
     for line in "${built[@]}"; do
-        IFS=$'\t' read -r b_ref _ b_hash <<< "$line"
+        # dr_kit_stamp_split, not `IFS=$'\t' read`: a tab is IFS whitespace, so
+        # read joins the two tabs of an EMPTY NAME field into one separator and
+        # hands you the hash as the name. A v3 kit has no name, so that was
+        # every v3 mound, and each one was told its untouched kit had changed.
+        dr_kit_stamp_split "$line" || dr_die \
+            "the record of the kits of $DRAUGR_SANDBOX is damaged" \
+            "This line of $(dr_kit_stamp) has fewer than three fields:" \
+            "  $line" \
+            "$recreate_hint"
+        b_ref=$DR_KIT_REF
+        b_hash=$DR_KIT_HASH
         now_ref=${refs[$i]:-}
         if [ "$now_ref" != "$b_ref" ]; then
             dr_die "the kit list no longer starts with the kits of $DRAUGR_SANDBOX" \
@@ -365,7 +375,9 @@ apply)
         [ -d "$r" ] || continue
         n=$(dr_kit_spec_name "$r")
         for line in "${built[@]}"; do
-            IFS=$'\t' read -r b_ref b_name _ <<< "$line"
+            dr_kit_stamp_split "$line" || continue
+            b_ref=$DR_KIT_REF
+            b_name=$DR_KIT_NAME
             [ -n "$n" ] && [ "$n" = "$b_name" ] && dr_die \
                 "$r is named \"$n\", as $b_ref, which $DRAUGR_SANDBOX already has" \
                 "sbx refuses two kits with one name in the same sandbox." \

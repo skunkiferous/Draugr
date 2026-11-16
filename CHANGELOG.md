@@ -16,7 +16,42 @@ people reading the source, not for people calling it.
 
 ### Changed
 
+- **`DRAUGR_FORGE_NOSCAN` is now a declaration that `dr-forge init` checks, and no longer a change
+  that Draugr makes.** `init` reads the Defender state of the guest and reports which of the
+  declared paths are excluded and which are not; `*` now means "I have turned real-time protection
+  off in the guest", and is checked the same way. A difference is not a failure. Nothing fails, and
+  nothing is applied.
+
+  The reason is measured, not caution. Defender's own signature for a real-time-protection-off
+  command matches the **text** of that command, in any file, and does not care whether anything
+  runs it: on this project it quarantined the session transcript of an agent that had merely
+  **read** that part of the guest script — a data file that nothing executes. The signature is right
+  about what the line does. A project that ships the line hands the same incident to everybody who
+  clones it, and to every agent whose log or patch then quotes what it read. So the line is gone,
+  and `tests/repo.bats` keeps it out of the whole repository, docs and comments included.
+
+  **What you lose:** `init` no longer makes the change for you. `docs/CONFIG.md` now says how to
+  make it in the guest, in Windows Security, which needs no command — and Tamper Protection refused
+  the scripted change on Windows 11 anyway, while the call returned with no error. **What you gain:**
+  a report that is true about the state, and a clone that does not trip the antivirus of the person
+  who made it. Also measured on the way: a shell without administrator rights does not *fail* to
+  read the exclusion list, it returns a message where a path belongs, so the check says that it
+  could not read them instead of reporting every declared path as missing.
+
 ### Fixed
+
+- `dr-kit apply` could never add a kit to a mound built from a **v3 kit**: it reported that the
+  untouched kit had `changed after <mound> was built` and named `dr-up --recreate`, which destroys
+  the clone and the home of the agent — the very loss the in-place path exists to avoid. Every
+  mound on a current sbx is in that state, because v3 is what current sbx reads and v3 has no
+  `name:` field. The record of a kit is `kit<TAB><ref><TAB><name><TAB><hash>`, so a kit with no
+  name leaves two tabs together, and `IFS=$'\t' read -r ref name hash` does not read that line: a
+  tab is IFS **whitespace**, so bash joins a run of tabs into one separator whatever `IFS` holds.
+  The hash arrived as the name, the hash field was empty, and the comparison with the real hash
+  could only fail. The format is unchanged and old records still read; what changed is the reader,
+  now `dr_kit_stamp_split`, which splits with parameter expansion, takes exactly the first three
+  fields, and refuses a line with fewer. A remote reference records no name either and was wrong
+  the same way. No test saw any of it, because the kit every test built had a `name:`.
 
 ## [0.9.0] — 2026-11-15
 

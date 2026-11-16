@@ -38,6 +38,15 @@ make_kit() {
         "$(basename "$1")" "$(basename "$1")" > "$1/spec.yaml"
 }
 
+# A v3 kit, which is what current sbx reads and what dr-init writes for it.
+# THERE IS NO `name:` FIELD IN v3, and that difference is the point of the
+# tests that use this: the name field of the record of such a kit is empty.
+make_kit_v3() {
+    mkdir -p "$1"
+    printf 'schemaVersion: "3"\nkind: mixin\ndisplayName: %s kit\n' \
+        "$(basename "$1")" > "$1/spec.yaml"
+}
+
 # --- the resolve of one entry -----------------------------------------------
 
 @test "dr_kit_resolve: an absolute path is used as it stands" {
@@ -452,6 +461,109 @@ build_mound() {
     run dr-kit drift
     [ "$status" -eq 0 ]
     [[ "$output" == *"matches"* ]]
+}
+
+# --- the EMPTY NAME field in a record -----------------------------------------
+#
+# A v3 kit has no `name:` field, and a remote reference has no spec.yaml here
+# to read one from. So the middle field of those records is empty, and the line
+# carries two tabs together. `IFS=$'\t' read -r ref name hash` does NOT read
+# such a line: a tab is IFS whitespace, so bash joins the run of two into one
+# separator, hands the hash to `name`, and leaves `hash` empty. apply then
+# compared a real hash with nothing, found them different, and reported that
+# the untouched kit had changed - which sends you to dr-up --recreate, the one
+# command that destroys the clone and the home of the agent.
+#
+# Every kit in the tests above has a `name:`, which is why none of them saw it.
+
+@test "dr_kit_stamp_split: an EMPTY name field keeps the hash in the hash" {
+    dr_kit_stamp_split "$(printf '/a/kit\t\tdeadbeef')"
+    [ "$DR_KIT_REF" = /a/kit ]
+    [ -z "$DR_KIT_NAME" ]
+    [ "$DR_KIT_HASH" = deadbeef ]
+}
+
+@test "dr_kit_stamp_split: reads the three fields of a named kit" {
+    dr_kit_stamp_split "$(printf '/a/kit\tlua\tdeadbeef')"
+    [ "$DR_KIT_REF" = /a/kit ]
+    [ "$DR_KIT_NAME" = lua ]
+    [ "$DR_KIT_HASH" = deadbeef ]
+}
+
+@test "dr_kit_stamp_split: a fourth field from a later Draugr is not read as the hash" {
+    dr_kit_stamp_split "$(printf '/a/kit\tlua\tdeadbeef\tsomething-new')"
+    [ "$DR_KIT_HASH" = deadbeef ]
+}
+
+@test "dr_kit_stamp_split: a line with fewer than three fields fails, and says nothing" {
+    run dr_kit_stamp_split "$(printf '/a/kit\tlua')"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "dr-kit apply: adds to a mound built from a v3 kit, which records no name" {
+    make_kit_v3 "$REPO/.draugr/kit"
+    make_kit "$DRAUGR_KIT_STORE/vim"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    # The record really has the empty field that this test is about.
+    [ -n "$(grep -c "$(printf '\t\t')" "$REPO/.draugr/kit.applied")" ]
+    [ "$(grep -c "$(printf '\t\t')" "$REPO/.draugr/kit.applied")" -eq 1 ]
+    : > "$DR_MOCK_LOG"
+    export DRAUGR_KIT=".draugr/kit vim"
+    run dr-kit apply --yes
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"changed after"* ]]
+    [ "$(calls kit | grep -c "^kit add ")" -eq 1 ]
+    [[ "$(calls kit)" == *vim* ]]
+}
+
+@test "dr-kit apply: an EDITED v3 kit is still refused, name or no name" {
+    make_kit_v3 "$REPO/.draugr/kit"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    : > "$DR_MOCK_LOG"
+    printf 'description: narrowed\n' >> "$REPO/.draugr/kit/spec.yaml"
+    run dr-kit apply --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"changed after"* ]]
+    [ -z "$(calls kit)" ]
+}
+
+@test "dr-kit apply: the name guard still fires past a record with an empty name" {
+    # The mixed case: a v3 project kit, which records no name, in front of a
+    # named one. The guard must read the SECOND record correctly all the same.
+    make_kit_v3 "$REPO/.draugr/kit"
+    make_kit "$DRAUGR_KIT_STORE/lua"
+    mkdir -p "$DRAUGR_KIT_STORE/other"
+    printf 'schemaVersion: "2"\nkind: mixin\nname: lua\ndisplayName: clash\n' \
+        > "$DRAUGR_KIT_STORE/other/spec.yaml"
+    export DRAUGR_KIT=".draugr/kit lua"
+    build_mound
+    : > "$DR_MOCK_LOG"
+    export DRAUGR_KIT=".draugr/kit lua other"
+    run dr-kit apply --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'named "lua"'* ]]
+    [ -z "$(calls kit)" ]
+}
+
+@test "dr-kit apply: a damaged record is refused, and the line is shown" {
+    make_kit "$REPO/.draugr/kit"
+    make_kit "$DRAUGR_KIT_STORE/lua"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    # A record with two fields where there must be three.
+    {
+        head -1 "$REPO/.draugr/kit.applied"
+        printf 'kit\t%s/.draugr/kit\tno-hash-field\n' "$REPO"
+    } > "$REPO/.draugr/kit.damaged"
+    mv "$REPO/.draugr/kit.damaged" "$REPO/.draugr/kit.applied"
+    export DRAUGR_KIT=".draugr/kit lua"
+    run dr-kit apply --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"damaged"* ]]
+    [ -z "$(calls kit)" ]
 }
 
 @test "dr_kit_spec_name: reads the name sbx composes by, quoted or not" {

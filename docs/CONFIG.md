@@ -991,46 +991,68 @@ the VM arrives on that port. Each other part that `up` needs comes with Draugr, 
 supervisor. Thus no other repository must be present, or have a specific layout.
 
 ### `DRAUGR_FORGE_NOSCAN`
-Default empty. Guest paths that `dr-forge init` excludes from Microsoft Defender, separated by
-**semicolons**. A Windows path can contain spaces, but not semicolons. That is why Windows itself
-separates paths that way.
+Default empty. The Microsoft Defender state that you **declare** for the guest, which `dr-forge
+init` **checks and reports**. Guest paths, separated by **semicolons**. A Windows path can contain
+spaces, but not semicolons. That is why Windows itself separates paths that way.
 
 ```bash
 DRAUGR_FORGE_NOSCAN="C:\UE_4.27;D:\work\MyGame;D:\work\MyGame\DerivedDataCache"
 ```
 
-**Why this is a key, and not a built-in list.** Real-time protection reads each file that a build
-writes, and each file that it reads back. In a forge VM, a differencing disk handles that write
-pattern worst ([FORGE.md](FORGE.md#what-is-a-layer-not-the-base)). But `init` is generic. It cannot
-know which trees are build output that you can make again, and which hold something to scan. Thus
-Draugr gives the mechanism, and your project gives the paths.
+**Draugr does not change Defender. You do.** `init` reads the state in the guest and says which of
+the declared paths are excluded and which are not. A difference is **not a failure**: the build
+works either way. It is slower, and the disk of the guest grows faster.
 
-**It only adds.** It leaves alone an exclusion that `init` did not create. A setup script must not
-remove an exclusion that somebody added by hand, only because a configuration file does not name it.
-Thus an empty key does not undo what it did. `Remove-MpPreference` in the guest does.
+**Why a check, and not the change.** Draugr used to make the change itself, and that was a mistake
+with a measurement behind it. Defender's own signature for a real-time-protection-off command
+matches the **text** of that command, in any file, and does not care whether anything ever runs it:
+it quarantined the session transcript of an agent that had merely **read** that part of the script.
+A data file, not a script. The signature is right about what the line does, so the honest response
+is not to argue with it. Thus **no file in Draugr holds a command that writes to Defender** — not in
+a script, not in an example, not in a comment, not in this page — and a test in `tests/repo.bats`
+keeps it that way. An agent that reads this repository copies what it reads into logs, patches and
+transcripts that this project does not control, so a doc is no safer a place for such a line than a
+script is.
 
-**`*` disables Defender fully**, and excludes nothing:
+**Why you still want the state.** Real-time protection reads each file that a build writes, and each
+file that it reads back. In a forge VM a differencing disk handles that write pattern worst
+([FORGE.md](FORGE.md#what-is-a-layer-not-the-base)). `init` is generic: it cannot know which trees
+are build output that you can make again, and which hold something worth scanning. Thus Draugr holds
+the question, and your project gives the paths.
+
+**How to make the change, in the guest.** Open its desktop (`dr-forge screen`), then **Windows
+Security → Virus & threat protection → Manage settings**. The real-time protection switch is at the
+top of that page, and *Add or remove exclusions* is further down it. Neither needs a command.
+Microsoft documents the PowerShell route for the same two settings, under *Configure and validate
+exclusions for Microsoft Defender Antivirus* and the `Defender` module reference; this project does
+not reproduce those commands, for the reason above.
+
+**`*` declares that real-time protection is off**, and declares no path:
 
 ```bash
 DRAUGR_FORGE_NOSCAN="*"
 ```
 
 The list is also the switch, because one key with a special value is easier to keep correct than two
-keys that can disagree. `*` cannot be a real path. Other entries beside it have nothing left to
-exclude, and `init` says so.
+keys that can disagree, and `*` cannot be a real path. Other entries beside it declare nothing more,
+and `init` says so.
 
 **Think about this one.** The guest downloads installers and assets from vendor stores, so the
-protection has a job. An exclusion of the build trees moves the busy path out of its way, but keeps
+protection has a job. An exclusion of the build trees moves the busy path out of its way, and keeps
 the protection. That is why it is the default shape. When `*` is defensible, this is why. The guest
 has **no network adapter**, so each byte that it fetches already passed the allowlist of the
 gateway. Also, the security claim of the forge is [already weaker than that of a
 mound](SECURITY.md). Why it is a real decision: an agent that controls that guest can run all that
 the allowlist reaches.
 
-Two practical notes. **Tamper Protection blocks it.** It is on by default on Windows 11, and the
-cmdlet can return with no error. Thus `init` tests the effect, and tells you when the change did not
-apply. Also, Windows can turn real-time protection on again after an update, so this is not
-permanent. A new run of `init` turns it off again.
+Three practical notes. **Tamper Protection** is on by default on Windows 11, and refuses a scripted
+change to real-time protection while the call returns with no error — one more reason that the only
+honest half of this is the check. **Windows turns real-time protection on again** after some
+updates, so a guest that matched can stop matching with nothing changed in your configuration; the
+report tells you, and a run of `init` does not undo it. **Reading the exclusions needs administrator
+rights**, and a shell without them does not fail: the call returns a message where a path belongs.
+An ssh session into the guest is elevated, so `init` reads the real list, and says that it could not
+rather than report your paths as missing.
 
 ---
 

@@ -1065,7 +1065,7 @@ snap_facts() {
 # The paths go as a FILE, one on each line. The value is Windows paths separated
 # by semicolons, and they often have spaces. The route to the guest crosses four
 # parsers. As an argument, --screen silently failed in vm.ps1.
-@test "dr-forge init: Defender exclusions are passed as a file, not an argument" {
+@test "dr-forge init: the declared Defender paths are passed as a file, not an argument" {
     export DR_MOCK_LOG="$DR_TMP/calls.log"
     export DRAUGR_FORGE_NOSCAN='C:\UE_4.27;D:\work\My Game'
     probe_with
@@ -1073,30 +1073,34 @@ snap_facts() {
     [ "$status" -eq 0 ]
     grep -q -- '-NoScanFile' "$DR_MOCK_LOG"
     # Two paths, and the one with a space stayed one entry.
-    [[ "$output" == *"exclusions to apply: 2"* ]]
+    [[ "$output" == *"exclusions to check: 2"* ]]
 }
 
-# "*" is a different act from a narrower scan, so the output says it before the
-# action.
-@test "dr-forge init: NOSCAN=* warns that Defender is disabled, not narrowed" {
+# The key DECLARES a state, and init CHECKS it. Draugr changes Defender nowhere,
+# and the output must not promise that it will. See tests/repo.bats for the rule
+# behind this, and lib/forge/guest/reduce-churn.ps1 for the measurement.
+@test "dr-forge init: NOSCAN=* reads as a declaration to check, not a change to make" {
     export DRAUGR_FORGE_NOSCAN='*'
     probe_with
     run dr-forge init
     [ "$status" -eq 0 ]
-    [[ "$output" == *"will be DISABLED"* ]]
-    [[ "$output" == *"Not smaller: off"* ]]
-    [[ "$output" != *"exclusions to apply"* ]]
+    [[ "$output" == *"declares real-time protection OFF"* ]]
+    [[ "$output" == *"CHECKS that"* ]]
+    [[ "$output" == *"changes nothing"* ]]
+    [[ "$output" != *"exclusions to check"* ]]
+    # The old wording promised an act. It must not come back.
+    [[ "$output" != *"will be DISABLED"* ]]
 }
 
 # A "*" with paths beside it is a mistake. Name it, but do not refuse. When
-# nothing is scanned, nothing is left to exclude.
+# nothing is scanned, no path declares anything more.
 @test "dr-forge init: NOSCAN=* alongside paths says the paths are moot" {
     export DRAUGR_FORGE_NOSCAN='*;C:\UE4'
     probe_with
     run dr-forge init
     [ "$status" -eq 0 ]
-    [[ "$output" == *"will be DISABLED"* ]]
-    [[ "$output" == *"nothing more to exclude"* ]]
+    [[ "$output" == *"declares real-time protection OFF"* ]]
+    [[ "$output" == *"declare nothing more"* ]]
 }
 
 @test "dr-forge init: no exclusion list is passed when the key is empty" {

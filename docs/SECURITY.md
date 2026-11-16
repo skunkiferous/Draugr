@@ -465,11 +465,12 @@ usable by an agent, which cannot look at a screen. But it means that all that is
 autologin desktop can reach the host, also what a browser or a signed-in application shows. The task
 has no trigger, and runs only on request.
 
-**`DRAUGR_FORGE_NOSCAN` set to `*` fully disables Defender in the guest**, and does not narrow it
-([`DRAUGR_FORGE_NOSCAN`](CONFIG.md#draugr_forge_noscan)). `dr-forge init` warns when it does this.
-Two cautions. You turn off real-time protection on a machine that reaches the internet. Also,
-**nobody tested that path**. Tamper Protection can refuse it while the cmdlet returns with no error.
-Thus look in the guest, and do not assume that the warning means that it worked.
+**`DRAUGR_FORGE_NOSCAN` set to `*` declares that the guest runs with real-time protection off**
+([`DRAUGR_FORGE_NOSCAN`](CONFIG.md#draugr_forge_noscan)). Draugr does not turn it off, and holds no
+command that would: `dr-forge init` reads the state of the guest and reports it, and the change is
+yours to make there. The caution stands all the same, because the state is what matters and not who
+set it. You are deciding to run a machine that reaches the internet through the gateway with its
+protection off, and the forge is already the weaker of the two boundaries in this project.
 
 ### One alias, every VM
 

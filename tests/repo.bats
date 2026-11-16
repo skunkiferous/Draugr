@@ -208,3 +208,30 @@ want_executable() {
         return 1
     fi
 }
+
+# --- the one command this repository must never hold -------------------------
+#
+# MEASURED, and the reason this test exists rather than a note in a review.
+# Defender's signature Trojan:PowerShell/Killav.VDA matches the TEXT of a
+# real-time-protection-off command, in ANY file, and does not care whether
+# anything ever runs it. On this project it quarantined the session transcript
+# of an agent that had merely READ such a line out of lib/forge/guest/ - a data
+# file that nothing executes. The signature is right about what the line does.
+#
+# Thus the rule covers the whole repository, docs and comments included. A doc
+# is scanned exactly like a script, and an agent copies what it reads into
+# logs, patches and transcripts that this project does not control. dr-forge
+# READS the state of Defender and reports it; the person makes the change by
+# hand, in Windows Security. See docs/CONFIG.md, DRAUGR_FORGE_NOSCAN.
+@test "no file in the repository writes to Defender, docs and comments included" {
+    cd "$DR_ROOT" || return 1
+    # Assembled from pieces on purpose. A test that spelled the names out would
+    # match itself, and would also BE one more copy of the thing it keeps out.
+    pat="(Set|Add|Remove)-Mp""Preference|Mp""CmdRun|Disable""Realtime""Monitoring"
+    # Tracked files only, which is exactly what this project publishes.
+    run git grep -n -I -E -i -- "$pat"
+    # git grep says 1 for "no match", and that is the pass. A reader of Get-
+    # MpPreference or Get-MpComputerStatus is fine: those only look.
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
