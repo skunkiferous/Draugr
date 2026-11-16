@@ -188,6 +188,24 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     run dr-up
     [ "$status" -eq 0 ]
     [[ "$output" == *"kit changed after"* ]]
+    # A lower-case mound can take the in-place path, so dr-up names it.
+    [[ "$output" == *"dr-kit apply"* ]]
+}
+
+# And it must not name that path on a mound that can never use it. sbx commits
+# an image named after the sandbox to add a kit without destroying the mound,
+# and an image name takes no capital letter. There, apply can only say so.
+@test "dr-up: drift on an upper-case mound points at the recreate, not at apply" {
+    export DR_MOCK_NAME=draugr-Repo DRAUGR_SANDBOX=draugr-Repo
+    mkdir -p "$REPO/.draugr/kit"
+    printf 'schemaVersion: "2"\n' > "$REPO/.draugr/kit/spec.yaml"
+    DR_MOCK_STATE=absent dr-up >/dev/null 2>&1
+    printf 'displayName: changed\n' >> "$REPO/.draugr/kit/spec.yaml"
+    run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"kit changed after"* ]]
+    [[ "$output" == *"dr-up --recreate"* ]]
+    [[ "$output" != *"dr-kit apply"* ]]
 }
 
 # --- dr-policy and dr-ports --------------------------------------------------

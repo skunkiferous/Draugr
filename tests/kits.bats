@@ -988,3 +988,53 @@ make_named_kit() {
     run grep -x 'name: claude-project' "$repo/.draugr/kit/spec.yaml"
     [ "$status" -eq 0 ]
 }
+
+# The name of a mound decides whether sbx can ever add a kit to it in place.
+# sbx commits an image called sandboxes-swap/<sandbox>, and an image name takes
+# no capital letter, while dr_sandbox_name keeps the case of the repo folder.
+# sbx says so only in the middle of the add, with the mound already started and
+# the agent already stopped, and it has no rename. Thus dr-kit says it first.
+@test "dr-kit apply: a mound whose name has a capital is refused before sbx is asked" {
+    export DR_MOCK_NAME=draugr-Repo DRAUGR_SANDBOX=draugr-Repo
+    make_kit "$REPO/.draugr/kit"
+    make_kit "$DRAUGR_KIT_STORE/lua"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    : > "$DR_MOCK_LOG"
+    export DRAUGR_KIT=".draugr/kit lua"
+    run dr-kit apply --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"because of its name"* ]]
+    # It names the two ways on, and the lower-case name to use for the second.
+    [[ "$output" == *"dr-up --recreate"* ]]
+    [[ "$output" == *"DRAUGR_SANDBOX=draugr-repo"* ]]
+    [ -z "$(calls kit)" ]
+}
+
+# The test above must not turn a mound that needs nothing into an error. A
+# mound with no kit to add needs no image, so the name cannot matter there.
+@test "dr-kit apply: a capital in the name still reports nothing to apply" {
+    export DR_MOCK_NAME=draugr-Repo DRAUGR_SANDBOX=draugr-Repo
+    make_kit "$REPO/.draugr/kit"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    : > "$DR_MOCK_LOG"
+    run dr-kit apply --yes
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to apply"* ]]
+    [ -z "$(calls kit)" ]
+}
+
+# A mound whose name is already lower case passes the test and reaches sbx.
+@test "dr-kit apply: a lower-case name is added as before" {
+    export DR_MOCK_NAME=draugr-repo DRAUGR_SANDBOX=draugr-repo
+    make_kit "$REPO/.draugr/kit"
+    make_kit "$DRAUGR_KIT_STORE/lua"
+    export DRAUGR_KIT=".draugr/kit"
+    build_mound
+    : > "$DR_MOCK_LOG"
+    export DRAUGR_KIT=".draugr/kit lua"
+    run dr-kit apply --yes
+    [ "$status" -eq 0 ]
+    [ "$(calls kit | grep -c '^kit add ')" -eq 1 ]
+}

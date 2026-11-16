@@ -210,6 +210,33 @@ teardown() { dr_test_teardown; }
     [[ "$output" == *"dr-sync"* ]]
 }
 
+# Draugr derived draugr-MyApp before it began lower-casing, and derives
+# draugr-myapp now. A name on the command line is then the way to reach the
+# mound you have, and it must not quietly skip the test for unfetched work.
+@test "dr-rm: a name that is this repo's older mound still tests for unfetched work" {
+    local repo mound
+    repo=$(dr_make_win_repo MyApp) || skip "no writable path under /mnt/<drive>"
+    cd "$repo" || return 1
+    export DR_MOCK_NAME=draugr-MyApp DR_MOCK_STATE=running
+    mound=$(dr_fake_mound "$repo" draugr-MyApp)
+    dr_mound_commit "$mound"
+    run dr-rm draugr-MyApp --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"did not fetch"* ]]
+}
+
+# A name that is no mound of this repo keeps the old behaviour. There is
+# nothing to compare it with, so the test cannot run at all.
+@test "dr-rm: an unrelated name is still removed without that test" {
+    export DR_MOCK_NAME=someone-else DR_MOCK_STATE=running
+    run dr-rm someone-else --yes
+    [ "$status" -eq 0 ]
+    # Not even the "could not connect" half of it: with no repo to compare
+    # with, the question is never asked. This is what holds the exception above
+    # to the one case it is for.
+    [[ "$output" != *"could not connect"* ]]
+}
+
 @test "dr-rm: --force destroys them anyway" {
     dr_mound_commit "$MOUND"
     run dr-rm --force

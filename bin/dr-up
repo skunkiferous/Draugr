@@ -158,6 +158,33 @@ fi
 
 state=$(dr_sandbox_state "$DRAUGR_SANDBOX")
 
+# A mound built by Draugr 0.9 or older carries a name that kept the case of the
+# repo folder. This Draugr derives a lower-case one, because sbx cannot add a
+# kit to a mound whose name has a capital and it has no rename. Without this
+# test, dr-up would quietly build a SECOND mound beside the one you have, and
+# the first would keep its disk and the work inside it.
+#
+# Only when the derived name is the one in use, and only when the new mound is
+# absent. If you named the mound yourself, you have already decided; with both
+# mounds present, a warning on every dr-up is noise.
+if [ "$state" = absent ] && [ "${DR_ORIGIN[DRAUGR_SANDBOX]:-}" = "derived from repo name" ]; then
+    _legacy=$(dr_sandbox_name_legacy "$DR_REPO")
+    if [ "$_legacy" != "$DRAUGR_SANDBOX" ] && dr_sandbox_exists "$_legacy"; then
+        dr_die "this repo already has a mound, under its older name $_legacy" \
+            "Draugr used to keep the case of the repo folder in the name of the mound." \
+            "It no longer does: sbx cannot add a kit to a mound whose name has a capital" \
+            "letter, and sbx has no rename, so the name must be right before the build." \
+            "This dr-up would build a SECOND mound, $DRAUGR_SANDBOX, beside that one." \
+            "To keep the mound you have, and with it the old name and no in-place path:" \
+            "  put  DRAUGR_SANDBOX=$_legacy  in .draugr.conf, then dr-trust it" \
+            "To move to the new name, which loses the clone and the home of the agent:" \
+            "  dr-rm $_legacy" \
+            "       it tests first for commits you never fetched, and for memory" \
+            "       that is not exported. sbx rm does neither." \
+            "  dr-up                builds $DRAUGR_SANDBOX, with every kit of the list"
+    fi
+fi
+
 # sbx cannot compose a kit for another agent with this one. It says so only at
 # creation, in its own words, about a YAML field that you did not know it read.
 # `sbx kit validate` accepts such a kit. Thus this test must be ours.
@@ -271,8 +298,17 @@ report_drift() {
             dr_warn "the kit changed after $DRAUGR_SANDBOX was built"
             printf '  %sThe mound still has the old rules and setup. Apply them with:%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
-            printf '  %s  dr-kit apply      (tells if it can, or if it needs a recreate)%s\n' \
-                "$_DR_DIM" "$_DR_OFF" >&2
+            # Name the in-place path only where it can work. sbx commits an
+            # image named after the sandbox to add a kit without destroying the
+            # mound, and an image name takes no capital letter. On such a mound,
+            # dr-kit apply can only say so, so point at the command that works.
+            if dr_sandbox_image_safe "$DRAUGR_SANDBOX"; then
+                printf '  %s  dr-kit apply  (tells if it can, or if it needs a recreate)%s\n' \
+                    "$_DR_DIM" "$_DR_OFF" >&2
+            else
+                printf '  %s  dr-up --recreate  (the name of this mound has no in-place path)%s\n' \
+                    "$_DR_DIM" "$_DR_OFF" >&2
+            fi
         fi
     fi
 

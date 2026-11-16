@@ -41,6 +41,14 @@ repo=$DR_REPO
 name=$(dr_sandbox_name "$repo")
 name=${name#draugr-}
 
+# The free-text fields of the kit keep YOUR spelling of the folder, and $name
+# no longer does: dr_sandbox_name lower-cases, so that sbx can name an image
+# after the mound. The legacy spelling is the right source for them. It keeps
+# the case, and it has already dropped the characters that would end a YAML
+# scalar early.
+display=$(dr_sandbox_name_legacy "$repo")
+display=${display#draugr-}
+
 wrote=0
 
 # --- .draugr.conf ----------------------------------------------------------
@@ -78,9 +86,9 @@ if [ -f "$kitdir/spec.yaml" ] && [ -z "$force" ]; then
     dr_info "kept existing kit at ${kitdir#"$repo"/}"
 else
     mkdir -p "$kitdir"
-    # Two substitutions from one project name. @SLUG@ is for the `name:` field.
-    # sbx requires lowercase letters, digits, and hyphens there. @NAME@ is for
-    # the free-text fields, with your spelling.
+    # Two substitutions, from two spellings of the project name. @SLUG@ is for
+    # the `name:` field. sbx requires lowercase letters, digits, and hyphens
+    # there. @NAME@ is for the free-text fields, with your spelling.
     #
     # The agent is NOT in the kit. sbx cannot compose a kit that pins an agent
     # with a different agent. If the current choice is in a committed file, a
@@ -88,7 +96,7 @@ else
     template="$DRAUGR_SHARE/kit.example/spec.yaml"
     if dr_sbx_v3; then template="$DRAUGR_SHARE/kit-v3.example/spec.yaml"; fi
     sed -e "s|@SLUG@|$(dr_kit_slug "$name")|g" \
-        -e "s|@NAME@|$name|g" \
+        -e "s|@NAME@|$display|g" \
         "$template" > "$kitdir/spec.yaml"
     dr_ok "wrote ${kitdir#"$repo"/}/spec.yaml"
     wrote=$((wrote + 1))
@@ -154,7 +162,7 @@ printf '\n'
 if [ "$wrote" -eq 0 ]; then
     dr_info "nothing to do. This project was already set up."
 else
-    dr_ok "$name is ready"
+    dr_ok "$display is ready"
 fi
 
 cat >&2 <<EOF

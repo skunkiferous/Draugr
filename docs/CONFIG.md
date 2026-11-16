@@ -233,10 +233,22 @@ Set `DRAUGR_ATTACH=sbx` if a later `sbx` changes its ssh proxy, or to compare be
 Ctrl+Z, and `dr-shell --root` uses `-u root` again, not `sudo`.
 
 ### `DRAUGR_SANDBOX`
-Default `draugr-<repo folder name>`. `sbx` rejects underscores and most punctuation. Thus Draugr
-keeps only letters, digits, `.`, `+` and `-`: `my_project` becomes `draugr-my-project`.
+Default `draugr-<repo folder name>`, in **lower case**. `sbx` rejects underscores and most
+punctuation, so Draugr keeps only lower-case letters, digits, `.` and `-`: `My_Project` becomes
+`draugr-my-project`.
 
 Set it explicitly to connect Draugr to a sandbox that you created by hand.
+
+**Why lower case.** To add a kit without destroying the mound, `sbx` commits an image called
+`sandboxes-swap/<sandbox>`, and an image name takes neither a capital letter nor a `+`. `sbx` has
+no rename, so the name a mound is born with decides for its whole life whether `dr-kit apply` can
+ever work on it. The only place to prevent that is here, before the mound is built.
+
+Draugr 0.9 and older kept the case of the folder, so `C:\Code\MyApp` gave `draugr-MyApp`. Such a
+mound still works, and keeps its name — this key changed what Draugr derives, not what `sbx`
+holds. Draugr still recognises it: `dr-ls` marks it as this repo's mound, and `dr-up` refuses to
+build a second one beside it and names both ways on. Set this key to that old name to keep it, or
+remove it and build again under the new one. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ### `DRAUGR_MEMORY`
 Default empty, which means the default of `sbx`: 50% of host RAM, with a limit of 32 GiB. Binary

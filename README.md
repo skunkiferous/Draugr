@@ -210,7 +210,7 @@ answers "why does it do that".
 DRAUGR_AGENT=claude                  # claude|codex|copilot|cursor|docker-agent|droid|gemini|
                                      # kiro|opencode|shell
 DRAUGR_AGENT_ARGS=                   # passed to the agent every time, e.g. "--continue"
-DRAUGR_SANDBOX=                      # default: draugr-<repo-folder-name>
+DRAUGR_SANDBOX=                      # default: draugr-<repo-folder-name>, lower-cased
 DRAUGR_MEMORY=8g                     # default: 50% of host RAM, capped at 32 GiB
 DRAUGR_CPUS=                         # default: all
 DRAUGR_CLONE=true                    # false = bind-mount your tree READ-WRITE. Think first.

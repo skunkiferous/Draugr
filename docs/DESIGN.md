@@ -87,9 +87,11 @@ tree. Thus if you want no confirmation, you are outside the purpose of the proje
 
 ### Names: `draugr-<leaf>` and the `draugr` remote
 
-Sandbox names come from the repo folder, with only the characters that `sbx` accepts. It rejects
-underscores, so `my_project` becomes `draugr-my-project`. The git remote is `draugr`. Neither name
-collides with anything that `sbx` creates itself.
+Sandbox names come from the repo folder, in lower case, with only the characters that `sbx` accepts.
+It rejects underscores, so `My_Project` becomes `draugr-my-project`. Lower case, because `sbx`
+names the image of an in-place kit add after the sandbox and an image name has no capitals: a mound
+with a capital in its name can never take a kit without being rebuilt, and `sbx` has no rename. The
+git remote is `draugr`. Neither name collides with anything that `sbx` creates itself.
 
 ### `jq` is a dependency
 

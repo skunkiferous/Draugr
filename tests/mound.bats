@@ -41,6 +41,42 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     [[ "$(calls create)" == *"claude"* ]]
 }
 
+# The name decides, for the life of the mound, whether sbx can ever add a kit
+# to it in place, and sbx has no rename. So the capital goes before the build.
+@test "dr-up: a repo folder with a capital builds a lower-case mound" {
+    local repo
+    repo=$(dr_make_win_repo MyApp) || skip "no writable path under /mnt/<drive>"
+    cd "$repo" || return 1
+    DR_MOCK_NAME=draugr-myapp DR_MOCK_STATE=absent run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$(calls create)" == *"--name draugr-myapp"* ]]
+}
+
+# Draugr 0.9 and older kept the capital, so such a mound exists on machines that
+# upgrade. Building the lower-case one beside it, in silence, would leave the
+# old mound holding its disk and the work inside it.
+@test "dr-up: refuses to build a second mound beside one with the older name" {
+    local repo
+    repo=$(dr_make_win_repo MyApp) || skip "no writable path under /mnt/<drive>"
+    cd "$repo" || return 1
+    DR_MOCK_NAME=draugr-MyApp DR_MOCK_STATE=stopped run dr-up
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"older name draugr-MyApp"* ]]
+    [[ "$output" == *"dr-rm draugr-MyApp"* ]]
+    [ -z "$(calls create)" ]
+}
+
+# A name you chose yourself is never second-guessed, whatever is on the machine.
+@test "dr-up: a DRAUGR_SANDBOX you set yourself is not called an older name" {
+    local repo
+    repo=$(dr_make_win_repo MyApp) || skip "no writable path under /mnt/<drive>"
+    cd "$repo" || return 1
+    export DRAUGR_SANDBOX=draugr-chosen
+    DR_MOCK_NAMES="draugr-MyApp" DR_MOCK_STATE=stopped run dr-up
+    [ "$status" -eq 0 ]
+    [[ "$(calls create)" == *"--name draugr-chosen"* ]]
+}
+
 @test "dr-up: stopped starts via 'exec true' and does not create" {
     DR_MOCK_STATE=stopped run dr-up
     [ "$status" -eq 0 ]
@@ -717,6 +753,17 @@ go_rc() {
     DR_MOCK_STATE=running run dr-ls
     [ "$status" -eq 0 ]
     [[ "$output" == *"-> $SANDBOX"* ]]
+}
+
+# A mound built by Draugr 0.9 or older kept the case of the repo folder, and
+# sbx cannot rename it. It must not look like somebody else's mound.
+@test "dr-ls: marks a mound that an older Draugr named, too" {
+    local repo
+    repo=$(dr_make_win_repo MyApp) || skip "no writable path under /mnt/<drive>"
+    cd "$repo" || return 1
+    DR_MOCK_NAME=draugr-MyApp DR_MOCK_STATE=running run dr-ls
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"-> draugr-MyApp"* ]]
 }
 
 @test "dr-ls: does not mark someone else's sandbox" {

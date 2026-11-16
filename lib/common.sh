@@ -1781,13 +1781,64 @@ dr_sandbox_name() {
     # ${repo##*/} removes the longest prefix that ends in "/". That is basename.
     leaf=${repo##*/}
 
+    # Lower case FIRST, and a plus sign becomes a hyphen. sbx accepts both in a
+    # sandbox name and then cannot add a kit to that sandbox, because the image
+    # it commits is named after the sandbox and an image name holds neither.
+    # See dr_sandbox_image_safe. sbx has no rename, so a mound keeps the name it
+    # was born with: the only place to prevent that is here, before it is built.
+    #
     # tr -c means "complement". It replaces each character that is NOT in the
-    # set with a hyphen. Then sed changes each run of hyphens into one hyphen,
-    # and removes a hyphen at the start or the end. (\{2,\} is BRE for "two or
-    # more". It is the portable form of {2,}.)
-    leaf=$(printf '%s' "$leaf" | tr -c 'A-Za-z0-9.+-' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')
+    # set with a hyphen. Then sed makes every run of two or more periods and
+    # hyphens into ONE hyphen, and removes them from both ends. What is left is
+    # groups of lower-case letters and digits with a single period or hyphen
+    # between them, which is exactly what an image name may hold. (\{2,\} is BRE
+    # for "two or more". It is the portable form of {2,}.)
+    leaf=$(printf '%s' "$leaf" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-' |
+        sed 's/[.-]\{2,\}/-/g; s/^[.-]*//; s/[.-]*$//')
+
+    # A folder named only with punctuation leaves nothing, and "draugr-" alone
+    # is not a name sbx can use either.
+    [ -n "$leaf" ] || leaf=mound
 
     printf 'draugr-%s' "$leaf"
+}
+
+# dr_sandbox_name_legacy [repo-root]: the name that Draugr 0.9 and older derived
+# for this repo.
+#
+# That one kept the case of the repo folder, and its plus signs. A mound built
+# by an older Draugr still carries such a name, and sbx has no rename, so it
+# cannot be brought over. dr-up and dr-ls look for it as well, so that a mound
+# does not appear to vanish after the upgrade. Nothing CREATES this name.
+dr_sandbox_name_legacy() {
+    local repo=${1:-$PWD} leaf
+    leaf=${repo##*/}
+    leaf=$(printf '%s' "$leaf" | tr -c 'A-Za-z0-9.+-' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')
+    printf 'draugr-%s' "$leaf"
+}
+
+# dr_sandbox_image_safe <name>: 0 when sbx can name a container image after a
+# sandbox called <name>.
+#
+# `sbx kit add` adds a kit to a mound WITHOUT destroying it. To do that, it
+# commits the running container to an image, and it names that image after the
+# sandbox: sandboxes-swap/<sandbox>. An image name is not a free string. Docker
+# takes groups of lower-case letters and digits, joined by one `.`, one `_`,
+# `__`, or a run of `-`, and nothing else. A capital letter is the case that
+# happens in practice, because dr_sandbox_name keeps the case of the repo
+# folder, and most repo folders have one. On a mound called draugr-Draugr, sbx
+# answers (measured on 0.53.0):
+#
+#   500 Internal Server Error: swap-image: commit original container:
+#   invalid reference format: repository name (sandboxes-swap/draugr-Draugr)
+#   must be lowercase
+#
+# It reports that AFTER it has started the mound, which stops the agent, and
+# sbx has no rename. So the name decides, once and for all, whether a mound can
+# ever take a kit in place. dr-kit tests it before it asks the question. The
+# expression below is that grammar, for the one path component of the name.
+dr_sandbox_image_safe() {
+    [[ $1 =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]
 }
 
 # dr_sbx_json <text>: the JSON from the stdout of sbx, without the other text.

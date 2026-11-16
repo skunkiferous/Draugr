@@ -282,6 +282,46 @@ dr-up --recreate    # a kit EDITED, removed or reordered: the only thing that ap
 leaves the old rules in force *(measured)*. Thus a host that you deleted from a kit stays reachable.
 If `sbx` itself gives `duplicate kit name`, that is the same thing.
 
+### The name of the mound has a capital letter in it
+
+Then `sbx` can never add a kit to it in place, and only a rebuild applies one. `sbx kit add` keeps
+the mound by committing the container to an image, and it names that image after the sandbox:
+`sandboxes-swap/<sandbox>`. An image name takes neither a capital letter nor a `+`. So on
+`draugr-MyApp`, `sbx` answers this — after it has started the mound, which stops the agent:
+
+```text
+500 Internal Server Error: swap-image: commit original container:
+invalid reference format: repository name (sandboxes-swap/draugr-MyApp) must be lowercase
+```
+
+`dr-kit apply` tests the name first and says so before anything moves. Draugr derives a lower-case
+name, so a mound built by 0.10 or later is never of this kind; one built by 0.9 or older is, since
+it kept the case of the repo folder, and `sbx` has no rename.
+
+### `dr-up` says this repo already has a mound under an older name
+
+Draugr 0.9 and older derived `draugr-MyApp` for `C:\Code\MyApp`; this one derives `draugr-myapp`,
+for the reason above. The mound you have is untouched and still works, so `dr-up` refuses rather
+than building a second one beside it and leaving the first holding its disk. Pick one:
+
+```bash
+echo 'DRAUGR_SANDBOX=draugr-MyApp' >> .draugr.conf
+dr-trust .draugr.conf       # Draugr reads no configuration that you have not trusted
+```
+
+That keeps the mound you have, with its name, and `dr-kit apply` keeps refusing on it. Or move to
+the new name, which **loses the clone and the home of the agent** in the old mound:
+
+```bash
+dr-rm draugr-MyApp          # tests first for unfetched commits and unexported memory
+dr-up                       # builds draugr-myapp, with every kit of the list
+```
+
+Use `dr-rm`, not `sbx rm`: only `dr-rm` asks the mound whether the agent committed something you
+never fetched, or holds memory you never exported, and it refuses rather than destroying it.
+
+`dr-ls` marks either mound as this repo's, so the one you keep does not look like a stranger's.
+
 ### `dr-up` fails with `500 Internal Server Error: failed to run sandbox container`
 
 That is all that sbx tells you, and it is not sufficient. Its daemon knows exactly what happened, and

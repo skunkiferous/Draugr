@@ -40,11 +40,24 @@ done
 
 # With a name, $repo stays empty, because a repo possibly does not exist. Then
 # the test for unsynced work below has nothing to compare with.
+#
+# The exception is the reason a name is usually given now: this repo's own
+# mound, under the spelling that Draugr derived before it began lower-casing.
+# There, everything the tests need is here, and they are exactly what you want.
+# DRAUGR_SANDBOX is exported with it, because dr-sync and dr-mem are separate
+# processes that resolve the configuration again. Without that they would ask
+# the mound of the new name, which does not exist, and report nothing to lose.
 repo=
 if [ -z "$name" ]; then
     dr_context
     name=$DRAUGR_SANDBOX
     repo=$DR_REPO
+elif _root=$(git rev-parse --show-toplevel 2>/dev/null) &&
+     { [ "$name" = "$(dr_sandbox_name "$_root")" ] ||
+       [ "$name" = "$(dr_sandbox_name_legacy "$_root")" ]; }; then
+    dr_context
+    repo=$DR_REPO
+    export DRAUGR_SANDBOX=$name
 fi
 
 [ "$(dr_sandbox_state "$name")" != absent ] || dr_die "$name does not exist" "See the mounds that exist:  dr-ls"

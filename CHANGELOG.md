@@ -16,6 +16,29 @@ people reading the source, not for people calling it.
 
 ### Changed
 
+- **The name Draugr derives for a mound is now lower case, and holds no `+`.** `C:\Code\MyApp` gave
+  `draugr-MyApp` and now gives `draugr-myapp`. The reason is the first entry under Fixed below:
+  `sbx` adds a kit to a mound without destroying it by committing an image called
+  `sandboxes-swap/<sandbox>`, an image name takes neither a capital letter nor a `+`, and `sbx` has
+  no rename — so the name a mound is born with decides, for its whole life, whether a kit can ever
+  be added to it in place. The only place to prevent that is before the mound is built. Every other
+  character is treated as before, and the name is still `draugr-<repo folder>`.
+
+  **This renames the mounds of every repo whose folder has a capital in it.** It renames nothing in
+  `sbx`: the mound you have keeps the name it was built with and goes on working. What changed is
+  the name Draugr looks for, and Draugr knows about both. `dr-ls` marks either one as this repo's
+  mound. `dr-up` refuses to build a second mound beside the one you have, rather than quietly
+  leaving the old one holding its disk and the work inside it, and names both ways on: keep it by
+  putting `DRAUGR_SANDBOX=draugr-MyApp` in `.draugr.conf`, or `dr-rm` it and `dr-up` again under the
+  new name — after which `dr-kit apply` works on it. `dr-init` writes
+  your own spelling into the free-text fields of the kit it generates, as before; only the `name:`
+  field and the mound follow the derived spelling.
+
+  `dr-rm <name>` now runs its tests for unfetched commits and unexported memory when that name is
+  this repo's mound under either spelling. It could not before: with a name it kept no repo to
+  compare against, and silently skipped both. With any other name it still skips them, for that
+  same reason, which is why the refusal above names `dr-rm` and not `sbx rm`.
+
 - **`DRAUGR_FORGE_NOSCAN` is now a declaration that `dr-forge init` checks, and no longer a change
   that Draugr makes.** `init` reads the Defender state of the guest and reports which of the
   declared paths are excluded and which are not; `*` now means "I have turned real-time protection
@@ -52,6 +75,23 @@ people reading the source, not for people calling it.
   now `dr_kit_stamp_split`, which splits with parameter expansion, takes exactly the first three
   fields, and refuses a line with fewer. A remote reference records no name either and was wrong
   the same way. No test saw any of it, because the kit every test built had a `name:`.
+
+- `dr-kit apply` now refuses **before it touches the mound** when the name of that mound cannot be
+  an image name, instead of letting sbx fail half way through. `sbx kit add` adds a kit in place by
+  committing the container to an image called `sandboxes-swap/<sandbox>`, and an image name takes
+  no capital letter, while the name Draugr derives keeps the case of the repo folder. So on
+  `draugr-Draugr`, sbx first started the mound — which stops the agent — and only then answered
+  `500 Internal Server Error: swap-image: commit original container: invalid reference format:
+  repository name (sandboxes-swap/draugr-Draugr) must be lowercase` *(measured on sbx 0.53.0)*.
+  The hint printed under it named the one cause Draugr knew, a sandbox older than kits, which was
+  not this one; it now names both known causes. The new test runs after `apply` has decided that
+  there is something to add, so a mound that needs nothing still hears `nothing to apply`, and it
+  names the two ways on: `dr-up --recreate`, which keeps the name and can meet this again, or a
+  lower-case `DRAUGR_SANDBOX`, after which kits add in place. sbx has no rename, so the name a
+  mound is born with decides this for its whole life. A `+`, which a sandbox name may also hold,
+  is refused the same way and for the same reason. `dr-up` reports a drifted kit by naming
+  `dr-kit apply`; on a mound with such a name it now names `dr-up --recreate` instead, because
+  `apply` there could only repeat this refusal.
 
 ## [0.9.0] — 2026-11-15
 

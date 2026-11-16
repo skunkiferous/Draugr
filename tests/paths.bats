@@ -93,14 +93,73 @@ teardown() { dr_test_teardown; }
 
 @test "dr_sandbox_name: strips characters sbx rejects" {
     run dr_sandbox_name "/mnt/c/Code/my project (old)"
-    # only letters, numbers, hyphens, periods and plus signs. No doubled hyphens
-    [[ "$output" =~ ^draugr-[A-Za-z0-9.+-]+$ ]]
+    # only lower-case letters, numbers, hyphens and periods. No doubled hyphens
+    [[ "$output" =~ ^draugr-[a-z0-9.-]+$ ]]
     [[ ! "$output" =~ -- ]]
 }
 
-@test "dr_sandbox_name: keeps periods and plus signs" {
+@test "dr_sandbox_name: keeps periods, and a plus sign becomes a hyphen" {
     run dr_sandbox_name /mnt/c/Code/app.v2+beta
+    [ "$output" = draugr-app.v2-beta ]
+}
+
+# The case of the repo folder used to be kept, and it decided for the life of
+# the mound whether a kit could ever be added to it in place.
+@test "dr_sandbox_name: lower-cases the name of the folder" {
+    run dr_sandbox_name /mnt/c/Code/MyApp
+    [ "$output" = draugr-myapp ]
+}
+
+@test "dr_sandbox_name: a folder of nothing but punctuation still gives a name" {
+    run dr_sandbox_name "/mnt/c/Code/..."
+    [ "$output" = draugr-mound ]
+}
+
+# The point of all of it: whatever the folder is called, the mound can take a
+# kit in place. These are the shapes that broke the grammar of an image name.
+@test "dr_sandbox_name: every name it derives can be an image name" {
+    local leaf
+    for leaf in MyApp "my project (old)" app.v2+beta "_under_" "...dots..." \
+                "--hyphens--" "Ünïcödé" "CAPS" "a..b" "x+-.y" 42; do
+        run dr_sandbox_name "/mnt/c/Code/$leaf"
+        dr_sandbox_image_safe "$output" || {
+            echo "not an image name: $leaf -> $output"
+            return 1
+        }
+    done
+}
+
+# Nothing creates this one. dr-up and dr-ls use it to recognise a mound that an
+# older Draugr built, which sbx cannot rename.
+@test "dr_sandbox_name_legacy: keeps the case and the plus sign, as 0.9 did" {
+    run dr_sandbox_name_legacy /mnt/c/Code/MyApp
+    [ "$output" = draugr-MyApp ]
+    run dr_sandbox_name_legacy /mnt/c/Code/app.v2+beta
     [ "$output" = draugr-app.v2+beta ]
+}
+
+# sbx names the image of an in-place kit add after the sandbox, and an image
+# name is narrower than a sandbox name. These four say where the two differ.
+@test "dr_sandbox_image_safe: a lower-case name can be an image name" {
+    dr_sandbox_image_safe draugr-myproject
+}
+
+@test "dr_sandbox_image_safe: periods and hyphens between groups are allowed" {
+    dr_sandbox_image_safe draugr-app.v2-beta
+}
+
+@test "dr_sandbox_image_safe: a capital letter is not" {
+    ! dr_sandbox_image_safe draugr-Draugr || return 1
+    ! dr_sandbox_image_safe draugr-unrealForge || return 1
+}
+
+# dr_sandbox_name used to keep a plus sign, and an image name has no place for
+# one. That is why it stopped. A mound that an older Draugr built can still
+# carry one, and is of the same kind as an upper-case one: no kit in place.
+@test "dr_sandbox_image_safe: a plus sign is not, and an older name may hold one" {
+    run dr_sandbox_name_legacy /mnt/c/Code/app.v2+beta
+    [ "$output" = draugr-app.v2+beta ]
+    ! dr_sandbox_image_safe "$output" || return 1
 }
 
 @test "dr_require_win_path: accepts a drive path" {

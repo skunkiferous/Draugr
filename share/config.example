@@ -77,8 +77,10 @@
 # Set sbx only if a future sbx breaks its ssh proxy, or to compare the two.
 #DRAUGR_ATTACH=ssh
 
-# Sandbox name. Empty gives draugr-<repo-folder-name>. That is correct, unless
-# two projects have the same folder name.
+# Sandbox name. Empty gives draugr-<repo-folder-name>, in lower case. That is
+# correct, unless two projects have the same folder name. Keep it lower case:
+# sbx cannot add a kit to a mound whose name has a capital letter, and it has
+# no rename, so the name decides that for the life of the mound.
 #DRAUGR_SANDBOX=
 
 # Empty means the defaults of sbx: 50% of host RAM, up to 32 GiB, and all CPUs.

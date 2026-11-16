@@ -385,6 +385,33 @@ apply)
         done
     done
 
+    # The NAME of the mound decides whether sbx can do this at all, and sbx
+    # only finds that out in the middle, after it has started the mound and
+    # stopped the agent. Test it here, where nothing has moved yet. This is
+    # last of the tests on purpose: a mound with nothing to add needs no image,
+    # and must still hear "nothing to apply" rather than this.
+    if ! dr_sandbox_image_safe "$DRAUGR_SANDBOX"; then
+        lower=$(printf '%s' "$DRAUGR_SANDBOX" | tr '[:upper:]' '[:lower:]')
+        # Name a replacement only where lower-casing really gives a usable one.
+        # A name with a `+` in it, for one, is refused in both cases.
+        if [ "$lower" != "$DRAUGR_SANDBOX" ] && dr_sandbox_image_safe "$lower"; then
+            fix="Put  DRAUGR_SANDBOX=$lower  in .draugr.conf, dr-trust it, then dr-up."
+        else
+            fix="Put a DRAUGR_SANDBOX of lower-case letters and digits in .draugr.conf, then dr-up."
+        fi
+        dr_die "sbx cannot add a kit to $DRAUGR_SANDBOX, because of its name" \
+            "To add a kit in place, sbx commits an image called" \
+            "sandboxes-swap/$DRAUGR_SANDBOX, and an image name takes no capital letter:" \
+            "only lower-case letters and digits, with . _ or - between them." \
+            "sbx has no rename, so this mound can never take a kit in place. Both ways" \
+            "on build it again, and both lose the clone and the home of the agent:" \
+            "  dr-up --recreate    the same name, with the new kits. This can happen again." \
+            "  a lower-case name   kits add in place afterwards." \
+            "$fix" \
+            "Then remove the mound it replaced:  dr-rm $DRAUGR_SANDBOX" \
+            "which tests first for commits you never fetched, as sbx rm does not."
+    fi
+
     # Tell the cost before the question, not after. You must not learn
     # "recreates the container" from a question that you already answered.
     dr_warn "adding ${#new_refs[@]} kit(s) recreates the container, in place"
@@ -412,7 +439,8 @@ apply)
     for k in "${new_args[@]}"; do
         dr_sbx kit add "$DRAUGR_SANDBOX" "$k" || dr_die \
             "could not add $k to $DRAUGR_SANDBOX" \
-            "sbx refuses on sandboxes that are older than kits. dr-up --recreate builds one again."
+            "Two causes are known: a sandbox older than kits, and a name that cannot be" \
+            "an image name, which dr-kit tests for above. dr-up --recreate builds one again."
     done
 
     mkdir -p "$DR_REPO/.draugr"

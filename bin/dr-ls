@@ -47,9 +47,16 @@ fi
 # Which one is ours? That has a meaning only inside a repo. This command often
 # runs outside a repo, so a failure here is not an error. The subshell keeps the
 # `exit 1` of dr_repo_root from a stop of dr-ls.
-mine=
+#
+# Two names, because a mound built by Draugr 0.9 or older kept the case of the
+# repo folder and this one derives a lower-case name. sbx has no rename, so
+# such a mound keeps the old spelling for its whole life. Marking both means it
+# does not appear to stop belonging to the repo after the upgrade.
+mine=''
+mine_old=''
 if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
     mine=$(dr_sandbox_name "$repo")
+    mine_old=$(dr_sandbox_name_legacy "$repo")
 fi
 
 # jq builds the rows, and the shell adds the marks.
@@ -87,7 +94,9 @@ while IFS=$'\t' read -r name agent status workspace; do
     esac
 
     marker='  '
-    [ "$name" = "$mine" ] && marker="${_DR_BLUE}->${_DR_OFF}"
+    if [ "$name" = "$mine" ] || { [ -n "$mine_old" ] && [ "$name" = "$mine_old" ]; }; then
+        marker="${_DR_BLUE}->${_DR_OFF}"
+    fi
 
     printf '%b %-24s %-8s %b%-9s%b %s\n' \
         "$marker" "$name" "$agent" "$colour" "$status" "$_DR_OFF" "$workspace"
