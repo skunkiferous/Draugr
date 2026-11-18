@@ -250,6 +250,50 @@ teardown() { dr_test_teardown; }
     [ "$status" -eq 0 ]
 }
 
+# --- unknown is not nothing ---------------------------------------------------
+#
+# AN UNREACHABLE MOUND IS NOT AN EMPTY MOUND. Status 2 from --check-only used to
+# print a warning and then ask the question anyway. The answer to that question
+# was worth nothing: you were agreeing to a destruction without the one fact
+# that the question exists to give you, and in the one case where nobody could
+# get that fact back afterwards. Thus both commands refuse, and --force is how
+# you say "destroy it without that fact".
+#
+# Same break as "--check-only is 2 when the mound cannot be reached": the URL
+# rewrite points at a path with no repository in it, so the fetch has no target.
+# No test-only variable, and the code under test is unchanged.
+break_mound_url() {
+    git config --unset-all "url.$MOUND.insteadOf"
+    git config "url.$DR_TMP/does-not-exist.insteadOf" "ssh://$SANDBOX.sbx${REPO#/mnt}"
+}
+
+@test "dr-rm: a mound that cannot answer is not destroyed" {
+    break_mound_url
+    run dr-rm --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not connect"* ]]
+    # The refusal must name the way past it. A refusal with no way out is a
+    # dead end on the command whose job is to destroy.
+    [[ "$output" == *"--force"* ]]
+    [ -z "$(grep '^rm ' "$DR_MOCK_LOG" || true)" ]
+}
+
+@test "dr-rm --force: destroys it although nobody could say what was in it" {
+    break_mound_url
+    run dr-rm --force
+    [ "$status" -eq 0 ]
+    grep -q '^rm ' "$DR_MOCK_LOG"
+}
+
+@test "dr-up --recreate: a mound that cannot answer is not destroyed either" {
+    break_mound_url
+    run dr-up --recreate --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not connect"* ]]
+    [ -z "$(grep '^rm ' "$DR_MOCK_LOG" || true)" ]
+    [ -z "$(grep '^create ' "$DR_MOCK_LOG" || true)" ]
+}
+
 # --- the whole loop ----------------------------------------------------------
 
 @test "the README's daily loop, end to end" {

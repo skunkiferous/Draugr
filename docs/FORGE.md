@@ -1795,6 +1795,34 @@ to fail the task.
   pipeline. Thus the gap was only this one case. `Invoke-GuestScript` now lets the own `cmd` of the
   guest decide with `if exist`. It gives absence the code **127**, and throws on it, and does not
   return it.
+
+  **And it took a security review to notice that only two of the three copies had it.**
+  `provision.ps1` and `vm.ps1` had the wrapper; `init.ps1` ran the file directly, with no
+  `if exist` and with the status of its `scp` discarded. The wrapper is one function now,
+  `Get-GuestRunCommand` in `lib/forge/guestexec.ps1`, and all three callers use it.
+  **A note in one file is not a rule; a shared function is.**
+
+- **A run owns a directory in the guest, and the destination is no longer fixed** *(measured, and
+  then redesigned)*. The destination used to be `C:\Windows\Temp\<name>` for every run of every VM.
+  `if exist` cannot see the difference that makes: it answers "is something there", never "is the
+  **right** thing there", so a copy that failed left an older file under the name the run was about
+  to use, and the wrapper would run it and report its result. The data files were worse than the
+  scripts, because no wrapper touches them at all — they are read as an argument by a script that
+  *is* run, and two of them are **public keys that the guest then authorizes**. A failed copy of
+  `draugr_tunnel.pub` could therefore authorize the key of an earlier run, or of another VM, with
+  the `permitopen` of the tunnel, and the phase would report `permitopen set`.
+
+  So each run now makes `C:\Windows\Temp\draugr-<id>\` (`New-GuestRunDir`), copies everything into
+  it, and removes the whole directory at the end. The directory is empty until this run fills it, so
+  `if exist` on a path inside it is a true answer to "did my copy arrive", and a forgotten status
+  check is no longer a stale file running under a name that looks right. The callers still check
+  their `scp` status, because that is the earliest and clearest place to say what went wrong.
+
+  Two details worth knowing before you touch this. The directory has **two spellings** — backslashes
+  for `cmd.exe`, `-File` and `-PubKeyFile`, forward slashes for the destination of `scp`, which
+  splits on `:` and loses backslashes — which is the same hazard as the three names of a repository
+  in `lib/common.sh`. And the **cleanup phase empties `C:\Windows\Temp`**, this run's directory
+  included, so `provision.ps1` makes it again before the manifest phase copies anything else in.
 - **A Cygwin `curl` eats the braces out of `-w '%{http_code}'`** *(measured)*. That killed the one
   test that proves that the guest can reach the internet:
 
@@ -2352,6 +2380,17 @@ elevated PowerShell for the full recipe taught people to elevate for work that n
 | `start` | `AppSandbox.exe --headless` | one UAC prompt |
 | `restart` | `stop` then `start` | one UAC prompt |
 
+**A list of VMs that it could not read is not an empty one.** `GET /v1/vms` is the only way this
+verb knows what runs, and a failed query used to arrive as an empty list: `status` then said "no VM
+runs, so the daemon can stop directly", and the per-VM wait in `stop` counted a guest that was
+missing from a listing nobody could read as one that had shut down. `status` now reports that it
+cannot say which VMs run and exits **4**, and `stop` changes nothing and exits **20** — the same
+code as a VM that did not stop, because both are the refusal that happens before anything changed.
+The same rule holds one level down, for a single VM: `lib/forge/vmstate.ps1` answers running,
+stopped, absent **or unknown**, and the waits that `down`, `base`, `rollback` and `rm` are built on
+never read unknown as stopped. "It is gone" is only the documented 404, checked against the list of
+VMs first, because the API uses that one code for an unknown VM *and* an unknown route.
+
 **The VMs go down gracefully, with a wait**, in that order. While a VM runs, `POST /shutdown` is
 refused with **409**, unless `{"force":true}`, which *terminates* the guests. A terminated guest has
 a dirty disk, and these commands exist to freeze disks. Thus force is not offered. **Draugr asks the
@@ -2422,6 +2461,17 @@ above](#the-pinned-port-has-a-price-a-far-end-is-not-identified-by-the-vm-being-
 no name is the trap where each VM called itself `layer-0`. Nobody can address a VM with a name but no
 alias. A VM with both but no screen server breaks `dr-forge screen`. It is idempotent and you can run
 it again. It reports one line for each phase, and needs the daemon **up** and normal rights.
+
+**A phase that failed decides the exit code.** Each phase reports one line, and a line is
+not a result: `FAILED (<rc>)` used to go into the row while the command still ended with success,
+so `init` could say that a VM is set up over a run in which the restricted tunnel key never arrived
+and the guest still offered password logins. The failures are collected and exit **13**, which
+`dr-forge` turns into a refusal that points at the detail. The disk-churn phase below is *not* in
+that set — it is tuning a guest may refuse, and `--no-tune` exists for exactly that — and a phase
+skipped because its input was not given (no tunnel key, no WSL key) is a declaration by absence,
+not a failure. The keys-only phase is the strictest of them: it requires **every** method the
+server offers to be `publickey`, because a list without the word `password` in it can still offer
+`keyboard-interactive`, which is where a Windows `sshd` password prompt comes back.
 
 **Built, as far as *reachable and correctly identified*.** `lib/forge/init.ps1` has the phases that
 make a new VM answer to Draugr. Those are a keys-only `sshd`, confirmed by effect, the `permitopen`

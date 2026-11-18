@@ -77,6 +77,59 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     [[ "$output" == *"deep/nested/.env"* ]]
 }
 
+# A PATTERN IS A PATTERN, NOT A FILE IN THE CURRENT DIRECTORY. An unquoted
+# expansion of DRAUGR_SCAN_PATTERNS does pathname expansion as well as word
+# splitting, so "*.key" was replaced by the names it happened to match where the
+# command ran. With one such file next to it, the broad pattern became that one
+# name, every other candidate was compared against it, and the nested secret
+# below went unreported while block mode exited 0.
+@test "dr-scan: a pattern is not expanded against the directory it runs in" {
+    export DRAUGR_SCAN_PATTERNS='*.key'
+    printf 'x\n' > "$REPO/visible.key"
+    mkdir -p "$REPO/nested"
+    printf 'x\n' > "$REPO/nested/hidden.key"
+    run dr-scan
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nested/hidden.key"* ]]
+}
+
+# The same expansion, with the decoy TRACKED, so the only finding left is the
+# nested one. Under the bug the scan reported nothing at all and passed.
+@test "dr-scan: a tracked decoy does not hide an untracked nested match" {
+    export DRAUGR_SCAN_PATTERNS='*.key'
+    printf 'x\n' > "$REPO/visible.key"
+    git add -A && git commit -qm decoy
+    mkdir -p "$REPO/nested"
+    printf 'x\n' > "$REPO/nested/hidden.key"
+    run dr-scan
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nested/hidden.key"* ]]
+    [[ "$output" != *"visible.key"* ]]
+}
+
+# A backstop that cannot run must not report a clean result. git's failure used
+# to be discarded with `2>/dev/null || true`, which left an empty candidate list
+# and printed "no files that look like credentials".
+@test "dr-scan: a file listing that fails is a refusal, not a clean report" {
+    local real
+    real=$(command -v git)
+    mkdir -p "$DR_TMP/bin"
+    # ONLY ls-files fails, and everything else reaches the real git. A mock that
+    # failed every call would be refused by dr_context first, and the test would
+    # pass without ever reaching the scan.
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'case " $* " in *" ls-files "*) exit 3 ;; esac\n'
+        printf 'exec %s "$@"\n' "$real"
+    } > "$DR_TMP/bin/git"
+    chmod +x "$DR_TMP/bin/git"
+    export PATH="$DR_TMP/bin:$PATH"
+    run dr-scan
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot list the untracked files"* ]]
+    [[ "$output" != *"no files that look like credentials"* ]]
+}
+
 # --- dr-scan: what the agent can leave behind --------------------------------
 
 @test "dr-scan: an empty skills store is reported as empty" {

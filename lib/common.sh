@@ -2021,13 +2021,36 @@ dr_forge_available() {
 # it to decide if they create or start a MOUND. If it gives the state of a VM, they act on
 # the wrong item. That failure is much worse than the refusal that this code removes.
 dr_sandbox_exists() {
-    local name=$1
+    local name=$1 state
     if [ -n "${DRAUGR_FORGE:-}" ] && [ "$name" = "$DRAUGR_FORGE" ]; then
         dr_forge_available || return 1
         dr_forge_far_end_running "$name"
         return
     fi
-    [ "$(dr_sandbox_state "$name")" != "absent" ]
+    # An assignment with an explicit test, not `[ "$(dr_sandbox_state ...)" != absent ]`.
+    #
+    # dr_sandbox_state DIES when it cannot reach sandboxd, and a death inside
+    # $( ) ends only the SUBSHELL. The old form then compared the empty output
+    # with "absent", found them different, and answered "the mound exists".
+    # Every caller treats this as a fact: dr-kit apply went on to a mound that
+    # nobody had confirmed, and dr-rm asked sbx to destroy one.
+    #
+    # `set -e` does not save it either. The old line is a `[` that SUCCEEDS, so
+    # there is no failure for errexit to see, and bash suppresses errexit inside
+    # a function that runs in an && or || list, which is how most callers call
+    # this one. Thus the test has to be written out.
+    #
+    # Dying here, rather than returning a third value, is deliberate: no caller
+    # has a branch for "I could not tell", and dr_sandbox_state has already
+    # printed the long diagnostic on stderr. This only says that the command
+    # stopped, and that nothing was changed.
+    state=$(dr_sandbox_state "$name") || dr_die \
+        "cannot tell whether '$name' exists, so nothing was changed" \
+        "The reason is above, from sbx itself."
+    [ -n "$state" ] || dr_die \
+        "cannot tell whether '$name' exists: sbx named no state for it" \
+        "Look at it with:  dr-ls"
+    [ "$state" != "absent" ]
 }
 
 # dr_sandboxes_running: the name of each running sandbox, one on each line.
@@ -2854,12 +2877,23 @@ dr_policy_denied() {
 # rule from the kit artifact is not editable. A rule from `dr-policy --allow`
 # is editable. A test showed this. The rule of the kit also has the name
 # "kit:<sandbox>", and an ad-hoc rule has only a UUID. Both fields agree.
+#
+# Status 2 means "cannot tell". The query is captured, not piped straight into
+# jq and sort, because the status of a pipeline is the status of its LAST
+# command, and sort is content with nothing. A sandbox that sbx cannot reach
+# would thus give an empty list, which reads as "nobody opened a host here".
+# dr-rm and dr-up --recreate use this list to refuse, so an empty list removes
+# their reason to refuse, at the one moment where the rules are destroyed.
 dr_policy_adhoc() {
-    dr_sbx policy ls "$DRAUGR_SANDBOX" --wide --json 2>/dev/null         | jq -r --arg s "sandbox:$DRAUGR_SANDBOX" '
+    local _json _hosts
+    _json=$(dr_sbx policy ls "$DRAUGR_SANDBOX" --wide --json 2>/dev/null) || return 2
+    _hosts=$(printf '%s\n' "$_json" | jq -r --arg s "sandbox:$DRAUGR_SANDBOX" '
               .. | objects
               | select(.applies_to? == $s and .decision? == "allow")
               | select(.resource_type? == "network" and .editable? == true)
-              | .resources[]?' 2>/dev/null         | sort -u
+              | .resources[]?' 2>/dev/null) || return 2
+    [ -n "$_hosts" ] || return 0
+    printf '%s\n' "$_hosts" | sort -u
 }
 
 # ---------------------------------------------------------------------------
@@ -3007,8 +3041,10 @@ dr_hostport_managed() {
 #
 # If the repo has no kit, each ad-hoc host is unadopted. There is no file
 # where it can be written.
+#
+# Status 2 means "cannot tell", from dr_policy_adhoc.
 dr_policy_unadopted() {
-    local kit have host
+    local kit have host adhoc
     # Use EACH kit, not only the kit of the repo. dr-kit adopt writes into one
     # kit, but a host is adopted in any kit that holds it. If not, a project
     # with several kits gets a warning that it will lose hosts that are already
@@ -3025,6 +3061,15 @@ dr_policy_unadopted() {
         have="$have
 $(dr_kit_allow_list "$kit")"
     done < <(dr_kit_refs)
+    # Captured before the loop, and not `done < <(dr_policy_adhoc)`, because a
+    # process substitution throws the status away. The loop would end because
+    # the input ended, and input that ended because the query failed looks
+    # exactly like input with no hosts in it.
+    #
+    # The kit list above is different, on purpose. If dr_kit_refs fails, every
+    # host counts as unadopted, and the caller warns about hosts that are
+    # already written down. That is noise. This one loses them.
+    adhoc=$(dr_policy_adhoc) || return 2
     while IFS= read -r host; do
         [ -n "$host" ] || continue
         # Draugr restores a rule from dr-hostport by itself. Thus a recreate does
@@ -3033,7 +3078,7 @@ $(dr_kit_allow_list "$kit")"
         printf '%s
 ' "$have" | grep -qxF "$host" || printf '%s
 ' "$host"
-    done < <(dr_policy_adhoc)
+    done <<< "$adhoc"
     return 0
 }
 
@@ -3697,10 +3742,16 @@ _dr_dep_field() {
     sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1
 }
 
-# dr_dep_claim_valid <file> [<running-list>]: is this claim still real?
+# dr_dep_claim_valid <file> <running-list>: is this claim still real?
 #
-# A caller that tests several claims gives the running list. Then one
-# `sbx ls` answers for all claims, not one for each claim.
+# The running list is NOT optional, and that is the whole design. One `sbx ls`
+# answers for all claims, and more importantly the caller is the only place that
+# can tell "no sandbox runs" from "I could not ask". This function therefore
+# only ever answers yes or no, and the question of an unreachable daemon belongs
+# to dr_dep_prune and dr_dep_claims, which do the asking.
+#
+# An empty list is a legitimate answer: it means nothing runs, so every claim
+# past its grace time is stale.
 dr_dep_claim_valid() {
     local file=$1 running=${2-} sandbox age now since
 
@@ -3716,7 +3767,6 @@ dr_dep_claim_valid() {
     # test, so the claim gets only the grace time above.
     sandbox=$(_dr_dep_field "$file" sandbox)
     [ -n "$sandbox" ] || return 1
-    [ -n "$running" ] || running=$(dr_sandboxes_running || true)
     printf '%s\n' "$running" | grep -qxF "$sandbox"
 }
 
@@ -3725,11 +3775,19 @@ dr_dep_claim_valid() {
 # It only reads, on purpose. A status command must not delete anything. Thus
 # this function ignores stale files, and dr_dep_prune removes them. The
 # functions that write claims call dr_dep_prune.
+# It returns 2, and prints nothing, when the liveness of the claimants cannot be
+# established. UNKNOWN IS NOT "NOBODY USES IT". Before, this was
+# `running=$(dr_sandboxes_running || true)`, so a failed `sbx ls` produced an
+# empty running list, every claim past its grace time looked stale, and this
+# function reported a resource as unused. Each caller then acted on that: the
+# warden stopped a VM that another project was using, the exclusive lock was
+# granted over the top of a live one, and dr-forge disturbed a shared VM without
+# asking. A caller that cannot handle 2 must refuse or ask, never assume.
 dr_dep_claims() {
     local dir file running
     dir=$(dr_dep_dir "$1")
     [ -d "$dir" ] || return 0
-    running=$(dr_sandboxes_running || true)
+    running=$(dr_sandboxes_running) || return 2
     for file in "$dir"/*.claim; do
         [ -f "$file" ] || continue
         dr_dep_claim_valid "$file" "$running" || continue
@@ -3741,15 +3799,66 @@ dr_dep_claims() {
 }
 
 # dr_dep_prune <key>: remove the claim files that do not count now.
+#
+# It removes NOTHING and returns 2 when it cannot establish which sandboxes run.
+# A claim is the only record that somebody is using a shared resource, and this
+# loop is the only thing that deletes one, so a failed query must not be able to
+# erase a live claim. See dr_dep_claims for what that cost before.
 dr_dep_prune() {
     local dir file running
     dir=$(dr_dep_dir "$1")
     [ -d "$dir" ] || return 0
-    running=$(dr_sandboxes_running || true)
+    running=$(dr_sandboxes_running) || {
+        dr_warn "cannot tell which sandboxes run, so no claim on $1 was removed"
+        return 2
+    }
     for file in "$dir"/*.claim; do
         [ -f "$file" ] || continue
         dr_dep_claim_valid "$file" "$running" || rm -f "$file"
     done
+}
+
+# dr_dep_others <key> <repo>: the OTHER projects that claim this resource.
+#
+# 0 with a possibly empty list, or 2 when the claimants' liveness is unknown.
+dr_dep_others() {
+    local key=$1 me=$2 claims
+    claims=$(dr_dep_claims "$key") || return 2
+    printf '%s' "$claims" | awk -F'\t' -v me="$me" '$1 != me && $1 != "" { print $1 }'
+}
+
+# dr_dep_report_others <key> <repo> <what>: say who else claims this resource,
+# or say that it cannot be told.
+#
+# It returns 0 when it printed something that deserves a question, and 1 when
+# nobody else holds the resource AND that answer was certain. Thus a caller can
+# write `dr_dep_report_others ... && dr_confirm ...`, and an unknown liveness
+# asks rather than passing in silence.
+#
+# The point of the function is that else branch. Four commands in dr-forge asked
+# this by piping dr_dep_claims into awk, which replaces its exit status with
+# awk's, so "I could not tell" and "nobody else" produced the same empty list
+# and the same silence before a permanent delete.
+dr_dep_report_others() {
+    local key=$1 me=$2 what=$3 others
+    if others=$(dr_dep_others "$key" "$me"); then
+        [ -n "$others" ] || return 1
+        dr_warn "another project uses this $what:"
+        printf '%s\n' "$others" | sed 's/^/    /' >&2
+    else
+        dr_warn "cannot tell whether another project uses this $what"
+        printf '  %ssbx could not say which sandboxes run, so a live claim can be invisible.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+    fi
+    return 0
+}
+
+# dr_dep_confirm_others <key> <repo> <what> <question>: the same, and then ask.
+# For a caller that has no question of its own further down.
+dr_dep_confirm_others() {
+    local key=$1 me=$2 what=$3 question=$4
+    dr_dep_report_others "$key" "$me" "$what" || return 0
+    dr_confirm "$question" || dr_die "cancelled"
 }
 
 # dr_dep_claim <key> <repo> <sandbox> [exclusive]: claim a resource.
@@ -3768,13 +3877,27 @@ dr_dep_claim() {
 
     dir=$(dr_dep_dir "$key")
     mkdir -p "$dir"
-    dr_dep_prune "$key"
+    # `|| true`, because dr_dep_prune returns 2 when it could not establish which
+    # sandboxes run, and this is a bare statement under `set -e`. It has already
+    # said so, and it deleted nothing, which is the safe outcome. The exclusive
+    # test below is the one that must refuse on that, and it does.
+    dr_dep_prune "$key" || true
     file=$(dr_dep_claim_file "$key" "$repo")
 
     # Refuse before the code writes anything, and name the holder. A lock that
     # says only "in use" does not tell the user what to do next.
     if dr_is_true "$exclusive" && [ ! -f "$file" ]; then
-        other=$(dr_dep_claims "$key" | head -1)
+        # Capture, then read the first line. Through a pipe the status of
+        # dr_dep_claims becomes the status of `head`, so an unknown liveness
+        # arrived here as "no other claim" and the exclusive lock was granted
+        # on top of a live one. For an EXCLUSIVE claim, unknown must refuse:
+        # that refusal is the entire purpose of the key.
+        other=$(dr_dep_claims "$key") || dr_die \
+            "$key is exclusive, and whether another project holds it cannot be established" \
+            "sbx could not say which sandboxes run, so a live claim can be invisible." \
+            "Look at it yourself with:  dr-dep status" \
+            "The reason sbx gave is above."
+        other=$(printf '%s' "$other" | head -1)
         if [ -n "$other" ]; then
             dr_die "$key is exclusive, and $(printf '%s' "$other" | cut -f1) uses it since $(printf '%s' "$other" | cut -f3)" \
                    "Its own configuration says DRAUGR_EXCLUSIVE=true, so only one project at a time can use it." \

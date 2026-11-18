@@ -154,6 +154,48 @@ load_helpers() {
     [[ "$output" == *"was not open"* ]]
 }
 
+# "closed" IS A SECURITY CLAIM. Before, the counter was raised beside the
+# warning whatever sbx answered, so a removal that failed still produced
+# "closed host port 11434 ... (1 rule(s))" and exit 0, and the caller believed
+# the agent could no longer reach a host service that is still allowed.
+#
+# DR_MOCK_FAIL_AT, not DR_MOCK_FAIL: the listing must succeed, or the removal is
+# never reached and the test would pass for the wrong reason.
+@test "dr-hostport --close: a removal that fails is not reported as closed" {
+    export DR_MOCK_ADHOC="172.19.192.26:11434"
+    export DR_MOCK_FAIL_AT="policy rm"
+    run dr-hostport --close 11434
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"NOT closed"* ]]
+    [[ "$output" != *"closed host port 11434 for"* ]]
+}
+
+@test "dr-hostport --close: a rule listing that fails removes nothing" {
+    export DR_MOCK_ADHOC="172.19.192.26:11434"
+    export DR_MOCK_FAIL_AT="policy ls"
+    run dr-hostport --close 11434
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot list the policy rules"* ]]
+    [[ "$output" != *"was not open"* ]]
+    run grep -c "policy rm" "$DR_MOCK_LOG"
+    [ "$status" -ne 0 ]
+}
+
+# The refresh path made the same claim: it counted a stale rule as replaced
+# before asking sbx to remove it, so "replaced 1 old rule(s)" could appear
+# while the old address was still allowed next to the new one.
+@test "dr-hostport: an old rule that will not go stops the refresh" {
+    export DR_MOCK_ADHOC="10.0.0.5:11434"
+    export DR_MOCK_FAIL_AT="policy rm"
+    run dr-hostport 11434
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not remove the old rule"* ]]
+    [[ "$output" != *"replaced"* ]]
+    # And no second rule was added beside the one that stayed.
+    run grep -c "policy allow" "$DR_MOCK_LOG"
+    [ "$status" -ne 0 ]
+}
+
 # --- refusals ---------------------------------------------------------------
 
 @test "dr-hostport: refuses something that is not a port number" {

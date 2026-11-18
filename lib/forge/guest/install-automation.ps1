@@ -450,15 +450,76 @@ if ($c) {
 # The server must refuse a request without authentication. With the forward in
 # place, only the token protects the desktop from all else that can reach the
 # port.
-try {
-    $r = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "http://127.0.0.1:$Port/mcp" `
-         -ContentType 'application/json' -Body '{}' -TimeoutSec 10
-    Write-Host "  no-token    ANSWERED $($r.StatusCode). The server does not ask for a token" -ForegroundColor Red
+#
+# TWO PROBES, AND ONLY BOTH TOGETHER ARE EVIDENCE.
+#
+# 1. Without a token, the answer must be the documented 401. Before, ONLY an
+#    answered request marked the phase bad: any other outcome printed a yellow
+#    "(expected 401)" and the run still ended in "automation ready". A timeout,
+#    a 500, a connection that was refused - each of them left the claim "the
+#    desktop is behind a token" with nothing behind it. An answer this probe
+#    did not get is not a refusal.
+#
+# 2. With the token, the answer must NOT be 401. A server that refuses
+#    everything would otherwise prove its own security by being broken: a
+#    different process on the port, a token file the server cannot read, or a
+#    half-written config all answer 401 to everyone. Any other status passes,
+#    including a 400 for an empty JSON-RPC body - the question here is
+#    authentication, not whether '{}' is a valid request.
+#
+# The status, or 0 when the request got no answer at all. $ErrorActionPreference
+# is 'Stop' in this script, so a bare [int]$_.Exception.Response.StatusCode is
+# itself terminating when there is no Response.
+function Get-McpProbeStatus([string]$Token) {
+    $headers = @{}
+    if ($Token) { $headers['Authorization'] = "Bearer $Token" }
+    try {
+        $r = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "http://127.0.0.1:$Port/mcp" `
+             -ContentType 'application/json' -Body '{}' -TimeoutSec 10 -Headers $headers
+        return [int]$r.StatusCode
+    } catch {
+        $resp = $null
+        try { $resp = $_.Exception.Response } catch { }
+        if ($null -eq $resp) { return 0 }
+        try { return [int]$resp.StatusCode } catch { return 0 }
+    }
+}
+
+$noToken = Get-McpProbeStatus ''
+if ($noToken -eq 401) {
+    Write-Host '  no-token    401, as expected'
+} elseif ($noToken -eq 0) {
+    Write-Host '  no-token    NO ANSWER. Nothing here shows that the port asks for a token' `
+        -ForegroundColor Red
     $bad += 'auth'
-} catch {
-    $code = [int]$_.Exception.Response.StatusCode
-    if ($code -eq 401) { Write-Host '  no-token    401, as expected' }
-    else { Write-Host "  no-token    $code (expected 401)" -ForegroundColor Yellow }
+} else {
+    Write-Host "  no-token    ANSWERED $noToken, and only 401 proves the refusal" -ForegroundColor Red
+    $bad += 'auth'
+}
+
+# The control. The token lives in the TOML as  auth_key = "..."
+$token = ''
+if (Test-Path $cfg) {
+    $line = @(Get-Content $cfg | Where-Object { $_ -match 'auth_key' }) | Select-Object -First 1
+    if ("$line" -match 'auth_key\s*=\s*"?([^"\r\n]+)"?') { $token = $Matches[1].Trim() }
+}
+if (-not $token) {
+    Write-Host "  with-token  no auth_key in $cfg, so the refusal above proves nothing" `
+        -ForegroundColor Red
+    $bad += 'auth control'
+} else {
+    $withToken = Get-McpProbeStatus $token
+    if ($withToken -eq 401) {
+        Write-Host '  with-token  401 WITH the token too. The server refuses everyone, so the' `
+            -ForegroundColor Red
+        Write-Host '              401 above says nothing about the token' -ForegroundColor Red
+        $bad += 'auth control'
+    } elseif ($withToken -eq 0) {
+        Write-Host '  with-token  NO ANSWER, so the refusal above proves nothing' -ForegroundColor Red
+        $bad += 'auth control'
+    } else {
+        Write-Host "  with-token  $withToken, which is not a refusal"
+    }
 }
 
 $exe = Join-Path $AhkDir 'AutoHotkey64.exe'

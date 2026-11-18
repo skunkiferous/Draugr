@@ -6,6 +6,11 @@
 #   DR_MOCK_STATE  what 'ls --json' reports: absent|stopped|running
 #   DR_MOCK_STATES overrides for it by name: "gw=running app=stopped"
 #   DR_MOCK_FAIL   exit non-zero for each subcommand named here
+#   DR_MOCK_FAIL_AT exit non-zero when the FULL argv holds this text. DR_MOCK_FAIL
+#                  matches the subcommand only, so it cannot fail `policy rm` and
+#                  leave `policy ls` working. A test of a failed revocation needs
+#                  exactly that: the listing has to succeed for the removal to be
+#                  reached at all.
 #   DR_MOCK_MOUND  a directory that acts as the filesystem of the mound. When
 #                  set, 'exec' and 'cp' really run, against that tree. Thus the
 #                  project keys, listings and cp arguments of dr-mem really run.
@@ -65,6 +70,15 @@ fi
 case " ${DR_MOCK_FAIL:-} " in
     *" $sub "*) printf 'mock sbx: %s failed\n' "$sub" >&2; exit 1 ;;
 esac
+
+# The guard matters: with DR_MOCK_FAIL_AT unset, the pattern would be *""* and
+# every call would fail.
+if [ -n "${DR_MOCK_FAIL_AT:-}" ]; then
+    case "$*" in
+        *"$DR_MOCK_FAIL_AT"*)
+            printf 'mock sbx: refused "%s"\n' "$DR_MOCK_FAIL_AT" >&2; exit 1 ;;
+    esac
+fi
 
 case "$sub" in
 # A version string that passes the >= 0.37 test of dr-doctor.

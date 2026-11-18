@@ -122,7 +122,21 @@ function Add-ToMachinePath([string]$Dir, [string]$Before = "$env:SystemRoot\syst
     return $true
 }
 
-function Invoke-Msys([string]$cmd) { & $bash -lc "( $cmd ) < /dev/null" 2>&1 }
+# THE STATUS, AS WELL AS THE OUTPUT. This returned only the lines, so every
+# caller judged a package install or a tool by the TEXT it printed. $script:rc
+# holds the exit status of the last call, and is read directly after one.
+#
+# A pipeline inside $cmd would hide the status of its first stage, which is how
+# `git --version | head -1` reports 0 for a git that does not exist. Thus the
+# verification below does not rely on this status for those - it asks
+# `command -v` as a separate question. The status is for the plain commands:
+# pacman, and nothing else here.
+$script:rc = 0
+function Invoke-Msys([string]$cmd) {
+    $out = & $bash -lc "( $cmd ) < /dev/null" 2>&1
+    $script:rc = $LASTEXITCODE
+    return $out
+}
 function Get-MsysMb { (Invoke-Msys "du -sm /c/msys64 2>/dev/null | cut -f1" | Select-Object -First 1) }
 
 if (-not $VerifyOnly) {
@@ -132,8 +146,19 @@ if (-not $VerifyOnly) {
         Write-Host "installing $($set.n) packages..."
         $list = $set.p -join ' '
         $out = Invoke-Msys "timeout 600 pacman -S --needed --noconfirm --disable-download-timeout $list"
+        $rc = $script:rc
         $out | Where-Object { $_ -match 'error|warning:|target not found' } |
             ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+        # THE STATUS DECIDES, NOT THE WORDS ABOVE. "done" was printed whatever
+        # pacman answered, and the yellow lines were a courtesy. A sync that
+        # downloaded nothing, a mirror that refused, and 124 from `timeout` all
+        # ended in a green "done" - and then the verification below was the only
+        # thing between that and a base image with no tools in it.
+        if ($rc -ne 0) {
+            $why = if ($rc -eq 124) { 'it ran into the 600 s timeout' } else { "pacman exited $rc" }
+            throw ("the $($set.n) packages were not installed: $why. The lines above are what " +
+                   'it said. Nothing after this point was tested, so the script stops here.')
+        }
         Write-Host "  done"
     }
     Write-Host ''
@@ -167,11 +192,36 @@ $checks = [ordered]@{
     'rg' = '/ucrt64/bin/rg --version | head -1'
     'fd' = '/ucrt64/bin/fd --version'
 }
+# TWO QUESTIONS, NOT ONE.
+#
+# "Is the binary there?" is `command -v`, which answers with a marker that this
+# code prints itself. "Does it run?" is the version command.
+#
+# BEFORE, THE ONLY TEST WAS A NON-EMPTY FIRST LINE - and a tool that is not
+# installed prints one: `bash: line 1: git: command not found` is a non-empty
+# first line, and it was printed in the column where a version belongs, in the
+# green rows. A guest with no git at all passed.
+#
+# The marker, and not the exit status, because each version command here ends
+# in a pipe (`| head -1`, `| sed -n 2p`). A pipeline reports the status of its
+# LAST stage, so `git --version | head -1` answers 0 for a git that does not
+# exist. `command -v x >/dev/null 2>&1 && echo MARKER` cannot be fooled that
+# way: no marker, no binary.
 $missing = @()
 foreach ($name in $checks.Keys) {
+    # The first word of the version command is the binary, which is a plain
+    # name for most and an absolute path for rg and fd. `command -v` takes
+    # either.
+    $bin = ($checks[$name] -split '\s+')[0]
+    $probe = Invoke-Msys "command -v $bin >/dev/null 2>&1 && echo DRAUGR_FOUND"
+    $found = @($probe) -match 'DRAUGR_FOUND'
     $out = Invoke-Msys $checks[$name] | Where-Object { $_ } | Select-Object -First 1
-    if (-not $out) {
-        Write-Host ("  {0,-9} MISSING" -f $name) -ForegroundColor Red
+    if (-not $found) {
+        Write-Host ("  {0,-9} MISSING (no $bin in the guest)" -f $name) -ForegroundColor Red
+        $missing += $name
+    } elseif (-not $out) {
+        Write-Host ("  {0,-9} SILENT ($bin is there and printed no version)" -f $name) `
+            -ForegroundColor Red
         $missing += $name
     } else {
         Write-Host ("  {0,-9} {1}" -f $name, ($out -replace '\s+', ' ').Trim())

@@ -458,8 +458,17 @@ if repo=$(git rev-parse --show-toplevel 2>/dev/null); then
                     "Read it, then run:  dr-trust $_dep/.draugr.conf"
             else
                 _dn=$(dr_dep_config "$_dep" DRAUGR_SANDBOX)
+                # The claim count must not read as "0" when the truth is
+                # "unknown": dr_dep_claims returns 2 and prints nothing when it
+                # cannot establish the liveness of the claimants, and through a
+                # pipe into grep -c that arrives as a confident zero.
+                if _dcl=$(dr_dep_claims "${_dn:-?}"); then
+                    _dcl="$(printf '%s' "$_dcl" | grep -c .) claim(s)"
+                else
+                    _dcl="claims unknown (sbx could not list the sandboxes)"
+                fi
                 ok "requires ${_dn:-$(basename "$_dep")}" \
-                   "$(dr_sandbox_state "${_dn:-?}"), $(dr_dep_claims "${_dn:-?}" | grep -c .) claim(s)"
+                   "$(dr_sandbox_state "${_dn:-?}"), $_dcl"
             fi
         done < <(dr_dep_requires "$DR_REPO")
     fi

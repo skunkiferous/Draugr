@@ -135,24 +135,16 @@ function Get-Tree {
 # not. If you remove one of the two @(), the blank counts come back.
 function Real($list) { return @($list | Where-Object { $null -ne $_ }) }
 
-function Test-Running {
-    try { return [bool](Asb GET "/vms/$Vm").running } catch { return $false }
-}
+# The state of the VM, in four answers. THIS FILE FREEZES DISKS, so the
+# difference between "stopped" and "nobody could ask" decides whether a
+# snapshot is taken of a machine that is still writing. The local pair that
+# used to live here read an unreachable daemon as stopped. See vmstate.ps1.
+. (Join-Path $PSScriptRoot 'vmstate.ps1')
 function Wait-Stopped([int]$Seconds) {
-    $t0 = Get-Date
-    do {
-        if (-not (Test-Running)) { return $true }
-        Start-Sleep -Seconds 5
-    } while (((Get-Date) - $t0).TotalSeconds -lt $Seconds)
-    return $false
+    return (Test-ForgeVmDown (Wait-ForgeVmState $Vm @('stopped', 'absent') $Seconds))
 }
 function Wait-Running([int]$Seconds) {
-    $t0 = Get-Date
-    do {
-        if (Test-Running) { return $true }
-        Start-Sleep -Seconds 5
-    } while (((Get-Date) - $t0).TotalSeconds -lt $Seconds)
-    return $false
+    return ((Wait-ForgeVmState $Vm @('running') $Seconds) -eq 'running')
 }
 
 # The clean stop. Both acting modes need it, and only one can force it.
@@ -161,7 +153,15 @@ function Wait-Running([int]$Seconds) {
 # waits until `running` is false, not for a named state. The stop mode of vm.ps1
 # does the same for `dr-forge down`.
 function Stop-Vm([bool]$MayForce) {
-    if (-not (Test-Running)) { return $true }
+    # One read, and all four answers are used. An unknown state is not a
+    # stopped one: there is nothing to shut down AND nothing to report as
+    # down, so the caller must not go on to freeze the disk.
+    $state = Get-ForgeVmState $Vm
+    if ($state -eq 'unknown') {
+        Say "the daemon did not say whether '$Vm' runs, so nothing was stopped"
+        return $false
+    }
+    if (Test-ForgeVmDown $state) { return $true }
     Say 'asking the daemon for a clean shutdown'
     try { $null = Asb POST "/vms/$Vm/shutdown" } catch {
         Say "the daemon refused the clean shutdown: $($_.Exception.Message)"

@@ -188,6 +188,10 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     # state variable is read before the removal, and the recreate path sets it
     # to absent. A guard that tests the wrong one leaves every rebuilt mound
     # without rsync, and nothing says so until the first transfer.
+    # A recreate destroys a mound, so it asks what would be lost first. An
+    # unanswerable question is a refusal, and this test is about the rsync
+    # install after the rebuild. Thus the mound answers.
+    dr_mound_answers
     DR_MOCK_NO_RSYNC=1 DR_MOCK_STATE=running run dr-up --yes --recreate
     [ "$status" -eq 0 ]
     [[ "$(calls exec)" == *"install -y rsync"* ]]
@@ -239,6 +243,7 @@ stale_tracking_ref() {
 }
 
 @test "dr-up: a recreate moves it too, which is the case that found this" {
+    dr_mound_answers
     stale_tracking_ref
     DR_MOCK_STATE=running run dr-up --yes --recreate
     [ "$status" -eq 0 ]
@@ -467,6 +472,7 @@ stale_tracking_ref() {
 }
 
 @test "dr-up: --recreate refreshes the record" {
+    dr_mound_answers
     DRAUGR_MOUNTS="/mnt/c/Docs:ro" DR_MOCK_STATE=absent run dr-up
     DRAUGR_MOUNTS="/mnt/c/Other:ro" DR_MOCK_STATE=running run dr-up --yes --recreate
     [ "$status" -eq 0 ]
@@ -734,7 +740,43 @@ go_rc() {
     [ -z "$(calls rm)" ]
 }
 
+# A PROBE THAT FAILED IS NOT A MOUND THAT EXISTS. dr_sandbox_state dies when it
+# cannot reach sandboxd, and that death ends only the subshell of a
+# `[ "$(dr_sandbox_state ...)" != absent ]`, whose empty output then differs from
+# "absent". dr-rm read that as "it exists" and went on to ask sbx to destroy it.
+@test "dr-rm: an unreachable daemon removes nothing" {
+    export DR_MOCK_FAIL=ls
+    run dr-rm --yes
+    [ "$status" -ne 0 ]
+    # The exact words of dr-rm's OWN check. "cannot tell whether" alone is not
+    # enough: with the defect put back, the command still stopped further down
+    # the chain and still printed that phrase from dr_sandbox_exists, so the
+    # assertion passed while the line it is about was gone. A mutation run
+    # showed this.
+    [[ "$output" == *"so nothing was removed"* ]]
+    [ -z "$(calls rm)" ]
+}
+
+@test "dr_sandbox_exists: an unreachable daemon is not an existing mound" {
+    dr_load_common
+    export DR_MOCK_FAIL=ls
+    run dr_sandbox_exists "$SANDBOX"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot tell whether"* ]]
+}
+
+@test "dr_sandbox_exists: still answers yes and no while the daemon answers" {
+    dr_load_common
+    DR_MOCK_STATE=running run dr_sandbox_exists "$SANDBOX"
+    [ "$status" -eq 0 ]
+    DR_MOCK_STATE=absent run dr_sandbox_exists "$SANDBOX"
+    [ "$status" -eq 1 ]
+}
+
 @test "dr-rm: --yes removes, forcing past sbx's own prompt" {
+    # --yes answers the question. It does not answer the three tests before it,
+    # and an unanswerable one is a refusal. Thus the mound answers here.
+    dr_mound_answers
     DR_MOCK_STATE=running run dr-rm --yes
     [ "$status" -eq 0 ]
     [[ "$(calls rm)" == *"--force"* ]]

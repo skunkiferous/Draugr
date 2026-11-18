@@ -110,6 +110,62 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     [ ! -f "$(dr_dep_claim_file gwmound /other/repo)" ]
 }
 
+# UNKNOWN IS NOT "NOBODY RUNS". A failed `sbx ls` used to arrive as an empty
+# running list, so every claim past its grace time looked stale and this loop
+# deleted the claims of mounds that were running at that moment. The warden then
+# saw an unused resource and stopped it.
+@test "prune keeps every claim when it cannot tell which sandboxes run" {
+    dr_dep_claim gwmound "$REPO" draugr-app false
+    dr_dep_claim gwmound /other/repo other-mound false
+    export DR_MOCK_FAIL=ls
+    run dr_dep_prune gwmound
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot tell which sandboxes run"* ]]
+    [ -f "$(dr_dep_claim_file gwmound "$REPO")" ]
+    [ -f "$(dr_dep_claim_file gwmound /other/repo)" ]
+}
+
+@test "claims answers unknown, not an empty list, when liveness cannot be read" {
+    dr_dep_claim gwmound "$REPO" draugr-app false
+    export DR_MOCK_FAIL=ls
+    run dr_dep_claims gwmound
+    [ "$status" -eq 2 ]
+    [ -z "$output" ]
+}
+
+# An exclusive claim exists to refuse. Through a pipe into `head`, the status of
+# dr_dep_claims was replaced by head's, so an unknown liveness read as "no other
+# claim" and the lock was granted on top of a live one.
+@test "an exclusive claim refuses while another holder cannot be ruled out" {
+    dr_dep_claim gwmound /other/repo other-mound false
+    export DR_MOCK_FAIL=ls
+    run dr_dep_claim gwmound "$REPO" draugr-app true
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot be established"* ]]
+}
+
+# dr-forge asks this before stopping, deleting and rolling back a shared VM.
+# The claim has to exist first: with no claim directory at all, dr_dep_claims
+# answers a certain "nobody" without probing liveness, which is correct and
+# would make this test pass without reaching the code it is about.
+@test "dr_dep_report_others: an unknown liveness is reported, not passed over" {
+    dr_dep_claim gwmound /other/repo other-mound false
+    export DR_MOCK_FAIL=ls
+    run dr_dep_report_others gwmound "$REPO" VM
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"cannot tell whether another project uses this VM"* ]]
+}
+
+# A claim held by THIS repo is not "another project", so there is nothing to
+# report and nothing to ask. The probe succeeds here, so this exercises the
+# filter rather than the early return above.
+@test "dr_dep_report_others: a certain nobody is silent, so no question is asked" {
+    dr_dep_claim gwmound "$REPO" draugr-app false
+    run dr_dep_report_others gwmound "$REPO" VM
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
 @test "status reads a claim without deleting the stale ones" {
     dr_dep_claim gwmound /other/repo dead-mound false
     export DR_MOCK_STATES="dead-mound=stopped"
@@ -248,6 +304,16 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     dr_dep_claim gwmound "$REPO" draugr-app false
     run dr-dep warden gwmound --sandbox gwmound --linger 1s --once
     [ "$status" -eq 0 ]
+    [ -z "$(calls stop)" ]
+}
+
+# The one outcome this loop must never produce: stopping a resource that another
+# project is using, because one query failed. Before, the failure arrived as an
+# empty claim list, which read as "nobody uses it" and started the idle clock.
+@test "warden: stops nothing while it cannot tell who uses the resource" {
+    export DR_MOCK_FAIL=ls
+    run dr-dep warden gwmound --sandbox gwmound --linger 0s --once
+    [[ "$output" == *"cannot tell who uses"* ]]
     [ -z "$(calls stop)" ]
 }
 

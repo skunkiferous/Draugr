@@ -79,11 +79,20 @@ $base = "https://$Mirror/distrib"
 # useful. But a READ of stderr and a fatal stderr are different things, and
 # 'Stop' cannot see the difference. The `finally` restores it, so that a real
 # throw inside the call does not leave it relaxed.
+# AND THE STATUS, as well as the output. It returned only the lines, so the
+# callers judged a package sync by grepping its TEXT for the word "error".
+# $script:rc holds the exit status of the last call, and is read directly after
+# one. A pipeline inside $cmd hides the status of its first stage, so a caller
+# that puts one there asks its question another way.
+$script:rc = 0
 function Invoke-Msys([string]$cmd) {
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { & $bash -lc "( $cmd ) < /dev/null" 2>&1 }
-    finally { $ErrorActionPreference = $old }
+    try {
+        $out = & $bash -lc "( $cmd ) < /dev/null" 2>&1
+        $script:rc = $LASTEXITCODE
+        return $out
+    } finally { $ErrorActionPreference = $old }
 }
 
 # Only the mirrorlists that pacman really reads. A glob of
@@ -159,8 +168,27 @@ if (-not $VerifyOnly) {
     Write-Host 'first sync (twice, because the first can update pacman and stop)...'
     foreach ($pass in 1, 2) {
         $out = Invoke-Msys 'timeout 900 pacman -Syu --noconfirm --disable-download-timeout'
+        $rc = $script:rc
         $out | Where-Object { $_ -match 'error|warning: config file|target not found' } |
             ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+        # THE STATUS, NOT A GREP FOR WORDS. "pass $pass done" was printed
+        # whatever pacman answered, and the yellow lines above were a courtesy.
+        #
+        # The two passes are not judged alike, and that is the reason the loop
+        # exists: the first sync can update pacman itself and stop, which is a
+        # non-zero status for a normal thing. The second pass is the retry, so a
+        # non-zero status there is the answer.
+        if ($rc -ne 0) {
+            if ($pass -eq 1) {
+                Write-Host "  pass 1 exited $rc. That is what the second pass is for" `
+                    -ForegroundColor Yellow
+                continue
+            }
+            $why = if ($rc -eq 124) { 'it ran into the 900 s timeout' } else { "pacman exited $rc" }
+            throw ("the first package sync failed on its second pass: $why. The lines above " +
+                   'are what it said. A guest with an unsynced pacman database installs ' +
+                   'nothing, so the script stops here.')
+        }
         Write-Host "  pass $pass done"
     }
 }
@@ -170,8 +198,17 @@ Write-Host ''
 Write-Host '--- msys2 ---'
 $bad = @()
 
+# The STATUS and the line. `uname -srm` has no pipe in it, so the status is
+# bash's own: a shell that cannot start, or a uname that is not there, is a
+# non-zero status, and a line of text is not the test for either.
 $ver = Invoke-Msys 'uname -srm' | Where-Object { $_ } | Select-Object -First 1
-if ($ver) { Write-Host "  bash          $ver" } else { Write-Host '  bash          NOT RUNNABLE' -ForegroundColor Red; $bad += 'bash' }
+$verRc = $script:rc
+if ($verRc -eq 0 -and $ver) {
+    Write-Host "  bash          $ver"
+} else {
+    Write-Host "  bash          NOT RUNNABLE (exit $verRc) $ver" -ForegroundColor Red
+    $bad += 'bash'
+}
 
 # Each Server line that stays must name the pinned host. Each other line is a
 # mirror that pacman can connect to, and the policy refuses it later, at a less
@@ -201,7 +238,10 @@ if ($stray.Count) {
 }
 
 $n = Invoke-Msys 'pacman -Qq | wc -l' | Where-Object { $_ -match '^\d+$' } | Select-Object -First 1
+# Said plainly, instead of leaving the row out. A pacman that cannot read its
+# own database prints nothing here, and a missing row is not a message.
 if ($n) { Write-Host "  packages      $n installed" }
+else { Write-Host '  packages      pacman did not count them' -ForegroundColor Yellow }
 
 $mb = Invoke-Msys "du -sm '$($Msys -replace '\\','/' -replace '^C:','/c')' 2>/dev/null | cut -f1" |
       Where-Object { $_ -match '^\d+$' } | Select-Object -First 1

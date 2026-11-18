@@ -187,6 +187,25 @@ dr_fake_mound() {
     printf '%s' "$fake"
 }
 
+# dr_mound_answers: let the mound answer the FIRST question that dr-rm and
+# dr-up --recreate ask, and print nothing.
+#
+# Both ask three questions before they destroy anything: unfetched commits,
+# unexported memory, and hosts that you opened by hand. An unknown answer to
+# any of them is now a refusal, because unknown is not the same as nothing.
+# Thus a test about the second or the third question must answer the first, or
+# it stops at a refusal it is not about, and the assertion fails for the wrong
+# reason.
+#
+# The sandbox name is derived, not spelled, in a subshell, so that the
+# derivation stays in one place. A spelled name silently stops matching when
+# the derivation changes, and then the stand-in is simply never used.
+dr_mound_answers() {
+    local repo=${1:-$REPO} name
+    name=$(. "$DR_ROOT/lib/common.sh" && dr_sandbox_name "$repo") || return 1
+    dr_fake_mound "$repo" "$name" >/dev/null
+}
+
 # --- a fake sbx installation tree ---------------------------------------------
 #
 # dr-scan finds the shared skills store with a walk up from sbx.exe:

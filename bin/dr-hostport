@@ -183,21 +183,43 @@ fi
 # A close removes each rule that this command wrote for the port, not only the
 # rule for the current address. You want to remove the old ones. If they stay,
 # a "closed" port still works from an address that the machine can get again.
+# "closed" is a SECURITY CLAIM, so it is made only about rules that are gone.
+# Before, the counter was raised next to the warning, whatever sbx answered, and
+# the command ended with "closed host port 8080 ... (1 rule(s))" and exit 0 while
+# the rule was still in force. The caller then believed the agent could no longer
+# reach a host service.
+#
+# The rule list is captured first for the same reason: read through a process
+# substitution, a failed query is an empty loop, which printed "was not open".
+_close_failed=0
 for port in "${close[@]+"${close[@]}"}"; do
     _check_port "$port"
-    n=0
+    _rules=$(dr_hostport_rules "$port") || dr_die \
+        "cannot list the policy rules of $DRAUGR_SANDBOX for port $port" \
+        "Nothing was removed, and the port may still be open." \
+        "Look at it yourself with:  dr-policy"
+    n=0 failed=0
     while IFS= read -r id; do
         [ -n "$id" ] || continue
-        dr_sbx policy rm network --sandbox "$DRAUGR_SANDBOX" --id "$id" >/dev/null \
-            || dr_warn "could not remove rule $id"
-        n=$((n + 1))
-    done < <(dr_hostport_rules "$port")
-    if [ "$n" -eq 0 ]; then
+        if dr_sbx policy rm network --sandbox "$DRAUGR_SANDBOX" --id "$id" >/dev/null; then
+            n=$((n + 1))
+        else
+            dr_warn "could not remove rule $id. It is still in force."
+            failed=$((failed + 1))
+        fi
+    done <<< "$_rules"
+    if [ "$failed" -gt 0 ]; then
+        dr_error "host port $port is NOT closed for $DRAUGR_SANDBOX: $failed rule(s) remain"
+        printf '  %sRemoved %s of %s. Run this again, or remove them by id:  dr-policy%s\n' \
+            "$_DR_DIM" "$n" "$((n + failed))" "$_DR_OFF" >&2
+        _close_failed=1
+    elif [ "$n" -eq 0 ]; then
         dr_info "host port $port was not open for $DRAUGR_SANDBOX"
     else
         dr_ok "closed host port $port for $DRAUGR_SANDBOX ($n rule(s))"
     fi
 done
+[ "$_close_failed" -eq 0 ] || exit 1
 
 for port in "${open[@]+"${open[@]}"}"; do
     _check_port "$port"
@@ -220,13 +242,24 @@ for port in "${open[@]+"${open[@]}"}"; do
     # Remove all that this command wrote for this port, before the new rule, not
     # after it. The removed address can be the address that this machine just
     # got again. The other order then deletes the new rule.
+    # The same discipline as the close above: an old rule that did not go is a
+    # rule that still lets the agent reach this port from its old address, so it
+    # must not be counted as replaced.
+    _rules=$(dr_hostport_rules "$port") || dr_die \
+        "cannot list the policy rules of $DRAUGR_SANDBOX for port $port" \
+        "Nothing was changed. A new rule now would be added next to the old ones." \
+        "Look at it yourself with:  dr-policy"
     stale=0
     while IFS= read -r id; do
         [ -n "$id" ] || continue
-        stale=$((stale + 1))
-        dr_sbx policy rm network --sandbox "$DRAUGR_SANDBOX" --id "$id" >/dev/null \
-            || dr_warn "could not remove old rule $id"
-    done < <(dr_hostport_rules "$port")
+        if dr_sbx policy rm network --sandbox "$DRAUGR_SANDBOX" --id "$id" >/dev/null; then
+            stale=$((stale + 1))
+        else
+            dr_die "could not remove the old rule $id for port $port" \
+                   "It still allows the old address, and this command refuses to add a" \
+                   "second rule next to it. Remove it by id:  dr-policy"
+        fi
+    done <<< "$_rules"
 
     dr_sbx policy allow network --sandbox "$DRAUGR_SANDBOX" "$want" >/dev/null \
         || dr_die "could not open host port $port" \

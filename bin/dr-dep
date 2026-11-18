@@ -130,8 +130,19 @@ if [ "$action" = warden ]; then
         # Remove old claims here, not only count them. Then the directory is
         # correct for the other readers: dr-dep status, dr-status, and
         # dr-doctor.
-        dr_dep_prune "$key"
-        if [ -n "$(dr_dep_claims "$key")" ]; then
+        # It deletes nothing when it cannot tell which sandboxes run, and says
+        # so itself. The tick goes on either way: the claim test below is what
+        # decides anything.
+        dr_dep_prune "$key" || true
+
+        # UNKNOWN IS NOT IDLE. Stopping a resource that another project is
+        # using, because one query failed, is the single outcome this loop must
+        # never produce. Before, dr_dep_claims turned that failure into an empty
+        # list, which read as "nobody uses it" and started the idle clock.
+        if ! _claims=$(dr_dep_claims "$key"); then
+            dr_warn "cannot tell who uses $key. The idle clock did not run this tick."
+            idle_since=
+        elif [ -n "$_claims" ]; then
             idle_since=
         else
             # The first tick with no user starts the clock. Only a new claim
@@ -142,7 +153,13 @@ if [ "$action" = warden ]; then
                 dr_info "nobody used $key for ${linger}. Stopping it."
                 kill "$(cat "$dir/keeper.pid" 2>/dev/null)" 2>/dev/null || true
                 rm -f "$dir/keeper.pid" "$dir/warden.pid"
-                dr_sbx stop "$sandbox" >/dev/null 2>&1 || true
+                # A failed stop is reported and carried out of the warden. It
+                # used to be discarded, and the warden exited 0, so the log
+                # said the resource was stopped while it kept running.
+                if ! dr_sbx stop "$sandbox" >/dev/null 2>&1; then
+                    dr_warn "could not stop $sandbox. It may still be running."
+                    exit 1
+                fi
                 exit 0
             fi
         fi
@@ -264,12 +281,19 @@ status)
 
         # Who uses it, with ours marked. Thus "it does not start" and "somebody
         # else has it" are one question, not two.
-        while IFS=$'\t' read -r claim_repo _ claim_since; do
-            [ -n "$claim_repo" ] || continue
-            mark="  used by"
-            [ "$claim_repo" = "$DR_REPO" ] && mark="  used by (this repo)"
-            printf '%s %s since %s\n' "$mark" "$claim_repo" "$claim_since"
-        done < <(dr_dep_claims "${name:-?}")
+        # Captured, not read through a process substitution: through one, the
+        # status of dr_dep_claims is lost, and an unknown liveness prints no
+        # user at all, which reads exactly like "nobody uses it".
+        if _claims=$(dr_dep_claims "${name:-?}"); then
+            while IFS=$'\t' read -r claim_repo _ claim_since; do
+                [ -n "$claim_repo" ] || continue
+                mark="  used by"
+                [ "$claim_repo" = "$DR_REPO" ] && mark="  used by (this repo)"
+                printf '%s %s since %s\n' "$mark" "$claim_repo" "$claim_since"
+            done <<< "$_claims"
+        else
+            printf '%s\n' "  users unknown: sbx could not list the sandboxes"
+        fi
     done
     ;;
 

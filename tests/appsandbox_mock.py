@@ -41,6 +41,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 ARGS = None
 STATE = None
 LOCK = threading.Lock()
+# How many times the one-VM route has been asked. --fail-vm-get-after counts
+# with it. See the note on that option in main().
+VM_GETS = 0
 
 
 def save():
@@ -94,6 +97,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"version": "0.1.8-mock",
                                         "capabilities": {"snapshots": True, "templates": True}})
             if self.path == "/v1/vms":
+                if ARGS.fail_vm_list:
+                    return self.reply(500, {"error": {"code": "core_failure"}})
                 return self.reply(200, {"vms": [dict(name=k, running=v["running"])
                                                 for k, v in STATE["vms"].items()]})
             m = re.match(r"^/v1/vms/([^/]+)/snapshots$", self.path)
@@ -114,6 +119,10 @@ class Handler(BaseHTTPRequestHandler):
                                         "user": v.get("user", "forge")})
             m = re.match(r"^/v1/vms/([^/]+)$", self.path)
             if m:
+                global VM_GETS
+                VM_GETS += 1
+                if ARGS.fail_vm_get_after and VM_GETS >= ARGS.fail_vm_get_after:
+                    return self.reply(500, {"error": {"code": "core_failure"}})
                 v = self.vm(m.group(1))
                 if v is None:
                     return
@@ -220,6 +229,20 @@ def main():
     p.add_argument("--state", required=True)
     p.add_argument("--log")
     p.add_argument("--ignore-shutdown", action="store_true")
+    # THE TWO WAYS A LIVE DAEMON STOPS ANSWERING ABOUT A VM. Both exist because
+    # the scripts used to read them as answers: a failed query became "it does
+    # not run", and after a delete it became "it is gone". A 500 is what the
+    # real daemon sends when its core returns a failure, and it is the honest
+    # shape of "the call arrived and there is no answer in it".
+    #
+    # --fail-vm-get-after N: the Nth and every later GET /v1/vms/<name> answers
+    # 500. The count, not a path, because a script must get a real answer first
+    # (it refuses an unknown VM at startup) and the interesting failure is the
+    # NEXT read: the one that waits for a stop, or proves a delete.
+    p.add_argument("--fail-vm-get-after", type=int, default=0)
+    # --fail-vm-list: GET /v1/vms answers 500, always. daemon.ps1 knows a VM
+    # only from that list, so this is its whole view going dark.
+    p.add_argument("--fail-vm-list", action="store_true")
     ARGS = p.parse_args()
     with open(ARGS.state, encoding="utf-8") as fh:
         STATE = json.load(fh)

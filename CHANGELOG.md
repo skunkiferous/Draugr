@@ -63,6 +63,167 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+The next ten entries come from a security review of 0.9.0. They are one defect in different
+places: **an error was turned into a reassuring answer.** A probe that failed, a listing that could
+not be read, a removal that was refused — each of them arrived at the code that had to decide as
+"nothing is wrong", and the decision then went the unsafe way. Where the honest answer is "I cannot
+tell", these now say so and stop, rather than guessing in the direction that destroys or permits.
+
+- **`dr-scan` could report a clean repository while a credential sat in it.** `DRAUGR_SCAN_PATTERNS`
+  was expanded unquoted, so each pattern went through **pathname expansion** against the directory
+  the command happened to run in before it was ever used as a pattern. With a `visible.key` next to
+  it, `*.key` became the single word `visible.key`, every candidate was then compared with that one
+  name, and a `nested/hidden.key` was never reported — `DRAUGR_SCAN_FAIL=block` exited 0. The
+  patterns are now split with `read -ra`, which does no pathname expansion. Separately, the file
+  listing discarded git's failure (`2>/dev/null || true`), so a git that could not read the
+  repository produced an empty candidate list and the same clean report; it is now a refusal, and
+  the listing is NUL-delimited so that a name holding a newline cannot slip past either.
+
+- **`dr-hostport --close` could report a port closed while the rule was still in force.** The
+  counter was raised beside the warning, whatever `sbx policy rm` answered, so a failed removal
+  still ended in `closed host port 8080 … (1 rule(s))` and exit 0. "Closed" is a security claim, so
+  it is now made only about rules that are gone: failures are counted apart, named, and carried out
+  in the exit status. The refresh path claimed the same thing about replaced rules, and now refuses
+  rather than adding a new rule beside an old one it could not remove. A rule listing that fails is
+  no longer read as "no rules".
+
+- **An unreachable sandboxd read as "the mound exists".** `dr_sandbox_state` dies with a diagnostic
+  when it cannot reach the daemon, but that death ends only the subshell of
+  `[ "$(dr_sandbox_state …)" != absent ]`, and the empty output then differs from `absent`. `set -e`
+  cannot catch it: the `[` succeeds, and bash suppresses errexit inside a function called in an `&&`
+  or `||` list, which is how most callers call `dr_sandbox_exists`. `dr-rm` had the same line
+  guarding its **destroy** path, so a mound whose state nobody had established could be handed to
+  `sbx rm`. Both now test the probe's result explicitly and stop.
+
+- **A failed `sbx ls` could delete the record that a shared resource was in use, and then stop it.**
+  `dr_dep_prune` and `dr_dep_claims` read the running sandboxes with `|| true`, so a failed query
+  became "nothing runs": every claim past its grace time looked stale, pruning deleted the claims of
+  mounds that were running, and the warden then saw an unused resource and stopped it. Both now
+  return 2 and change nothing when they cannot tell. `dr_dep_claim_valid` takes the running list as
+  a required argument and only ever answers yes or no — the question of an unreachable daemon
+  belongs to the callers, which are the only place that can tell "nothing runs" from "I could not
+  ask". The warden treats unknown as "not idle" instead of starting the idle clock, and a stop that
+  fails is reported instead of being discarded behind a successful exit. An exclusive claim refuses
+  while a rival holder cannot be ruled out, which is the entire purpose of that key; it used to read
+  the claims through a pipe into `head`, which replaced the status with head's. `dr-forge` asked
+  "does another project use this VM?" the same way, before stopping, deleting and rolling back a
+  shared VM, so "I could not tell" and "nobody" produced the same silence; all four sites now ask.
+  `dr-doctor` and `dr-dep status` said `0 claim(s)` for the same reason and now say `unknown`.
+
+- **`dr-rm` and `dr-up --recreate` could destroy a mound whose contents nobody had been able to
+  read.** Both ask three questions before they destroy anything: are there commits you never
+  fetched, memory the agent wrote that was never exported, and hosts you opened by hand that no kit
+  declares. Each question has a third answer — "I could not reach the mound" — and that answer used
+  to print a warning and then ask whether to go ahead anyway. That question was worth nothing: it
+  asked you to agree to a destruction without the one fact it exists to supply, in the one case
+  where nobody can recover that fact afterwards. Both commands now refuse, and name `--force` as
+  the way to say "destroy it without knowing". `--yes` answers the question and has never answered
+  these three; that is unchanged. A status that neither command knows is treated as unknown too, so
+  a new one cannot become silence.
+
+  The third question had the same defect one level further down, and in a worse form.
+  `dr_policy_adhoc` piped `sbx` into `jq` into `sort`, and a pipeline reports the status of its
+  **last** command — `sort` is content with nothing. A daemon that could not answer therefore
+  produced an empty list, which reads as "nobody opened a host here", and the guard whose only
+  purpose is to protect that list found nothing to protect, at the one moment where those rules are
+  about to be destroyed with the mound. `dr-kit adopt` read the same list and reported `nothing to
+  adopt. The kit already declares all hosts that you opened.` — and the step after that sentence is
+  the recreate that discards them. `mapfile -t … < <(…)` hid the failure at all three call sites,
+  because `mapfile` reports its own status, and an input that ended early is a success to it.
+
+- **The forge control plane read "I could not ask the daemon" as "the VM is not running".** Four
+  scripts carried a copy of the same two-answer test — `try { return [bool](Asb GET
+  "/vms/$Vm").running } catch { return $false }` — which answers "it does not run" to a stopped VM,
+  to a VM that was never registered, and to a daemon that could not be reached. The waits are built
+  on it, so a **timeout returned true**: `dr-forge down` reported `clean shutdown complete` for a
+  guest it had lost sight of, and `snap.ps1` went on to freeze a disk that nothing had confirmed was
+  idle. `dr-forge rm` was the worst of them. Its proof after the delete was `try { Asb GET } catch {
+  $still = $false }`, so a timeout, a 500 or an expired token all read as "the VM is gone": it
+  printed `phase=gone` and cleared the pinned host key of a machine that may still have been
+  registered. `dr-forge daemon` had the same defect one level up, where a failed `GET /vms` became an
+  empty list: `status` said `no VM runs, so the daemon can stop directly`, and the per-VM wait in
+  `stop` counted a guest that was missing from a listing it could not read as one that had shut
+  down — which is how a daemon stops under a running guest and leaves a dirty disk.
+
+  There are four answers now, in `lib/forge/vmstate.ps1`: running, stopped, absent, **unknown**. The
+  waits report the state they ended on instead of a boolean, so "it still runs" and "the daemon went
+  quiet" are different messages with different fixes. And **absent is confirmed, not assumed**: the
+  API documents 404 as "unknown VM *or route*", so a route that moves in a later daemon would
+  otherwise make every VM look deleted. A 404 about one VM is now checked against the list of VMs
+  before anything acts on it.
+
+- **`dr-forge init` could run a script that was already in the guest, and report its result as the
+  phase's.** It copied each guest script to the fixed path `C:\Windows\Temp\<name>` and then ran
+  that path — discarding the exit status of `scp`. Every run of every VM shares that path, so a copy
+  that failed left whatever an earlier run had put there, and the stale script ran, succeeded and
+  reported success for the phase that had just failed to arrive. One of those phases is the one that
+  turns password logins off. The sibling in `lib/forge/provision.ps1` had already solved this, and
+  the stronger version is now the only one: it is in `lib/forge/guestexec.ps1`, both callers use it,
+  and the copy is checked before the run. It wraps the run in the guest's own `cmd.exe` with
+  `if exist … else (exit /b 127)`, because `powershell -File <missing>` writes its complaint to
+  stderr and **exits 0** — which is how a script that never ran used to look exactly like a phase
+  that worked.
+
+  **And each run now owns a directory in the guest, instead of sharing one fixed destination.**
+  That fixed destination is the premise the whole defect rested on: `if exist` answers "is something
+  there", never "is the **right** thing there". A run makes `C:\Windows\Temp\draugr-<id>\`, copies
+  everything into it, and removes the whole directory afterwards — so the directory is empty until
+  this run fills it, the 127 above becomes a true "my copy did not arrive", and a status check
+  somebody forgets is no longer a stale file running under a name that looks right. It also replaces
+  the hand-written list of eight fixed names that the cleanup deleted: a list is a second place to
+  remember, and a file added to the copies and forgotten there stayed in the guest. All three
+  scripts that put files into a guest — `init.ps1`, `provision.ps1` and `vm.ps1` — now stage this
+  way, and `vm.ps1` loses the third copy of the `if exist` wrapper.
+
+  **The three data files it copies in had the same defect, and two of them authorize a key.** The
+  tunnel public key, the WSL public key and the Defender declaration go to fixed destinations in the
+  same directory, and each copy's status was assigned to `$null`. So a failed copy left the `.pub`
+  of an earlier run — or of another VM — in place, `install-tunnel-key.ps1` authorized **that** key
+  with the permitopen, and the phase reported `permitopen set`. The wrapper above cannot catch this
+  one: a data file is not run, it is read as an argument by a script that is. All three copies are
+  now checked, and the phase that depends on one does not run when its copy failed.
+
+- **`dr-forge init` reported success over a failed security phase.** Each phase wrote
+  `FAILED (<rc>)` into its row and the script ended with `exit 0`, so the command answered
+  `'<vm>' is set up. Re-running changes nothing, so it is safe to repeat` over a run in which the
+  restricted tunnel key never arrived and the guest still offered password logins. The failures are collected
+  now and decide the exit code (13, which `dr-forge` already turns into a refusal naming the
+  detail). Tuning that a guest may refuse — the disk-churn phase, which `-NoTune` exists for — is
+  not in that set, and a phase skipped because its input was not given is not a failure.
+
+  The keys-only test in the same command was also weaker than it looked: it accepted any offered
+  list without the word `password` in it, so a server still offering `keyboard-interactive` — the
+  interactive path, where a Windows sshd password prompt comes back — passed. The test is now that
+  **every** method offered is `publickey`, in `lib/forge/sshauth.ps1`. An empty list still proves
+  nothing, which it must not: during the sshd restart the connection is refused and nothing at all
+  is offered.
+
+- **The guest's automation port could be left unprotected, and the check would print a warning.**
+  Only an *answered* request marked that phase bad. A timeout, a 500 or a refused connection each
+  printed a yellow `(expected 401)` and the run ended in `automation ready` — with the claim "only
+  the token protects the desktop from all else that can reach the port" resting on a probe that
+  never got an answer. The documented 401 is now required, and a second probe **with** the token
+  must not be refused: a server that answers 401 to everybody — a different process on the port, a
+  token file it cannot read, a half-written config — would otherwise prove its own security by being
+  broken.
+
+- **The guest installers judged themselves by the text they printed.** `install-base-tools.ps1`
+  tested each tool by running `<tool> --version | head -1` and asking whether the first line was
+  empty. For a tool that is not installed that line is `bash: line 1: git: command not found`, which
+  is not empty — so it was printed in the column where a version belongs, in the rows that are not
+  red, and a guest with no git at all passed. Presence is now a separate question, asked with
+  `command -v`, whose answer cannot be confused with output; the version line is still printed, and
+  a binary that is there and prints nothing is also a finding. (The exit status cannot do this job
+  here: every one of those checks ends in a pipe, and a pipeline reports the status of its last
+  stage, so `git --version | head -1` answers 0 for a git that does not exist.)
+
+  The package installs in `install-base-tools.ps1` and `install-msys2.ps1` were the same shape:
+  `pacman` output was grepped for the word `error`, the findings were printed in yellow, and then
+  `done` was printed whatever had happened — including `124` from the `timeout` around it. Both now
+  take the exit status and stop. The first of the two `pacman -Syu` passes is the exception, and the
+  reason the loop exists: that pass can update pacman itself and stop, so it is allowed to end
+  non-zero, and the second pass is the one that decides.
+
 - `dr-kit apply` could never add a kit to a mound built from a **v3 kit**: it reported that the
   untouched kit had `changed after <mound> was built` and named `dr-up --recreate`, which destroys
   the clone and the home of the agent — the very loss the in-place path exists to avoid. Every

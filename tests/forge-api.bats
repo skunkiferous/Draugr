@@ -392,3 +392,96 @@ BASED_VM='{"test":{"running":true,"diskDirectory":"C:\\ForgeLayers","ramMb":8192
     run grep -cE '^DELETE /v1/vms/test$' "$API_LOG"
     [ "$output" = 0 ]
 }
+
+# --- a daemon that stops answering is not an answer ---------------------------------------
+#
+# All four scripts here carried the same two-answer test:
+#
+#     function Test-Running {
+#         try { return [bool](Asb GET "/vms/$Vm").running } catch { return $false }
+#     }
+#
+# which says "it does not run" to a stopped VM, to an unknown VM, and to a
+# daemon that could not be asked. The waits are built on it, so a TIMEOUT
+# returned true and read as a clean stop. These four tests are the third answer,
+# executed: the mock answers 500 from a chosen call on, which is what the real
+# daemon sends when its core fails, and each script must refuse rather than act.
+# See lib/forge/vmstate.ps1.
+
+# The same fixture as the delete test above: a store with a real disk in it,
+# written BEFORE the server starts, because the mock reads state.json once.
+api_rm_fixture() {
+    local store win
+    store="$(api_win_tmp)/ForgeLayers"
+    mkdir -p "$store/test"
+    printf 'not a real disk\n' > "$store/test/disk.vhdx"
+    win=$(api_winpath "$store")
+    python3 -c 'import json, sys; print(json.dumps({"test": {"running": False, "diskDirectory": sys.argv[1], "ramMb": 8192, "snapshots": [], "current": {"snapIndex": -1, "branchIndex": -1}}}))' "$win"
+}
+
+# THE WORST ONE. The delete answered, and then nothing could confirm it. The old
+# code read any error as "it is gone", printed phase=gone, and cleared the
+# pinned host key of a VM that may still be registered.
+@test "rm.ps1 delete: a daemon that goes quiet after the delete is not a VM that is gone" {
+    local vms
+    vms=$(api_rm_fixture)
+    # 2: the first read is the one at startup, which must succeed or the script
+    # refuses an unknown VM. The second is the proof after the delete.
+    api_start "$vms" --fail-vm-get-after 2
+    run api_run rm.ps1 -Mode delete -Vm test
+    api_is 13
+    [[ "$output" != *phase=gone* ]]
+    [[ "$output" == *"did not say whether"* ]]
+    # And it said nothing about the host key, because it did not touch it.
+    [[ "$output" != *hostkey=* ]]
+}
+
+@test "vm.ps1 stop: a daemon that goes quiet during the wait is not a clean shutdown" {
+    api_start "$RUNNING_VM" --fail-vm-get-after 2
+    # Both waits are short, because both are reached: the grace period ends
+    # with an unknown state, the plug is pulled, and that wait ends the same
+    # way. Before, the first wait returned true at once and said 'clean
+    # shutdown complete'.
+    run api_run vm.ps1 -Mode stop -Vm test -GraceSec 6 -TimeoutSec 6
+    api_is 11
+    [[ "$output" != *"clean shutdown complete"* ]]
+    [[ "$output" == *"stopped answering"* ]]
+}
+
+@test "snap.ps1 base: a daemon that cannot say whether the VM runs takes no snapshot" {
+    api_start "$RUNNING_VM" --fail-vm-get-after 2
+    run api_run snap.ps1 -Mode base -Vm test -Name probe -GraceSec 6
+    api_is 22
+    # The point of the refusal: a baseline of a guest that is still writing is
+    # a corrupt baseline, and nothing here could tell whether it is.
+    run grep -cE '^POST /v1/vms/test/snapshots$' "$API_LOG"
+    [ "$output" = 0 ]
+    # AND IT ASKED FOR NOTHING EITHER. The refusal comes before the stop, the
+    # same as the other refusals in this script: a guest whose state nobody
+    # could read is not one to send an ACPI power-off to and then wait for.
+    run grep -cE '^POST /v1/vms/test/shutdown$' "$API_LOG"
+    [ "$output" = 0 ]
+}
+
+# daemon.ps1 sees a VM only through GET /v1/vms, and read a failed listing as an
+# empty one. The status line then said "no VM runs, so the daemon can stop
+# directly", and the stop path shut the daemon down over guests it could not
+# see, which leaves a dirty disk.
+@test "daemon.ps1 status: a list it could not read is not 'no VM runs'" {
+    api_start "$RUNNING_VM" --fail-vm-list
+    run api_run daemon.ps1 -Mode status
+    api_is 4
+    [[ "$output" == *"did not list its VMs"* ]]
+    [[ "$output" != *"no VM runs"* ]]
+}
+
+@test "daemon.ps1 stop: a list it could not read stops nothing" {
+    api_start "$RUNNING_VM" --fail-vm-list
+    run api_run daemon.ps1 -Mode stop -TimeoutSec 6
+    api_is 20
+    [[ "$output" == *"did not list its VMs"* ]]
+    # It must not reach the daemon shutdown. That is the call that leaves a
+    # running guest without power.
+    run grep -cE '^POST /v1/shutdown$' "$API_LOG"
+    [ "$output" = 0 ]
+}

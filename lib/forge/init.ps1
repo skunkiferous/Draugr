@@ -68,8 +68,28 @@ if (-not $Vm) { Write-Host 'init.ps1: -Vm is required' -ForegroundColor Red; exi
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 $guestDir = Join-Path $PSScriptRoot 'guest'
+# The cmd.exe wrapper that proves a guest script is there, and the test for a
+# keys-only sshd. Both were weaker versions of themselves in this file: the run
+# was `powershell -File <path>` with no proof, and keys-only was "the offered
+# list has no 'password' in it". See guestexec.ps1 and sshauth.ps1.
+. (Join-Path $PSScriptRoot 'guestexec.ps1')
+. (Join-Path $PSScriptRoot 'sshauth.ps1')
 
 function Phase([string]$n, [string]$s) { Write-Host ("  {0,-22} {1}" -f $n, $s) }
+
+# WHAT A FAILED PHASE MEANT FOR THE EXIT CODE: nothing. Each phase printed
+# `FAILED (<rc>)` into its row and the script ended with `exit 0`, so
+# `dr-forge init` answered "'<vm>' is set up. Re-running changes nothing" over a
+# run in which the password logins stayed on and the restricted tunnel key never
+# arrived. A row in a table that nothing reads is not a result. These are
+# collected and decide the exit code at the end of the file.
+#
+# NOT EVERY PHASE IS IN HERE. The disk-churn phase tunes a disk, and a guest
+# that refuses the tuning is still a correct guest - that is also what -NoTune
+# exists for. A phase that was SKIPPED because its input was not given (no
+# tunnel key, no WSL key) is a declaration by absence, not a failure.
+$script:failed = @()
+function Add-FailedPhase([string]$n) { $script:failed += $n }
 function Note([string]$m)  { Write-Host "      $m" -ForegroundColor DarkGray }
 function Warn([string]$m)  { Write-Host "      $m" -ForegroundColor Yellow }
 function Die([int]$code, [string]$m, [string]$fix) {
@@ -150,6 +170,24 @@ function Get-SshArgs { @('-i', $AdminKey, '-p', $script:port, '-o', 'IdentitiesO
                       '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
                       '-o', "HostKeyAlias=draugr-$Vm", '-o', 'ConnectTimeout=20') }
 
+# --- the directory this run owns in the guest ---------------------------------------------
+# Made HERE, because sshd has just answered a real command and nothing has been
+# copied yet. Everything this run puts into the guest goes in here and nowhere
+# else, and the last phase removes the whole directory. See guestexec.ps1 for
+# why a directory, and why two spellings of its path.
+#
+# A FAILURE IS FATAL. Without it, each copy below would land in a directory
+# that does not exist, and the run would report a list of failures that all
+# have one cause.
+$script:gdir = New-GuestRunDir
+& ssh.exe -n @(Get-SshArgs) "forge@127.0.0.1" (Get-GuestMkdirCommand $script:gdir.Win) 2>&1 |
+    ForEach-Object { Note $_ }
+if ($LASTEXITCODE -ne 0) {
+    Die 13 "could not make $($script:gdir.Win) in the guest (ssh $LASTEXITCODE)." `
+        'Nothing was copied in, and nothing was changed.'
+}
+Phase 'guest temp' $script:gdir.Name
+
 # A guest script, copied in and run as a CHILD process with -ExecutionPolicy
 # Bypass -File. Not dot-invoked. The own policy of the guest is Restricted, so
 # it refuses `& script.ps1` inside a running session with "running scripts is
@@ -167,15 +205,35 @@ function Invoke-GuestScript([string]$Name, [string]$ScriptArgs = '') {
     $script:guestOut = ''
     $local = Join-Path $guestDir $Name
     if (-not (Test-Path $local)) { Warn "missing: $local"; return 1 }
+    $remote = "$($script:gdir.Win)\$Name"
     & scp.exe @(Get-SshArgs | ForEach-Object { if ($_ -eq '-p') { '-P' } else { $_ } }) `
-        -- $local "forge@127.0.0.1:C:/Windows/Temp/$Name" 2>&1 | ForEach-Object { Note $_ }
-    $out = & ssh.exe -n @(Get-SshArgs) "forge@127.0.0.1" `
-        "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\$Name $ScriptArgs" 2>&1
+        -- $local "forge@127.0.0.1:$($script:gdir.Scp)/$Name" 2>&1 | ForEach-Object { Note $_ }
+    # THE COPY DECIDES WHETHER THE RUN MAY HAPPEN. Its status was discarded,
+    # and the line below ran the destination anyway. When the destination was a
+    # fixed path shared by every run of every VM, a failed copy left whatever an
+    # earlier run had put there — a stale script that runs, succeeds, and
+    # reports its result as this phase's. The phase it belongs to may be the one
+    # that turns password logins off. The run directory makes that impossible
+    # now; this check makes the failure say so at once, and in the right words.
+    if ($LASTEXITCODE -ne 0) {
+        Warn "the copy of $Name into the guest failed ($LASTEXITCODE), so it was not run"
+        return 1
+    }
+    $out = & ssh.exe -n @(Get-SshArgs) "forge@127.0.0.1" (Get-GuestRunCommand $remote $ScriptArgs) 2>&1
     $rc = $LASTEXITCODE
     $script:guestOut = (@($out) | ForEach-Object { "$_" }) -join "`n"
     # The marker is for this script, not for a reader, so the code does not
     # print it.
     @($out) | Where-Object { "$_" -notmatch 'DRAUGR_CHANGED=' } | ForEach-Object { Note $_ }
+    # 127 comes from the guest's own cmd.exe, and only when the file is not at
+    # $remote although scp reported success. That is a defect of THIS script,
+    # not a state of the guest, and nothing below the call was tested. It is
+    # fatal, and not one more code for each caller to judge differently.
+    if ($rc -eq 127) {
+        Die 13 ("$Name never ran: it is not at $remote in the guest, although the copy " +
+                'reported success. Nothing after that point was applied.') `
+            "Run it again. If it repeats, look in the guest at $($script:gdir.Win):  dr-forge screen"
+    }
     return $rc
 }
 
@@ -184,9 +242,13 @@ function Invoke-GuestScript([string]$Name, [string]$ScriptArgs = '') {
 # a summary lie again.
 function Test-Changed([string]$Text) { -not ($Text -match 'DRAUGR_CHANGED=0') }
 
+# A data file, not a script: the guest scripts above read these as an argument.
+# Into the run directory, like everything else, so that the argument cannot
+# name a file from an earlier run. The caller must still read the status - two
+# of these files are PUBLIC KEYS that a script then authorizes.
 function Copy-ToGuest([string]$Local, [string]$RemoteName) {
     & scp.exe @(Get-SshArgs | ForEach-Object { if ($_ -eq '-p') { '-P' } else { $_ } }) `
-        -- $Local "forge@127.0.0.1:C:/Windows/Temp/$RemoteName" 2>&1 | ForEach-Object { Note $_ }
+        -- $Local "forge@127.0.0.1:$($script:gdir.Scp)/$RemoteName" 2>&1 | ForEach-Object { Note $_ }
     return $LASTEXITCODE
 }
 
@@ -221,7 +283,10 @@ function Confirm-KeysOnly([int]$Seconds) {
             $o = Get-Offered
             if ($o -ne '(none offered)') {
                 $script:offered = $o
-                if ($o -notmatch 'password') { return $true }
+                # Every method offered must be publickey. `-notmatch
+                # 'password'` passed a server that still offered
+                # keyboard-interactive. See sshauth.ps1.
+                if (Test-KeysOnlyList $o) { return $true }
             }
         }
         Start-Sleep -Seconds 5
@@ -244,9 +309,13 @@ if (Confirm-KeysOnly 120) {
     Die 13 'sshd did not come back after the restart.' `
         'get in through the screen, and run:  Start-Service sshd'
 } else {
+    # THE PHASE THAT MATTERS MOST, and it only warned. A sandbox with the
+    # gateway rule can reach this sshd, so a guest that still offers a password
+    # method is the one outcome that must not end in a success.
     Warn "still offering: $script:offered, two minutes after the restart request"
     Warn 'look at C:\ProgramData\ssh\sshd_config in the guest, and whether the task ran:'
     Warn '  Get-ScheduledTaskInfo -TaskName DraugrSshdRestart'
+    Add-FailedPhase 'sshd auth (a password method is still offered)'
 }
 # The one-shot task did its job. If it stays, it is clutter that looks like a
 # job. THE CODE REMOVES IT ONLY AFTER THE WAIT ABOVE, and that order is
@@ -264,12 +333,28 @@ $tunnelKeyChanged = $false
 if (-not (Test-Path "$TunnelKey.pub")) {
     Warn "no tunnel public key at $TunnelKey.pub. Skipped. The $ForwardPort forward is refused"
 } else {
-    $null = Copy-ToGuest "$TunnelKey.pub" 'draugr_tunnel.pub'
-    $rc = Invoke-GuestScript 'install-tunnel-key.ps1' '-PubKeyFile C:\Windows\Temp\draugr_tunnel.pub'
-    $tunnelKeyChanged = ($rc -eq 0) -and (Test-Changed $script:guestOut)
-    Phase 'tunnel key' $(if ($rc -ne 0) { "FAILED ($rc)" }
-                         elseif ($tunnelKeyChanged) { 'permitopen set' }
-                         else { 'permitopen already set' })
+    # A STALE PUBLIC KEY IS WORSE THAN NO KEY. The destination used to be the
+    # fixed C:\Windows\Temp\draugr_tunnel.pub and the status of this copy was
+    # discarded (`$null =`), so a failed copy left the .pub of an earlier run —
+    # or of another VM — in place, and the line below authorized THAT key with
+    # the permitopen, then reported 'permitopen set'. The 127 wrapper cannot see
+    # this one: a data file is not run, it is read as an argument. Hence both
+    # halves: the run directory, which is empty until this run fills it, and
+    # this check.
+    $crc = Copy-ToGuest "$TunnelKey.pub" 'draugr_tunnel.pub'
+    if ($crc -ne 0) {
+        Warn "the copy of $TunnelKey.pub into the guest failed ($crc)"
+        Warn 'no key was authorized, because the file at the destination can be an older one'
+        Phase 'tunnel key' "FAILED (the copy, $crc)"
+        Add-FailedPhase 'tunnel key'
+    } else {
+        $rc = Invoke-GuestScript 'install-tunnel-key.ps1' "-PubKeyFile $($script:gdir.Win)\draugr_tunnel.pub"
+        $tunnelKeyChanged = ($rc -eq 0) -and (Test-Changed $script:guestOut)
+        Phase 'tunnel key' $(if ($rc -ne 0) { "FAILED ($rc)" }
+                             elseif ($tunnelKeyChanged) { 'permitopen set' }
+                             else { 'permitopen already set' })
+        if ($rc -ne 0) { Add-FailedPhase 'tunnel key' }
+    }
 }
 
 # --- the forward that the options of the key control ------------------------------------
@@ -340,11 +425,22 @@ if (-not $WslPubKey) {
     Warn "no WSL public key at $WslPubKey. Skipped"
     Warn 'make one with:  dr-setup --forge'
 } else {
-    $null = Copy-ToGuest $WslPubKey 'draugr_forge_wsl.pub'
-    $rc = Invoke-GuestScript 'authorize-key.ps1' '-PubKeyFile C:\Windows\Temp\draugr_forge_wsl.pub'
-    Phase 'wsl key' $(if ($rc -ne 0) { "FAILED ($rc)" }
-                      elseif (Test-Changed $script:guestOut) { 'authorized in the guest' }
-                      else { 'already authorized' })
+    # The same as the tunnel key above, and for the same reason: this phase
+    # AUTHORIZES the file at a fixed destination, so a copy whose status
+    # nobody read can hand an older key to authorize-key.ps1.
+    $crc = Copy-ToGuest $WslPubKey 'draugr_forge_wsl.pub'
+    if ($crc -ne 0) {
+        Warn "the copy of $WslPubKey into the guest failed ($crc)"
+        Warn 'no key was authorized, because the file at the destination can be an older one'
+        Phase 'wsl key' "FAILED (the copy, $crc)"
+        Add-FailedPhase 'wsl key'
+    } else {
+        $rc = Invoke-GuestScript 'authorize-key.ps1' "-PubKeyFile $($script:gdir.Win)\draugr_forge_wsl.pub"
+        Phase 'wsl key' $(if ($rc -ne 0) { "FAILED ($rc)" }
+                          elseif (Test-Changed $script:guestOut) { 'authorized in the guest' }
+                          else { 'already authorized' })
+        if ($rc -ne 0) { Add-FailedPhase 'wsl key' }
+    }
 }
 
 # --- the writes that a layered VM pays for two times ------------------------------------
@@ -386,8 +482,18 @@ if ($NoTune) {
     $churnArgs = "-PageFileInitialMb $PageFileInitialMb -PageFileMaxMb $pfMax"
     if ($NoScanFile) {
         if (Test-Path -LiteralPath $NoScanFile) {
-            $null = Copy-ToGuest $NoScanFile 'draugr_noscan.txt'
-            $churnArgs += ' -NoScanFile C:\Windows\Temp\draugr_noscan.txt'
+            # The third fixed destination. This one is only READ, so a stale
+            # file means a report about the wrong paths rather than a wrong
+            # key - but a report about the wrong paths is the thing this
+            # declaration exists to prevent. Without the file, the guest
+            # script says that nothing was declared.
+            $crc = Copy-ToGuest $NoScanFile 'draugr_noscan.txt'
+            if ($crc -ne 0) {
+                Warn "the copy of $NoScanFile into the guest failed ($crc)"
+                Warn 'the Defender check is skipped: an older list would report the wrong paths'
+            } else {
+                $churnArgs += " -NoScanFile $($script:gdir.Win)\draugr_noscan.txt"
+            }
         } else {
             Warn "no Defender list at $NoScanFile. That check is skipped"
         }
@@ -422,6 +528,9 @@ $rc = Invoke-GuestScript 'install-shot.ps1'
 Phase 'desktop camera' $(if ($rc -ne 0) { "FAILED ($rc)" }
                          elseif (Test-Changed $script:guestOut) { 'installed. Run draugr-shot in the guest' }
                          else { 'already installed' })
+# Required, for the reason in the comment above: without it an agent has no way
+# at all to see what it did to a screen.
+if ($rc -ne 0) { Add-FailedPhase 'desktop camera' }
 
 # --- the computer name -------------------------------------------------------------------
 # LAST of the guest changes, because it needs a reboot. Here, that is one
@@ -435,10 +544,22 @@ $nameChanged = ($rc -eq 0) -and (Test-Changed $script:guestOut)
 Phase 'computer name' $(if ($rc -ne 0) { "FAILED ($rc)" }
                         elseif ($nameChanged) { 'set. It applies at the next boot' }
                         else { "already $Vm" })
+if ($rc -ne 0) { Add-FailedPhase 'computer name' }
 
 # --- the guest's temp copies -------------------------------------------------------------
+# THE WHOLE DIRECTORY, AND NO LIST. This was a hand-written list of the eight
+# fixed names, and a list is a second place to remember: a file added above and
+# forgotten here stayed in the guest, including a public key. Now this run owns
+# a directory, so the cleanup is the directory.
+#
+# Two of the files in it are public keys. They are not secret - that is what a
+# .pub is - but they are a record of which credentials were offered to this
+# guest, and they have no reason to stay.
+#
+# NOT fatal, and nothing reads its status: the run is finished here, and a
+# leftover directory in Temp is not a failed setup. The next run makes its own.
 & ssh.exe -n @(Get-SshArgs) "forge@127.0.0.1" `
-    'powershell -NoProfile -Command "Remove-Item C:\Windows\Temp\harden-sshd.ps1, C:\Windows\Temp\authorize-key.ps1, C:\Windows\Temp\install-tunnel-key.ps1, C:\Windows\Temp\set-computer-name.ps1, C:\Windows\Temp\reduce-churn.ps1, C:\Windows\Temp\draugr_noscan.txt, C:\Windows\Temp\draugr_tunnel.pub, C:\Windows\Temp\draugr_forge_wsl.pub -Force -ErrorAction SilentlyContinue"' 2>&1 | Out-Null
+    (Get-GuestRmdirCommand $script:gdir.Win) 2>&1 | Out-Null
 
 Write-Host ''
 # NO REBOOT FOR NOTHING. The code lists the reasons, and does not count them.
@@ -483,5 +604,13 @@ if ($rebootFor.Count -eq 0) {
 }
 
 Write-Host ''
+# THE ROWS ABOVE DECIDE THE EXIT CODE. See $script:failed near the top. 13 is
+# the documented "a guest phase failed badly", which bin/dr-forge already turns
+# into a refusal that names the detail above.
+if ($script:failed.Count -gt 0) {
+    Write-Host ("these phases did not succeed: " + ($script:failed -join ', ')) -ForegroundColor Red
+    Write-Host '  Nothing here is destructive, so running it again is safe.'
+    exit 13
+}
 Write-Host 'Test the whole chain from WSL:  dr-forge doctor --deep'
 exit 0

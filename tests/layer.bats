@@ -717,23 +717,60 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
 # backslashes when WSL starts provision.ps1 (docs/FORGE.md, the technique
 # notes). Thus there must be no quotes around it. The path is always
 # C:\Windows\Temp\<name>, and needs none.
+#
+# THE WRAPPER MOVED, and that is the point of this version of the test.
+# init.ps1 had its own copy of this call WITHOUT the `if exist` guard, so the
+# weaker one could run a stale script and report its result. There is one
+# wrapper now, in guestexec.ps1, and neither caller builds its own.
 @test "live 2026-10-26: the remote path is sent unquoted" {
-    local ps="$DR_ROOT/lib/forge/provision.ps1"
-    grep -q 'if exist \$remote ' "$ps"
+    local ps="$DR_ROOT/lib/forge/guestexec.ps1"
+    grep -q 'if exist \$Remote ' "$ps"
     # The exact form that lost the backslashes must not come back.
-    ! grep -q -- '-File `"\$remote`"' "$ps" || return 1
+    ! grep -q -- '-File `"\$Remote`"' "$ps" || return 1
+    ! grep -q -- '-File "\$Remote"' "$ps" || return 1
+    local f
+    for f in provision.ps1 init.ps1; do
+        grep -q 'Get-GuestRunCommand' "$DR_ROOT/lib/forge/$f"
+        # A second copy of the command is how the two drifted apart.
+        ! grep -q 'if exist ' "$DR_ROOT/lib/forge/$f" || return 1
+    done
+}
+
+# A FAILED COPY MUST NOT RUN THE DESTINATION. The remote path is fixed
+# (C:\Windows\Temp\<name>), so a copy that failed leaves whatever an earlier
+# run of any VM left there. init.ps1 discarded the status of scp and ran it.
+@test "init.ps1 does not run a guest script whose copy failed" {
+    local ps="$DR_ROOT/lib/forge/init.ps1"
+    grep -q 'the copy of \$Name into the guest failed' "$ps"
+
+    # AND THE THREE DATA FILES, which the scripts above read as an argument from
+    # the same fixed directory. Two of them AUTHORIZE A PUBLIC KEY: a copy whose
+    # status nobody read can hand install-tunnel-key.ps1 or authorize-key.ps1
+    # the .pub of an earlier run, or of another VM, and the phase then reports
+    # 'permitopen set'. The cmd.exe wrapper cannot see those, because a data
+    # file is not run.
+    run bash -c "grep -c 'the copy of .* into the guest failed' '$ps'"
+    [ "$output" -ge 4 ]
+
+    # The form that threw the status away must not come back. Copy-ToGuest
+    # RETURNS it for the caller to read, and all three callers assigned it to
+    # $null. Comments are removed first, because the fixes explain that.
+    run bash -c "grep -vE '^[[:space:]]*#' '$ps' | grep -F 'null = Copy-ToGuest'"
+    [ -z "$output" ]
 }
 
 # `powershell -File <missing>` exits 0. Thus absence needs its own code. If not,
 # a script that never ran looks like a phase that worked. That gave fourteen
 # green rows for fourteen failures.
 @test "live 2026-10-26: a guest script that never arrived cannot report success" {
-    local ps="$DR_ROOT/lib/forge/provision.ps1"
-    grep -q 'exit /b 127' "$ps"
+    grep -q 'exit /b 127' "$DR_ROOT/lib/forge/guestexec.ps1"
     # Thrown, not returned. A return adds a code to fourteen call sites that
     # each judge \$rc differently, and one of them gets it wrong.
-    grep -q 'never ran. It is not at' "$ps"
-    grep -q 'if (\$rc -eq 127)' "$ps"
+    grep -q 'never ran. It is not at' "$DR_ROOT/lib/forge/provision.ps1"
+    grep -q 'if (\$rc -eq 127)' "$DR_ROOT/lib/forge/provision.ps1"
+    # init.ps1 has no throw to catch, so it ends the run with its own Die.
+    grep -q 'never ran: it is not at' "$DR_ROOT/lib/forge/init.ps1"
+    grep -q 'if (\$rc -eq 127)' "$DR_ROOT/lib/forge/init.ps1"
 }
 
 # The egress proof reported OK for a proxy on port 9. Two things keep it honest.
@@ -850,6 +887,122 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     grep -q 'if (\$shimVer -eq \$PythonVersion)' "$au"
     # Also after the install. The throw makes it a test, not a hope.
     grep -q "not the pinned \$PythonVersion" "$au"
+}
+
+# --- the security review: a failure that reported itself as a result ---------
+#
+# These four come from a review of 0.9.0, and they are all the same defect in
+# the forge PowerShell: a phase that could not prove its claim said nothing, or
+# said it in yellow, and the run ended green. The behaviour of the first two is
+# executed in tests/forge-ps.bats and tests/forge-api.bats; what is asserted
+# here is the wiring, which no mock can see.
+
+# A ROW IN A TABLE THAT NOTHING READS IS NOT A RESULT. Each phase wrote
+# `FAILED (<rc>)` into its row, and the script ended with `exit 0`. Thus
+# `dr-forge init` answered "'<vm>' is set up. Re-running changes nothing" over a
+# run in which the password logins stayed on and the restricted tunnel key
+# never arrived.
+@test "init.ps1: a phase that failed decides the exit code" {
+    local ps="$DR_ROOT/lib/forge/init.ps1"
+    grep -q 'function Add-FailedPhase' "$ps"
+    # The security phase is the one that used to only warn. COMMENTS REMOVED
+    # FIRST: a mutation run commented this call out, and a plain grep still
+    # matched the commented line, so the test passed with the defect back. A
+    # negative or a presence grep of source must read code.
+    grep -vE '^[[:space:]]*#' "$ps" | grep -q "Add-FailedPhase 'sshd auth"
+    grep -q 'if (\$script:failed.Count -gt 0)' "$ps"
+    # 13 is the documented code, and bin/dr-forge already turns it into a
+    # refusal that names the detail. A new code would be silence again.
+    grep -q 'exit 13' "$ps"
+    grep -q '13) dr_die' "$DR_ROOT/bin/dr-forge"
+}
+
+# `-notmatch 'password'` passes a server that offers keyboard-interactive. The
+# predicate and its reasoning are in sshauth.ps1, and forge-ps.bats runs it.
+@test "init.ps1: keys-only is every method offered, not the absence of one word" {
+    local ps="$DR_ROOT/lib/forge/init.ps1"
+    grep -q 'Test-KeysOnlyList \$o' "$ps"
+    # And the weaker test is gone from the code. Comments first: the comment
+    # that explains the fix names the form it replaced, which is its purpose.
+    ! grep -vE '^[[:space:]]*#' "$ps" | grep -qE "notmatch .password." || return 1
+}
+
+# EVERY RUN OWNS A DIRECTORY IN THE GUEST, and no caller builds a path from the
+# fixed temp directory any more. That fixed destination was the premise of the
+# whole stale-file problem: a copy that failed left an older file under the name
+# the run was about to use, and two of those files are public keys that a guest
+# script then authorizes.
+@test "the forge scripts stage into a directory the run owns, not a fixed one" {
+    local f
+    for f in init.ps1 provision.ps1 vm.ps1; do
+        # The forbidden thing is BUILDING a guest path from the fixed directory:
+        # the literal, then a variable. Comments are removed first, because they
+        # keep the history of why this changed, and a message that merely names
+        # C:\Windows\Temp is not a path being built.
+        run bash -c "grep -vE '^[[:space:]]*#' '$DR_ROOT/lib/forge/$f' | grep -E 'C:.Windows.Temp.\\\$'"
+        [ -z "$output" ]
+        # And each of them gets the directory from the one place that makes it.
+        grep -q 'New-GuestRunDir' "$DR_ROOT/lib/forge/$f"
+    done
+    # guestexec.ps1 is that one place, and the only file that spells it out.
+    grep -q 'C:.Windows.Temp' "$DR_ROOT/lib/forge/guestexec.ps1"
+    # The cleanup is the directory. A list of names is a second place to keep in
+    # step with the copies, and init.ps1's list had fallen out of step.
+    #
+    # ALL THREE REMOVE THEIR OWN. provision.ps1 is the one that seals a layer,
+    # so a directory it leaves behind is in the image for ever: a look inside
+    # layer-0 found the staged write-manifest.ps1 of the run that built it,
+    # under a name that a later run copies in again.
+    for f in init.ps1 provision.ps1 vm.ps1; do
+        grep -q 'Get-GuestRmdirCommand' "$DR_ROOT/lib/forge/$f"
+    done
+}
+
+@test "the forge scripts share one four-answer VM state, and keep no boolean copy" {
+    local f
+    for f in vm.ps1 snap.ps1 rm.ps1; do
+        grep -q 'vmstate.ps1' "$DR_ROOT/lib/forge/$f"
+    done
+    # The two-answer function is gone from the files that had it. Comments are
+    # removed first, because vmstate.ps1 quotes it to say why it exists.
+    run bash -c "grep -rn 'function Test-Running' '$DR_ROOT/lib/forge'/*.ps1 | grep -vE ':[0-9]+:[[:space:]]*#'"
+    [ -z "$output" ]
+}
+
+# A WARNING IS NOT A FINDING. Only an ANSWERED request marked the auth phase
+# bad. A timeout, a 500 and a refused connection each printed a yellow
+# "(expected 401)" and the run still ended in "automation ready" - with the
+# claim "only the token protects the desktop" resting on nothing.
+@test "install-automation.ps1: the token test needs a 401, and a control that is not one" {
+    local au="$DR_ROOT/lib/forge/guest/install-automation.ps1"
+    grep -q 'function Get-McpProbeStatus' "$au"
+    grep -q 'if (\$noToken -eq 401)' "$au"
+    grep -q "bad += 'auth'" "$au"
+    # The control: with the token the answer must NOT be 401, or a server that
+    # refuses everyone proves its own security by being broken.
+    grep -q 'if (\$withToken -eq 401)' "$au"
+    grep -q "bad += 'auth control'" "$au"
+}
+
+# `git --version | head -1` for a git that does not exist prints
+# "bash: line 1: git: command not found" - a non-empty first line, which was the
+# whole test. It was printed in the column where a version belongs.
+@test "install-base-tools.ps1: a tool is proved by command -v, not by printing something" {
+    local bt="$DR_ROOT/lib/forge/guest/install-base-tools.ps1"
+    grep -q 'command -v \$bin >/dev/null 2>&1 && echo DRAUGR_FOUND' "$bt"
+    grep -q 'DRAUGR_FOUND' "$bt"
+    # And the package install is judged by pacman's status, not by its words.
+    grep -q '\$script:rc = \$LASTEXITCODE' "$bt"
+    grep -q 'were not installed' "$bt"
+}
+
+@test "install-msys2.ps1: the sync is judged by pacman's status, not by a grep for 'error'" {
+    local ms="$DR_ROOT/lib/forge/guest/install-msys2.ps1"
+    grep -q '\$script:rc = \$LASTEXITCODE' "$ms"
+    grep -q 'the first package sync failed on its second pass' "$ms"
+    # The first pass can legitimately end non-zero, because it can update
+    # pacman itself and stop. That is why there are two passes.
+    grep -q 'That is what the second pass is for' "$ms"
 }
 
 # A TEST BELOW THE REBOOT THAT MAKES ITS ANSWER TRUE. The order is the defect,

@@ -519,12 +519,7 @@ if [ "$action" = down ]; then
     # OTHER USERS GET A QUESTION. A claim counts only while the mound of its
     # project runs, or while it is younger than the grace period. Thus a project
     # that is gone cannot block this. After a reboot, all claims are old.
-    others=$(dr_dep_claims "vm:$vm" | awk -F'\t' -v me="$repo" '$1 != me { print $1 }')
-    if [ -n "$others" ]; then
-        dr_warn "another project uses this VM:"
-        printf '%s\n' "$others" | sed 's/^/    /' >&2
-        dr_confirm "Shut down $vm anyway?" || dr_die "cancelled"
-    fi
+    dr_dep_confirm_others "vm:$vm" "$repo" VM "Shut down $vm anyway?"
 
     # Graceful, then the plug, both inside vm.ps1. vm.ps1 tells why this does
     # not go into the guest through ssh first now.
@@ -636,11 +631,7 @@ if [ "$action" = rm ]; then
 
     # OTHER USERS GET A QUESTION, the same rule as in `down`. The risk here is
     # higher, because a delete is permanent.
-    others=$(dr_dep_claims "vm:$vm" | awk -F'\t' -v me="$repo" '$1 != me { print $1 }')
-    if [ -n "$others" ]; then
-        dr_warn "another project uses this VM:"
-        printf '%s\n' "$others" | sed 's/^/    /' >&2
-    fi
+    dr_dep_report_others "vm:$vm" "$repo" VM || true
 
     printf '\n' >&2
     dr_confirm "Delete $vm and everything above? You cannot undo this." || dr_die "cancelled"
@@ -787,12 +778,7 @@ if [ "$action" = base ]; then
     fi
 
     # OTHER USERS GET A QUESTION, as in down and rm, because this stops the VM.
-    others=$(dr_dep_claims "vm:$vm" | awk -F'\t' -v me="$repo" '$1 != me { print $1 }')
-    if [ -n "$others" ]; then
-        dr_warn "another project uses this VM:"
-        printf '%s\n' "$others" | sed 's/^/    /' >&2
-        dr_confirm "Stop $vm and take its baseline anyway?" || dr_die "cancelled"
-    fi
+    dr_dep_confirm_others "vm:$vm" "$repo" VM "Stop $vm and take its baseline anyway?"
     if [ "$(dr_forge_fact vm_running)" = yes ]; then
         dr_info "the VM shuts down first, because a snapshot needs it stopped."
     fi
@@ -879,11 +865,7 @@ if [ "$action" = rollback ]; then
         dr_info "  Only the first captures the current state, so the rollback goes to it."
     fi
 
-    others=$(dr_dep_claims "vm:$vm" | awk -F'\t' -v me="$repo" '$1 != me { print $1 }')
-    if [ -n "$others" ]; then
-        dr_warn "another project uses this VM:"
-        printf '%s\n' "$others" | sed 's/^/    /' >&2
-    fi
+    dr_dep_report_others "vm:$vm" "$repo" VM || true
 
     printf '\n' >&2
     dr_warn "all that was written since that baseline goes, and the cache too."

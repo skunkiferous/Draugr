@@ -56,16 +56,44 @@ if [ -z "$skills_only" ]; then
     # does not report half of the danger. `--others` alone is all that git does
     # not track, ignored or not. That is the set that the agent can read through
     # /run/sandbox/source, and that is not in the clone.
-    mapfile -t candidates < <(
-        git -C "$DR_REPO" ls-files --others 2>/dev/null || true
-    )
+    # The enumeration must SUCCEED, or there is no scan. Before, this was
+    # `2>/dev/null || true`, so a git that could not read the repository gave an
+    # empty candidate list, and the scan then reported "no files that look like
+    # credentials" and exited 0 in block mode. A backstop that cannot run must
+    # say so, not pass.
+    #
+    # -z, so that the list is NUL-delimited. A file name can hold a newline, and
+    # git quotes such a name in its default output ("a\nb"), which arrives here
+    # as a name that matches no pattern.
+    # A file, not `$(...)`: bash DISCARDS NUL bytes in a command substitution,
+    # which would join every name into one string.
+    _ls_out=$(mktemp); _ls_err=$(mktemp)
+    if ! git -C "$DR_REPO" ls-files --others -z > "$_ls_out" 2>"$_ls_err"; then
+        _err=$(cat "$_ls_err" 2>/dev/null); rm -f "$_ls_out" "$_ls_err"
+        dr_die "cannot list the untracked files of $DR_REPO" \
+               "${_err:-git ls-files failed and gave no reason}" \
+               "Without that list this scan proves nothing, so it reports no result at all."
+    fi
+    candidates=()
+    while IFS= read -r -d '' _f; do candidates+=("$_f"); done < "$_ls_out"
+    rm -f "$_ls_out" "$_ls_err"
 
     # Compare the basename of each candidate with the configured globs. `case`
     # takes one pattern at a time, so the code loops over the patterns.
+    # read -ra, not `for pat in $DRAUGR_SCAN_PATTERNS`. An unquoted expansion
+    # does word splitting AND PATHNAME EXPANSION, so each pattern was first
+    # matched against the directory the command ran in. With a visible.key next
+    # to it, the pattern "*.key" became the single word "visible.key", and the
+    # loop below then compared every candidate with that one file name: a
+    # nested/hidden.key matched nothing, and block mode exited 0. `read` does no
+    # pathname expansion, so the patterns reach `case` as patterns.
+    pats=()
+    read -ra pats <<< "$DRAUGR_SCAN_PATTERNS"
+
     hits=()
     for f in "${candidates[@]+"${candidates[@]}"}"; do
         base=${f##*/}
-        for pat in $DRAUGR_SCAN_PATTERNS; do
+        for pat in ${pats[@]+"${pats[@]}"}; do
             # shellcheck disable=SC2254  # $pat is deliberately a glob, not a literal
             case "$base" in
                 $pat) hits+=("$f"); break ;;

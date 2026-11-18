@@ -223,11 +223,22 @@ if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
         _check=0
         "$_dr_bin/dr-sync" --check-only || _check=$?
         case "$_check" in
+            0) ;;
             1) dr_die \
                    "$DRAUGR_SANDBOX has commits that you did not fetch" \
                    "A recreate destroys them. Fetch them first with:  dr-sync" \
                    "Then run dr-up --recreate again. To discard them:  dr-up --recreate --force" ;;
-            2) dr_warn "could not connect to $DRAUGR_SANDBOX to look for unfetched commits" ;;
+            # Unknown is not nothing. A recreate is destructive, so it needs
+            # the same answer as dr-rm: refuse, and name the way to say "do it
+            # without that fact".
+            2) dr_die \
+                   "could not connect to $DRAUGR_SANDBOX to look for unfetched commits" \
+                   "A recreate destroys whatever is in there, and nothing here can see it." \
+                   "Try again when the mound answers, or accept the loss:  dr-up --recreate --force" ;;
+            *) dr_die \
+                   "dr-sync --check-only ended with status $_check, which dr-up does not know" \
+                   "So nothing here can tell whether the recreate would destroy unfetched commits." \
+                   "Accept that loss:  dr-up --recreate --force" ;;
         esac
     fi
 
@@ -237,11 +248,19 @@ if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
         _mcheck=0
         "$_dr_bin/dr-mem" check || _mcheck=$?
         case "$_mcheck" in
+            0) ;;
             1) dr_die \
                    "$DRAUGR_SANDBOX has memory or a conversation that you did not export" \
                    "A recreate destroys it. Export it first with:  dr-mem export" \
                    "Then run dr-up --recreate again. To discard it:  dr-up --recreate --force" ;;
-            2) dr_warn "could not connect to $DRAUGR_SANDBOX to look for memory that is not exported" ;;
+            2) dr_die \
+                   "could not connect to $DRAUGR_SANDBOX to look for memory that is not exported" \
+                   "A recreate destroys whatever is in there, and nothing here can see it." \
+                   "Try again when the mound answers, or accept the loss:  dr-up --recreate --force" ;;
+            *) dr_die \
+                   "dr-mem check ended with status $_mcheck, which dr-up does not know" \
+                   "So nothing here can tell whether the recreate would destroy memory." \
+                   "Accept that loss:  dr-up --recreate --force" ;;
         esac
     fi
 fi
@@ -251,8 +270,20 @@ fi
 # after the build finally works. Thus the list that made it work goes away at
 # the moment that you want to make it permanent. The fix is the same as the
 # guard in dr-rm.
+#
+# Captured, and not `mapfile < <(...)`: mapfile reports its own status, so a
+# failed query would be an empty array, and an empty array is "there is
+# nothing here to lose". See the same guard in dr-rm.
 if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
-    mapfile -t _opened < <(dr_policy_unadopted)
+    _unadopted=$(dr_policy_unadopted) || dr_die \
+        "cannot tell which hosts are open for $DRAUGR_SANDBOX" \
+        "A recreate destroys those rules, and this is the last moment to write them down." \
+        "Try again when sbx answers, or accept the loss:  dr-up --recreate --force"
+    _opened=()
+    while IFS= read -r _host; do
+        [ -n "$_host" ] || continue
+        _opened+=("$_host")
+    done <<< "$_unadopted"
     if [ ${#_opened[@]} -gt 0 ]; then
         dr_die "${#_opened[@]} host(s) are open for $DRAUGR_SANDBOX, and not in the kit" \
                "$(printf '%s ' "${_opened[@]}")" \
@@ -486,8 +517,10 @@ absent)
     dr_hook post-create "$DR_REPO"
     ;;
 
-# If dr_sandbox_state cannot reach sbx, it prints "unknown". Other values here
-# mean that sbx has a new state that we did not see. Do not guess for either.
+# A value here that is none of the three above means that sbx has a state that
+# we did not see. Do not guess. (dr_sandbox_state does not reach this point with
+# an unreachable daemon: it dies there, with the elevation diagnostic. An older
+# comment here promised the string "unknown", which it has never printed.)
 *)
     dr_die "$DRAUGR_SANDBOX is in an unexpected state: $state" \
            "Look at it with:  dr-ls"

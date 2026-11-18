@@ -318,6 +318,9 @@ make_kit_deny_only() {
 # "policy or rule not found".
 
 @test "dr-rm: refuses while a host is open and not in the kit" {
+    # The hosts are the THIRD question. The first two must be answerable, or
+    # the refusal comes from one of them and says nothing about this guard.
+    dr_mound_answers
     export DR_MOCK_ADHOC="opened.example.com"
     run dr-rm -y
     [ "$status" -ne 0 ]
@@ -335,6 +338,7 @@ make_kit_deny_only() {
 }
 
 @test "dr-rm: says nothing once the kit declares them" {
+    dr_mound_answers
     make_kit_with opened.example.com
     export DR_MOCK_ADHOC="opened.example.com" DRAUGR_KIT=.draugr/kit
     run dr-rm -y
@@ -345,6 +349,7 @@ make_kit_deny_only() {
 @test "dr-up --recreate: refuses BEFORE removing the mound" {
     # The worst time to lose them. You recreate the mound exactly when the build
     # works at last.
+    dr_mound_answers
     export DR_MOCK_ADHOC="opened.example.com" DR_MOCK_STATE=running
     run dr-up --recreate -y
     [ "$status" -ne 0 ]
@@ -354,11 +359,74 @@ make_kit_deny_only() {
 }
 
 @test "dr-up --recreate: proceeds once they are adopted" {
+    dr_mound_answers
     make_kit_with opened.example.com
     export DR_MOCK_ADHOC="opened.example.com" DR_MOCK_STATE=running DRAUGR_KIT=.draugr/kit
     run dr-up --recreate -y
     [ "$status" -eq 0 ]
     grep -q "^create " "$DR_MOCK_LOG"
+}
+
+# --- and when sbx cannot say what is open -------------------------------------
+#
+# A QUERY THAT FAILED IS NOT AN EMPTY LIST. dr_policy_adhoc piped sbx into jq
+# into sort, and a pipeline reports the status of its LAST command. sort is
+# content with nothing. Thus a daemon that could not answer gave an empty list,
+# which reads as "nobody opened a host here" — and the guards above, whose whole
+# purpose is to protect that list, found nothing to protect, at the one moment
+# where the rules are about to be destroyed.
+#
+# DR_MOCK_FAIL_AT matches the full command line, so only `policy ls` fails. A
+# whole-subcommand DR_MOCK_FAIL=policy would also break dr_policy_denied and the
+# rules of dr-hostport, and the refusal could then come from anywhere.
+
+@test "dr_policy_adhoc: a query that failed is not an empty list" {
+    DR_MOCK_FAIL_AT="policy ls" run dr_policy_adhoc
+    [ "$status" -eq 2 ]
+}
+
+@test "dr_policy_adhoc: an answer it cannot parse is not an empty list either" {
+    # A quote inside a host name makes the mock emit JSON that jq cannot read.
+    # That is the shape of a daemon whose answer has changed: the call succeeds
+    # and the parse does not, which must not read as "no host is open here".
+    DR_MOCK_ADHOC='bad"host' run dr_policy_adhoc
+    [ "$status" -eq 2 ]
+}
+
+@test "dr_policy_unadopted: it hands that on, instead of reporting nothing" {
+    DR_MOCK_FAIL_AT="policy ls" run dr_policy_unadopted
+    [ "$status" -eq 2 ]
+}
+
+@test "dr-rm: a list it could not read removes nothing" {
+    dr_mound_answers
+    DR_MOCK_FAIL_AT="policy ls" run dr-rm -y
+    [ "$status" -ne 0 ]
+    # The words of dr-rm's own guard. "cannot tell" alone also comes out of
+    # dr_sandbox_exists further down the chain, so it would pass with this
+    # guard deleted.
+    [[ "$output" == *"so nothing was removed"* ]]
+    ! grep -q "^rm " "$DR_MOCK_LOG"
+}
+
+@test "dr-up --recreate: a list it could not read destroys nothing" {
+    dr_mound_answers
+    DR_MOCK_FAIL_AT="policy ls" DR_MOCK_STATE=running run dr-up --recreate -y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot tell which hosts"* ]]
+    [ -z "$(grep '^rm ' "$DR_MOCK_LOG" || true)" ]
+    [ -z "$(grep '^create ' "$DR_MOCK_LOG" || true)" ]
+}
+
+@test "dr-kit adopt: a list it could not read is not 'nothing to adopt'" {
+    make_kit_with
+    DR_MOCK_FAIL_AT="policy ls" run dr-kit adopt -y
+    [ "$status" -ne 0 ]
+    # The old answer was worse than an error. It said the kit already declares
+    # everything, and the next step after that sentence is the recreate that
+    # destroys the rules.
+    [[ "$output" != *"nothing to adopt"* ]]
+    [[ "$output" == *"cannot tell which hosts"* ]]
 }
 
 @test "dr-up without --recreate is not guarded: it destroys nothing" {

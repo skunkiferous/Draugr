@@ -468,7 +468,18 @@ adopt)
         "$DRAUGR_SANDBOX does not exist" \
         "The rules are part of the mound, so there is nothing to adopt."
 
-    mapfile -t hosts < <(dr_policy_unadopted)
+    # Captured, and not `mapfile < <(...)`: mapfile reports its own status, so
+    # a failed query would print "nothing to adopt" — and you would then run
+    # the recreate that destroys the rules, believing they are written down.
+    _unadopted=$(dr_policy_unadopted) || dr_die \
+        "cannot tell which hosts are open for $DRAUGR_SANDBOX" \
+        "sbx did not answer, and an empty list here would be a guess." \
+        "Look at the mound first:  dr-policy"
+    hosts=()
+    while IFS= read -r _h; do
+        [ -n "$_h" ] || continue
+        hosts+=("$_h")
+    done <<< "$_unadopted"
     if [ ${#hosts[@]} -eq 0 ]; then
         dr_ok "nothing to adopt. The kit already declares all hosts that you opened."
         exit 0

@@ -41,6 +41,10 @@ $ProgressPreference = 'SilentlyContinue'
 # The host key that a deleted VM leaves behind. layer.ps1 shares this, because
 # `drop` and `adopt` leave the same entry.
 . (Join-Path $PSScriptRoot 'hostkey.ps1')
+# Four answers about the VM, and only one of them is "it is gone". This script
+# deletes a disk and then clears the host key of the machine it believes is
+# gone, so it is the one that must never read an error as an absence.
+. (Join-Path $PSScriptRoot 'vmstate.ps1')
 
 function Fail([int]$code, [string]$m) {
     Write-Host "dr-forge rm: $m" -ForegroundColor Red
@@ -146,12 +150,17 @@ if ($unsafe.Count -gt 0) {
 if ($st.running) {
     Write-Output 'phase=stopping'
     try { $null = Asb POST "/vms/$Vm/stop" } catch { }
-    $t0 = Get-Date
-    do {
-        Start-Sleep -Seconds 3
-        try { $st = Asb GET "/vms/$Vm" } catch { break }
-    } while ($st.running -and ((Get-Date) - $t0).TotalSeconds -lt 120)
-    if ($st.running) { Fail 13 "'$Vm' did not stop, so it was not deleted." }
+    # The wait reports the state it ended on. A probe that failed used to
+    # `break` out of this loop, and the test after it then read the LAST good
+    # answer. See vmstate.ps1 for why that is not a boolean.
+    $state = Wait-ForgeVmState $Vm @('stopped', 'absent') 120 3
+    if (-not (Test-ForgeVmDown $state)) {
+        if ($state -eq 'unknown') {
+            Fail 13 ("the daemon stopped answering about '$Vm', so nothing here can say that " +
+                     'it is down. It was NOT deleted.')
+        }
+        Fail 13 "'$Vm' did not stop, so it was not deleted."
+    }
 }
 
 # POST /vms/<name>/delete, which is the same shape as /start and /stop.
@@ -188,10 +197,21 @@ try {
 }
 
 # Proved by effect. A 200 from a young API is not the same as a VM that is gone.
+#
+# AND AN ERROR IS NOT A PROOF EITHER. This was `try { Asb GET } catch { $still =
+# $false }`, so a timeout, a 500 or an expired token all read as "it is gone" —
+# and the line below then cleared the pinned host key of a VM that may still be
+# registered, after printing phase=gone. Only the documented 404, confirmed
+# against the list of VMs, means absent. See vmstate.ps1.
 Start-Sleep -Seconds 2
-$still = $true
-try { $null = Asb GET "/vms/$Vm" } catch { $still = $false }
-if ($still) { Fail 13 "the daemon still reports '$Vm' after the delete." }
+$state = Get-ForgeVmState $Vm
+if ($state -ne 'absent') {
+    if ($state -eq 'unknown') {
+        Fail 13 ("the daemon did not say whether '$Vm' is gone after the delete, so this " +
+                 'reports nothing. Look with:  dr-forge ls')
+    }
+    Fail 13 "the daemon still reports '$Vm' after the delete."
+}
 Write-Output 'phase=gone'
 
 # THE HOST KEY GOES WITH THE VM. It is filed under the NAME of the VM. Thus it

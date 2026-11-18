@@ -221,6 +221,22 @@ function Install-GuestKeys([int]$Port, [string]$User, [string]$Via) {
     }
     $asbKey = $Via
     $ok = $true
+
+    # The directory this run owns in the guest. One mkdir before the first copy,
+    # because scp does not make its destination. The old destination was
+    # C:\Windows\Temp itself, so a copy that failed left the installer - or the
+    # .pub - of an earlier run under the name this run was about to use. See
+    # lib/forge/guestexec.ps1.
+    $gdir = New-GuestRunDir
+    & ssh.exe -n -i $asbKey -p $Port -o IdentitiesOnly=yes -o BatchMode=yes `
+        -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm `
+        "$User@127.0.0.1" (Get-GuestMkdirCommand $gdir.Win) 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Say "  could not make $($gdir.Win) in the guest (ssh $LASTEXITCODE)"
+        Say '  No key was installed, because there is nowhere to put the installer.'
+        return $false
+    }
+
     foreach ($j in @(
         @{ What = 'admin';  Script = 'authorize-key.ps1';      Pub = "$AdminKey.pub" },
         @{ What = 'tunnel'; Script = 'install-tunnel-key.ps1'; Pub = "$TunnelKey.pub" })) {
@@ -234,23 +250,20 @@ function Install-GuestKeys([int]$Port, [string]$User, [string]$Via) {
         $leaf = Split-Path $j.Pub -Leaf
         & scp.exe -q -i $asbKey -P $Port -o IdentitiesOnly=yes -o BatchMode=yes `
             -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm `
-            $src $j.Pub "$User@127.0.0.1:C:/Windows/Temp/"
+            $src $j.Pub "$User@127.0.0.1:$($gdir.Scp)/"
         if ($LASTEXITCODE -ne 0) {
             Say "  could not copy the $($j.What) key installer into the guest (scp $LASTEXITCODE)"
             $ok = $false
             continue
         }
-        # UNQUOTED REMOTE PATHS. A test showed the reason, so this is not
-        # careless. Plain double quotes around a Windows path lose their
-        # backslashes if WSL starts the script, as bin/dr-forge does. `if exist`
-        # is the guard of provision for the other half. `powershell -File
-        # <missing>` exits 0, so a copy that silently failed looks like a script
-        # that ran and did nothing. docs/FORGE.md.
-        $remote = "C:\Windows\Temp\$($j.Script)"
-        $pubAt  = "C:\Windows\Temp\$leaf"
-        $cmd = "if exist $remote " +
-               "(powershell -NoProfile -ExecutionPolicy Bypass -File $remote -PubKeyFile $pubAt) " +
-               "else (exit /b 127)"
+        # The wrapper and the unquoted paths are in lib/forge/guestexec.ps1 now,
+        # with the two measurements behind them: plain quotes around a remote
+        # path lose their backslashes when WSL starts the script, and
+        # `powershell -File <missing>` exits 0. This file had the third copy of
+        # that line, and init.ps1 had none.
+        $remote = "$($gdir.Win)\$($j.Script)"
+        $pubAt  = "$($gdir.Win)\$leaf"
+        $cmd = Get-GuestRunCommand $remote "-PubKeyFile $pubAt"
         $out = & ssh.exe -n -i $asbKey -p $Port -o IdentitiesOnly=yes -o BatchMode=yes `
                    -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm `
                    "$User@127.0.0.1" $cmd 2>&1
@@ -263,27 +276,32 @@ function Install-GuestKeys([int]$Port, [string]$User, [string]$Via) {
             Say "  the $($j.What) key installer failed ($rc)"
             $ok = $false
         }
-        # Do not leave the public key in Temp. The installer already read it.
+        # Do not leave the public key in the guest. The installer already read
+        # it, and the whole directory goes below - but not until both jobs are
+        # done, and a failure between them must not leave a key behind.
         & ssh.exe -n -i $asbKey -p $Port -o IdentitiesOnly=yes -o BatchMode=yes `
             -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm `
             "$User@127.0.0.1" `
             "del /q $pubAt" 2>&1 | Out-Null
     }
+
+    # The directory, with the two installers in it. Not fatal and not read: the
+    # keys are in by now, and a leftover directory in Temp is not a failed
+    # install. The next run makes its own.
+    & ssh.exe -n -i $asbKey -p $Port -o IdentitiesOnly=yes -o BatchMode=yes `
+        -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm `
+        "$User@127.0.0.1" (Get-GuestRmdirCommand $gdir.Win) 2>&1 | Out-Null
     return $ok
 }
 
-function Test-Running {
-    try { return [bool](Asb GET "/vms/$Vm").running } catch { return $false }
-}
-
-function Wait-Stopped([int]$Seconds) {
-    $t0 = Get-Date
-    do {
-        if (-not (Test-Running)) { return $true }
-        Start-Sleep -Seconds 5
-    } while (((Get-Date) - $t0).TotalSeconds -lt $Seconds)
-    return $false
-}
+# The state of the VM, in four answers, from the shared file. The local
+# Test-Running/Wait-Stopped pair that used to live here read an unreachable
+# daemon as "stopped", so a timeout reported a clean shutdown. See vmstate.ps1.
+. (Join-Path $PSScriptRoot 'vmstate.ps1')
+# And the run directory and the cmd.exe wrapper that Install-GuestKeys above
+# uses. Dot-sourced here, with the other one: a function is resolved when it is
+# called, and the mode blocks below are what call it.
+. (Join-Path $PSScriptRoot 'guestexec.ps1')
 
 # A BOUND PORT IS NOT A WORKING FORWARD. That difference cost a full diagnosis.
 # The listener was up, and the right supervisor owned it. But the guest refused
@@ -470,15 +488,26 @@ switch ($Mode) {
         Say "the daemon refused the clean shutdown: $($_.Exception.Message)"
     }
     Say "waiting up to $GraceSec s for it to power off"
-    if (Wait-Stopped $GraceSec) {
+    $state = Wait-ForgeVmState $Vm @('stopped', 'absent') $GraceSec
+    if (Test-ForgeVmDown $state) {
         Say 'clean shutdown complete'
         exit 0
     }
+    # 'unknown' comes here too, and that is right: the plug is what you reach
+    # for when the clean stop did not finish, and "nobody could tell" is not a
+    # finished clean stop.
     Say 'it did not stop in the grace period. Pulling the plug through the daemon'
     try { $null = Asb POST "/vms/$Vm/stop" } catch {
         Fail 11 "the daemon refused to stop it: $($_.Exception.Message)"
     }
-    if (-not (Wait-Stopped $TimeoutSec)) { Fail 11 "it still runs $TimeoutSec s after stop" }
+    $state = Wait-ForgeVmState $Vm @('stopped', 'absent') $TimeoutSec
+    if (-not (Test-ForgeVmDown $state)) {
+        if ($state -eq 'unknown') {
+            Fail 11 ("the daemon stopped answering about '$Vm' during the stop, so nothing " +
+                     'here can say that it is down. Look with:  dr-forge status')
+        }
+        Fail 11 "it still runs $TimeoutSec s after stop"
+    }
     Say 'stopped through the daemon'
     exit 0
 }

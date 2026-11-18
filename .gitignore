@@ -3,3 +3,4 @@ tmp
 
 # Draugr can sandbox its own repo. This is the layer for each user. It never ships.
 .draugr.local.conf
+appsandbox.log

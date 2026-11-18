@@ -184,6 +184,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# The cmd.exe wrapper that proves a guest script is really the one just copied
+# in. It was written here first; init.ps1 ran the file directly and could run a
+# stale copy, so the line moved to one place. See guestexec.ps1.
+. (Join-Path $PSScriptRoot 'guestexec.ps1')
+
 $script:done = [ordered]@{}
 function Phase($name, $state) { $script:done[$name] = $state }
 function Say($msg)   { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
@@ -196,18 +201,25 @@ function Fail($msg)  { Write-Host "  $msg" -ForegroundColor Red }
 # -`. That form runs stdin one line at a time, as typed text. Thus it reads a
 # multi-line block as not complete, and silently loses the rest, with exit code
 # 0 and no output. A test showed this, after three scripts "succeeded" that way.
-function Copy-ToGuest([string[]]$Paths, [string]$Dest = 'C:/Windows/Temp/') {
+# $Dest defaults to the run directory of THIS run. A default is evaluated at the
+# call, so $script:gdir is already set by then - it is made directly after the
+# ssh port is known, above the first phase that copies anything.
+function Copy-ToGuest([string[]]$Paths, [string]$Dest = "$($script:gdir.Scp)/") {
     Invoke-Native { & scp.exe -q -i $AdminKey -P $script:sshPort -o IdentitiesOnly=yes `
         -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm @Paths `
         "$($script:guestUser)@127.0.0.1:$Dest" 2>&1 } | ForEach-Object { Write-Host "  $_" }
-    if ($LASTEXITCODE -ne 0) { throw "scp to the guest failed ($LASTEXITCODE)" }
+    if ($LASTEXITCODE -ne 0) {
+        throw ("scp to the guest failed ($LASTEXITCODE). The destination is " +
+               "$Dest, which this run makes once, above phase 1 - and the cleanup " +
+               'phase empties C:\Windows\Temp, so a phase after it re-makes it.')
+    }
 }
 # NOT named $Args. That is an automatic variable of PowerShell, and a parameter
 # with that name silently gets nothing. A test on the first run of this script
 # showed this. -VerifyOnly never reached the guest, and a read-only run changed
 # a value.
 function Invoke-GuestScript([string]$Name, [string[]]$ScriptArgs = @()) {
-    $remote = "C:\Windows\Temp\$Name"
+    $remote = "$($script:gdir.Win)\$Name"
     # ============================ TWO DEFECTS FROM TESTS, BOTH FIXED HERE ================
     # A TEST on the first run of this script that reached the
     # guest. Each phase on the guest side failed, and each one reported `ok`.
@@ -239,9 +251,10 @@ function Invoke-GuestScript([string]$Name, [string[]]$ScriptArgs = @()) {
     #    Thus the own cmd.exe of the guest decides, and a missing file gets its own code. 127
     #    is the shell convention for "not found", and no guest script here uses it.
     # ====================================================================================
-    $cmd = "if exist $remote " +
-           "(powershell -NoProfile -ExecutionPolicy Bypass -File $remote $($ScriptArgs -join ' ')) " +
-           "else (exit /b 127)"
+    # The wrapper itself now lives in guestexec.ps1, because init.ps1 ran the
+    # file WITHOUT it and so could run a stale copy and report its result. The
+    # reasoning above is kept there, where both callers can find it.
+    $cmd = Get-GuestRunCommand $remote ($ScriptArgs -join ' ')
     # The output of the guest goes to the console, and is NOT returned.
     # Otherwise `$rc = Invoke-GuestScript` captures each line of the guest into
     # $rc, with the exit code as the last element of an array of text. Thus the
@@ -982,6 +995,27 @@ $script:sshPort = $ssh.port
 $script:guestUser = $ssh.user
 Note "ssh: $($ssh.user)@127.0.0.1:$($ssh.port) (sshState=$($ssh.sshState))"
 
+# --- the directory this run owns in the guest ---------------------------------------------
+# Made here, because the port and the user are known and nothing has been copied
+# yet. Everything this run puts into the guest goes in here, and phase 12
+# removes the whole directory. The destination used to be C:\Windows\Temp
+# itself, shared by every run of every VM, so a copy that failed left an older
+# file under the name the run was about to use. See lib/forge/guestexec.ps1.
+#
+# IN BOTH MODES. -VerifyOnly copies the guest scripts in too; it only tells them
+# to change nothing.
+$script:gdir = New-GuestRunDir
+$script:gmk = Get-GuestMkdirCommand $script:gdir.Win
+Invoke-Native { & ssh.exe -n -i $AdminKey -p $script:sshPort -o IdentitiesOnly=yes `
+    -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm `
+    "$($script:guestUser)@127.0.0.1" $script:gmk 2>&1 } | ForEach-Object { Write-Host "  $_" }
+if ($LASTEXITCODE -ne 0) {
+    Fail "could not make $($script:gdir.Win) in the guest (ssh $LASTEXITCODE)."
+    Fail '  Nothing was copied in, so nothing below could have run.'
+    exit 2
+}
+Note "guest temp: $($script:gdir.Win)"
+
 # ============================================================== 1. keys on the host
 Say 'keys'
 foreach ($k in @($AdminKey, $TunnelKey)) {
@@ -1103,9 +1137,13 @@ if ($SkipTunnelKey) { Phase 'tunnel key' 'skipped' } elseif ($VerifyOnly) {
 } else {
     Say 'the restricted tunnel key'
     Copy-ToGuest @((Join-Path $PSScriptRoot 'guest\install-tunnel-key.ps1'), "$TunnelKey.pub")
-    $rc = Invoke-GuestScript 'install-tunnel-key.ps1' @("-PubKeyFile C:\Windows\Temp\$(Split-Path "$TunnelKey.pub" -Leaf)")
+    $rc = Invoke-GuestScript 'install-tunnel-key.ps1' @("-PubKeyFile $($script:gdir.Win)\$(Split-Path "$TunnelKey.pub" -Leaf)")
     Phase 'tunnel key' $(if ($rc -eq 0) { 'ok' } else { "FAILED ($rc)" })
-    Invoke-GuestPs "Remove-Item 'C:\Windows\Temp\$(Split-Path "$TunnelKey.pub" -Leaf)' -Force -EA SilentlyContinue" | Out-Null
+    # The key goes at once, and does not wait for the cleanup of the whole
+    # directory in phase 12: a reboot between here and there would leave it in
+    # the guest. Copy-ToGuest threw if the copy failed, so the file this
+    # authorized is the one it sent.
+    Invoke-GuestPs "Remove-Item '$($script:gdir.Win)\$(Split-Path "$TunnelKey.pub" -Leaf)' -Force -EA SilentlyContinue" | Out-Null
 }
 
 # ============================================================== 4. the gateway mound
@@ -1406,7 +1444,10 @@ if (-not $NetFxSource) {
     Phase 'netfx3' 'not requested'
 } else {
     Say '.NET Framework 3.5'
-    $sxs = 'C:/Windows/Temp/draugr-sxs'
+    # Inside the run directory, not beside it: a fixed C:\Windows\Temp\draugr-sxs
+    # would hold the cab of an earlier run if that run died between the copy and
+    # the Remove-Item below, and DISM would install from THAT payload.
+    $sxs = "$($script:gdir.Scp)/sxs"
     Invoke-GuestPs "New-Item -ItemType Directory -Force -Path '$($sxs -replace '/','\')' | Out-Null" | Out-Null
     # The cab, then the script. Pushed the same way as the MSI of the screen
     # installer. The host has normal internet and a file that a person put
@@ -1434,6 +1475,17 @@ if ($SkipCleanup) { Phase 'cleanup' 'skipped' } else {
     Copy-ToGuest @((Join-Path $PSScriptRoot 'guest\cleanup.ps1'))
     $rc = Invoke-GuestScript 'cleanup.ps1' $(if ($VerifyOnly) { @('-WhatIfOnly') } else { @() })
     Phase 'cleanup' $(if ($rc -eq 0) { $(if ($VerifyOnly) { 'reported' } else { 'ok' }) } else { "FAILED ($rc)" })
+
+    # CLEANUP JUST DELETED THE RUN DIRECTORY, and that is correct: it empties
+    # C:\Windows\Temp, and this run's directory is in there. Phase 13 copies the
+    # manifest script in, so the destination has to exist again. A phase added
+    # below this line needs the same thing - without it, scp lands in a
+    # directory that is not there.
+    if (-not $VerifyOnly) {
+        Invoke-Native { & ssh.exe -n -i $AdminKey -p $script:sshPort -o IdentitiesOnly=yes `
+            -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm `
+            "$($script:guestUser)@127.0.0.1" $script:gmk 2>&1 } | Out-Null
+    }
 }
 
 # ============================================================== 13. the manifest
@@ -1448,6 +1500,19 @@ if ($SkipManifest) { Phase 'manifest' 'skipped' } else {
     $rc = Invoke-GuestScript 'write-manifest.ps1' @("-McpPort $McpPort", '-Print')
     Phase 'manifest' $(if ($rc -eq 0) { 'ok' } else { "FAILED ($rc)" })
 }
+
+# --- this run's directory in the guest ----------------------------------------------------
+# LAST, because the manifest phase above is the last thing that copies anything
+# in, and it runs AFTER the cleanup phase emptied the temp directory. Without
+# this, a sealed layer carries the staged copy of write-manifest.ps1 for ever:
+# a look inside layer-0 found exactly that, left by the run that built it, under
+# a name that a later run copies in again.
+#
+# Not fatal and nothing reads its status. The guest is finished here, and a
+# leftover directory is litter, not a failed provision.
+Invoke-Native { & ssh.exe -n -i $AdminKey -p $script:sshPort -o IdentitiesOnly=yes `
+    -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm `
+    "$($script:guestUser)@127.0.0.1" (Get-GuestRmdirCommand $script:gdir.Win) 2>&1 } | Out-Null
 
 # ============================================================== what is left to a human
 Say 'summary'

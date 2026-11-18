@@ -31,7 +31,10 @@
 #   0   done. For `status`, the daemon runs
 #   2   the arguments are wrong
 #   3   only for `status`: the daemon is down. Not a failure, a fact
-#   20  a VM did not stop, so the daemon did not change
+#   4   only for `status`: the daemon answers, and did not list its VMs. Thus
+#       this cannot say which run, and an empty list would be a guess
+#   20  nothing was confirmed down, so the daemon did not change: a VM that did
+#       not stop, or a list of VMs that could not be read
 #   21  the daemon did not stop
 #   22  the script did not find AppSandbox.exe to start it
 #   24  elevation was refused
@@ -75,9 +78,22 @@ function Get-Daemon {
     } catch { return $null }
 }
 
+# $null means "I could not ask". THE CALLERS ARE WHAT MAKES THAT TRUE, and this
+# function cannot do it alone: PowerShell unrolls an array on the way out of a
+# function, so `return @()` and `return $null` arrive at `$v = Get-Vms $d` as
+# exactly the same $null. A mutation run proved it - putting `return @()` back
+# changed no behaviour at all. The defect was never the value here; it was that
+# nobody tested it.
+#
+# Both callers read the failure as "nothing runs": the status line said "no VM
+# runs, so the daemon can stop directly", and the wait below treated a VM
+# missing from a failed listing as one that had shut down - after which this
+# script asks the daemon to stop while a guest is still writing to its disk.
+# Each caller now has its own test for $null, and each of those is mutated in
+# tmp/run-mut-a6.sh.
 function Get-Vms($d) {
     try { return @((Invoke-RestMethod -Uri "$($d.Endpoint)/v1/vms" -Headers $d.Header -TimeoutSec 15).vms) }
-    catch { return @() }
+    catch { return $null }
 }
 
 # The image path of the daemon, from the process that runs now. For a process
@@ -117,6 +133,10 @@ if ($Mode -eq 'status') {
     Save-ExePath
     Say "AppSandbox is UP: $($d.Version) on $($d.Endpoint)"
     $vms = Get-Vms $d
+    if ($null -eq $vms) {
+        Warn 'the daemon answers, but it did not list its VMs. Thus this cannot say which run.'
+        exit 4
+    }
     $running = @($vms | Where-Object { $_.running } | ForEach-Object { $_.name })
     if ($running.Count) {
         Note "running: $($running -join ', ')"
@@ -136,7 +156,16 @@ if ($Mode -eq 'stop' -or $Mode -eq 'restart') {
     } else {
         Save-ExePath
         Say "stopping AppSandbox: $($d.Version)"
-        $running = @(Get-Vms $d | Where-Object { $_.running } | ForEach-Object { $_.name })
+        $all = Get-Vms $d
+        if ($null -eq $all) {
+            # 20, the same code as a VM that did not stop: it is the refusal
+            # that happens BEFORE anything changed, which is what a front end
+            # branches on.
+            Fail 20 ('the daemon answers, but it did not list its VMs. Nothing was stopped: a ' +
+                     'list this script could not read is not an empty one, and a daemon stopped ' +
+                     'under a running guest leaves a dirty disk.')
+        }
+        $running = @($all | Where-Object { $_.running } | ForEach-Object { $_.name })
 
         # GRACEFULLY, ONE AT A TIME, AND THE SCRIPT WAITS FOR EACH. /shutdown is
         # the ACPI power-off. /stop is the plug. A guest that loses power under
@@ -153,8 +182,15 @@ if ($Mode -eq 'stop' -or $Mode -eq 'restart') {
             $sw = [Diagnostics.Stopwatch]::StartNew()
             $down = $false
             while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
-                $st = @(Get-Vms $d | Where-Object { $_.name -eq $v })
-                if (-not $st -or -not $st[0].running) { $down = $true; break }
+                # A listing this script could not read says nothing about this
+                # guest, so the wait goes on. Before, `-not $st` covered both
+                # "it is no longer listed" and "there was no list", and the
+                # second one ended the wait with $down = $true.
+                $now = Get-Vms $d
+                if ($null -ne $now) {
+                    $st = @($now | Where-Object { $_.name -eq $v })
+                    if (-not $st -or -not $st[0].running) { $down = $true; break }
+                }
                 Start-Sleep -Seconds 3
             }
             if (-not $down) {

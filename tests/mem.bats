@@ -319,6 +319,9 @@ setup_mound() {
 
 @test "dr-rm: refuses while the mound holds unexported memory" {
     setup_mound || skip "no writable Windows drive path"
+    # The memory question is the second one. Without this, dr-rm refuses at the
+    # first, over commits it cannot ask about, and this test proves nothing.
+    dr_mound_answers
     mkdir -p "$MEMDIR"
     printf 'unexported\n' > "$MEMDIR/a.md"
 
@@ -330,6 +333,7 @@ setup_mound() {
 
 @test "dr-rm: proceeds once the memory is in the store" {
     setup_mound || skip "no writable Windows drive path"
+    dr_mound_answers
     mkdir -p "$MEMDIR"
     printf 'exported\n' > "$MEMDIR/a.md"
     dr-mem export >/dev/null 2>&1
@@ -342,6 +346,7 @@ setup_mound() {
 
 @test "mem sync manual: no automatic transfer, but dr-rm still refuses" {
     setup_mound || skip "no writable Windows drive path"
+    dr_mound_answers
     mkdir -p "$MEMDIR"
     printf 'unexported\n' > "$MEMDIR/a.md"
 
@@ -352,11 +357,43 @@ setup_mound() {
 
 @test "mem sync off: dr-rm does not refuse over memory you said you do not keep" {
     setup_mound || skip "no writable Windows drive path"
+    dr_mound_answers
     mkdir -p "$MEMDIR"
     printf 'unexported\n' > "$MEMDIR/a.md"
 
     DRAUGR_MEM_SYNC=off run dr-rm --yes
     [ "$status" -eq 0 ]
+}
+
+# A MOUND THAT CANNOT ANSWER IS NOT AN EMPTY MOUND. The memory of the agent
+# lives only in the disk image, so this is the one question whose answer cannot
+# be reconstructed afterwards. Status 2 used to print a warning and then ask
+# whether to destroy it anyway. DR_MOCK_FAIL=exec fails exactly the call that
+# lists the memory, and nothing else in dr-rm's chain uses it.
+@test "dr-rm: a mound that cannot say what memory it holds is not destroyed" {
+    setup_mound || skip "no writable Windows drive path"
+    dr_mound_answers
+    mkdir -p "$MEMDIR"
+    printf 'unexported\n' > "$MEMDIR/a.md"
+
+    DR_MOCK_FAIL=exec run dr-rm --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"look for memory"* ]]
+    [[ "$output" == *"--force"* ]]
+    [ -z "$(grep '^rm ' "$DR_MOCK_LOG" || true)" ]
+}
+
+@test "dr-up --recreate: the same mound is not rebuilt over either" {
+    setup_mound || skip "no writable Windows drive path"
+    dr_mound_answers
+    mkdir -p "$MEMDIR"
+    printf 'unexported\n' > "$MEMDIR/a.md"
+
+    DR_MOCK_FAIL=exec run dr-up --recreate --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"look for memory"* ]]
+    [ -z "$(grep '^rm ' "$DR_MOCK_LOG" || true)" ]
+    [ -z "$(grep '^create ' "$DR_MOCK_LOG" || true)" ]
 }
 
 @test "mem sync off: dr-status leaves the memory section out" {
@@ -742,6 +779,7 @@ release_transcript() {
 
 @test "dr-up --recreate: refuses while the conversation is not exported" {
     setup_mound || skip "no writable Windows drive path"
+    dr_mound_answers
     make_transcript new 1800000000
 
     run dr-up --recreate --yes

@@ -55,10 +55,21 @@ function Remove-Quietly([string[]]$paths) {
 Write-Host '--- cleanup ---'
 
 # --- the scripts that provisioning staged, and the work directory of the screen installer ---
-# lib/forge/provision.ps1 copies each guest script into C:\Windows\Temp, and
-# runs it there. All of them are in the repository. The copies are scaffolding.
+# lib/forge/provision.ps1 copies each guest script into the guest and runs it
+# there. All of them are in the repository. The copies are scaffolding.
+#
+# TWO PLACES TO LOOK, because the destination changed. A run now owns
+# C:\Windows\Temp\draugr-<id>\ and puts its copies in there (lib/forge/
+# guestexec.ps1 says why). The top level still holds the copies of a guest that
+# an older Draugr provisioned, and this script also runs on those. A report
+# that counted only the top level would say "staged scripts (0)" with a
+# directory full of them one level down.
+$stagedNames = '^(install-|preflight|write-manifest|cleanup|audit)'
 $staged = @(Get-ChildItem 'C:\Windows\Temp' -Filter '*.ps1' -EA SilentlyContinue |
-            Where-Object { $_.Name -match '^(install-|preflight|write-manifest|cleanup|audit)' })
+            Where-Object { $_.Name -match $stagedNames })
+$staged += @(Get-ChildItem 'C:\Windows\Temp' -Directory -Filter 'draugr-*' -EA SilentlyContinue |
+             ForEach-Object { Get-ChildItem $_.FullName -Filter '*.ps1' -Recurse -EA SilentlyContinue } |
+             Where-Object { $_.Name -match $stagedNames })
 $mb = [math]::Round((($staged | Measure-Object Length -Sum).Sum) / 1MB, 2)
 Report "staged scripts ($($staged.Count))" $mb
 Remove-Quietly @($staged.FullName)
