@@ -238,6 +238,92 @@ make_plain_dir() {
     [[ "$output" == *"report.md"* ]]
 }
 
+# THE FINDING. The credential rules were written only when there was NO
+# .gitignore at all, so one ordinary pre-existing ignore file - a single
+# `*.log` is enough - skipped every rule, and the `git add -A` then committed
+# the credential beside it. A security review staged a private.key that way.
+# In history it is also invisible to dr-scan for ever, because that scan
+# reports untracked files.
+@test "add-all: an existing .gitignore no longer disables the credential rules" {
+    make_plain_dir || skip "no writable Windows drive path"
+    printf '*.log\n' > "$DIR/.gitignore"
+    printf 'PRIVATE KEY\n' > "$DIR/private.key"
+    printf 'AWS_SECRET=hunter2\n' > "$DIR/secrets.env"
+    DRAUGR_ON_MISSING_REPO=create-add-all dr-init >/dev/null 2>&1
+
+    run git -C "$DIR" ls-files
+    [[ "$output" != *"private.key"* ]]
+    [[ "$output" != *"secrets.env"* ]]
+    [[ "$output" == *"report.md"* ]]
+
+    # Untracked, so the scan that exists to find them still can.
+    run dr-scan
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"private.key"* ]]
+
+    # AND THE RULES KEEP WORKING AFTER THE CREATE. This is what the appended
+    # block gives that the index check cannot: a credential written later is
+    # ignored, so the next `git add -A` of your own does not stage it. Without
+    # the block the two files above are still kept out of the first commit (the
+    # index check drops them), which is why this assertion is here - a mutation
+    # run showed that removing the block broke nothing else in this test.
+    printf 'KEY\n' > "$DIR/later.pem"
+    run git -C "$DIR" status --porcelain
+    [[ "$output" != *"later.pem"* ]]
+}
+
+@test "add-all: the rules are appended, and the user's own file is not rewritten" {
+    make_plain_dir || skip "no writable Windows drive path"
+    # A rule and a negation that really applies. (`notes/` + `!notes/keep.md`
+    # does NOT: git cannot re-include a file whose parent directory is
+    # excluded, so that pair would prove nothing about precedence.)
+    printf '# my own header\n*.csv\n!notes/data.csv\n' > "$DIR/.gitignore"
+    printf 'rows\n' > "$DIR/other.csv"
+    DRAUGR_ON_MISSING_REPO=create-add-all dr-init >/dev/null 2>&1
+
+    # Their lines, unchanged and in their order, with the Draugr block after
+    # them. Appended at the END on purpose: gitignore gives the last matching
+    # rule, so the credential patterns win over an earlier negation without
+    # touching it.
+    run head -3 "$DIR/.gitignore"
+    [ "${lines[0]}" = '# my own header' ]
+    [ "${lines[1]}" = '*.csv' ]
+    [ "${lines[2]}" = '!notes/data.csv' ]
+    grep -q '>>> Draugr (managed)' "$DIR/.gitignore"
+    grep -q '<<< Draugr (managed)' "$DIR/.gitignore"
+
+    # And their rules still decide what they decided: their negation holds,
+    # and their exclusion holds.
+    run git -C "$DIR" ls-files
+    [[ "$output" == *"notes/data.csv"* ]]
+    [[ "$output" != *"other.csv"* ]]
+}
+
+@test "add-all: a credential in the INDEX is dropped, not committed" {
+    make_plain_dir || skip "no writable Windows drive path"
+    # The rules are a claim about what git will do; this is the check of what
+    # git DID. Reached here by a .gitignore that already carries the marker
+    # line and none of the rules - an older Draugr block, or one somebody
+    # emptied - so the block is not written again and nothing ignores the key.
+    printf '# >>> Draugr (managed): credential and checkout patterns\n# <<< Draugr (managed)\n' \
+        > "$DIR/.gitignore"
+    printf 'PRIVATE KEY\n' > "$DIR/private.key"
+    run env DRAUGR_ON_MISSING_REPO=create-add-all dr-init
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"look like credentials"* ]]
+    [[ "$output" == *"private.key"* ]]
+
+    # Not in the first commit, and the rest of the directory still is.
+    run git -C "$DIR" ls-files
+    [[ "$output" != *"private.key"* ]]
+    [[ "$output" == *"report.md"* ]]
+    # Named in the ignore file, so it stays out, and the tree is clean.
+    grep -qxF '/private.key' "$DIR/.gitignore"
+    [ -z "$(git -C "$DIR" status --porcelain)" ]
+    # The file itself is untouched on disk.
+    grep -q 'PRIVATE KEY' "$DIR/private.key"
+}
+
 @test "add-all: hands back an ordinary repo, dirty-tree check included" {
     make_plain_dir || skip "no writable Windows drive path"
     DRAUGR_ON_MISSING_REPO=create-add-all dr-init >/dev/null 2>&1

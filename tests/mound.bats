@@ -403,16 +403,30 @@ stale_tracking_ref() {
     [[ "$(calls create)" == *"--kit "*':\'* ]]
 }
 
-@test "dr-up: a missing default kit is silent, a missing configured one warns" {
+@test "dr-up: a missing default kit is silent, a missing configured one stops" {
+    # The default LOCATION is nobody's request, so a repo with no kit there is
+    # an ordinary repo and not an error.
     DR_MOCK_STATE=absent run dr-up
-    [[ "$output" != *"no kit found"* ]]
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"do not exist"* ]]
 
+    # A kit asked for BY NAME and not there is fatal: it can carry the deny
+    # rules of the project, and the mound would come up without them.
+    #
     # Reported by the name that you wrote, not by a resolved path. Draugr looks
     # for a bare entry in two places. Thus "no kit at /repo/nope" hides half of
     # the places where Draugr looked.
+    #
+    # The log is emptied first. It accumulates over a whole test, and the half
+    # above already created a mound - so "nothing was created" has to be asked
+    # about THIS run.
+    : > "$DR_MOCK_LOG"
     DRAUGR_KIT=.draugr/nope DR_MOCK_STATE=absent run dr-up
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"no kit found for '.draugr/nope'"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *".draugr/nope"* ]]
+    [[ "$output" == *"do not exist"* ]]
+    # It refuses BEFORE it builds anything.
+    [ -z "$(calls create)" ]
 }
 
 @test "dr-up: --print runs nothing" {
@@ -612,10 +626,32 @@ stale_tracking_ref() {
     [ -n "$(calls create)" ]
 }
 
-@test "dr-go: DRAUGR_CLONE=false prompts and will not assume yes" {
-    DRAUGR_CLONE=false DR_MOCK_STATE=running run dr-go
+# THE MOUND DECIDES, NOT THE KEY. dr-up reuses the mound that exists, so
+# DRAUGR_CLONE describes the next one. A mound built with DRAUGR_CLONE=false
+# keeps your tree read-write after the key is set back to true, and that is the
+# mound a security review attached to with no prompt at all. DR_MOCK_TREE is
+# what sandboxd reports about it.
+@test "dr-go: a bind-mounted mound prompts and will not assume yes" {
+    DR_MOCK_TREE=writable DR_MOCK_STATE=running run dr-go
     [ "$status" -ne 0 ]
     [[ "$output" == *"read-write"* ]]
+    ! attached
+}
+
+@test "dr-go: the key alone does not raise the question for a clone mound" {
+    # DRAUGR_CLONE=false against a mound that IS a clone. The agent cannot
+    # write your tree, so there is nothing to confirm - but the key is not in
+    # effect either, and one dim line says so.
+    DRAUGR_CLONE=false DR_MOCK_TREE=clone DR_MOCK_STATE=running run dr-go
+    [[ "$output" != *"read-write"* ]]
+    [[ "$output" == *"THIS MOUND is a clone"* ]]
+}
+
+@test "dr-go: a mound sandboxd cannot describe still prompts" {
+    # "I could not tell" is not "it is safe". Only a confirmed clone is quiet.
+    DR_MOCK_TREE=fail DR_MOCK_STATE=running run dr-go
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot tell"* ]]
     ! attached
 }
 
@@ -841,6 +877,25 @@ go_rc() {
     [[ "$output" == *"running"* ]]
     [[ "$output" == *"main"* ]]
     [[ "$output" == *"clean"* ]]
+}
+
+@test "dr-status: the clone row describes the MOUND, not the key" {
+    # A row that reads DRAUGR_CLONE describes the mound you would get NEXT.
+    # The dangerous disagreement is the one where the key says clone and the
+    # mound is a bind mount, so the row has to come from sandboxd.
+    DR_MOCK_TREE=writable DRAUGR_CLONE=true DR_MOCK_STATE=running run dr-status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"bind mount"* ]]
+    [[ "$output" == *"--recreate"* ]]
+
+    DR_MOCK_TREE=clone DR_MOCK_STATE=running run dr-status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"read-only"* ]]
+
+    # And "I could not tell" says so, instead of describing the key.
+    DR_MOCK_TREE=fail DR_MOCK_STATE=running run dr-status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"cannot tell"* ]]
 }
 
 @test "dr-status: an uncommitted change is reported with its consequence" {

@@ -648,10 +648,34 @@ if ($Mode -eq 'adopt') {
         # that could not be read into the answer "no disks in here" - which is
         # the answer that leads to the recursive delete below. An enumeration
         # that failed is not an enumeration that found nothing.
+        #
+        # .avhdx TOO, and not by -Filter. A checkpoint disk is a disk: it holds
+        # the writes that a snapshot kept, and `-Filter *.vhdx` does not match
+        # it. (-Filter is also the Win32 matcher, which answers for 8.3 aliases
+        # as well, so an exact extension test is the honest form.)
         $strayErr = @()
-        $stray = @(Get-ChildItem $old -Filter *.vhdx -Recurse -Force `
+        $stray = @(Get-ChildItem $old -Recurse -Force `
                        -ErrorAction SilentlyContinue -ErrorVariable strayErr |
+                   Where-Object { $_.Extension -in '.vhdx', '.avhdx' } |
                    Where-Object { -not ($WhatIfOnly -and $_.FullName -eq $from) })
+
+        # WHAT MAY BE DELETED, BY NAME. The folder of the VM is removed because
+        # tidying up is part of what adopt is for - but "the disk is gone" is
+        # not "nothing here matters". The old code removed the folder whole as
+        # long as no .vhdx was left, so a note, a script or a build output that
+        # somebody had put beside the VM went with it, unnamed.
+        #
+        # These four names are what AppSandbox leaves next to a VM. Measured on
+        # the layer store of this machine: layer-1 and layer-3-unreal hold
+        # exactly snapshots\, vm.vmgs, vm.vmrs and vm_state.json beside their
+        # disk. Anything else means the folder stays, and the extra entries are
+        # named, because only you can say whether they matter.
+        $ownArtifacts = @('vm.vmgs', 'vm.vmrs', 'vm_state.json', 'snapshots')
+        $foreignErr = @()
+        $foreign = @(Get-ChildItem $old -Force `
+                         -ErrorAction SilentlyContinue -ErrorVariable foreignErr |
+                     Where-Object { $_.Name -notin $ownArtifacts } |
+                     Where-Object { -not ($WhatIfOnly -and $_.FullName -eq $from) })
 
         # NEVER THE ROOT. The header of this file warns not to build a VM
         # inside the layer store, because its folder is one delete from taking
@@ -668,14 +692,21 @@ if ($Mode -eq 'adopt') {
             Warn "NOT removing $old. It is the layer root, holds it, or is a drive root."
             Warn '  The VM was built inside the layer store. Move what you want to keep,'
             Warn '  and remove that folder yourself.'
-        } elseif ($strayErr.Count) {
+        } elseif ($strayErr.Count -or $foreignErr.Count) {
             Warn "NOT removing $old. Its contents could not be listed:"
-            foreach ($e in $strayErr) { Warn "  $($e.Exception.Message)" }
+            foreach ($e in @($strayErr) + @($foreignErr)) { Warn "  $($e.Exception.Message)" }
             Warn '  A folder that cannot be read is not a folder that is known to be empty.'
         } elseif ($stray.Count) {
-            Warn "NOT removing $old. It still holds $($stray.Count) .vhdx file(s):"
+            # A disk first, and by its full path: it is the one leftover whose
+            # loss cannot be undone, and it can be nested inside snapshots\.
+            Warn "NOT removing $old. It still holds $($stray.Count) disk file(s):"
             foreach ($f in $stray) { Warn "  $($f.FullName)" }
             Warn '  Something else is there. Look before you delete it yourself.'
+        } elseif ($foreign.Count) {
+            Warn "NOT removing $old. It holds $($foreign.Count) entry(s) that the forge did not put there:"
+            foreach ($f in $foreign) { Warn "  $($f.Name)" }
+            Warn '  Only snapshots, vm.vmgs, vm.vmrs and vm_state.json are removed with the'
+            Warn '  folder. Move what you want to keep, then remove it yourself.'
         } elseif ($WhatIfOnly) {
             Note "would remove $old (now with no disk)"
         } else {

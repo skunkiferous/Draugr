@@ -147,12 +147,58 @@ fi
 # The other direction. DRAUGR_CLONE=false bind-mounts your real working tree
 # read-write, and Draugr exists to prevent that. It asks each time, and no
 # configuration key stops the question. That is the purpose.
-if ! dr_is_true "$DRAUGR_CLONE"; then
-    dr_warn "DRAUGR_CLONE is false"
-    printf '  %sThe agent gets your real working tree, read-write. It can change and%s\n' "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sdelete files in %s directly. There is no clone to review first.%s\n' "$_DR_DIM" "$DR_REPO" "$_DR_OFF" >&2
-    dr_confirm "Continue without the mound?" || dr_die "cancelled"
+#
+# AND IT IS NO LONGER THE CONFIGURATION THAT DECIDES. `if ! dr_is_true
+# "$DRAUGR_CLONE"` asks what you want for the NEXT mound. dr-up reuses the one
+# you have, so a mound built with DRAUGR_CLONE=false keeps your tree
+# read-write however the key reads today - and the question was skipped. A
+# security review attached to such a mound with no prompt at all.
+#
+# The mound that exists is asked about itself (see dr_mound_tree_state, which
+# also says why neither .draugr.conf nor the create stamp can be the source:
+# the agent can write both of them in exactly this case). Only a CONFIRMED
+# clone goes quiet. "I could not tell" asks.
+if dr_sandbox_exists "$DRAUGR_SANDBOX"; then
+    tree=$(dr_mound_tree_state "$DRAUGR_SANDBOX" "$DR_REPO")
+else
+    # No mound yet. dr-up is about to create one from the configuration below,
+    # so here the configuration IS the effective mode.
+    if dr_is_true "$DRAUGR_CLONE"; then tree=clone; else tree=writable; fi
 fi
+
+case "$tree" in
+    clone)
+        # sandboxd says your tree is mounted read-only, so there is nothing to
+        # confirm. The other direction of the drift still deserves one line:
+        # you asked for a bind mount and this mound is not one, which is safe
+        # but not what the configuration says.
+        if ! dr_is_true "$DRAUGR_CLONE"; then
+            printf '  %sDRAUGR_CLONE is false, but THIS MOUND is a clone. The key applies at%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %sthe next:  dr-up --recreate%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        fi ;;
+    writable)
+        dr_warn "the agent gets your real working tree, read-write"
+        printf '  %sIt can change and delete files in %s directly. There is no%s\n' \
+            "$_DR_DIM" "$DR_REPO" "$_DR_OFF" >&2
+        printf '  %sclone to review first.%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+        # The drift case, which is the one the review found. The key says
+        # clone, the mound is not one, and only a recreate changes that.
+        if dr_is_true "$DRAUGR_CLONE"; then
+            printf '  %sDRAUGR_CLONE is true, but THIS MOUND was built without a clone.%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %sA key cannot change a mound that exists:  dr-up --recreate%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+        fi
+        dr_confirm "Continue without the mound?" || dr_die "cancelled" ;;
+    *)
+        dr_warn "Draugr cannot tell whether $DRAUGR_SANDBOX has your working tree read-write"
+        printf '  %ssbx did not name a mount for %s. Until that is clear, this asks%s\n' \
+            "$_DR_DIM" "$DR_REPO" "$_DR_OFF" >&2
+        printf '  %sthe question it would ask for a bind mount:  sbx inspect %s%s\n' \
+            "$_DR_DIM" "$DRAUGR_SANDBOX" "$_DR_OFF" >&2
+        dr_confirm "Continue anyway?" || dr_die "cancelled" ;;
+esac
 
 # Scan BEFORE the mound exists, not after. The purpose is to find a credential
 # before something can read it, and dr-up makes the read-only mount. With

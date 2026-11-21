@@ -206,13 +206,20 @@ make_kit_v3() {
     [[ "$line" == *"ghcr.io/org/kit:v1"* ]]
 }
 
-@test "dr-up: names a missing library kit without stopping" {
+# This used to warn and create the mound without the kit, and the thing left
+# out is the thing that was asked for: a kit is where a project's DENY rules
+# live, while the machine policy keeps its allow rules either way. So the mound
+# came up MORE OPEN than the configuration described.
+@test "dr-up: a missing library kit stops the create" {
     make_kit "$REPO/.draugr/kit"
     DRAUGR_KIT=".draugr/kit lua" DR_MOCK_STATE=absent run dr-up
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"no kit found for 'lua'"* ]]
-    # The one that DID resolve must still reach sbx.
-    [[ "$(calls create)" == *"--kit"* ]]
+    [ "$status" -ne 0 ]
+    # Named by the spelling that was written, not by a resolved path.
+    [[ "$output" == *"lua"* ]]
+    [[ "$output" == *"do not exist"* ]]
+    # And nothing was created. The kit that DID resolve does not make a
+    # half-configured mound acceptable.
+    [ -z "$(calls create)" ]
 }
 
 # --- the library commands -----------------------------------------------------

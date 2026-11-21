@@ -118,6 +118,95 @@ teardown() { dr_test_teardown; }
     [[ "$output" == *"DRAUGR_SCAN"*"true"* ]]
 }
 
+# --- who decides whether the working tree is writable -------------------------
+#
+# The bind-mount question was asked of DRAUGR_CLONE, which is what you want for
+# the NEXT mound. dr-up reuses the mound you have, so a mound built with
+# DRAUGR_CLONE=false keeps your tree read-write however the key reads today -
+# and a security review attached to exactly that mound with no prompt.
+#
+# The key is also the wrong source for a second reason, which the two tests
+# above demonstrate: it lives in .draugr.conf, and in bind mode the agent can
+# write that file. Editing it breaks the trust hash, the layer is then SKIPPED,
+# and the built-in default (DRAUGR_CLONE=true) applies. The agent would be
+# removing its own warning. So sandboxd is asked instead, and only a confirmed
+# clone goes quiet.
+
+# dr-go needs a terminal for the question, so these go through a pty. The
+# answer is "no", so the run stops at the question and attaches to nothing.
+clone_pty() {
+    DR_MOCK_STATE=running DR_MOCK_NAME="draugr-$(basename "$PWD")" \
+        dr_pty "printf 'n\n' | dr-go" 2>&1 || true
+}
+
+@test "clone: a confirmed clone asks nothing" {
+    local repo; repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
+    cd "$repo"
+    export DR_MOCK_TREE=clone DR_MOCK_WS_WIN="$(dr_path_win "$repo")"
+    run clone_pty
+    [[ "$output" != *"read-write"* ]]
+    [[ "$output" != *"cannot tell"* ]]
+}
+
+@test "clone: a mound that really is bind-mounted asks, whatever the key says" {
+    local repo; repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
+    cd "$repo"
+    # The whole finding: the configuration says clone, the MOUND is not one.
+    export DRAUGR_CLONE=true
+    export DR_MOCK_TREE=writable DR_MOCK_WS_WIN="$(dr_path_win "$repo")"
+    run clone_pty
+    [[ "$output" == *"read-write"* ]]
+    # And it names why the key did not help.
+    [[ "$output" == *"built without a clone"* ]]
+    [[ "$output" == *"--recreate"* ]]
+}
+
+@test "clone: an answer in an unknown shape asks as well" {
+    local repo; repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
+    cd "$repo"
+    export DRAUGR_CLONE=true
+    # sbx answered, but named no mount for THIS repo.
+    export DR_MOCK_TREE=other
+    run clone_pty
+    [[ "$output" == *"cannot tell"* ]]
+}
+
+@test "clone: a daemon that cannot answer asks as well" {
+    local repo; repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
+    cd "$repo"
+    export DRAUGR_CLONE=true
+    export DR_MOCK_TREE=fail
+    run clone_pty
+    [[ "$output" == *"cannot tell"* ]]
+}
+
+@test "dr_mound_tree_state: only a read-only mount of THIS repo is a clone" {
+    dr_load_common
+    local repo; repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
+    export DR_MOCK_WS_WIN="$(dr_path_win "$repo")"
+
+    # export, not a plain assignment: the mock is a CHILD PROCESS. Without it
+    # the mock answered with its default for every case, so three of these
+    # four passed for the wrong reason and only one failed.
+    export DR_MOCK_TREE=clone
+    [ "$(dr_mound_tree_state draugr-x "$repo")" = clone ]
+    export DR_MOCK_TREE=writable
+    [ "$(dr_mound_tree_state draugr-x "$repo")" = writable ]
+    export DR_MOCK_TREE=other
+    [ "$(dr_mound_tree_state draugr-x "$repo")" = unknown ]
+    export DR_MOCK_TREE=fail
+    [ "$(dr_mound_tree_state draugr-x "$repo")" = unknown ]
+}
+
+@test "dr_mound_tree_state: a mound that holds ANOTHER repo read-only is not this one's clone" {
+    dr_load_common
+    local repo; repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
+    # The sandbox has a read-only clone source - of a different repository.
+    # "Some repo is safe" must not answer "my repo is safe".
+    export DR_MOCK_TREE=other DR_MOCK_OTHER_WIN='C:\Code\someone-elses-repo'
+    [ "$(dr_mound_tree_state draugr-x "$repo")" = unknown ]
+}
+
 @test "hook: an untrusted hook is refused, not run" {
     local repo; repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
     cd "$repo"

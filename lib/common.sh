@@ -1242,6 +1242,36 @@ dr_context_create() {
     DR_REPO_WIN=$(dr_path_win "$dir")
 }
 
+# dr_scan_name_matches <path>: does this name look like a credential file?
+#
+# ONE MECHANISM FOR TWO QUESTIONS THAT MUST AGREE. dr-scan asks it about the
+# untracked files of a repository. dr_repo_create asks it about the files that
+# a FIRST COMMIT is about to include. A disagreement between those two is the
+# shape of a finding: dr-scan reports only UNTRACKED files, so a credential
+# that went into the initial commit is invisible to the scan that exists to
+# find it, for ever.
+#
+# THE PATTERNS ARE SPLIT WITH read -ra, and that is not a style choice.
+# `for pat in $DRAUGR_SCAN_PATTERNS` does word splitting AND PATHNAME
+# EXPANSION, so each pattern was first matched against the directory the
+# command happened to run in. With a `visible.key` next to it, the pattern
+# `*.key` became the single word `visible.key`, every candidate was then
+# compared with that one name, a `nested/hidden.key` matched nothing, and
+# DRAUGR_SCAN_FAIL=block exited 0. `read` does no pathname expansion, so the
+# patterns arrive at `case` as patterns.
+dr_scan_name_matches() {
+    local base=${1##*/} pat
+    local -a pats=()
+    read -ra pats <<< "${DRAUGR_SCAN_PATTERNS:-}"
+    for pat in ${pats[@]+"${pats[@]}"}; do
+        # shellcheck disable=SC2254  # $pat is deliberately a glob, not a literal
+        case "$base" in
+            $pat) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 # dr_repo_create <dir>: do what DRAUGR_ON_MISSING_REPO says. For "fail", it is
 # a fatal error. It sets DR_REPO_CREATED to the mode that it used. The caller
 # then knows that the repository is new, and that the caller must commit the
@@ -1331,10 +1361,29 @@ dr_repo_create() {
         # dr-scan reports only UNTRACKED files. A committed credential goes into
         # the clone of the agent and into the history. The scan that exists to
         # find it then says nothing.
-        if [ ! -f "$dir/.gitignore" ]; then
-            local pat pats=()
-            printf '%s\n' '# Draugr wrote this file. First, names of credential files:' \
-                > "$dir/.gitignore"
+        # AN EXISTING .gitignore USED TO MEAN NO PROTECTION AT ALL. The test
+        # was `[ ! -f "$dir/.gitignore" ]`, so an ordinary pre-existing ignore
+        # file - one `*.log` is enough - skipped every rule below, and the
+        # `git add -A` further down then committed the credential beside it.
+        # A security review staged a `private.key` that way.
+        #
+        # So the rules are APPENDED when the file exists, inside a marked
+        # block, and nothing of the user's is rewritten or reordered. Appended
+        # at the END on purpose: gitignore gives the last matching rule, so
+        # these win over an earlier `!negation` without touching it.
+        local pat pats=() marker='# >>> Draugr (managed): credential and checkout patterns'
+        if [ ! -f "$dir/.gitignore" ] || ! grep -qxF "$marker" "$dir/.gitignore"; then
+            if [ ! -f "$dir/.gitignore" ]; then
+                printf '%s\n' '# Draugr wrote this file.' > "$dir/.gitignore"
+            else
+                dr_info "appending a marked Draugr block to the .gitignore that is already there"
+                printf '\n' >> "$dir/.gitignore"
+            fi
+            printf '%s\n%s\n' "$marker" \
+                '# Names of credential files. dr-scan reports only UNTRACKED files,' \
+                >> "$dir/.gitignore"
+            printf '%s\n' '# so a committed credential is invisible to it for ever.' \
+                >> "$dir/.gitignore"
             read -ra pats <<< "${DRAUGR_SCAN_PATTERNS:-}"
             [ ${#pats[@]} -eq 0 ] || printf '%s\n' "${pats[@]}" >> "$dir/.gitignore"
 
@@ -1354,12 +1403,60 @@ dr_repo_create() {
                     >> "$dir/.gitignore"
                 for pat in "${pats[@]}"; do printf '%s\n' "$pat" >> "$dir/.gitignore"; done
             fi
+            printf '%s\n' '# <<< Draugr (managed)' >> "$dir/.gitignore"
         fi
 
         # Tell what was committed and what changes now. This mode gives back a
         # usual git repo, with the usual test for uncommitted changes. That
         # surprises users who wanted the other mode.
         git -C "$dir" add -A
+
+        # THE STAGED SET, NOT THE RULES. The block above is a rule, and a rule
+        # is a claim about what git will do. This asks git what it DID, with
+        # the same predicate dr-scan uses, because the one thing that must not
+        # happen here is a credential entering history - where no later scan
+        # can see it.
+        #
+        # A hit is unstaged and named in the block, and the commit goes ahead
+        # without it. Not a question: the file stays on disk, untouched and
+        # untracked, dr-scan reports it from now on, and committing it anyway
+        # is one `git add -f` away. A prompt here would be a prompt about
+        # something Draugr can simply not do.
+        #
+        # -z, because a file name can hold a newline, and git quotes such a
+        # name in its default output.
+        local _f _staged=() _ls
+        _ls=$(mktemp)
+        if git -C "$dir" diff --cached --name-only -z > "$_ls" 2>/dev/null; then
+            while IFS= read -r -d '' _f; do
+                if dr_scan_name_matches "$_f"; then _staged+=("$_f"); fi
+            done < "$_ls"
+        else
+            rm -f "$_ls"
+            dr_die "cannot list what the first commit of $dir would contain" \
+                   "Without that list, nothing here can promise that no credential" \
+                   "goes into the history of this repository."
+        fi
+        rm -f "$_ls"
+
+        if [ ${#_staged[@]} -gt 0 ]; then
+            dr_warn "${#_staged[@]} file(s) look like credentials and are NOT in the first commit:"
+            for _f in "${_staged[@]}"; do
+                printf '    %s\n' "$_f" >&2
+                # :(literal) so that a name holding a glob character means
+                # itself. The path also goes into the block, anchored with a
+                # leading slash: it reached the index although a pattern
+                # matched its name, so the pattern alone is not holding it.
+                git -C "$dir" rm --cached -q -- ":(literal)$_f" 2>/dev/null || true
+                printf '/%s\n' "$_f" >> "$dir/.gitignore"
+            done
+            printf '  %sThey stay on disk, untracked. dr-scan reports them from now on.%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %sTo commit one anyway:  git add -f <file>%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            git -C "$dir" add -- .gitignore
+        fi
+
         git -C "$dir" commit -qm "Draugr: initial commit" \
             || dr_die "could not make the initial commit in $dir"
         DR_REPO_CREATED=$mode
@@ -2108,6 +2205,68 @@ dr_sandbox_exists() {
         "cannot tell whether '$name' exists: sbx named no state for it" \
         "Look at it with:  dr-ls"
     [ "$state" != "absent" ]
+}
+
+# dr_mound_tree_state <sandbox> <repo>: clone | writable | unknown
+#
+# "CAN THE AGENT IN THIS MOUND WRITE MY WORKING TREE?" - asked of the thing
+# that knows, which is sandboxd. Three sources could answer, and two of them
+# are wrong to ask:
+#
+#   the configuration   DRAUGR_CLONE is what you want NEXT time. dr-up REUSES
+#                       an existing mound, so a mound built with
+#                       DRAUGR_CLONE=false stays bind-mounted no matter what
+#                       the key says today. A security review attached to
+#                       exactly that mound with no question asked.
+#
+#                       It is also the wrong source for a second reason. The
+#                       key lives in .draugr.conf, INSIDE the repository - and
+#                       in the case that matters, the agent can write that
+#                       file. Editing it breaks the trust hash, dr_load_config
+#                       then SKIPS the layer, and the built-in default
+#                       (DRAUGR_CLONE=true) applies. So the agent can remove
+#                       its own warning by touching one file.
+#
+#   .draugr/create.applied  better: it records what dr-up really passed. But
+#                       it is in the repository too, so a bind-mounted mound
+#                       can rewrite it, and a forged `DRAUGR_CLONE=true` would
+#                       buy silence. It stays useful for naming DRIFT, which
+#                       is dr_create_drift's job, and it is not consulted here.
+#
+#   sandboxd            outside the repository, and no mound can reach it.
+#
+# WHAT COUNTS AS PROOF. `sbx inspect <name> --json` lists host_mounts as
+# {container_target, host_path, read_only}. Measured on sbx 0.53 for a clone
+# mound: `C:\Code\Draugr -> /run/sandbox/source, read_only: true`, plus a
+# `source_repo_dir` naming the same host path. `sbx create --help` documents
+# --clone as "a private in-container clone of the host Git repository (mounted
+# read-only) INSTEAD OF bind-mounting the workspace".
+#
+# So: this repo mounted read-only is a clone; this repo mounted writable is a
+# bind mount; anything else is unknown. Only `clone` suppresses a question, so
+# an answer in a shape this code does not recognise costs one prompt and
+# cannot cost a silent bind mount.
+dr_mound_tree_state() {
+    local name=$1 repo=$2 win out json state
+    win=$(dr_path_win "$repo") || { printf 'unknown\n'; return 0; }
+    out=$(dr_sbx inspect "$name" --json 2>/dev/null) || { printf 'unknown\n'; return 0; }
+    json=$(dr_sbx_json "$out" 2>/dev/null) || { printf 'unknown\n'; return 0; }
+    [ -n "$json" ] || { printf 'unknown\n'; return 0; }
+
+    # Case-insensitively, because a Windows path has several spellings and the
+    # one in .draugr.conf need not match the one sbx recorded.
+    state=$(printf '%s' "$json" | jq -r --arg w "$win" '
+        [ (.host_mounts // [])[]
+          | select((.host_path // "") | ascii_downcase == ($w | ascii_downcase)) ] as $mine
+        | if ($mine | length) == 0 then "unknown"
+          elif ([ $mine[] | select(.read_only != true) ] | length) > 0 then "writable"
+          else "clone"
+          end' 2>/dev/null) || { printf 'unknown\n'; return 0; }
+
+    case "$state" in
+        clone|writable) printf '%s\n' "$state" ;;
+        *)              printf 'unknown\n' ;;
+    esac
 }
 
 # dr_sandboxes_running: the name of each running sandbox, one on each line.

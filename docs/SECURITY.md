@@ -58,6 +58,15 @@ not**. That is the full purpose. Bare `git ls-files --others` is on purpose. `--
 removes the ignored files from the list. `--ignored --exclude-standard` lists only the ignored ones.
 In both cases, half the danger is not reported.
 
+**The scan reports untracked files, so a credential that is COMMITTED is invisible to it for ever.**
+That makes the first commit of a repository Draugr creates (`DRAUGR_ON_MISSING_REPO=create-add-all`)
+the one moment where this matters most — and the credential rules used to be written only when the
+directory had no `.gitignore` at all. One pre-existing ignore file, a single `*.log`, skipped them,
+and `git add -A` then committed the `private.key` beside it. The rules are now appended to an
+existing file in a marked block, and the **index** is checked before the commit with the same
+predicate: a credential-shaped name is unstaged, named, added to the block, and left on disk
+untracked, where this scan reports it.
+
 Do not keep real credentials in a directory that you give to an agent. `dr-scan` is a backstop, not
 a permission.
 
@@ -149,6 +158,15 @@ hash of each project configuration that you accept. Thus a configuration that ar
 a merge, a pull or anything else, is refused until you run `dr-trust`. Tested: a `.draugr.conf` with
 `DRAUGR_SCAN=false` and `DRAUGR_CLONE=false` added is not sourced. Both keys fall back to their
 built-in defaults, not to the weaker values.
+
+**One of those two fallbacks used to cut the wrong way, and that is worth stating plainly.**
+`DRAUGR_SCAN` falls back to `true`, which is the stronger value. `DRAUGR_CLONE` falls back to `true`
+as well — and because the bind-mount prompt was *asked of the key*, "fall back to clone" meant
+"ask nothing". In bind mode the agent can write `.draugr.conf`, so it could remove its own warning
+by editing the file it was never trusted to edit. `.draugr/create.applied` was no better: it lives in
+the repository too. The prompt now asks **sandboxd** about the mound that exists, which is the one
+party in this picture that a mound cannot write to. See
+[Things Draugr refuses to do](#things-draugr-refuses-to-do).
 
 `.draugr/hooks/*` gets the same test. A hook is a script that runs on the host, as you, with the
 merged configuration in its environment. That is more dangerous than the configuration file beside
@@ -548,9 +566,23 @@ forever has no clear purpose.
 | `dr-forge base` when the guest does not shut down gracefully | none: Draugr takes no baseline from a guest whose power was cut |
 | `dr-forge rollback` without confirmation | `dr-forge rollback -y` |
 
-`DRAUGR_CLONE=false` is the one with no override in a configuration file. It bind-mounts your real
-working tree read-write, which is exactly what this project exists to prevent. Thus `dr-go` asks you
-to confirm it each time. If you want no prompt, you are outside the purpose of the product.
+A bind-mounted working tree is the one with no override in a configuration file. It gives the agent
+your real files read-write, which is exactly what this project exists to prevent. Thus `dr-go` asks
+you to confirm it each time. If you want no prompt, you are outside the purpose of the product.
+
+**And the question is asked of the mound, not of `DRAUGR_CLONE`.** The key says what you want for
+the *next* mound; `dr-up` reuses the one you have. So a mound built with `DRAUGR_CLONE=false` keeps
+your tree read-write after the key is set back to `true`, and that mound used to be attached to in
+silence. `dr-go` now asks sandboxd: measured on sbx 0.53, `sbx inspect <name> --json` reports each
+`host_mount` with its `read_only` flag, and `--clone` means this repository is mounted **read-only**
+at `/run/sandbox/source`. Only a confirmed clone is quiet — a writable mount of your repository asks,
+and so does an answer Draugr cannot read, or no answer at all. `dr-status` describes the mound the
+same way, and names the key beside it only when the two disagree.
+
+A missing kit is in the same family, and is also a refusal rather than a warning: a kit is where a
+project's deny rules live, so creating the mound without one you asked for by name would leave it
+more open than your configuration describes. The built-in default *location* stays silent, because
+nobody asked for it.
 
 ---
 

@@ -78,27 +78,14 @@ if [ -z "$skills_only" ]; then
     while IFS= read -r -d '' _f; do candidates+=("$_f"); done < "$_ls_out"
     rm -f "$_ls_out" "$_ls_err"
 
-    # Compare the basename of each candidate with the configured globs. `case`
-    # takes one pattern at a time, so the code loops over the patterns.
-    # read -ra, not `for pat in $DRAUGR_SCAN_PATTERNS`. An unquoted expansion
-    # does word splitting AND PATHNAME EXPANSION, so each pattern was first
-    # matched against the directory the command ran in. With a visible.key next
-    # to it, the pattern "*.key" became the single word "visible.key", and the
-    # loop below then compared every candidate with that one file name: a
-    # nested/hidden.key matched nothing, and block mode exited 0. `read` does no
-    # pathname expansion, so the patterns reach `case` as patterns.
-    pats=()
-    read -ra pats <<< "$DRAUGR_SCAN_PATTERNS"
-
+    # The match itself is dr_scan_name_matches in lib/common.sh, not a loop
+    # here. The same question is asked in one other place - of the files that
+    # the FIRST COMMIT of a Draugr-created repository is about to include -
+    # and the two answers have to be the same answer. The comment there
+    # carries the reason the patterns are split with `read -ra`.
     hits=()
     for f in "${candidates[@]+"${candidates[@]}"}"; do
-        base=${f##*/}
-        for pat in ${pats[@]+"${pats[@]}"}; do
-            # shellcheck disable=SC2254  # $pat is deliberately a glob, not a literal
-            case "$base" in
-                $pat) hits+=("$f"); break ;;
-            esac
-        done
+        if dr_scan_name_matches "$f"; then hits+=("$f"); fi
     done
 
     # The message tells the mechanism. "A secret was found" invites "but it is

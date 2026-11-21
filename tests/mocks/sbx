@@ -299,6 +299,65 @@ policy)
 ' "$*"
     ;;
 
+# inspect: the shape of `sbx inspect <name> --json`, measured on sbx 0.53, with
+# only the fields that Draugr reads. This is the one source that can say
+# whether a mound has the host tree READ-WRITE, and it is the one a mound
+# cannot edit - unlike .draugr.conf and .draugr/create.applied, which live in
+# the repository that a bind-mounted agent can write.
+#
+#   DR_MOCK_TREE=clone      this repo mounted READ-ONLY at /run/sandbox/source,
+#                           which is what --clone produces (the default here)
+#   DR_MOCK_TREE=writable   this repo bind-mounted read-write
+#   DR_MOCK_TREE=other      an answer that names no mount for this repo
+#   DR_MOCK_TREE=fail       a non-zero exit, as from a daemon that cannot answer
+#   DR_MOCK_WS_WIN          the Windows spelling of the repo. The default is
+#                           the CURRENT DIRECTORY, because that is the repo
+#                           whenever a dr-* command asks this question, and a
+#                           fixture repo is never at a fixed path. Draugr
+#                           compares by path, so a fixed default would answer
+#                           "I know nothing about your repo" to every test
+#                           that merely runs dr-go.
+inspect)
+    # /mnt/<d>/x -> <D>:\x, reversed here rather than by sourcing common.sh.
+    # The mock does its own translations on purpose (see translate() under cp):
+    # then a wrong dr_path_win gives a mismatch, and not two matching bugs.
+    _ws_default=$PWD
+    case "$_ws_default" in
+        /mnt/[A-Za-z]/*|/mnt/[A-Za-z])
+            _d=$(printf '%s' "${_ws_default:5:1}" | tr '[:lower:]' '[:upper:]')
+            # shellcheck disable=SC1003  # '\\' is the two characters that tr reads as one backslash
+            _ws_default="$_d:\\$(printf '%s' "${_ws_default:7}" | tr '/' '\\')" ;;
+        *) _ws_default='C:\Code\testrepo' ;;
+    esac
+    case "${DR_MOCK_TREE:-clone}" in
+        fail)
+            printf 'mock sbx: cannot inspect %s\n' "${2:-}" >&2
+            exit 1 ;;
+        other)    _ro=true;  _hp=${DR_MOCK_OTHER_WIN:-'C:\Code\another-repo'} ;;
+        writable) _ro=false; _hp=${DR_MOCK_WS_WIN:-$_ws_default} ;;
+        *)        _ro=true;  _hp=${DR_MOCK_WS_WIN:-$_ws_default} ;;
+    esac
+    # A backslash is an escape inside a JSON string, so each one is doubled
+    # here. Without this, jq reads C:\Temp as C: followed by a tab.
+    _hp_json=${_hp//\\/\\\\}
+    cat <<EOF
+{
+  "name": "${2:-draugr-testrepo}",
+  "agent": "${DR_MOCK_AGENT-${DRAUGR_AGENT:-claude}}",
+  "state": "${DR_MOCK_STATE:-stopped}",
+  "workspace": "$_hp_json",
+  "source_repo_dir": "$(if [ "$_ro" = true ]; then printf '%s' "$_hp_json"; fi)",
+  "host_mounts": [
+    {
+      "container_target": "$(if [ "$_ro" = true ]; then printf '/run/sandbox/source'; else printf '/c/Code/testrepo'; fi)",
+      "host_path": "$_hp_json",
+      "read_only": $_ro
+    }
+  ]
+}
+EOF
+    ;;
+
 # create makes the stand-in filesystem, when there is one. dr-plugin builds in
 # the rootfs of the mound, and copies the result back to the workspace. Without
 # DR_MOCK_MOUND after create, the first exec fails, not the step under test.

@@ -327,6 +327,72 @@ copied, published or deleted along it.
   "no disks in there", which was the answer that led to the recursive delete. That delete also
   refuses outright when the folder is the layer root or holds it.
 
+The last four come from the same review, and they are a third shape:
+**something other than the fact decided a security question** — the
+configuration instead of the mound, a warning instead of a refusal, a rule
+instead of the result.
+
+- **The bind-mount question was asked of the configuration, not of the mound.**
+  `DRAUGR_CLONE` says what you want for the NEXT mound, and `dr-up` reuses the
+  one you have — so a mound built with `DRAUGR_CLONE=false` keeps your working
+  tree read-write after the key is set back to `true`, and `dr-go` attached to
+  it with no prompt at all. A security review reproduced that with a recorded
+  false setting, a current true setting and a pseudo-terminal.
+
+  The key is the wrong source for a second reason, which this also closes: it
+  lives in `.draugr.conf`, inside the repository — and in bind mode the agent
+  can write that file. Editing it breaks the trust hash, the layer is then
+  *skipped*, and the built-in default (`DRAUGR_CLONE=true`) applies, so the
+  agent could remove its own warning by touching one file.
+  `.draugr/create.applied` can be rewritten the same way, so neither of them is
+  consulted here.
+
+  `dr-go` now asks sandboxd about the mound that exists. Measured on sbx 0.53:
+  `sbx inspect <name> --json` reports `host_mounts` as
+  `{container_target, host_path, read_only}`, and a clone mound carries this
+  repository **read-only** at `/run/sandbox/source` — which is what
+  `sbx create --help` documents `--clone` to mean, "instead of bind-mounting
+  the workspace". Only a confirmed clone is quiet: this repository mounted
+  writable asks, and so does an answer in a shape Draugr does not recognise, or
+  no answer at all. Both directions of the drift are named, and `dr-status`
+  describes the mound rather than the key.
+
+- **A configured kit that does not exist no longer creates the mound without
+  it.** It warned and carried on, and what it left out is what was asked for: a
+  kit is where a project's deny rules live, while the allow rules of the machine
+  policy stay in force either way. So the mound came up *more open* than the
+  configuration described, with one yellow line about it, and a script saw a
+  successful create. It is now fatal, with no opt-out key, and the refusal names
+  every missing kit at once rather than the first. The built-in default
+  *location* is still silent: nobody asked for it, so a repo with no kit there
+  is an ordinary repo. The refusal comes before the `--recreate` removal, so a
+  typo can never leave you unable to remove the mound that the typo built, and
+  `dr-rm` resolves no kits at all.
+
+- **`create-add-all` could commit a credential when a `.gitignore` already
+  existed.** The credential rules were written only when there was no
+  `.gitignore` at all, so one ordinary pre-existing ignore file — a single
+  `*.log` is enough — skipped every rule, and the `git add -A` then committed
+  the `private.key` beside it. In history it is also invisible to `dr-scan` for
+  ever, because that scan reports untracked files only.
+
+  The rules are now **appended** in a marked block at the end of the file, so
+  your own lines are neither rewritten nor reordered, and the credential
+  patterns win over an earlier negation without touching it. And because a rule
+  is only a claim about what git will do, the **index** is checked before the
+  commit with the same predicate `dr-scan` uses: a match is unstaged, named,
+  added to the block, and the commit goes ahead without it. The file stays on
+  disk, untracked, where `dr-scan` reports it. That predicate is now one
+  function, so the two answers cannot drift apart.
+
+- **`dr-layer adopt` removed the old VM folder whole.** "The disk is gone" is
+  not "nothing here matters": a note or a build output beside the VM went with
+  the folder, unnamed. The folder is now removed only when everything in it is
+  on the allowlist of what AppSandbox leaves — `snapshots`, `vm.vmgs`,
+  `vm.vmrs`, `vm_state.json` — and anything else is named instead. The leftover
+  check also covers `.avhdx`: a checkpoint disk is a disk, and `-Filter *.vhdx`
+  does not match one.
+
 ## [0.9.0] — 2026-11-15
 
 ### Added

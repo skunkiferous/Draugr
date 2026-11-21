@@ -985,10 +985,26 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     grep -q 'ErrorVariable strayErr' "$ps"
     grep -q 'strayErr.Count' "$ps"
     # -Force, or a HIDDEN .vhdx is not listed and the folder looks empty.
-    grep -qE 'Get-ChildItem \$old -Filter \*\.vhdx -Recurse -Force' "$ps"
+    grep -qE 'Get-ChildItem \$old -Recurse -Force' "$ps"
     # And never the root: the header of that file warns that a VM built inside
     # the layer store is one delete from taking every layer with it.
     grep -q 'isRootish' "$ps"
+}
+
+# "The disk is gone" is not "nothing here matters". adopt removed the VM folder
+# whole as long as no .vhdx was left in it, so a note or a build output that
+# somebody had put beside the VM went with it, unnamed. Source assertions: the
+# verb needs Hyper-V and a closed AppSandbox, so only a real adopt can run it.
+@test "layer.ps1: adopt removes only what the forge itself leaves behind" {
+    local ps="$DR_ROOT/lib/forge/layer.ps1"
+    # The allowlist, by name. These four are what AppSandbox leaves next to a
+    # VM, measured on the layer store of this machine.
+    grep -qF "ownArtifacts = @('vm.vmgs', 'vm.vmrs', 'vm_state.json', 'snapshots')" "$ps"
+    # Anything else means the folder stays and the extra entries are named.
+    grep -q 'foreign.Count' "$ps"
+    # A CHECKPOINT disk is a disk. `-Filter *.vhdx` does not match .avhdx, so
+    # the test is on the extension and both are listed.
+    grep -qF "Extension -in '.vhdx', '.avhdx'" "$ps"
 }
 
 @test "the forge scripts share one four-answer VM state, and keep no boolean copy" {

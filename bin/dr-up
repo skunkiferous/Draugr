@@ -97,9 +97,24 @@ if [ -n "$DRAUGR_KIT" ]; then
         fi
     done < <(dr_kit_refs)
 
-    # Report each entry that resolved to nothing, with the name that you wrote.
-    # A kit is optional, so this warns, and does not refuse. A silent miss gives
-    # a mound without the network rules that you wanted, with no message.
+    # A KIT YOU ASKED FOR BY NAME AND THAT IS NOT THERE IS FATAL. This used to
+    # warn and build the mound anyway, and what it left out is what you asked
+    # for: a kit is where a project's DENY rules live, while the ~190 allow
+    # rules of the machine policy stay in force either way. So the mound came
+    # up MORE OPEN than the configuration described, with one yellow line
+    # about it, and a script saw a successful create.
+    #
+    # The built-in default LOCATION is the exception. Nobody asked for it, so
+    # a repo with no kit there is an ordinary repo and not an error.
+    #
+    # Fatal on CREATE, and this runs before the --recreate removal further
+    # down - which is the point: a typo in DRAUGR_KIT must never leave you
+    # unable to remove the mound that the typo built. dr-rm resolves no kits
+    # at all, so the destroy path cannot be trapped this way.
+    #
+    # The list is collected first, so the refusal names every missing kit.
+    # Dying on the first one hides the second, and you fix one typo per run.
+    _missing_kits=()
     while IFS= read -r _miss; do
         [ -n "$_miss" ] || continue
         if [ "${DR_ORIGIN[DRAUGR_KIT]}" = "built-in default" ]; then
@@ -107,13 +122,20 @@ if [ -n "$DRAUGR_KIT" ]; then
             # repo with no kits, not an error, so it gets no warning.
             dr_debug "no kit at $_miss (default location, none configured)"
         else
-            dr_warn "no kit found for '$_miss'. Creating the mound without it."
-            printf '  %sLooked in %s and in the kit store %s%s\n' \
-                "$_DR_DIM" "$DR_REPO" "$(dr_kit_store)" "$_DR_OFF" >&2
-            printf '  %sDRAUGR_KIT came from %s. Saved kits:  dr-kit list%s\n' \
-                "$_DR_DIM" "${DR_ORIGIN[DRAUGR_KIT]}" "$_DR_OFF" >&2
+            _missing_kits+=("$_miss")
         fi
     done < <(dr_kit_missing)
+
+    # Every missing kit in one refusal, with the spelling that was written.
+    if [ ${#_missing_kits[@]} -gt 0 ]; then
+        dr_die "${#_missing_kits[@]} configured kit(s) do not exist" \
+            "$(printf '%s ' "${_missing_kits[@]}")" \
+            "A configured kit can carry this project's deny rules, and the mound" \
+            "would come up without them - more open than your configuration says." \
+            "Draugr does not guess that a kit you named was optional." \
+            "Looked in $DR_REPO and in the kit store $(dr_kit_store)." \
+            "DRAUGR_KIT came from ${DR_ORIGIN[DRAUGR_KIT]}. Saved kits:  dr-kit list"
+    fi
 fi
 
 # read -ra splits on whitespace into an array. With quotes, "$DRAUGR_PORTS" is
