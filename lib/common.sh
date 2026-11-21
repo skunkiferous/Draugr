@@ -4148,6 +4148,13 @@ DR_RUN_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/draugr/run"
 # takes about a minute. Tests can change the value, so that they do not sleep.
 DR_DEP_GRACE=${DR_DEP_GRACE:-300}
 
+# How long a claimant waits for the lock on a resource, and how old a lock must
+# be before a claimant treats it as abandoned. Everything under the lock is
+# filesystem work -- sbx is asked BEFORE it is taken -- so a lock still held
+# after minutes belongs to a process that died, not to one that is slow.
+DR_DEP_LOCK_WAIT=${DR_DEP_LOCK_WAIT:-30}
+DR_DEP_LOCK_STALE=${DR_DEP_LOCK_STALE:-300}
+
 # The SHA-256 of a string, not of a file. It changes a repository path into a
 # file name. It uses the same two tools as _dr_hash, for the same reason.
 _dr_hash_text() {
@@ -4233,10 +4240,23 @@ dr_dep_claim_valid() {
 # granted over the top of a live one, and dr-forge disturbed a shared VM without
 # asking. A caller that cannot handle 2 must refuse or ask, never assume.
 dr_dep_claims() {
-    local dir file running
+    local dir running
     dir=$(dr_dep_dir "$1")
     [ -d "$dir" ] || return 0
     running=$(dr_sandboxes_running) || return 2
+    _dr_dep_claims_with "$dir" "$running"
+}
+
+# _dr_dep_claims_with <dir> <running-list>: the same, from a list already held.
+#
+# dr_dep_claim asks sbx ONCE and then prunes and tests for a holder with that
+# one answer. Two calls never guaranteed one moment: a mound could stop between
+# them, so the prune kept a claim that the test then read as stale, or the other
+# way round. Taking the answer first is also what keeps the lock below cheap,
+# because no part of the locked section waits on a daemon.
+_dr_dep_claims_with() {
+    local dir=$1 running=$2 file
+    [ -d "$dir" ] || return 0
     for file in "$dir"/*.claim; do
         [ -f "$file" ] || continue
         dr_dep_claim_valid "$file" "$running" || continue
@@ -4253,14 +4273,30 @@ dr_dep_claims() {
 # A claim is the only record that somebody is using a shared resource, and this
 # loop is the only thing that deletes one, so a failed query must not be able to
 # erase a live claim. See dr_dep_claims for what that cost before.
+#
+# This one does NOT take the lock that dr_dep_claim holds, and that is a
+# decision rather than an omission. Its caller is the warden, which prunes each
+# tick, and a lock there would put a 30-second wait inside a 60-second loop. It
+# also opens no hole: a claim is written with an atomic rename, so this loop
+# never sees half of one, and the claim it could delete in the gap is one the
+# rules already call stale. What must not interleave is the exclusivity test
+# and the write, and both of those are inside the lock.
 dr_dep_prune() {
-    local dir file running
+    local dir running
     dir=$(dr_dep_dir "$1")
     [ -d "$dir" ] || return 0
     running=$(dr_sandboxes_running) || {
         dr_warn "cannot tell which sandboxes run, so no claim on $1 was removed"
         return 2
     }
+    _dr_dep_prune_with "$dir" "$running"
+}
+
+# _dr_dep_prune_with <dir> <running-list>: the same, from a list already held.
+# See _dr_dep_claims_with for why the list is a parameter and not a lookup.
+_dr_dep_prune_with() {
+    local dir=$1 running=$2 file
+    [ -d "$dir" ] || return 0
     for file in "$dir"/*.claim; do
         [ -f "$file" ] || continue
         dr_dep_claim_valid "$file" "$running" || rm -f "$file"
@@ -4310,6 +4346,69 @@ dr_dep_confirm_others() {
     dr_confirm "$question" || dr_die "cancelled"
 }
 
+# _dr_dep_lock_age <lock>: how many seconds ago the lock was made, or nothing.
+#
+# A reading that cannot be had is not a zero. The caller must be able to tell
+# "this lock is young" from "I could not read its age", because only the first
+# of those two is a reason to leave it alone AND keep waiting.
+_dr_dep_lock_age() {
+    local mtime now
+    mtime=$(stat -c %Y "$1" 2>/dev/null) || return 1
+    case $mtime in ''|*[!0-9]*) return 1 ;; esac
+    now=$(date +%s)
+    printf '%s' "$(( now - mtime ))"
+}
+
+# _dr_dep_lock <dir>: take the one lock on the claims of a resource.
+#
+# mkdir is the primitive. It creates the directory or it fails, and two
+# processes cannot both create the same one, because the kernel decides. A lock
+# FILE would need O_EXCL, which a shell cannot ask for portably.
+#
+# The lock lives INSIDE the claim directory, not beside it. A sibling named
+# "<key>.lock" is itself a legal claim directory -- the key "foo.lock" spells
+# exactly that one -- so breaking an abandoned lock would delete another
+# resource's claims. Nothing here globs ".lock": the readers match "*.claim".
+_dr_dep_lock() {
+    local dir=$1 lock=$1/.lock waited=0 broke=0 age
+
+    while ! mkdir "$lock" 2>/dev/null; do
+        # Break a lock only when its age can be READ and is past the limit. A
+        # lock of unknown age is left alone, because breaking it would put two
+        # claimants in the section at once, which is the one thing this exists
+        # to stop. Breaks are counted, so a clock that reports every directory
+        # as ancient cannot spin here.
+        age=$(_dr_dep_lock_age "$lock") || age=''
+        if [ -n "$age" ] && [ "$age" -ge "$DR_DEP_LOCK_STALE" ] && [ "$broke" -lt 3 ]; then
+            broke=$((broke + 1))
+            rm -rf "$lock" && continue
+        fi
+        [ "$waited" -lt "$DR_DEP_LOCK_WAIT" ] || return 1
+        waited=$((waited + 1))
+        sleep 1
+    done
+
+    # A lock that nobody can be identified from is worse than no lock, because
+    # the owner test below would have to guess. If the mark cannot be written,
+    # give the lock straight back and fail the acquisition.
+    printf '%s\n' "$$" > "$lock/owner" 2>/dev/null && return 0
+    rm -rf "$lock"
+    return 1
+}
+
+# _dr_dep_unlock <dir>: give the lock back, if it is still ours.
+#
+# The owner test is what makes breaking a lock safe. If this process were ever
+# slow enough that another claimant declared the lock abandoned and took it,
+# the directory in place would belong to that claimant, and removing it would
+# hand a third process the same section.
+_dr_dep_unlock() {
+    local lock=$1/.lock owner
+    owner=$(cat "$lock/owner" 2>/dev/null) || return 0
+    [ "$owner" = "$$" ] || return 0
+    rm -rf "$lock"
+}
+
 # dr_dep_claim <key> <repo> <sandbox> [exclusive]: claim a resource.
 #
 # For the same repository, it is idempotent (safe to run two times). A second
@@ -4318,39 +4417,55 @@ dr_dep_confirm_others() {
 #
 # The code compares an exclusive claim with the other VALID claims, after the
 # cleanup. Thus if the holder of a lock is gone, the new claim takes the lock.
-# It does not wait for somebody to delete a file. When two dr-ups run at the
-# same time, mkdir decides, because it is atomic. The loser sees the claim of
-# the winner, and gets a refusal that names the winner.
+# It does not wait for somebody to delete a file.
+#
+# The prune, the test for another holder and the write happen under ONE lock.
+# They used to happen under none, and the gap between reading the directory and
+# writing into it was the bug: two dr-ups started together, both read before
+# either had written, both saw no owner, and both took an exclusive resource.
+# The lock makes the loser read the directory after the winner wrote, so it
+# gets the refusal that names the winner.
 dr_dep_claim() {
-    local key=$1 repo=$2 sandbox=$3 exclusive=${4:-false} file dir other
+    local key=$1 repo=$2 sandbox=$3 exclusive=${4:-false}
+    local dir file running other refuse='' rst=0
 
     dir=$(dr_dep_dir "$key")
     mkdir -p "$dir"
-    # `|| true`, because dr_dep_prune returns 2 when it could not establish which
-    # sandboxes run, and this is a bare statement under `set -e`. It has already
-    # said so, and it deleted nothing, which is the safe outcome. The exclusive
-    # test below is the one that must refuse on that, and it does.
-    dr_dep_prune "$key" || true
-    file=$(dr_dep_claim_file "$key" "$repo")
+
+    # One answer from sbx, taken BEFORE the lock, and used by both steps below.
+    # Asking can take seconds, and a lock held across it would make every other
+    # claimant wait on a daemon that is not theirs.
+    running=$(dr_sandboxes_running) || rst=$?
+
+    _dr_dep_lock "$dir" || dr_die \
+        "another Draugr holds the claims on $key" \
+        "It did not give them back within $DR_DEP_LOCK_WAIT seconds." \
+        "If nothing else is running, remove:  $dir/.lock"
+
+    # Unknown liveness deletes nothing, which is the safe outcome, and it has
+    # to be said here rather than left to dr_dep_prune, which asks sbx itself.
+    # The exclusive test below is the one that must refuse on it, and it does.
+    if [ "$rst" -eq 0 ]; then
+        _dr_dep_prune_with "$dir" "$running"
+    else
+        dr_warn "cannot tell which sandboxes run, so no claim on $key was removed"
+    fi
 
     # Refuse before the code writes anything, and name the holder. A lock that
-    # says only "in use" does not tell the user what to do next.
+    # says only "in use" does not tell the user what to do next. For an
+    # EXCLUSIVE claim, unknown must refuse too: that refusal is the entire
+    # purpose of the key, and a live claim is invisible while sbx cannot answer.
+    file=$(dr_dep_claim_file "$key" "$repo")
+    other=''
     if dr_is_true "$exclusive" && [ ! -f "$file" ]; then
-        # Capture, then read the first line. Through a pipe the status of
-        # dr_dep_claims becomes the status of `head`, so an unknown liveness
-        # arrived here as "no other claim" and the exclusive lock was granted
-        # on top of a live one. For an EXCLUSIVE claim, unknown must refuse:
-        # that refusal is the entire purpose of the key.
-        other=$(dr_dep_claims "$key") || dr_die \
-            "$key is exclusive, and whether another project holds it cannot be established" \
-            "sbx could not say which sandboxes run, so a live claim can be invisible." \
-            "Look at it yourself with:  dr-dep status" \
-            "The reason sbx gave is above."
-        other=$(printf '%s' "$other" | head -1)
-        if [ -n "$other" ]; then
-            dr_die "$key is exclusive, and $(printf '%s' "$other" | cut -f1) uses it since $(printf '%s' "$other" | cut -f3)" \
-                   "Its own configuration says DRAUGR_EXCLUSIVE=true, so only one project at a time can use it." \
-                   "Stop the mound of that project, or release it there:  dr-dep release"
+        if [ "$rst" -ne 0 ]; then
+            refuse=unknown
+        else
+            # Capture, then read the first line. Through a pipe the status of
+            # the reader becomes the status of `head`.
+            other=$(_dr_dep_claims_with "$dir" "$running")
+            other=$(printf '%s' "$other" | head -1)
+            [ -z "$other" ] || refuse=held
         fi
     fi
 
@@ -4358,9 +4473,30 @@ dr_dep_claim() {
     # never sees half a claim. One process writes all fields, and they appear
     # at the same time. The key is recorded as it was given. The directory name
     # went through tr, and "vm_UE5-Test" cannot give back "vm:UE5-Test".
-    printf 'key=%s\nrepo=%s\nsandbox=%s\nsince=%s\nsince_epoch=%s\n' \
-        "$key" "$repo" "$sandbox" "$(date '+%Y-%m-%d %H:%M')" "$(date +%s)" > "$file.tmp"
-    mv "$file.tmp" "$file"
+    if [ -z "$refuse" ]; then
+        printf 'key=%s\nrepo=%s\nsandbox=%s\nsince=%s\nsince_epoch=%s\n' \
+            "$key" "$repo" "$sandbox" "$(date '+%Y-%m-%d %H:%M')" "$(date +%s)" > "$file.tmp"
+        mv "$file.tmp" "$file"
+    fi
+
+    # The refusals are down here on purpose, after the lock is back. A dr_die
+    # inside the section above would leave the lock behind, and the next
+    # claimant would wait DR_DEP_LOCK_WAIT seconds on a process that is gone.
+    _dr_dep_unlock "$dir"
+
+    case $refuse in
+        unknown)
+            dr_die \
+                "$key is exclusive, and whether another project holds it cannot be established" \
+                "sbx could not say which sandboxes run, so a live claim can be invisible." \
+                "Look at it yourself with:  dr-dep status" \
+                "The reason sbx gave is above." ;;
+        held)
+            dr_die \
+                "$key is exclusive, and $(printf '%s' "$other" | cut -f1) uses it since $(printf '%s' "$other" | cut -f3)" \
+                "Its own configuration says DRAUGR_EXCLUSIVE=true, so only one project at a time can use it." \
+                "Stop the mound of that project, or release it there:  dr-dep release" ;;
+    esac
 }
 
 # dr_dep_unclaim <key> <repo>: give one resource back.

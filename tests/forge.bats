@@ -526,6 +526,26 @@ EOF
     [[ "$output" == *"runs. The whole chain"* ]]
 }
 
+# The claim is bookkeeping, and it is made LAST, after the forge is usable. A
+# lock on the claims that cannot be taken stops dr_dep_claim -- which is right
+# where a claim decides whether to go on -- so here it must be contained, or a
+# working `up` would end in a failure. It must not pass in silence either:
+# without the claim, another project's `dr-forge down` cannot see this one.
+@test "dr-forge up: a claim it cannot record warns, and the forge still succeeds" {
+    local repo dir
+    repo=$(dr_make_win_repo forgeclaim) || skip "no writable path under /mnt/<drive> on this machine"
+    cd "$repo" || return 1
+    dr_load_common
+    dir=$(dr_dep_dir "vm:mock-vm")
+    mkdir -p "$dir/.lock"
+    printf '999999\n' > "$dir/.lock/owner"
+    export DR_DEP_LOCK_WAIT=0
+    run dr-forge up
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"runs. The whole chain"* ]]
+    [[ "$output" == *"claim on it was not recorded"* ]]
+}
+
 # Code 14 now means that the supervisor is missing from lib/forge. That is a
 # BROKEN INSTALL, not a configuration problem, so it must not look like one.
 @test "dr-forge up: a missing supervisor is reported as a broken install" {

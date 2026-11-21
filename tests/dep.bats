@@ -214,6 +214,149 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     [ "$(dr_dep_claims gwmound | grep -c .)" -eq 1 ]
 }
 
+# --- the lock on the claims ---------------------------------------------------
+#
+# A claim used to be read-then-write with nothing in between. Two dr-ups started
+# together both read the directory before either had written, both saw no owner,
+# and both took an exclusive resource. The prune, the test for a holder and the
+# write now happen under one lock.
+#
+# These tests are about the section being HELD, not about luck. Each puts a lock
+# in place by hand and makes the outcome depend on whether the claimant respects
+# it, so none of them depends on two processes interleaving a certain way.
+
+@test "a claimant waits for the lock, and sees the claim that appeared under it" {
+    export DR_MOCK_NAMES="draugr-app other-mound"
+    local dir
+    dir=$(dr_dep_dir gwmound)
+    mkdir -p "$dir/.lock"
+    printf '999999\n' > "$dir/.lock/owner"
+
+    # The holder publishes its claim and only then gives the lock back. A
+    # claimant that walks past the lock writes its own claim before this
+    # happens, and then two of them hold an exclusive resource.
+    (
+        sleep 1
+        printf 'key=gwmound\nrepo=/other/repo\nsandbox=other-mound\nsince=earlier\nsince_epoch=%s\n' \
+            "$(date +%s)" > "$(dr_dep_claim_file gwmound /other/repo)"
+        rm -rf "$dir/.lock"
+    ) &
+
+    DR_DEP_LOCK_WAIT=10 run dr_dep_claim gwmound "$REPO" draugr-app true
+    wait
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"/other/repo"* ]]
+    [[ "$output" == *exclusive* ]]
+    [ ! -f "$(dr_dep_claim_file gwmound "$REPO")" ]
+}
+
+# A SHARED claim takes the lock too. Its write is what an exclusive claimant
+# tests against, so a write that skipped the lock could still land beside a
+# holder that had just checked and found nothing.
+@test "a lock that is never given back refuses the claim, and names it" {
+    local dir
+    dir=$(dr_dep_dir gwmound)
+    mkdir -p "$dir/.lock"
+    printf '999999\n' > "$dir/.lock/owner"
+    DR_DEP_LOCK_WAIT=0 run dr_dep_claim gwmound "$REPO" draugr-app false
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$dir/.lock"* ]]
+    [ ! -f "$(dr_dep_claim_file gwmound "$REPO")" ]
+}
+
+@test "an abandoned lock is broken once it is old enough" {
+    local dir
+    dir=$(dr_dep_dir gwmound)
+    mkdir -p "$dir/.lock"
+    printf '999999\n' > "$dir/.lock/owner"
+    touch -d "@$(( $(date +%s) - 1000 ))" "$dir/.lock"
+    DR_DEP_LOCK_WAIT=0 DR_DEP_LOCK_STALE=60 run dr_dep_claim gwmound "$REPO" draugr-app true
+    [ "$status" -eq 0 ]
+    [ -f "$(dr_dep_claim_file gwmound "$REPO")" ]
+    [ ! -d "$dir/.lock" ]
+}
+
+@test "a lock of unreadable age is left alone, not broken" {
+    local dir
+    dir=$(dr_dep_dir gwmound)
+    mkdir -p "$dir/.lock"
+    printf '999999\n' > "$dir/.lock/owner"
+    touch -d "@$(( $(date +%s) - 1000 ))" "$dir/.lock"
+    # The lock is old enough to break. The only thing that keeps it is that its
+    # age cannot be read, and an age that cannot be read is not an age past the
+    # limit: breaking on it would put two claimants in the section at once.
+    # shellcheck disable=SC2317  # called from _dr_dep_lock_age, not from here
+    stat() { return 1; }
+    DR_DEP_LOCK_WAIT=0 DR_DEP_LOCK_STALE=60 run dr_dep_claim gwmound "$REPO" draugr-app true
+    [ "$status" -ne 0 ]
+    [ -d "$dir/.lock" ]
+}
+
+@test "the lock is given back, whether the claim was written or refused" {
+    export DR_MOCK_NAMES="draugr-app other-mound"
+    local dir
+    dir=$(dr_dep_dir gwmound)
+    dr_dep_claim gwmound "$REPO" draugr-app true
+    [ ! -d "$dir/.lock" ]
+    run dr_dep_claim gwmound /other/repo other-mound true
+    [ "$status" -ne 0 ]
+    [ ! -d "$dir/.lock" ]
+}
+
+# One answer from sbx, used by the prune AND by the test for a holder. Two
+# calls meant two moments: a mound could stop between them, so the prune kept a
+# claim that the test then read as stale. It is also what keeps the lock cheap,
+# because nothing held under it waits on a daemon.
+@test "a claim asks sbx once, and judges both of its steps with that answer" {
+    : > "$DR_MOCK_LOG"
+    dr_dep_claim gwmound "$REPO" draugr-app true
+    [ "$(calls ls | grep -c .)" -eq 1 ]
+}
+
+@test "a lock that belongs to another process is not removed by this one" {
+    local dir
+    dir=$(dr_dep_dir gwmound)
+    mkdir -p "$dir/.lock"
+    printf '999999\n' > "$dir/.lock/owner"
+    _dr_dep_unlock "$dir"
+    [ -d "$dir/.lock" ]
+}
+
+# The end-to-end form of the same rule, with two real processes. The mock sbx
+# holds each one at its `ls` until the test opens the gate, so both enter the
+# claim at the same moment instead of at whatever moment the scheduler picks.
+@test "two claimants released together: exactly one takes the exclusive resource" {
+    export DR_MOCK_NAMES="draugr-app other-mound"
+    cat > "$DR_TMP/claimant" <<EOS
+#!/usr/bin/env bash
+set -euo pipefail
+. "$DR_ROOT/lib/common.sh"
+dr_dep_claim gwmound "\$1" "\$2" true
+EOS
+    chmod +x "$DR_TMP/claimant"
+
+    export DR_MOCK_LS_BARRIER="$DR_TMP/barrier"
+    : > "$DR_TMP/barrier.arrived"
+    local a b i ok=0
+    "$DR_TMP/claimant" "$REPO" draugr-app > "$DR_TMP/a.out" 2>&1 &
+    a=$!
+    "$DR_TMP/claimant" /other/repo other-mound > "$DR_TMP/b.out" 2>&1 &
+    b=$!
+
+    i=0
+    while [ "$(grep -c . "$DR_TMP/barrier.arrived" || true)" -lt 2 ] && [ "$i" -lt 200 ]; do
+        i=$((i + 1))
+        sleep 0.05
+    done
+    [ "$(grep -c . "$DR_TMP/barrier.arrived" || true)" -ge 2 ]
+    : > "$DR_TMP/barrier.go"
+
+    if wait "$a"; then ok=$((ok + 1)); fi
+    if wait "$b"; then ok=$((ok + 1)); fi
+    [ "$ok" -eq 1 ]
+    [ "$(dr_dep_claims gwmound | grep -c .)" -eq 1 ]
+}
+
 # --- durations ----------------------------------------------------------------
 
 @test "dr_dep_seconds: the three suffixes, and off" {

@@ -16,6 +16,12 @@
 #                  project keys, listings and cp arguments of dr-mem really run.
 #                  The reason is the same as for the real git fetch of
 #                  dr_fake_mound.
+#   DR_MOCK_LS_BARRIER  a path. Before answering `ls`, the mock appends its pid
+#                  to "<path>.arrived" and waits for "<path>.go". A test holds
+#                  several processes at one point that way and releases them
+#                  together, which is how a race is reproduced on purpose
+#                  rather than hoped for. It gives up after 10 s, so a test
+#                  that never opens the gate fails instead of hanging.
 set -euo pipefail
 
 if [ -n "${DR_MOCK_LOG:-}" ]; then
@@ -23,6 +29,17 @@ if [ -n "${DR_MOCK_LOG:-}" ]; then
 fi
 
 sub=${1:-}
+
+# The barrier is the first thing an `ls` meets, before any state is read, so
+# every caller stops at the same place.
+if [ -n "${DR_MOCK_LS_BARRIER:-}" ] && [ "$sub" = ls ]; then
+    printf '%s\n' "$$" >> "$DR_MOCK_LS_BARRIER.arrived"
+    _wait=0
+    while [ ! -e "$DR_MOCK_LS_BARRIER.go" ] && [ "$_wait" -lt 200 ]; do
+        _wait=$((_wait + 1))
+        sleep 0.05
+    done
+fi
 
 # Version-sensitive generated kits can be tested without changing old fixtures.
 if [ "$sub" = --version ]; then

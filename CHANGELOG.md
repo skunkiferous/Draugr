@@ -61,6 +61,15 @@ people reading the source, not for people calling it.
   read the exclusion list, it returns a message where a path belongs, so the check says that it
   could not read them instead of reporting every declared path as missing.
 
+- **CI runs the action it was given, not whatever the name points at today.** Both jobs used
+  `actions/checkout@v4`. A tag is a name its owner can repoint at any commit, so that line said
+  "whatever is published under `v4` when this job runs" — and a job with `contents: read` on a
+  public repository is still a place where somebody else's code executes against the checkout. It
+  is now the commit of `v4.4.0`, with the version in a trailing comment for people. This changes
+  nothing for anyone using Draugr; it changes what has to happen for Draugr's own CI to run
+  something nobody read. The guest installers that fetch a current remote version are the other
+  half of this, and are not done: they need a disposable VM to change safely.
+
 ### Fixed
 
 The next ten entries come from a security review of 0.9.0. They are one defect in different
@@ -392,6 +401,23 @@ instead of the result.
   `vm.vmrs`, `vm_state.json` — and anything else is named instead. The leftover
   check also covers `.avhdx`: a checkpoint disk is a disk, and `-Filter *.vhdx`
   does not match one.
+
+The last one is a fourth shape: **two processes read the same state before
+either of them had written it.**
+
+- **Two `dr-up`s started together could both take an exclusive dependency.** A claim was a read
+  followed by a write with nothing in between, so two claimants that started at the same moment
+  both listed the claim directory before either had written into it, both saw no owner, and both
+  went on — which is the one outcome `DRAUGR_EXCLUSIVE=true` exists to prevent. The cleanup, the
+  test for another holder and the write now happen under one lock on that resource: a directory
+  that `mkdir` creates, because `mkdir` either creates it or fails and two processes cannot both
+  create the same one. The loser reads the directory after the winner wrote into it, so it gets
+  the refusal that names the winner. A **shared** claim takes the same lock, because its write is
+  what an exclusive claimant tests against. Nothing held under the lock asks `sbx`: that answer is
+  taken once, before the lock, and then serves both the cleanup and the test — which also ends the
+  second listing a claim used to cost, and the moment of difference between the two. A lock left
+  behind by a process that died is broken once it is older than the limit, and a lock whose age
+  cannot be read is left alone, because breaking that one would put two claimants inside at once.
 
 ## [0.9.0] — 2026-11-15
 

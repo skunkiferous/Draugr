@@ -110,8 +110,10 @@ mound builds. During that minute, a second project can get past an exclusive loc
 
 ### The lock is a claim that refuses company
 
-An exclusive resource is one whose `.draugr.conf` says `DRAUGR_EXCLUSIVE=true`. For those, Draugr
-creates the claim directory with `mkdir`, which is atomic. It **refuses a second claimant by name**:
+An exclusive resource is one whose `.draugr.conf` says `DRAUGR_EXCLUSIVE=true`. For those, the
+cleanup, the test for another holder and the write of the claim all happen under **one lock on
+that resource**: a directory that `mkdir` creates, because `mkdir` either creates it or fails, and
+two processes cannot both create the same one. It **refuses a second claimant by name**:
 
 ```text
 dr-up: draugr-gateway is exclusive, and /home/you/code/TabuLua uses it since 14:02
@@ -119,14 +121,22 @@ dr-up: draugr-gateway is exclusive, and /home/you/code/TabuLua uses it since 14:
   Stop the mound of that project, or release it there:  dr-dep release
 ```
 
-Four properties, all from the decision above:
+Five properties, all from the decision above:
 
 - **Off unless you ask for it**, so a dependency on a database stays as simple as its name.
 - **It repairs itself.** Draugr takes over a lock whose holder is invalid, once. It does not wait
   for a human to delete a file.
 - **Re-entrant for the same repository.** The first terminal in a project does not lock out a
   second terminal in the same project. The claim is for each repository, not for each shell.
-- **It informs, and it refuses, and does not wait.** A wait hides a queue. A refusal names a holder.
+- **One claimant decides at a time.** Two `dr-up`s started together cannot both read the directory
+  before either has written into it. The second reads it after the first wrote, so it gets the
+  refusal instead of a second copy of the resource.
+- **It informs, and it refuses, and does not wait for the resource.** A wait hides a queue. A
+  refusal names a holder. The one thing a claimant does wait for is the lock above, and only
+  because somebody else is a few filesystem operations from giving it back: `sbx` is asked before
+  the lock is taken, so nothing held under it waits on a daemon. A lock left behind by a process
+  that died is broken once it is old enough, and a lock whose age cannot even be read is left
+  alone — breaking that one would put two claimants inside at once, which is the whole point.
 
 Draugr claims each resource **separately**. A forge project holds one claim on the gateway, and one
 on the forge VM, because their lifetimes are different. The gateway can serve while the forge is
