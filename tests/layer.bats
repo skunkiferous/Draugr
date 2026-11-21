@@ -958,6 +958,39 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     done
 }
 
+# A NAME THAT BECOMES A RECURSIVE DELETE. `drop` did `Join-Path $Root $Name`
+# on a bare [string] and removed what it found, so `..\..\x` left the store and
+# `.` selected the root. The predicates are executed in forge-ps.bats; what
+# this test can say is that the verb which deletes actually calls them, and
+# that is worth saying, because the verb itself needs Hyper-V and a closed
+# AppSandbox to run at all.
+@test "layer.ps1: drop asks for a name, a place and a marker before it deletes" {
+    local ps="$DR_ROOT/lib/forge/layer.ps1"
+    # The predicates come from the file that forge-ps.bats can dot-source.
+    grep -q "layerpath.ps1" "$ps"
+    # One chokepoint for every verb that takes a name, and the deleting verb
+    # asks again for itself.
+    [ "$(grep -cE '^[[:space:]]*if \(.*Test-LayerName' "$ps")" -ge 2 ]
+    # The place: canonical, strictly inside -Root, no reparse point.
+    grep -q 'Test-UnderRoot \$dir \$Root' "$ps"
+    # The marker: a layer has a disk and a layer.json beside it. An existing
+    # directory is not a layer.
+    grep -q "Join-Path \$dir 'layer.json'" "$ps"
+}
+
+# An enumeration that FAILED is not an enumeration that found nothing - and
+# the answer "no stray disks in there" is what leads to Remove-Item -Recurse.
+@test "layer.ps1: adopt does not read a failed listing as an empty folder" {
+    local ps="$DR_ROOT/lib/forge/layer.ps1"
+    grep -q 'ErrorVariable strayErr' "$ps"
+    grep -q 'strayErr.Count' "$ps"
+    # -Force, or a HIDDEN .vhdx is not listed and the folder looks empty.
+    grep -qE 'Get-ChildItem \$old -Filter \*\.vhdx -Recurse -Force' "$ps"
+    # And never the root: the header of that file warns that a VM built inside
+    # the layer store is one delete from taking every layer with it.
+    grep -q 'isRootish' "$ps"
+}
+
 @test "the forge scripts share one four-answer VM state, and keep no boolean copy" {
     local f
     for f in vm.ps1 snap.ps1 rm.ps1; do

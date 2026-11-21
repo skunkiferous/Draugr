@@ -216,6 +216,29 @@ installed() {
         "$SEED/installed_plugins.json" 2>/dev/null || true
 }
 
+# registry_names_ok <seed dir>: is every identifier in its registry a name?
+#
+# The same question that `clean` asks, asked at the other end: a build mound
+# writes installed_plugins.json, and this is where that file becomes YOUR
+# library. Refusing here names the build that produced the bad entry. Refusing
+# only at cleanup time would blame a command that is weeks away and innocent.
+#
+# A version of "?" is jq's own placeholder for an entry that records none (see
+# installed()), not text from the registry, so it is allowed through. `clean`
+# leaves such a plugin alone rather than deleting every version of it.
+registry_names_ok() {
+    local f="$1/installed_plugins.json" id ver
+    [ -f "$f" ] || return 0
+    while read -r id ver; do
+        [ -n "$id" ] || continue
+        dr_simple_name "${id%@*}" || return 1
+        dr_simple_name "${id#*@}" || return 1
+        [ "$ver" = '?' ] || dr_simple_name "$ver" || return 1
+    done < <(jq -r '.plugins // {} | to_entries[] | "\(.key) \(.value[0].version // "?")"' \
+        "$f" 2>/dev/null)
+    return 0
+}
+
 # Enabled is a different question from installed. The seed holds the content,
 # and the settings file holds the decision. dr-plugin reports both, because a
 # plugin that is one and not the other is the confusing case.
@@ -435,6 +458,15 @@ build_commit() {
         build_harvest
     fi
     [ -d "$BUILD/seed" ] || dr_die "nothing was built"
+
+    # The boundary. After this swap the file is your library, and `clean`
+    # builds paths out of it.
+    registry_names_ok "$BUILD/seed" || dr_die \
+        "the built library names a plugin that cannot be one" \
+        "An id or a version in its installed_plugins.json is not a simple name," \
+        "and this host turns those into paths." \
+        "Your library is unchanged. The build is in $BUILD/seed; look at it there."
+
     rm -rf "$PREV"
     # An `if`, not `[ ] && mv`. Under set -e, that form exits the script the
     # first time that there is no library to move, that is, on the first add.
@@ -841,14 +873,67 @@ clean)
     # next to a live 1.0.0 stayed after `plugin update`, `plugin prune`, and
     # `plugin list`, and list never named it. The code keeps only the version
     # that the library names as installed.
+    # THE PATH IS BUILT FROM THE LIBRARY, AND A MOUND WROTE THE LIBRARY.
+    # `_mkt=${_id#*@}` is a key of installed_plugins.json, which a plugin
+    # build produced inside a sandbox. An id of `x@../../..` made the path
+    # `$SEED/cache/../../../x`, and the loop below deletes the directories it
+    # finds there, with your authority. A security review reproduced it: a
+    # planted entry deleted a directory outside the fixture's plugin store.
+    #
+    # Two gates, because neither one covers the other:
+    #
+    #   dr_simple_name    no identifier can become more than one component,
+    #                     so no path can be built out of one.
+    #   dr_path_contained the target must canonicalise INSIDE the cache. That
+    #                     is the one that sees a LINK, whose name is innocent
+    #                     and whose destination is not.
+    #
+    # Both refuse the whole run. A library that names something impossible is
+    # not a library to delete files by, and a partial clean would leave you
+    # guessing which half ran.
+    _cache="$SEED/cache"
+    [ ! -L "$_cache" ] || dr_die \
+        "the plugin cache is a link: $_cache" \
+        "dr-plugin clean deletes inside it, and will not follow a link out of" \
+        "the store it owns. Nothing was deleted."
+
+    # One line for each installed plugin: "<plugin>@<marketplace> <version>".
     _kept=0 _dropped=0
     while read -r _id _ver; do
         [ -n "$_id" ] || continue
+        # The split that used to go straight into a path.
         _plug=${_id%@*}; _mkt=${_id#*@}
-        _dir="$SEED/cache/$_mkt/$_plug"
+        if ! dr_simple_name "$_plug" || ! dr_simple_name "$_mkt"; then
+            dr_die \
+                "the plugin library names something that cannot be a plugin: $_id" \
+                "A plugin and a marketplace are simple names, and this one would" \
+                "become a path. Nothing was deleted." \
+                "Look at $SEED/installed_plugins.json."
+        fi
+
+        # A version of "?" is jq's placeholder for an entry that records none
+        # (see installed()). Keeping nothing would delete EVERY version of
+        # that plugin, which is a decision made on missing data.
+        if [ "$_ver" = '?' ]; then
+            dr_warn "$_id records no version. Leaving its cache alone."
+            continue
+        fi
+        dr_simple_name "$_ver" || dr_die \
+            "the plugin library gives $_id a version that cannot be one: $_ver" \
+            "Nothing was deleted."
+
+        # Now the path, out of two names that are known to be names.
+        _dir="$_cache/$_mkt/$_plug"
         [ -d "$_dir" ] || continue
+
+        # One directory for each version that is on disk. The live one stays,
+        # every other one goes - and each is asked where it really is first.
         for _v in "$_dir"/*; do
             [ -d "$_v" ] || continue
+            dr_path_contained "$_cache" "$_v" || dr_die \
+                "a version directory of $_id is not inside the plugin cache" \
+                "$_v resolves outside $_cache. A link in the store does that." \
+                "Nothing was deleted."
             if [ "$(basename "$_v")" = "$_ver" ]; then
                 _kept=$((_kept + 1))
             else

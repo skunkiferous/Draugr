@@ -191,6 +191,90 @@ PY
     [ ! -d "$DRAUGR_PLUGIN_STORE/codex/.lock" ]
 }
 
+# --- the library is built where no sandbox can reach it ---------------------
+#
+# The host used to write library.json, library.json.next and every marketplace
+# catalog inside the build mound's own workspace, and then publish that tree.
+# A security review redirected one of those writes with a link planted at
+# `library.json.next` and watched the host's jq output land in a file outside
+# the build directory. Validating plugin NAMES cannot see that: the name was
+# never the problem.
+
+# A published Codex library with one package. enable, disable and remove run
+# the whole begin-and-commit cycle on it without needing a build mound.
+codex_library() {
+    export DRAUGR_PLUGIN_STORE="$REPO/plugins"
+    seed="$DRAUGR_PLUGIN_STORE/codex/seed"
+    mkdir -p "$seed/marketplaces/parity/packages/marker/1"
+    printf 'package byte\n' > "$seed/marketplaces/parity/packages/marker/1/file.txt"
+    printf '%s\n' '{"format":1,"marketplaces":{"parity":"example/marketplace"},"plugins":[{"id":"marker@parity","name":"marker","marketplace":"parity","version":"1","enabled":true}]}' \
+        > "$seed/library.json"
+}
+
+@test "codex plugins: a link in the library cannot redirect a host write" {
+    codex_library
+    printf 'original\n' > "$DR_TMP/victim"
+    # The exact name the host writes next, pointing at a file it never meant
+    # to touch. `cp -a` into the staging tree keeps it a link, so the check
+    # has to happen before the first write, not only before publication.
+    ln -s "$DR_TMP/victim" "$seed/library.json.next" 2>/dev/null \
+        || skip "this drive does not take a symlink"
+
+    run dr-plugin disable marker@parity
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"link"* ]]
+    [ "$(cat "$DR_TMP/victim")" = original ]
+    # And the published library is as it was.
+    [ -f "$seed/library.json" ]
+}
+
+@test "codex plugins: nothing the host writes goes into the mound workspace" {
+    codex_library
+    printf 'original\n' > "$DR_TMP/victim"
+    build="$DRAUGR_PLUGIN_STORE/codex/.build"
+    mkdir -p "$build/seed"
+    # A link at the old location of the host's temporary file. --force,
+    # because a leftover build directory is itself a refusal.
+    ln -s "$DR_TMP/victim" "$build/seed/library.json.next" 2>/dev/null \
+        || skip "this drive does not take a symlink"
+
+    run dr-plugin disable marker@parity --force
+    [ "$status" -eq 0 ]
+    [ "$(cat "$DR_TMP/victim")" = original ]
+    # The workspace is not the library, and publication does not come from it.
+    [ ! -e "$build" ]
+    [ -f "$seed/library.json" ]
+    run jq -r '.plugins[0].enabled' "$seed/library.json"
+    [ "$output" = false ]
+}
+
+# The two assertions below are about the SOURCE, and they say so. The staged
+# library is already out of a sandbox's reach, so the last gate before
+# publication can only fire if something changes between the install and the
+# commit - which needs a real build mound to produce. Its two siblings (the
+# check in _dr_cp_begin, and the per-package check after each export) are
+# tested by running them.
+@test "codex plugins: the host writes nothing under the mound's workspace" {
+    local f="$DR_ROOT/lib/plugins/codex.sh"
+    # The workspace is created, handed to sbx, and removed. Every other
+    # mention of it would be a host write inside a directory the sandbox owns,
+    # which is the shape the review exploited.
+    run bash -c "grep -vE '^[[:space:]]*#' '$f' | grep '_cp_build' \
+        | grep -vE 'mkdir -p|rm -rf|dr_path_win|for d in|local _cp_seed'"
+    [ -z "$output" ]
+}
+
+@test "codex plugins: the writer stops before the library is judged" {
+    local f="$DR_ROOT/lib/plugins/codex.sh" body stop judge
+    body=$(sed -n '/^_dr_cp_commit() {/,/^}/p' "$f")
+    stop=$(printf '%s\n' "$body" | grep -n '_dr_cp_stop_mound' | head -1 | cut -d: -f1)
+    judge=$(printf '%s\n' "$body" | grep -n 'dr_mem_validate_tree' | head -1 | cut -d: -f1)
+    [ -n "$stop" ] && [ -n "$judge" ]
+    # A check is worth nothing if the thing it checked can still be edited
+    # afterwards.
+    [ "$stop" -lt "$judge" ]
+}
+
 # sbx changed the envelope. State and identity must still name the real mound.
 @test "sbx array listing: state and agent survive the native envelope" {
     export DR_MOCK_JSON='[{"name":"draugr-testrepo","agent":"codex","status":"running","workspaces":["C:\\Code\\testrepo"]}]'

@@ -198,6 +198,107 @@ JSON
     [ ! -d "$STORE/seed/cache/ghost-mkt" ]
 }
 
+# --- clean deletes inside the store, or not at all --------------------------
+#
+# The identifiers in installed_plugins.json are written by a plugin BUILD,
+# which runs in a sandbox. `_mkt=${_id#*@}` of `x@../../..` used to build
+# $SEED/cache/../../../x, and the loop deleted the version directories it
+# found there. A security review reproduced that with a planted entry: it
+# deleted a disposable directory outside the fixture's store.
+
+# A registry that names one plugin, with whatever id and version the caller
+# gives. The second argument is the version string.
+plant_registry() {
+    cat > "$STORE/seed/installed_plugins.json" <<JSON
+{"version": 2, "plugins": {"$1": [
+  {"scope": "user", "version": "$2", "installPath": "/somewhere/stale"}]}}
+JSON
+}
+
+@test "dr-plugin clean: an id that escapes the store deletes nothing" {
+    setup_store || skip "no writable Windows drive path"
+    local outside
+    outside="$(dirname "$STORE")/victim"
+    mkdir -p "$outside/1.0.0"
+
+    # ../../victim from $STORE/seed/cache is exactly the fixture's sibling.
+    plant_registry "plug-a@../../victim" "9.9.9"
+    run dr-plugin clean
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot be a plugin"* ]]
+    # The whole finding in one assertion.
+    [ -d "$outside/1.0.0" ]
+    # And the real cache is untouched, because the refusal is the whole run.
+    [ -d "$STORE/seed/cache/mkt-a/plug-a/1.0.0" ]
+}
+
+@test "dr-plugin clean: a version that is not a name deletes nothing" {
+    setup_store || skip "no writable Windows drive path"
+    mkdir -p "$STORE/seed/cache/mkt-a/plug-a/0.9.0"
+    plant_registry "plug-a@mkt-a" "../../../../etc"
+    run dr-plugin clean
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"version"* ]]
+    [ -d "$STORE/seed/cache/mkt-a/plug-a/0.9.0" ]
+}
+
+@test "dr-plugin clean: a link out of the cache deletes nothing" {
+    setup_store || skip "no writable Windows drive path"
+    local outside
+    outside="$(dirname "$STORE")/linked-away"
+    mkdir -p "$outside/keepme"
+    # The NAME is innocent: letters only. The destination is not. Only a
+    # canonicalising check can tell the difference.
+    ln -s "$outside" "$STORE/seed/cache/mkt-a/plug-a/0.9.0" 2>/dev/null \
+        || skip "this drive does not take a symlink"
+
+    run dr-plugin clean
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not inside the plugin cache"* ]]
+    [ -d "$outside/keepme" ]
+}
+
+@test "dr-plugin clean: a plugin with no recorded version keeps its cache" {
+    setup_store || skip "no writable Windows drive path"
+    mkdir -p "$STORE/seed/cache/mkt-a/plug-a/0.9.0"
+    # No version field at all: jq reports "?", and "keep only the live one"
+    # would then delete every version of this plugin on missing data.
+    cat > "$STORE/seed/installed_plugins.json" <<'JSON'
+{"version": 2, "plugins": {"plug-a@mkt-a": [{"scope": "user"}]}}
+JSON
+    run dr-plugin clean
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"records no version"* ]]
+    [ -d "$STORE/seed/cache/mkt-a/plug-a/0.9.0" ]
+    [ -d "$STORE/seed/cache/mkt-a/plug-a/1.0.0" ]
+}
+
+@test "dr-plugin add: a built library that names a path is not published" {
+    setup_store || skip "no writable Windows drive path"
+    # The registry the BUILD produced. build_begin copies the library into
+    # .build/seed, the mocked CLI changes nothing, and build_commit is where
+    # those bytes become yours. Refusing there names the build; refusing only
+    # at cleanup time would blame a command weeks away and innocent.
+    plant_registry "plug-a@../../escape" "1.0.0"
+    run dr-plugin add owner/repo plug-b@mkt-b
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot be one"* ]]
+    # The live library is untouched, and the build is kept to look at.
+    [ -d "$STORE/seed" ]
+    [ -d "$STORE/.build/seed" ]
+}
+
+@test "dr-plugin clean: an ordinary library still cleans" {
+    # The other half of every refusal above: the verb must still do its job,
+    # or people stop running it.
+    setup_store || skip "no writable Windows drive path"
+    mkdir -p "$STORE/seed/cache/mkt-a/plug-a/0.9.0"
+    run dr-plugin clean
+    [ "$status" -eq 0 ]
+    [ ! -d "$STORE/seed/cache/mkt-a/plug-a/0.9.0" ]
+    [ -d "$STORE/seed/cache/mkt-a/plug-a/1.0.0" ]
+}
+
 # --- rollback -----------------------------------------------------------------
 
 @test "dr-plugin rollback: swaps, so running it twice is a no-op" {

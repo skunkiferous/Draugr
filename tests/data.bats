@@ -366,3 +366,314 @@ tmp/x.bin" ]
     printf "\000" >> "$DR_TMP/t.big"
     dr_data_is_text "$DR_TMP/t.big"
 }
+
+# --- one name on the sender, another file on the host -----------------------
+#
+# The sender is Linux, where .GIT and .git are two directories. The destination
+# is a Windows drive, where they are one. Measured with real rsync 3.2.7 and
+# `--exclude=.git` in force: a sender's `.GIT/hooks-marker` arrived as
+# `.git/hooks-marker`, and a sender's `GIT~1/config` OVERWROTE `.git/config`
+# through the 8.3 short name that this volume still generates.
+#
+# .git/config decides what git RUNS for you, so this is the file the review was
+# built to protect, reached by a spelling the review did not know.
+
+@test "data filters: another case of .git never travels" {
+    need_rsync
+    make_tree
+    mkdir -p "$DR_TMP/src/.GIT/hooks" "$DR_TMP/src/.Draugr"
+    touch "$DR_TMP/src/.GIT/config" "$DR_TMP/src/.Draugr/kit.applied"
+
+    DRAUGR_DATA="*"
+    run transferred
+    [[ "$output" != *".GIT"* ]]
+    [[ "$output" != *".Draugr"* ]]
+    # The real data still moves. A refusal of everything would pass this test
+    # and break the command.
+    [[ "$output" == *"a.parquet"* ]]
+}
+
+@test "data filters: the 8.3 alias of host metadata never travels" {
+    need_rsync
+    make_tree
+    mkdir -p "$DR_TMP/src/GIT~1" "$DR_TMP/src/DRAUGR~1"
+    touch "$DR_TMP/src/GIT~1/config" "$DR_TMP/src/DRAUGR~1/kit.applied"
+
+    DRAUGR_DATA="*"
+    run transferred
+    [[ "$output" != *"GIT~1"* ]]
+    [[ "$output" != *"DRAUGR~1"* ]]
+    [[ "$output" == *"a.parquet"* ]]
+}
+
+@test "dr_data_matches: another case of the plumbing is still not data" {
+    DRAUGR_DATA="*"
+    run dr_data_matches ".GIT/config"
+    [ "$status" -ne 0 ]
+    run dr_data_matches "GIT~1/config"
+    [ "$status" -ne 0 ]
+    run dr_data_matches "out/.Draugr/tmp/x"
+    [ "$status" -ne 0 ]
+    # The trailing-dot form, which only this side can be asked about:
+    # dr_data_path_safe refuses every trailing dot outright, so the stripping
+    # inside dr_name_reserved_meta is load-bearing HERE and nowhere else.
+    run dr_data_matches ".git./config"
+    [ "$status" -ne 0 ]
+    run dr_data_matches ".GIT /hooks/x"
+    [ "$status" -ne 0 ]
+    # And the exemption still works for real data, at any depth.
+    run dr_data_matches "out/report.csv"
+    [ "$status" -eq 0 ]
+}
+
+@test "dr_data_path_safe: another case of host metadata is refused" {
+    ! dr_data_path_safe ".GIT/config" || return 1
+    ! dr_data_path_safe ".Git/config" || return 1
+    ! dr_data_path_safe ".DRAUGR/tmp" || return 1
+    # Not only at the front: a repo can hold a nested checkout.
+    ! dr_data_path_safe "out/.GIT/config"
+}
+
+@test "dr_data_path_safe: the 8.3 alias of host metadata is refused" {
+    # Measured: a write through GIT~1 is a write to .git on this drive.
+    ! dr_data_path_safe "GIT~1/config" || return 1
+    ! dr_data_path_safe "git~1/config" || return 1
+    ! dr_data_path_safe "DRAUGR~2/tmp"
+}
+
+@test "dr_data_path_safe: a trailing dot or space is refused" {
+    # Win32 strips both before it looks the name up, so each of these is a
+    # name for a different file than the one the review printed.
+    ! dr_data_path_safe ".git./config" || return 1
+    ! dr_data_path_safe ".git /config" || return 1
+    ! dr_data_path_safe "out/report." || return 1
+    ! dr_data_path_safe "out/report "
+}
+
+@test "dr_data_path_safe: a backslash or a colon is refused" {
+    # A backslash is a SEPARATOR on the destination, so this is three
+    # components there and one here. A colon is a drive prefix or an alternate
+    # data stream.
+    ! dr_data_path_safe 'out\.git\config' || return 1
+    ! dr_data_path_safe "C:/data/x" || return 1
+    ! dr_data_path_safe "out/report.csv:hidden"
+}
+
+@test "dr_data_path_safe: a name of nothing but dots is refused" {
+    ! dr_data_path_safe ".../x" || return 1
+    ! dr_data_path_safe "out/...."
+}
+
+@test "dr_data_path_safe: the names people really transfer still pass" {
+    # The other half of every refusal above. A guard that refuses .gitignore
+    # or a directory called my.git is a guard people turn off.
+    dr_data_path_safe ".gitignore"
+    dr_data_path_safe ".gitattributes"
+    dr_data_path_safe "out/my.git/notes.md"
+    dr_data_path_safe "scratch/raw/r1"
+    dr_data_path_safe "a.b/c-d_e+f/g.parquet"
+    dr_data_path_safe "data/~tilde~/x"
+}
+
+@test "dr_data_exec_shaped: an uppercase extension is still runnable" {
+    # `case` is case sensitive, and Windows resolves an extension without
+    # regard to case. So payload.PS1 answered "not runnable" on a destination
+    # that runs it.
+    dr_data_exec_shaped "payload.PS1"
+    dr_data_exec_shaped "SETUP.CMD"
+    dr_data_exec_shaped "out/Tool.Exe"
+    dr_data_exec_shaped "deep/Dockerfile.PROD"
+    dr_data_exec_shaped "MAKEFILE"
+    dr_data_exec_shaped "installer.AppImage"
+}
+
+# --- staging goes outside the repository ------------------------------------
+#
+# dr_stage used to build $DR_REPO/.draugr/tmp/$$, delete it, and recreate it.
+# A mound with the repository bind-mounted writes that path, and a link there
+# redirects both the deletion and everything staged afterwards.
+
+need_win_stage() {
+    # sbx cp can only reach a Windows path, so the root must be a real one.
+    REPO=$(dr_make_win_repo) || skip "no writable Windows drive path"
+    DR_REPO=$REPO
+}
+
+@test "dr_stage: the staging directory is not in the repository" {
+    need_win_stage
+    dr_stage
+    [ -d "$DR_STAGE" ]
+    [[ "$DR_STAGE" != "$DR_REPO"/* ]]
+    # sbx needs the Windows spelling of the same directory.
+    [[ "$DR_STAGE_WIN" == [A-Z]:'\'* ]]
+    rm -rf "$DR_STAGE"
+}
+
+@test "dr_stage: two runs get two directories, and neither is deleted" {
+    need_win_stage
+    dr_stage
+    local first=$DR_STAGE
+    printf 'x\n' > "$first/keep"
+    dr_stage
+    local second=$DR_STAGE
+    [ "$first" != "$second" ]
+    # The old code deleted a predictable path on the way in. This file is the
+    # proof that nothing is deleted to make room any more.
+    [ -f "$first/keep" ]
+    [ -d "$second" ]
+    rm -rf "$first" "$second"
+}
+
+@test "dr_stage: a staging root behind a link is refused" {
+    need_win_stage
+    # NOT $DR_WIN_TMP: dr_make_win_repo runs in a command substitution, so its
+    # export dies with that subshell (helper.bash says so at length). The
+    # parent of the repo is the same directory, and it is still here.
+    local wintmp
+    wintmp=$(dirname "$REPO")
+    mkdir -p "$wintmp/elsewhere"
+    ln -s "$wintmp/elsewhere" "$wintmp/stage-link" 2>/dev/null \
+        || skip "this drive does not take a symlink"
+    DRAUGR_STAGE_ROOT="$wintmp/stage-link"
+    run dr_stage
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"goes through a link"* ]]
+    # And nothing was staged through it.
+    [ -z "$(ls -A "$wintmp/elsewhere")" ]
+}
+
+# --- an empty preview is not "nothing to pull" ------------------------------
+#
+# The review of an incoming pull was `rsync … 2>/dev/null | grep -v '/$' ||
+# true`, which is GREP's status with even that discarded. An unreachable mound
+# therefore produced an empty list, every caller read it as "this pull lands
+# nothing", and the real transfer ran unreviewed. That is finding F07.
+#
+# A stand-in rsync, because these tests are about what dr-data does with an
+# ANSWER, not about copying. It cannot live in tests/mocks: the filter tests
+# above need the real one, and tests/mocks comes first on PATH for every test.
+fake_rsync() {
+    mkdir -p "$DR_TMP/fakebin"
+    export DR_FAKE_RSYNC_LOG="$DR_TMP/rsync-real.log"
+    export DR_FAKE_RSYNC_MODE=$1
+    : > "$DR_FAKE_RSYNC_LOG"
+    cat > "$DR_TMP/fakebin/rsync" <<'SH'
+#!/usr/bin/env bash
+# The dry run answers the way a measured rsync answers. Every other call is
+# the REAL transfer, and it only writes down that it was asked - so a test can
+# prove that a refusal happened BEFORE any bytes moved.
+#
+# It renders --out-format itself, exactly as rsync does. So a name arrives
+# with whatever marker the caller asked for, and a caller that asks for none
+# gets none. Without that, a test could not tell the two apart.
+fmt='%n'
+for a in "$@"; do
+    case "$a" in --out-format=*) fmt=${a#--out-format=} ;; esac
+done
+case " $* " in
+    *" --dry-run "*)
+        case "$DR_FAKE_RSYNC_MODE" in
+            fail)
+                printf 'rsync: connection unexpectedly closed\n' >&2
+                exit 12 ;;
+            chatter)
+                # Measured on rsync 3.2.7, and it goes to STDOUT, where the
+                # names are.
+                printf 'skipping non-regular file "payload"\n'
+                exit 0 ;;
+            *)
+                printf '%s\n' "${fmt//%n/report.csv}"
+                exit 0 ;;
+        esac ;;
+    *)
+        printf 'REAL %s\n' "$*" >> "$DR_FAKE_RSYNC_LOG"
+        exit 0 ;;
+esac
+SH
+    chmod +x "$DR_TMP/fakebin/rsync"
+    export PATH="$DR_TMP/fakebin:$PATH"
+}
+
+setup_pull() {
+    REPO=$(dr_make_win_repo) || return 1
+    cd "$REPO" || return 1
+    export DR_MOCK_STATE=running
+    export DRAUGR_DATA="*"
+    return 0
+}
+
+@test "dr-data pull: a failed preview stops the pull" {
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync fail
+    run dr-data pull -y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not preview"* ]]
+    # The whole finding in one assertion: no bytes moved on an empty review.
+    [ ! -s "$DR_FAKE_RSYNC_LOG" ]
+}
+
+@test "dr-data pull: a line that is not a file name stops the pull" {
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync chatter
+    run dr-data pull -y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot tell what a pull would land"* ]]
+    [ ! -s "$DR_FAKE_RSYNC_LOG" ]
+}
+
+@test "dr-data pull: a clean preview still transfers" {
+    # The other half. A review that refuses everything protects nothing,
+    # because nobody keeps using it.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    run dr-data pull -y
+    [ "$status" -eq 0 ]
+    grep -q '^REAL' "$DR_FAKE_RSYNC_LOG"
+}
+
+@test "dr-data: a symlink cannot cross in either direction" {
+    # The flags, on the real transfer, in both directions. -a is -rlptgoD, so
+    # without these three a symlink, a device and a socket are recreated on
+    # the other side - and a symlink is a name that points anywhere.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    run dr-data pull -y
+    [ "$status" -eq 0 ]
+    grep -q '^REAL .*--no-links' "$DR_FAKE_RSYNC_LOG"
+    grep -q '^REAL .*--no-devices' "$DR_FAKE_RSYNC_LOG"
+    grep -q '^REAL .*--no-specials' "$DR_FAKE_RSYNC_LOG"
+
+    : > "$DR_FAKE_RSYNC_LOG"
+    run dr-data push -y
+    [ "$status" -eq 0 ]
+    grep -q '^REAL .*--no-links' "$DR_FAKE_RSYNC_LOG"
+}
+
+@test "dr_stage: a staging root with a space in it still works" {
+    # The default root is %LOCALAPPDATA%\Draugr\stage, and a Windows account
+    # folder normally has a space in it. The fixtures here do not, so this is
+    # the only place that exercises the spelling that ships.
+    need_win_stage
+    local wintmp
+    wintmp=$(dirname "$REPO")
+    DRAUGR_STAGE_ROOT="$wintmp/stage root"
+    dr_stage
+    [ -d "$DR_STAGE" ]
+    [[ "$DR_STAGE" == *"stage root/stage."* ]]
+    # sbx cp gets this spelling, space and all.
+    [[ "$DR_STAGE_WIN" == *'stage root\stage.'* ]]
+    printf 'x\n' > "$DR_STAGE/a file.md"
+    [ -f "$DR_STAGE/a file.md" ]
+    rm -rf "$DR_STAGE"
+}
+
+@test "dr_stage: no host-owned root is a refusal, not a repo-local fallback" {
+    need_win_stage
+    # No override, no LOCALAPPDATA, and no cmd.exe to ask Windows. The answer
+    # must be a refusal that names the override - never a return to
+    # .draugr/tmp, which is the directory this change exists to leave.
+    DRAUGR_STAGE_ROOT= LOCALAPPDATA= PATH=/usr/bin:/bin run dr_stage
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"DRAUGR_STAGE_ROOT"* ]]
+    [ ! -d "$DR_REPO/.draugr/tmp" ]
+}

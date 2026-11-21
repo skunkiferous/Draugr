@@ -418,6 +418,63 @@ dr_path_from_win() {
     printf '/mnt/%s%s' "$drive" "$(printf '%s' "$rest" | tr '\\' '/')"
 }
 
+# dr_simple_name <text>: is this ONE path component, and nothing else?
+#
+# The question behind it is always the same: a name arrived from somewhere
+# that Draugr does not control — a plugin registry that a build mound wrote, a
+# marketplace that named itself, a version string from a CLI — and the host is
+# about to put it in a path. `_mkt=${_id#*@}` of an id like `x@../../..`
+# builds `<store>/cache/../../../x`, and the cleanup then deletes what it
+# finds there. A security review reproduced exactly that with a planted
+# registry entry.
+#
+# The allowed set is the one the rest of this file already used in three
+# places by hand: letters, digits, and `_ . + -`. What it refuses:
+#
+#   empty          a component that disappears, so the path means its parent
+#   . and ..       traversal
+#   only dots      `...` is not a name that a host can keep
+#   a leading -    a name that the next command reads as an option
+#   a slash        the whole point: one component, not a path
+#
+# A name is NOT a path. Call this once for each component, never on the joined
+# string: `a/../b` fails here, but `a` and `..` and `b` must each be asked, or
+# a safe-looking concatenation hides an empty or traversing part.
+dr_simple_name() {
+    case "$1" in
+        ''|.|..|-*)          return 1 ;;
+        *[!A-Za-z0-9_.+-]*)  return 1 ;;
+    esac
+    # Nothing but dots, of any length.
+    case "$1" in
+        *[!.]*) ;;
+        *)      return 1 ;;
+    esac
+    return 0
+}
+
+# dr_path_contained <root> <path>: is <path> a STRICT descendant of <root>?
+#
+# Both sides are canonicalised first, which is the part that matters. A name
+# check cannot see a LINK: `<store>/cache/mkt/plug` can be a name made only of
+# letters and still be a link to somewhere else entirely, and a deletion
+# through it deletes there. readlink -f resolves every link and every `..` in
+# both paths, so the comparison is between the two real places.
+#
+# Strict: a path equal to the root is NOT contained. Nothing here should ever
+# delete or replace the root it is confined to.
+dr_path_contained() {
+    local root=$1 path=$2 rroot rpath
+    rroot=$(readlink -f -- "$root" 2>/dev/null) || return 1
+    rpath=$(readlink -f -- "$path" 2>/dev/null) || return 1
+    [ -n "$rroot" ] && [ -n "$rpath" ] || return 1
+    [ "$rpath" != "$rroot" ] || return 1
+    case "$rpath" in
+        "$rroot"/*) return 0 ;;
+    esac
+    return 1
+}
+
 # dr_require_win_path <path>: the limit that the README states first.
 dr_require_win_path() {
     dr_path_mound "$1" >/dev/null 2>&1 && return 0
@@ -2162,6 +2219,102 @@ _dr_data_entries() {
     read -ra _DR_DATA_ENTRIES <<< "${DRAUGR_DATA:-}"
 }
 
+# --- the names that the host destination must not take ----------------------
+#
+# ONE NAME ON THE SENDER, ANOTHER FILE ON THE HOST. The sender is a mound, a
+# Linux filesystem where `.GIT` and `.git` are two directories. The destination
+# is a Windows drive, where they are the SAME directory, and dr_require_win_path
+# makes a Windows drive the only destination Draugr supports. So an rsync
+# `--exclude=.git` does not exclude the host's `.git`: it excludes one spelling
+# of it. That matters because `.git/config` decides what git RUNS for you
+# (core.sshCommand, core.fsmonitor, every alias).
+#
+# Measured on this drive with real rsync 3.2.7 in WSL, against a destination
+# that held `.git/config`, with `--exclude=.git --exclude=.draugr` in force:
+#
+#   sender ships         host result
+#   .GIT/hooks-marker    arrives as .git/hooks-marker
+#   GIT~1/config         .git/config OVERWRITTEN
+#
+# The second one is not a case problem, and lowercasing would not have caught
+# it. `GIT~1` is the 8.3 short name of `.git`, which this volume still
+# generates: `dir /x` lists `GIT~1  .git` for a directory created seconds
+# earlier. Win32 resolves the alias, so a write through it is a write to the
+# long name. Two more spellings resolve the same way, by Win32 rule rather than
+# by measurement here: a trailing dot and a trailing space are stripped, so
+# `.git.` and `.git ` are also that directory.
+#
+# Hence this file does not try to enumerate spellings in the rsync filters and
+# call it done. The filters still carry the cheap ones (defence in depth, and
+# they keep a push from sending the host's own metadata), but the guarantee is
+# the host-side refusal in dr_data_path_safe, which stops the whole transfer.
+#
+# dr_name_reserved_meta <component>: is this one name host metadata?
+dr_name_reserved_meta() {
+    local n=$1
+
+    # The destination does not care which case arrived, so neither does this.
+    n=${n,,}
+
+    # Strip what Win32 strips before it looks a name up. `.git.` and `.git `
+    # are `.git` to the filesystem, and `.git. .` is too.
+    while :; do
+        case "$n" in
+            *.|*' ') n=${n%?} ;;
+            *)       break ;;
+        esac
+    done
+
+    case "$n" in
+        .git|.draugr) return 0 ;;
+        # The 8.3 alias drops the leading dot and appends ~<n>: .git -> GIT~1,
+        # .draugr -> DRAUGR~1. Measured above for .git on this volume.
+        git~[0-9]*|draugr~[0-9]*) return 0 ;;
+    esac
+    return 1
+}
+
+# dr_data_reserved_path <path>: does ANY component name host metadata?
+#
+# Every component, not just the first: `data/.GIT/config` is the host's
+# `data/.git/config`, and a repo can hold a nested checkout.
+dr_data_reserved_path() {
+    local comp
+    local -a comps=()
+    # read -ra splits and does NOT glob (see _dr_data_entries). An empty
+    # component from a `//` is harmless, and the loop skips nothing for it.
+    IFS=/ read -ra comps <<< "$1"
+    for comp in "${comps[@]}"; do
+        if dr_name_reserved_meta "$comp"; then return 0; fi
+    done
+    return 1
+}
+
+# dr_name_windows_plain <component>: does the host store this name AS GIVEN?
+#
+# A name that Win32 rewrites on the way in is a name that writes to a file
+# other than the one the review printed. `report.` is `report`. Only the
+# forms that ALIAS are refused here, not every name Windows dislikes: a
+# refusal stops the whole pull, so it is reserved for a boundary question.
+#
+#   . and ..          traversal, also caught by the caller
+#   all dots          `...` is not a name the host can keep
+#   trailing . or     stripped by Win32, so the name is an alias
+#   backslash         a path SEPARATOR on the destination, not a character
+#   colon             a drive prefix, or an alternate data stream (`x:hidden`)
+dr_name_windows_plain() {
+    case "$1" in
+        ''|.|..)      return 1 ;;
+        *.|*' ')      return 1 ;;
+        *\\*|*:*)     return 1 ;;
+    esac
+    case "$1" in
+        *[!.]*) ;;
+        *)      return 1 ;;
+    esac
+    return 0
+}
+
 # dr_data_matches <repo-relative-path>: does DRAUGR_DATA include this path?
 #
 # All the code below depends on one rule. A `case` pattern is a GLOB, and the
@@ -2182,9 +2335,13 @@ dr_data_matches() {
     # copied, the clean-tree test skips it, and nobody sends it. The
     # two functions are a pair to prevent that bug, where one says yes and the
     # other says no.
-    case "$path" in
-        .git|.git/*|.draugr|.draugr/*) return 1 ;;
-    esac
+    #
+    # This side is the stricter of the two, on purpose: it also refuses the
+    # spellings above (`.GIT`, `GIT~1`, `.git.`). Those cannot exist next to
+    # the real `.git` on a Windows drive, so "not data" is the only answer
+    # that can be right for them, and being stricter here never hides a file
+    # that a transfer would carry.
+    if dr_data_reserved_path "$path"; then return 1; fi
 
     local _DR_DATA_ENTRIES=()
     _dr_data_entries
@@ -2261,7 +2418,20 @@ dr_data_filters() {
     # tree of the agent. The rule has no slash at the end. Thus it also
     # excludes a `.git` *file*, which a submodule or a worktree leaves, not
     # only a directory.
-    printf '%s\n' '--exclude=.git' '--exclude=.draugr'
+    #
+    # Each name goes in three forms, because one spelling is not one name on a
+    # Windows destination (see dr_name_reserved_meta above). An rsync pattern
+    # takes a character class, so `.[Gg][Ii][Tt]` is every case of `.git` in
+    # one rule instead of eight, and `[Gg][Ii][Tt]~[0-9]*` is the 8.3 alias
+    # that `--exclude=.git` let through on a measured run.
+    #
+    # These rules are cheap and they are not the guarantee. A sender decides
+    # the names, and only dr_data_path_safe on the host side can refuse one.
+    printf '%s\n' \
+        '--exclude=.[Gg][Ii][Tt]' \
+        '--exclude=[Gg][Ii][Tt]~[0-9]*' \
+        '--exclude=.[Dd][Rr][Aa][Uu][Gg][Rr]' \
+        '--exclude=[Dd][Rr][Aa][Uu][Gg][Rr]~[0-9]*'
     printf '%s\n' '--include=*/'
 
     # Split without globbing (see _dr_data_entries). If globbing occurs here,
@@ -2292,13 +2462,35 @@ dr_data_filters() {
 # characters. A newline in a file name also breaks the parsing of one file on
 # each line. Each caller needs that parsing. Without the test, a review can
 # be incomplete with no message.
+#
+# It also refuses the names that are not the name they print as, and that is
+# the part that stops a real attack rather than a copy-tool quirk. Draugr
+# writes these bytes onto a Windows drive, where `.GIT/config`, `GIT~1/config`
+# and `.git./config` are all one file: the file that decides what git runs.
+# dr_name_reserved_meta carries the measurements. A refusal here stops the
+# WHOLE transfer, which is why it holds only boundary questions and not every
+# name Windows finds odd.
 dr_data_path_safe() {
-    local path=$1
+    local path=$1 comp
     case "$path" in
         ''|/*)             return 1 ;;
         ..|../*|*/../*|*/..) return 1 ;;
         *[[:cntrl:]]*)     return 1 ;;
     esac
+
+    # One component at a time. A path is safe only if every part of it is: the
+    # dangerous name is as likely to be in the middle (`out/.GIT/config`) as at
+    # the front, and `a\b` is two components on the destination although it is
+    # one here.
+    local -a comps=()
+    IFS=/ read -ra comps <<< "$path"
+    for comp in "${comps[@]}"; do
+        # An empty component is a `//` or a trailing slash. rsync collapses
+        # those, and they name nothing of their own.
+        [ -n "$comp" ] || continue
+        dr_name_windows_plain "$comp" || return 1
+        if dr_name_reserved_meta "$comp"; then return 1; fi
+    done
     return 0
 }
 
@@ -2315,13 +2507,23 @@ dr_data_path_safe() {
 # data. Thus the list does not include extensions that are often data and
 # often code: .bin, .ts, .run, .dat. Each of them can run, but the list skips
 # them.
+#
+# THE NAME IS LOWERCASED FIRST, and that is not tidying. A `case` pattern is
+# case sensitive, so the old list answered "not runnable" for `payload.PS1`,
+# `SETUP.CMD` and `tool.EXE` — on a destination that runs all three, because
+# Windows resolves an extension without regard to case. The old list had
+# `*.appimage|*.AppImage` written out by hand, which is the same bug seen once
+# and fixed in one place. One lowercase conversion covers every entry and
+# cannot fall out of step with the list.
 dr_data_exec_shaped() {
-    case "${1##*/}" in
+    local name=${1##*/}
+    name=${name,,}
+    case "$name" in
         *.sh|*.bash|*.zsh|*.ksh|*.fish|*.py|*.pl|*.rb|*.lua|*.php)        return 0 ;;
         *.js|*.mjs|*.cjs|*.ps1|*.psm1|*.bat|*.cmd|*.vbs|*.wsf)            return 0 ;;
         *.exe|*.dll|*.so|*.so.*|*.dylib|*.msi|*.scr|*.jar)                return 0 ;;
-        *.appimage|*.AppImage|*.desktop|*.service)                        return 0 ;;
-        Makefile|makefile|GNUmakefile|*.mk|Dockerfile|Dockerfile.*)       return 0 ;;
+        *.appimage|*.desktop|*.service)                                   return 0 ;;
+        makefile|gnumakefile|*.mk|dockerfile|dockerfile.*)                return 0 ;;
     esac
     return 1
 }
@@ -3253,9 +3455,11 @@ dr_codex_plugin_skills() {
         read -r id name m ver <<< "$row"
         # Each component is checked separately. Concatenating them hides
         # an empty component or a traversal name inside otherwise safe text.
-        case "$name" in ''|.|..|*[!A-Za-z0-9_.+-]*) continue ;; esac
-        case "$m" in ''|.|..|*[!A-Za-z0-9_.+-]*) continue ;; esac
-        case "$ver" in ''|.|..|*[!A-Za-z0-9_.+-]*) continue ;; esac
+        # Here a bad row is skipped rather than fatal: this function only
+        # LISTS, and one unreadable entry must not hide the rest.
+        dr_simple_name "$name" || continue
+        dr_simple_name "$m" || continue
+        dr_simple_name "$ver" || continue
         for dir in "$seed/marketplaces/$m/packages/$name/$ver"/skills/*/; do
             [ -f "${dir}SKILL.md" ] || continue
             skill=$(sed -n 's/^name:[[:space:]]*//p' "${dir}SKILL.md" | head -1)
@@ -3410,19 +3614,105 @@ dr_mound_run() {
 #
 # The reason is that sbx changes the leading "/" into "\", and looks for it on
 # the current drive. Only C:\… works. $DRAUGR_MEM_STORE can be anywhere, also on
-# the ext4 of WSL, where sbx cannot go. Thus each transfer goes through here:
-# .draugr/tmp/ in the repo. dr_require_win_path already made sure that the repo
-# is on a Windows drive.
+# the ext4 of WSL, where sbx cannot go. Thus each transfer goes through a
+# directory on a Windows drive, and dr_require_win_path below says so for the
+# one this function picks.
 #
 # It sets DR_STAGE (the WSL path) and DR_STAGE_WIN (the same directory, in the
 # format for sbx). The caller must remove DR_STAGE with a trap. It holds memory
 # files, and those must not stay on the disk after a crash.
+#
+# AND IT IS NOT IN THE REPOSITORY ANY MORE. It used to be
+# `$DR_REPO/.draugr/tmp/$$`, which has three separate problems, all of them
+# about a directory that something else can write:
+#
+#   1. A mound with the repository bind-mounted (DRAUGR_CLONE=false) writes
+#      that path. So does a `dr-data pull` that carried a `.DRAUGR` of its own
+#      before the check above learned to refuse one.
+#   2. `.draugr/tmp` was not validated. If it is a link, every step below
+#      acts somewhere else: the `rm -rf` deletes there and the staged files
+#      land there. A link is the whole of the attack; nothing else is needed.
+#   3. The name was the pid, which is predictable and reused. The `rm -rf`
+#      in front of it was there to clear a stale one, and a deletion of a
+#      predictable path is the primitive an attacker wants.
+#
+# So: a root that only the host user writes, a random name, exclusive
+# creation, and nothing deleted on the way in.
+#
+# dr_stage_root: the host-owned directory that holds the staging directories.
+#
+# %LOCALAPPDATA%\Draugr, where the forge already keeps its tunnel log. It is
+# per-user, it is outside every checkout, and it is on a Windows drive, which
+# `sbx cp` requires (see the paragraph above). C:\Temp and the like are not
+# usable for this: another local account can pre-create a name there.
+dr_stage_root() {
+    if [ -n "${DRAUGR_STAGE_ROOT:-}" ]; then
+        printf '%s' "${DRAUGR_STAGE_ROOT%/}"
+        return 0
+    fi
+
+    local lad=''
+    # Git Bash has it in the environment. WSL does not, so ask Windows, the
+    # same way dr_find_sbx does, and never guess the user name.
+    if [ -n "${LOCALAPPDATA:-}" ]; then
+        lad=$(dr_path_from_win "$LOCALAPPDATA") || lad=''
+    elif command -v cmd.exe >/dev/null 2>&1; then
+        lad=$(cmd.exe /c 'echo %LOCALAPPDATA%' 2>/dev/null | tr -d '\r\n')
+        case "$lad" in
+            ''|'%LOCALAPPDATA%') lad='' ;;
+            *) lad=$(dr_path_from_win "$lad") || lad='' ;;
+        esac
+    fi
+    [ -n "$lad" ] || return 1
+    printf '%s/Draugr/stage' "$lad"
+}
+
+# Staging holds memory files and the files a pull would land. The old path
+# deleted the previous run's directory on the way IN, which is how a crashed
+# run's bytes left the disk. A random name cannot do that, so the sweep is
+# explicit, and it names only what this function creates.
+_dr_stage_prune() {
+    # -type d is false for a link, so a planted link is not followed and not
+    # deleted. -mmin +1440 is "older than a day": long enough that a running
+    # transfer of any size is never in range.
+    find "$1" -maxdepth 1 -type d -name 'stage.*' -mmin +1440 \
+        -exec rm -rf {} + 2>/dev/null || true
+}
+
 dr_stage() {
-    DR_STAGE="$DR_REPO/.draugr/tmp/$$"
-    rm -rf "$DR_STAGE"
-    mkdir -p "$DR_STAGE"
+    # No root is a refusal, never a quiet return to the old repo-local path.
+    local root
+    root=$(dr_stage_root) || dr_die \
+        "Draugr has nowhere to stage this transfer" \
+        "It stages outside the repository now, in %LOCALAPPDATA%\\Draugr\\stage." \
+        "Windows did not answer with LOCALAPPDATA here. Name a directory on a" \
+        "Windows drive instead:  DRAUGR_STAGE_ROOT=/mnt/c/Temp/draugr-stage"
+    dr_require_win_path "$root"
+
+    mkdir -p "$root" 2>/dev/null || dr_die "could not create the staging root $root"
+
+    # The two components Draugr creates get the link test. Either one, if it is
+    # a link, moves everything below it, which is the hole this root closes.
+    # Above them is the user's own LOCALAPPDATA, and what they do there is
+    # their business.
+    local parent=${root%/*}
+    if [ -L "$parent" ] || [ -L "$root" ]; then
+        dr_die "the staging root goes through a link: $root" \
+            "Draugr stages untrusted files there and will not follow a link into" \
+            "a directory it does not own. Remove the link, or name another root:" \
+            "DRAUGR_STAGE_ROOT=/mnt/c/Temp/draugr-stage"
+    fi
+    [ -d "$root" ] || dr_die "the staging root is not a directory: $root"
+
+    # mktemp -d: a random name, created with O_EXCL. Two runs cannot pick the
+    # same directory, nothing has to be deleted to make room, and there is no
+    # name for anyone else to plant in advance.
+    DR_STAGE=$(mktemp -d "$root/stage.XXXXXXXX") || dr_die \
+        "could not create a staging directory in $root"
     # shellcheck disable=SC2034  # the dr-* command that called this reads it
     DR_STAGE_WIN=$(dr_path_win "$DR_STAGE")
+
+    _dr_stage_prune "$root"
 }
 
 # ---------------------------------------------------------------------------

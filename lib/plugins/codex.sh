@@ -4,8 +4,12 @@
 
 # Names become path components and TOML keys. Validate before constructing
 # either, including names that a marketplace returned rather than the user.
+#
+# dr_simple_name is the one definition of that rule (lib/common.sh). This file
+# had its own copy, which refused one case fewer: a name beginning with `-`,
+# which the next command reads as an option, and a name of nothing but dots.
 _dr_cp_name() {
-    case "$1" in ''|.|..|*[!A-Za-z0-9_.+-]*) return 1 ;; esac
+    dr_simple_name "$1"
 }
 
 # The native CLI works in rootfs, under an empty home that contains no login.
@@ -13,28 +17,69 @@ _dr_cp_native() {
     dr_sbx exec "$_cp_mound" -- env "CODEX_HOME=$_cp_work/home" codex plugin "$@" --json </dev/null
 }
 
+# TWO DIRECTORIES, AND THE DIFFERENCE IS THE POINT.
+#
+#   $_cp_build   the WORKSPACE of the build mound. The sandbox writes here.
+#                The host creates it, hands it to sbx, and reads nothing out
+#                of it, ever.
+#   $_cp_stage   the library under construction. HOST ONLY. No mound is given
+#                this path, and the final rename publishes it.
+#
+# They used to be one directory. The host wrote library.json, library.json.next
+# and every marketplace catalog inside the mound's own workspace, and then
+# published that tree by renaming it. A security review showed the consequence:
+# a link placed at `library.json.next` redirects the host's `jq … > $tmp` to
+# whatever the link points at, and no amount of validating plugin NAMES can see
+# that, because the name was never the problem. It also means the published
+# library was a tree a sandbox could edit between the check and the rename.
+#
+# Keeping the two apart removes the question instead of guarding it. The
+# exported package bytes still come from the mound - they are the product -
+# but they arrive by `sbx cp` into a path the host chose, and the whole staged
+# tree is validated before anything is published.
+#
 # Clean up only the resources of this transaction. A failed build never touches
 # the live library; a collision refuses before the trap is installed.
+_dr_cp_stop_mound() {
+    [ -n "${_cp_created:-}" ] || return 0
+    _cp_created=''
+    dr_sbx rm --force "$_cp_mound" >/dev/null 2>&1 || dr_warn "could not remove $_cp_mound"
+}
+
 _dr_cp_cleanup() {
-    if [ -n "${_cp_created:-}" ]; then
-        dr_sbx rm --force "$_cp_mound" >/dev/null 2>&1 || dr_warn "could not remove $_cp_mound"
-    fi
+    _dr_cp_stop_mound
     if [ -n "${_cp_locked:-}" ]; then rmdir "$_cp_root/.lock" 2>/dev/null || true; fi
 }
 
 # Copy existing published bytes so adding one plugin does not update others.
 _dr_cp_begin() {
+    local d
     mkdir -p "$_cp_root"
     mkdir "$_cp_root/.lock" || dr_die "another Codex plugin transaction holds $_cp_root/.lock"
     _cp_locked=1
     trap _dr_cp_cleanup EXIT
-    if [ -e "$_cp_build" ]; then
-        [ -n "${force:-}" ] || dr_die "a previous build remains at $_cp_build" "Retry with --force after checking it."
-        rm -rf "$_cp_build"
+    for d in "$_cp_build" "$_cp_stage"; do
+        if [ -e "$d" ]; then
+            [ -n "${force:-}" ] || dr_die "a previous build remains at $d" "Retry with --force after checking it."
+            rm -rf "$d"
+        fi
+    done
+    # The workspace is created EMPTY. Nothing of the library goes into it, so
+    # there is nothing in there for the sandbox to tamper with.
+    mkdir -p "$_cp_build" "$_cp_stage/seed"
+    if [ -d "$_cp_seed" ]; then
+        cp -a "$_cp_seed/." "$_cp_stage/seed/"
+        # `cp -a` copies a link AS A LINK, so the published library decides
+        # what the staged one contains. A library from an older Draugr was
+        # never checked for links, and the very first host write below is
+        # `library.json.next` - the name the review redirected. So the tree is
+        # judged BEFORE anything writes into it, not only before it publishes.
+        dr_mem_validate_tree "$_cp_stage/seed" || dr_die \
+            "the Codex library contains a link or an unsupported file" \
+            "Draugr will not write into a tree whose names point elsewhere." \
+            "It is copied as it was, in $_cp_stage/seed. Your library is unchanged."
     fi
-    mkdir -p "$_cp_build/seed"
-    if [ -d "$_cp_seed" ]; then cp -a "$_cp_seed/." "$_cp_build/seed/"; fi
-    _cp_json="$_cp_build/seed/library.json"
+    _cp_json="$_cp_stage/seed/library.json"
     if [ ! -f "$_cp_json" ]; then printf '{"format":1,"marketplaces":{},"plugins":[]}\n' > "$_cp_json"; fi
 }
 
@@ -59,8 +104,15 @@ _dr_cp_install() {
     ver=$(printf '%s' "$result" | jq -er .version) || dr_die "Codex did not report a version"
     _dr_cp_name "$ver" || dr_die "unsafe plugin version: $ver"
     case "$path" in "$_cp_work/home/plugins/cache/$mkt/$plug/$ver") ;; *) dr_die "unexpected Codex install path: $path" ;; esac
-    dest="$_cp_build/seed/marketplaces/$mkt/packages/$plug"
+    dest="$_cp_stage/seed/marketplaces/$mkt/packages/$plug"
     mkdir -p "$dest"
+    # The names above are simple names, so this path cannot traverse. That is
+    # not the same as "this path is where it looks": a link anywhere along it
+    # points elsewhere with an innocent name. The deletion below is the reason
+    # to ask.
+    dr_path_contained "$_cp_stage" "$dest" || dr_die \
+        "the staged package directory of $id is not inside $_cp_stage" \
+        "Nothing was deleted or published."
     # Copying into a fresh version path avoids merging a removed upstream file
     # back into a new package that happens to use the same version string.
     rm -rf "${dest:?}/${ver:?}"
@@ -81,7 +133,7 @@ _dr_cp_catalogs() {
     local m dir
     while IFS= read -r m; do
         _dr_cp_name "$m" || dr_die "unsafe marketplace identity"
-        dir="$_cp_build/seed/marketplaces/$m/.agents/plugins"
+        dir="$_cp_stage/seed/marketplaces/$m/.agents/plugins"
         mkdir -p "$dir"
         jq --arg m "$m" '{name:$m,plugins:[.plugins[] | select(.marketplace == $m) |
             {name:.name,source:{source:"local",path:("./packages/"+.name+"/"+.version)},
@@ -91,12 +143,25 @@ _dr_cp_catalogs() {
 }
 
 # Publish by rename after every native operation and artifact check succeeded.
+#
+# THE WRITER STOPS BEFORE THE TREE IS JUDGED. The staged library is already
+# out of reach of the build mound, and stopping it first keeps that true
+# whatever a later change does to the layout: a check is worth nothing if
+# something can still edit what was checked afterwards.
+#
+# Then the WHOLE tree, not only the package subdirectory that each install
+# validated. A catalog, a receipt or a leftover from an earlier version is as
+# much a part of what gets published as the packages are.
 _dr_cp_commit() {
     _dr_cp_catalogs
+    _dr_cp_stop_mound
+    dr_mem_validate_tree "$_cp_stage/seed" || dr_die \
+        "the built Codex library contains a link or an unsupported file" \
+        "Nothing was published. The build is in $_cp_stage/seed; look at it there."
     rm -rf "$_cp_root/seed.old"
     if [ -d "$_cp_seed" ]; then mv "$_cp_seed" "$_cp_root/seed.old"; fi
-    mv "$_cp_build/seed" "$_cp_seed"
-    rm -rf "$_cp_build"
+    mv "$_cp_stage/seed" "$_cp_seed"
+    rm -rf "$_cp_stage" "$_cp_build"
     dr_ok "Codex plugin library updated; previous library is in $_cp_root/seed.old"
 }
 
@@ -132,7 +197,8 @@ dr_codex_plugins() {
     dr_require_win_path "$DRAUGR_PLUGIN_STORE"
     local _cp_root="$DRAUGR_PLUGIN_STORE/codex" _cp_work=/home/agent/draugr-plugins
     local _cp_mound="$DRAUGR_SANDBOX-plugin-build-codex" _cp_created='' _cp_locked='' _cp_market=''
-    local _cp_seed="$_cp_root/seed" _cp_build="$_cp_root/.build" _cp_json="$_cp_root/seed/library.json"
+    local _cp_seed="$_cp_root/seed" _cp_build="$_cp_root/.build" _cp_stage="$_cp_root/.stage"
+    local _cp_json="$_cp_root/seed/library.json"
     local ids=()
     case "$action" in
     status|list)
@@ -208,12 +274,17 @@ dr_codex_plugins() {
         _dr_cp_begin
         # Work on a copy, and keep only versions named by its own receipt.
         while IFS= read -r dir; do
-            row=${dir#"$_cp_build/seed/marketplaces/"}
+            row=${dir#"$_cp_stage/seed/marketplaces/"}
             m=${row%%/*}; row=${row#*/packages/}; name=${row%%/*}; ver=${row#*/}
             if ! jq -e --arg m "$m" --arg n "$name" --arg v "$ver" '.plugins[] | select(.marketplace==$m and .name==$n and .version==$v)' "$_cp_json" >/dev/null; then
+                # The copy is host-only, and find does not follow links. Ask
+                # anyway: this is a deletion, and the answer costs nothing.
+                dr_path_contained "$_cp_stage" "$dir" || dr_die \
+                    "a staged package directory is not inside $_cp_stage: $dir" \
+                    "Nothing was deleted."
                 rm -rf "$dir"
             fi
-        done < <(find "$_cp_build/seed/marketplaces" -mindepth 4 -maxdepth 4 -type d 2>/dev/null)
+        done < <(find "$_cp_stage/seed/marketplaces" -mindepth 4 -maxdepth 4 -type d 2>/dev/null)
         _dr_cp_commit
         ;;
     kit)

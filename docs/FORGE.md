@@ -2776,6 +2776,26 @@ some unrelated VM, whose GPU and network values were then copied into the layer 
 layer with a different `GpuMode` or `NetworkMode` from its parent acts differently from the thing
 that it was built on, and that shows three steps away.
 
+**`drop` deletes a directory recursively, so it asks what that directory is.** `-Name` was a bare
+string: `drop` joined it to the root, accepted whatever directory existed there, and removed it.
+`..\..\something` therefore left the layer store, and `.` selected the **root** — every layer in one
+elevated call. A security review reproduced the first of those against a fixture root. Three
+questions now stand in front of that `Remove-Item`, and they are different questions:
+
+| | what it rules out |
+|---|---|
+| the **name** is one name | letters, digits, `.`, `_`, `-`, starting with a letter or digit. `..\..\x`, `.`, `C:`, `-Recurse` and `layer-0.` are not names. Checked once for every verb that takes one |
+| the **place** is under the root | canonical, a *strict* descendant, and no junction or symlink at any level on the way. A junction has an ordinary name and another destination, and a recursive delete follows it |
+| the **contents** are a layer | `disk.vhdx` and `layer.json` beside it. An existing directory is not a layer, and `drop` removes only what this tool made |
+
+The predicates are in `lib/forge/layerpath.ps1` rather than inside `layer.ps1`, because dot-sourcing
+`layer.ps1` would *run* it; `tests/forge-ps.bats` executes them under the real `powershell.exe`,
+junction included. `adopt`'s cleanup of the old VM folder got the same treatment from the other
+side: it lists with `-Force` (a hidden `.vhdx` was invisible before), an enumeration that **failed**
+is no longer read as "no disks in there", and it refuses outright when that folder is the layer root
+or holds it — the case this document warns about three sections above, where a VM built inside the
+store is one delete from taking every layer with it.
+
 **The most important guard looks wider than the root.** `thaw` and `drop` both refuse when a disk
 differences from this one. A write to a parent that a child differences from silently corrupts the
 child, and nothing in the stack reports it. *Measured*: `C:\ForgeLayers\layer-1` is the parent of

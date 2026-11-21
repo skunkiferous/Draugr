@@ -510,9 +510,13 @@ adopt)
     # The code writes a temp file and moves it into place. Thus a stopped run
     # cannot leave a half-edited spec. sbx refuses such a spec in the middle of
     # a session, about a file that you did not know you touched.
-    tmp="$DR_REPO/.draugr/tmp"
-    mkdir -p "$tmp"
-    out="$tmp/spec.yaml.$$"
+    # The temp file sits IN THE KIT DIRECTORY, beside the file it replaces.
+    # The `mv` below is then a rename inside one directory, which is the
+    # atomic form, and there is no `mkdir -p` of a staging path that something
+    # else may have replaced with a link first. This used to stage through
+    # $DR_REPO/.draugr/tmp, which a mound with the repo bind-mounted writes.
+    # dr_stage carries the longer version of that story.
+    out="$kit/.spec.yaml.$$"
 
     # A small, exact edit, not a YAML rewriter, in two ways.
     #

@@ -690,6 +690,26 @@ does not. Keep `seed.old` until one session proves that the new one works.
 A mound reads the seed at startup. Thus a replacement under a running session is not a problem to
 solve, only a fact to know.
 
+**The registry is written by a build, and a build runs in a sandbox.** `installed_plugins.json`
+holds entries keyed `<plugin>@<marketplace>`, and `dr-plugin clean` turned those keys into a path:
+`$SEED/cache/<marketplace>/<plugin>`, whose version directories it deletes. A key of `x@../../..`
+therefore selected a directory outside the store, and the cleanup removed what it found there with
+your authority. A security review reproduced exactly that with a planted entry.
+
+So an identifier is checked where it is produced *and* where it is used. `dr-plugin` refuses to
+publish a built library whose ids or versions are not simple names — at the swap, which is the
+moment those bytes become yours, and which names the build that made them. `clean` asks again, and
+adds the question a name cannot answer: every directory it is about to delete must *canonicalise*
+to a strict descendant of the plugin cache, so a link inside the store with an innocent name is
+refused rather than followed. Either refusal stops the whole run; a half-finished clean would leave
+you guessing which half ran. A plugin whose entry records **no** version is now left alone with a
+warning, instead of being treated as "keep nothing", which deleted every version it had.
+
+The Codex library (`dr-plugin --agent codex`) got the matching fix on the other side: the host no
+longer builds the library inside the build mound's own workspace. It stages in a directory no
+sandbox is given, validates the whole tree — not only each package — and publishes by rename after
+the build mound has stopped.
+
 ### What the seed will not do
 
 - **Auto-update is off**, by design. A `git pull` fails on a read-only mount. You update on purpose.

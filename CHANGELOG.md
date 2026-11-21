@@ -254,6 +254,79 @@ tell", these now say so and stop, rather than guessing in the direction that des
   `dr-kit apply`; on a mound with such a name it now names `dr-up --recreate` instead, because
   `apply` there could only repeat this refusal.
 
+The next entries come from the same review, and they are a different defect: **untrusted bytes
+decided where the host writes.** A name chosen by a sandbox became a host path, and the host then
+copied, published or deleted along it.
+
+- **A mound could overwrite your `.git/config` through a `dr-data pull`.** The transfer excluded
+  `.git` and `.draugr`, and the sender is a Linux filesystem where `.GIT` and `.git` are two
+  directories, while the destination is a Windows drive — which Draugr requires — where they are
+  one. Measured with rsync 3.2.7 on a real drive, with those excludes in force: a sender's
+  `.GIT/hooks-marker` arrived as `.git/hooks-marker`. Worse, `GIT~1/config` **overwrote**
+  `.git/config`: `GIT~1` is the 8.3 short name of `.git`, which this volume still generates
+  (`dir /x` shows it for a directory made seconds earlier), and Win32 resolves the alias. That file
+  decides what git runs for you — `core.sshCommand`, `core.fsmonitor`, every alias.
+
+  The incoming-name check now works on each path component and refuses the names that resolve to
+  something else: `.git` and `.draugr` in any case, their `~1` aliases, a trailing dot or space
+  (Win32 strips both, so `report.` writes `report`), a backslash, and a colon. It still accepts
+  `.gitignore`, `my.git/` and ordinary data. The rsync excludes carry the case variants too, as
+  defence in depth, but the guarantee is the host-side refusal, which stops the whole transfer.
+  Separately, `dr_data_exec_shaped` lowercases the name first: `payload.PS1` and `SETUP.CMD` used
+  to arrive **without** the runnable-file question, on a destination that runs them.
+
+- **`dr-data` transfers regular files and directories only.** `-a` includes `-l` and `-D`, so a
+  symlink, device or socket crossed as itself. A symlink is a name that points anywhere, and it is
+  what let two findings chain: ship `.draugr/tmp` as a link, and the next host command that writes
+  through it writes elsewhere. `--no-links --no-devices --no-specials` turn the class off in both
+  directions. Measured: rsync still exits **0** when it skips one, so the preview reads the skip
+  from rsync's output rather than from the status.
+
+- **A failed preview is no longer "nothing to pull".** The review that `dr-data status`, `diff` and
+  `pull` share ran `rsync … 2>/dev/null | grep -v '/$' || true` — the status of *grep*, discarded.
+  An unreachable mound, a refused ssh or a missing rsync inside produced an empty list, every
+  caller read it as "this pull lands nothing", and the pull then ran **unreviewed**. The preview is
+  captured with its status, each name carries a marker so that rsync's own remarks on stdout cannot
+  be mistaken for file names, and a line that is not a name stops the pull.
+
+- **Staging left the repository.** `dr-data diff` and `dr-mem export` staged through
+  `.draugr/tmp/<pid>`: a path inside the checkout, which a mound with the repo bind-mounted can
+  write, deleted and recreated on every run. A link in its place redirected both the deletion and
+  everything staged afterwards. Staging is now `%LOCALAPPDATA%\Draugr\stage\stage.XXXXXXXX` —
+  host-owned, outside every checkout, a random name created exclusively, refused if anything on the
+  way is a link, and nothing deleted to make room. `DRAUGR_STAGE_ROOT` moves it. Nothing writes
+  `.draugr/tmp` any more; `dr-init` keeps ignoring it so that a leftover from an older version does
+  not block `dr-go`.
+
+- **`dr-plugin clean` could delete outside the plugin store.** The keys of
+  `installed_plugins.json` are written by a plugin build, which runs in a sandbox, and
+  `<plugin>@<marketplace>` became `$SEED/cache/<marketplace>/<plugin>` with no check at all: an id
+  of `x@../../..` selected a directory outside the store and the cleanup removed the version
+  directories it found there. Identifiers are now validated where they are published *and* where
+  they are used, and every deletion target must canonicalise to a strict descendant of the cache —
+  which is what catches a link whose name is innocent. A plugin that records no version is left
+  alone with a warning instead of being read as "keep nothing", which deleted every version it had.
+
+- **The Codex plugin library is no longer built inside the build mound's workspace.** The host
+  wrote `library.json`, `library.json.next` and every marketplace catalog into the directory it had
+  just handed to a sandbox, then published that tree by renaming it. The review placed a link at
+  `library.json.next` and watched the host's `jq` output land outside the build directory. The
+  staging tree is now a directory no mound is given; the whole tree is validated — not only each
+  exported package — the build mound is stopped before that judgement, and publication is a rename
+  from host-owned state. A library copied in from a previous version is validated **before** the
+  first host write into it, because `cp -a` keeps a link a link.
+
+- **`dr-layer drop` is confined to the layer store.** `-Name` was a bare string: `drop` joined it
+  to the root, accepted any directory that existed there, and removed it recursively, elevated. So
+  `..\..\something` left the store and `.` selected the **root** — every layer in one call. A name
+  is now one name, checked once for every verb that takes one; the directory must canonicalise to a
+  strict descendant of the root with no junction or symlink on the way; and it must hold
+  `disk.vhdx` and `layer.json`, so an ordinary directory is not mistaken for a layer. In `adopt`,
+  the listing that decides whether the old VM folder still holds a disk now uses `-Force` (a hidden
+  `.vhdx` was invisible) and keeps its errors: an enumeration that **failed** is no longer read as
+  "no disks in there", which was the answer that led to the recursive delete. That delete also
+  refuses outright when the folder is the layer root or holds it.
+
 ## [0.9.0] — 2026-11-15
 
 ### Added

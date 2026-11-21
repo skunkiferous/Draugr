@@ -208,3 +208,73 @@ ps_with() {
         "if ((Test-ForgeVmDown 'stopped') -and (Test-ForgeVmDown 'absent') -and -not (Test-ForgeVmDown 'unknown') -and -not (Test-ForgeVmDown 'running')) { exit 0 }; exit 9"
     [ "$status" -eq 0 ]
 }
+
+# --- layerpath.ps1: a name that `drop` may turn into a path -------------------------------
+#
+# `dr-layer drop` removes a directory recursively, elevated, and -Name was a
+# bare [string]. `..\..\x` left the layer store and `.` selected the root.
+
+@test "Test-LayerName: the names of the real layers are names" {
+    run ps_with layerpath.ps1 \
+        "if ((Test-LayerName 'layer-0') -and (Test-LayerName 'layer-3-unreal') -and (Test-LayerName 'base_1.2')) { exit 0 }; exit 9"
+    [ "$status" -eq 0 ]
+}
+
+@test "Test-LayerName: a traversal is not a name" {
+    run ps_with layerpath.ps1 \
+        "if ((Test-LayerName '..') -or (Test-LayerName '.') -or (Test-LayerName '..\\..\\windows')) { exit 9 }; exit 0"
+    [ "$status" -eq 0 ]
+}
+
+@test "Test-LayerName: a separator, a drive or a stream is not a name" {
+    run ps_with layerpath.ps1 \
+        "if ((Test-LayerName 'a/b') -or (Test-LayerName 'a\\b') -or (Test-LayerName 'C:') -or (Test-LayerName 'x:stream')) { exit 9 }; exit 0"
+    [ "$status" -eq 0 ]
+}
+
+@test "Test-LayerName: an option, an empty string and a trailing dot are not names" {
+    run ps_with layerpath.ps1 \
+        "if ((Test-LayerName '-Recurse') -or (Test-LayerName '') -or (Test-LayerName 'layer-0.') -or (Test-LayerName '.hidden')) { exit 9 }; exit 0"
+    [ "$status" -eq 0 ]
+}
+
+@test "Test-UnderRoot: a layer directory is under its root" {
+    run ps_with layerpath.ps1 \
+        "if (Test-UnderRoot 'C:/ForgeLayers/layer-0' 'C:/ForgeLayers') { exit 0 }; exit 9"
+    [ "$status" -eq 0 ]
+}
+
+# The one that mattered: the root is not inside itself, so nothing can delete
+# the whole store by naming it.
+@test "Test-UnderRoot: the root itself is not under the root" {
+    run ps_with layerpath.ps1 \
+        "if ((Test-UnderRoot 'C:/ForgeLayers' 'C:/ForgeLayers') -or (Test-UnderRoot 'C:/ForgeLayers/' 'C:/ForgeLayers')) { exit 9 }; exit 0"
+    [ "$status" -eq 0 ]
+}
+
+@test "Test-UnderRoot: a path that climbs out is not under the root" {
+    run ps_with layerpath.ps1 \
+        "if ((Test-UnderRoot 'C:/ForgeLayers/../Windows' 'C:/ForgeLayers') -or (Test-UnderRoot 'C:/ForgeLayersEvil/x' 'C:/ForgeLayers')) { exit 9 }; exit 0"
+    [ "$status" -eq 0 ]
+}
+
+# A junction has an ordinary name and another destination, and a recursive
+# delete follows it. GetFullPath cannot see one, so the walk asks each level.
+@test "Test-UnderRoot: a junction inside the root is not under the root" {
+    # A real directory on a real Windows drive: $DR_TMP is on the ext4 of WSL,
+    # which has no Windows path and no junctions. The same scratch name that
+    # dr_test_teardown removes.
+    local wroot base root
+    wroot=$(dr_win_root) || skip "no writable Windows drive path"
+    base="$wroot/draugr-test.${DR_TMP##*/}"
+    mkdir -p "$base/fixtureroot/real" "$base/elsewhere" || skip "cannot write to $wroot"
+    root=$(ps_win_slash "$base")/fixtureroot
+
+    run ps_with layerpath.ps1 \
+        "New-Item -ItemType Junction -Path '$root/away' -Target '$(ps_win_slash "$base")/elsewhere' > \$null; if (Test-UnderRoot '$root/away' '$root') { exit 9 }; exit 0"
+    [ "$status" -eq 0 ]
+    # And the plain directory beside it still answers yes, so the walk refuses
+    # the link and not the root.
+    run ps_with layerpath.ps1 "if (Test-UnderRoot '$root/real' '$root') { exit 0 }; exit 9"
+    [ "$status" -eq 0 ]
+}

@@ -146,6 +146,27 @@ setup_mound() {
     grep -qxF "repo:    $REPO" "$store/.draugr-export"
 }
 
+# THE PATH THAT ACTUALLY SHIPS HAS A SPACE IN IT. Staging moved out of the
+# repository and its default is %LOCALAPPDATA%\Draugr\stage, which on a normal
+# Windows account sits under `C:\Users\<first last>\…`. Every fixture path in
+# this suite is space-free, so without this test the one route that every user
+# takes would be the untested one, and `sbx cp` gets that path as an argument.
+@test "dr-mem export: a staging root with a space in it still exports" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'the build is cmake, not make\n' > "$MEMDIR/build.md"
+    # dr_make_win_repo exports DR_WIN_TMP from a subshell, so it never arrives
+    # here. The parent of the repo is that same directory.
+    DRAUGR_STAGE_ROOT="$(dirname "$REPO")/stage root"
+    export DRAUGR_STAGE_ROOT
+
+    run dr-mem export
+    [ "$status" -eq 0 ]
+    store=$(dr_mem_store_dir "$REPO")
+    [ -f "$store/memory/build.md" ]
+    grep -q "cmake" "$store/memory/build.md"
+}
+
 @test "dr-mem export: the copy it replaces is kept, not deleted" {
     setup_mound || skip "no writable Windows drive path"
     mkdir -p "$MEMDIR"

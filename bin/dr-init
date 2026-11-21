@@ -113,7 +113,10 @@ ignore_entries=(
     '.draugr.local.conf'     # configuration for one user, never shared
     '.draugr/kit.applied'    # the kit of the mound of this checkout
     '.draugr/create.applied' # its configuration at creation: ports, mounts, memory
-    '.draugr/tmp/'           # staging for sbx cp, removed after each transfer
+    # Nothing writes this any more: staging moved out of the repository
+    # entirely (see dr_stage). The entry stays so that a leftover from an
+    # older Draugr does not block dr-go with DRAUGR_REQUIRE_CLEAN=true.
+    '.draugr/tmp/'
 )
 
 # Test one entry at a time, not all together. Thus a repo from an older Draugr

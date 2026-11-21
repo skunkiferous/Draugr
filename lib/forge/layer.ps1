@@ -118,6 +118,10 @@ $ProgressPreference = 'SilentlyContinue'
 # adopt, drop, and rm all leave the same `draugr-<name>` entry, and people use
 # layer names again.
 . (Join-Path $PSScriptRoot 'hostkey.ps1')
+# Test-LayerName and Test-UnderRoot: what -Name may be, and whether a path is
+# really inside the layer root. `drop` deletes a directory recursively, so
+# both are load-bearing. They are a separate file so that a test can run them.
+. (Join-Path $PSScriptRoot 'layerpath.ps1')
 
 function Say($m)  { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
 function Note($m) { Write-Host "  $m" }
@@ -324,6 +328,10 @@ function Resolve-LayerDisk([string]$nameOrPath) {
     Join-Path (Join-Path $Root $nameOrPath) 'disk.vhdx'
 }
 
+# Test-LayerName and Test-UnderRoot are in layerpath.ps1, dot-sourced at the
+# top of this file, because dot-sourcing THIS file would run it. That is how
+# tests/forge-ps.bats can execute them.
+
 # ------------------------------------------------------------------ what a layer remembers
 # WHY A SIDECAR FILE. `new` copies RamMB, CpuCores, GpuMode, GpuName, and
 # NetworkMode from a VM BLOCK. But the purpose of a frozen layer is that no VM
@@ -496,6 +504,17 @@ if ($Mode -eq 'list') {
 }
 
 if (-not $Name) { Fail "-Name is required for '$Mode'."; exit 2 }
+# One chokepoint for every verb that takes a name, before any of them joins it
+# to -Root. `freeze` and `show` also accept a path to a .vhdx, which is a
+# documented second form and reaches no deletion; everything else must be one
+# layer name. See Test-LayerName for what `drop` did without this.
+if ($Name -notmatch '\.vhdx$' -and -not (Test-LayerName $Name)) {
+    Fail "'$Name' is not a layer name."
+    Fail '  A layer name is ONE name under the layer root: letters, digits, dot,'
+    Fail '  underscore and hyphen, starting with a letter or a digit. It is not a'
+    Fail '  path, and it cannot contain \ / or :'
+    exit 2
+}
 # Tested again, and not without a reason. The first test was before the UAC
 # question, and somebody can start a daemon while that question is on the
 # screen. The edit depends on this test.
@@ -624,10 +643,35 @@ if ($Mode -eq 'adopt') {
         # Thus the code counts it as extra, and the dry run reports a refusal
         # that the real run does not make. Do not count exactly that one file,
         # and nothing else.
-        $stray = @(Get-ChildItem $old -Filter *.vhdx -Recurse -ErrorAction SilentlyContinue |
+        # -Force, and the errors kept. Without -Force a HIDDEN .vhdx is not
+        # listed, and -ErrorAction SilentlyContinue alone turned a directory
+        # that could not be read into the answer "no disks in here" - which is
+        # the answer that leads to the recursive delete below. An enumeration
+        # that failed is not an enumeration that found nothing.
+        $strayErr = @()
+        $stray = @(Get-ChildItem $old -Filter *.vhdx -Recurse -Force `
+                       -ErrorAction SilentlyContinue -ErrorVariable strayErr |
                    Where-Object { -not ($WhatIfOnly -and $_.FullName -eq $from) })
+
+        # NEVER THE ROOT. The header of this file warns not to build a VM
+        # inside the layer store, because its folder is one delete from taking
+        # every layer with it. This is that delete, so it asks.
+        $oldFull  = (Get-FullPath $old).TrimEnd('\')
+        $rootFull = (Get-FullPath $Root).TrimEnd('\')
+        $isRootish = ($oldFull -ieq $rootFull) -or
+                     $rootFull.StartsWith($oldFull + '\', [StringComparison]::OrdinalIgnoreCase) -or
+                     ([IO.Path]::GetPathRoot($oldFull).TrimEnd('\') -ieq $oldFull)
+
         if ($KeepVmFolder) {
             Note "kept     $old (-KeepVmFolder). It holds no disk now"
+        } elseif ($isRootish) {
+            Warn "NOT removing $old. It is the layer root, holds it, or is a drive root."
+            Warn '  The VM was built inside the layer store. Move what you want to keep,'
+            Warn '  and remove that folder yourself.'
+        } elseif ($strayErr.Count) {
+            Warn "NOT removing $old. Its contents could not be listed:"
+            foreach ($e in $strayErr) { Warn "  $($e.Exception.Message)" }
+            Warn '  A folder that cannot be read is not a folder that is known to be empty.'
         } elseif ($stray.Count) {
             Warn "NOT removing $old. It still holds $($stray.Count) .vhdx file(s):"
             foreach ($f in $stray) { Warn "  $($f.FullName)" }
@@ -912,9 +956,34 @@ if ($Mode -eq 'thaw') {
 
 # =========================================================================== drop
 if ($Mode -eq 'drop') {
+    # THIS VERB DELETES A DIRECTORY RECURSIVELY, so it asks three questions
+    # that the rest of the script does not need. Each one is a different way
+    # for $dir to be somewhere other than a layer of this store:
+    #
+    #   the name       one component, checked at the chokepoint above, so
+    #                  `..\..\x` and `.` never get this far
+    #   the place      canonical, strictly under -Root, no reparse point on
+    #                  the way. A junction has an innocent name.
+    #   the contents   a layer has a disk and the layer.json beside it. An
+    #                  existing directory is not a layer, and the old code
+    #                  removed one with neither.
+    if (-not (Test-LayerName $Name)) { Fail "'$Name' is not a layer name."; exit 2 }
     $dir = Join-Path $Root $Name
     $disk = Join-Path $dir 'disk.vhdx'
     if (-not (Test-Path $dir)) { Fail "no layer directory at $dir"; exit 21 }
+    if (-not (Test-UnderRoot $dir $Root)) {
+        Fail "$dir is not inside the layer root $Root"
+        Fail '  A link or a junction on the way does that, and a delete follows it.'
+        Fail '  Nothing was removed.'
+        exit 21
+    }
+    $marker = Join-Path $dir 'layer.json'
+    if (-not (Test-Path $disk) -or -not (Test-Path $marker)) {
+        Fail "$dir does not look like a layer: it needs disk.vhdx and layer.json."
+        Fail '  dr-layer drop removes a whole directory, so it removes only the'
+        Fail '  directories that this tool made. Remove anything else yourself.'
+        exit 21
+    }
     Say "drop '$Name'"
 
     # Refuse to remove a layer that another layer differences from. The test is

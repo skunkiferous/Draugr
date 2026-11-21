@@ -22,6 +22,12 @@ dr_test_setup() {
     local fixture_root
     if fixture_root=$(dr_win_root 2>/dev/null); then
         export GIT_CEILING_DIRECTORIES="$fixture_root${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}"
+
+        # dr_stage stages OUTSIDE the repository now, and its default root is
+        # the real %LOCALAPPDATA%\Draugr\stage. A test must not write there.
+        # The name is the same throwaway directory that dr_test_teardown
+        # removes, by both of its two routes.
+        export DRAUGR_STAGE_ROOT="$fixture_root/draugr-test.${DR_TMP##*/}/stage"
     fi
 }
 

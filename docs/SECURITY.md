@@ -195,8 +195,9 @@ project whose data really contains scripts can never pull. People turn off a gua
 satisfy. The list is narrow on purpose. `.bin`, `.ts` and `.dat` are not in it, because people learn
 to ignore a warning that fires on each parquet file.
 
-**`dr-data diff` is the review step.** It fetches what a pull writes into `.draugr/tmp`, which no
-transfer includes, and shows a real unified diff against your copy. It shows text files up to
+**`dr-data diff` is the review step.** It fetches what a pull writes into a staging directory that
+belongs to the host, outside your checkout (see below), and shows a real unified diff against your
+copy. It shows text files up to
 [`DRAUGR_DATA_DIFF_MAX`](CONFIG.md#draugr_data_diff_max) (256 KB) in full. It reports larger files
 and binaries by name and size, because a diff of a 4 GB CSV helps nobody. It is a separate command,
 not part of `pull`, for the same reason. A fetch of each changed file for a comparison is real work
@@ -216,6 +217,49 @@ writes. It refuses absolute paths, each `..` component, and control characters. 
 stops fully, and does not prompt. Control characters are in that list for a second reason. A newline
 in a filename cuts short the list of one line for each file, which the review itself rests on. A
 review that silently shows you less than what arrives is worse than none.
+
+**One spelling is not one name.** A security review found, and a measurement confirmed, that the
+list above was not enough. The sender is a Linux filesystem, where `.GIT` and `.git` are two
+directories. The destination is a Windows drive, which Draugr requires, and there they are one. With
+`--exclude=.git` in force, measured with rsync 3.2.7 on a real drive:
+
+| the mound sends | what the host got |
+|---|---|
+| `.GIT/hooks-marker` | `.git/hooks-marker` |
+| `GIT~1/config` | `.git/config`, **overwritten** |
+
+The second one is not a case problem. `GIT~1` is the 8.3 short name of `.git`, which this volume
+still generates — `dir /x` lists it — and Win32 resolves the alias, so a write through it is a write
+to the long name. `.git/config` decides what git *runs* for you (`core.sshCommand`, `core.fsmonitor`,
+every alias), so these two names reach the file the review exists to protect.
+
+So the name check now works on each path component, and refuses the spellings that resolve to
+something else: `.git` and `.draugr` **in any case**, their `~1` aliases, a trailing dot or space
+(Win32 strips both, so `report.` writes `report`), a backslash (a *separator* on the destination),
+and a colon (a drive prefix, or an alternate data stream). It still accepts `.gitignore`,
+`my.git/` and every ordinary data name, because a guard that refuses those is a guard people
+switch off.
+
+**Draugr transfers bytes, not names that point somewhere.** `dr-data` now passes `--no-links
+--no-devices --no-specials`, so a symlink in either direction is skipped rather than recreated. A
+symlink is how two findings chained: a sender ships `.draugr/tmp` as a link to anywhere, and the
+next host command that writes through it writes there. rsync still exits 0 when it skips one
+(measured), so the preview reads the skip from rsync's output instead of trusting the status, and
+refuses the pull rather than reporting an incomplete list.
+
+**An empty review is not "nothing to pull".** The preview that `dr-data status`, `diff` and `pull`
+all use was `rsync … 2>/dev/null | grep -v '/$' || true`: the status of *grep*, with even that
+discarded. An unreachable mound or a missing rsync inside it produced an empty list, every caller
+read it as "this pull lands nothing", and the transfer then ran unreviewed. A failed preview is now
+fatal, and so is any line that is not a file name.
+
+**Staging happens outside your checkout.** `dr-data diff` and `dr-mem export` stage files through a
+directory on a Windows drive, because `sbx cp` can reach nothing else. That used to be
+`.draugr/tmp/<pid>` inside the repository: a path that a mound with the repo bind-mounted can write,
+deleted and recreated on every run. A link in its place redirected both the deletion and everything
+staged afterwards. Staging is now `%LOCALAPPDATA%\Draugr\stage\stage.XXXXXXXX`, created with a
+random name, refused if anything on the way is a link, and never deleted to make room. Set
+`DRAUGR_STAGE_ROOT` to move it.
 
 ### Nothing rides out on the ssh transport
 

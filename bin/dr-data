@@ -76,19 +76,51 @@ local_dir="$DR_REPO/"
 # -a keeps permissions and times. -m removes empty directories. --chmod sets the
 # modes on the way in. Under WSL, all of /mnt/c is mode 777, and without --chmod
 # that goes into the mound.
-common=(-a -m --chmod="$DRAUGR_DATA_CHMOD" "${filters[@]}")
+#
+# REGULAR FILES AND DIRECTORIES, NOTHING ELSE. -a is -rlptgoD, and the `l` and
+# the `D` are a transfer of names rather than of content: a symlink, a device,
+# a fifo, a socket. A symlink is the interesting one. It is a NAME THAT POINTS
+# SOMEWHERE, so a sender can put `.draugr/tmp -> /anywhere` in your tree and
+# the next host command that writes through it writes there instead. That is
+# how two findings of the review chained into one. Draugr transfers data, and
+# data is bytes, so the three --no- flags turn the whole class off.
+#
+# Measured with rsync 3.2.7: a skipped symlink prints `skipping non-regular
+# file "x"` and the run still exits 0. The exit code does NOT report it, which
+# is why incoming_names below reads that line instead of trusting the status.
+common=(-a --no-links --no-devices --no-specials
+        -m --chmod="$DRAUGR_DATA_CHMOD" "${filters[@]}")
 
 # The summary of rsync is more correct than a number that Draugr calculates. It
 # tells what moved on the wire. That number shows that the delta algorithm works
 # across the boundary.
 run_rsync() {
-    local label=$1 src=$2 dst=$3
+    local label=$1 src=$2 dst=$3 rc=0
     shift 3
     dr_info "$label"
-    rsync "${common[@]}" "$@" "$src" "$dst" || dr_die \
-        "rsync failed" \
-        "Is the mound reachable?  dr-status" \
-        "Is rsync installed inside it?  dr-shell -- command -v rsync"
+
+    # The status goes into a variable first. `rsync … || dr_die` cannot tell
+    # you WHICH failure it was, and the three that matter here have different
+    # answers.
+    rsync "${common[@]}" "$@" "$src" "$dst" || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+
+    case "$rc" in
+        23|24)
+            # 23 is "some files could not be transferred", 24 is "some files
+            # vanished on the sender". Both mean the transfer is INCOMPLETE,
+            # and the old code reported them as "rsync failed. Is the mound
+            # reachable?", which sends you to look at the wrong thing.
+            dr_die "the transfer is incomplete (rsync status $rc)" \
+                "rsync named each file it could not take, above this message." \
+                "A permission or a vanished file does that. So does a file that" \
+                "is not a regular file: Draugr transfers bytes, not symlinks," \
+                "devices or sockets." ;;
+        *)
+            dr_die "rsync failed (status $rc)" \
+                "Is the mound reachable?  dr-status" \
+                "Is rsync installed inside it?  dr-shell -- command -v rsync" ;;
+    esac
 }
 
 # --- reviewing what a pull would land ---------------------------------------
@@ -111,9 +143,70 @@ human() {
 # The names that a pull writes, relative to the repo, one on each line, without
 # directories. Only a dry run gives the correct list. It uses the same filter
 # rules and delta algorithm as the real transfer, so the two cannot differ.
+#
+# THREE THINGS THIS FUNCTION USED TO GET WRONG, and they are one mistake: it
+# believed output that it had not checked.
+#
+#   1. `rsync … 2>/dev/null | grep -v '/$' || true` is the status of GREP, and
+#      `|| true` discards even that. A dry run that FAILED - an unreachable
+#      mound, a refused ssh, a missing rsync in there - arrived as an empty
+#      list, which every caller reads as "a pull lands nothing". The pull then
+#      ran unreviewed, with the real transfer doing the work. That is F07.
+#   2. rsync writes its own remarks to STDOUT, mixed in with the names.
+#      Measured on 3.2.7: `skipping non-regular file "alink"` is a stdout
+#      line. So a symlink in the sender's tree turned into an incoming "file"
+#      with that sentence for a name. The >> marker below tells the two apart:
+#      a name is a line that rsync FORMATTED, not any line it printed.
+#   3. A line it cannot read is not a line to drop. If rsync has something to
+#      say here, the honest answer is "I cannot tell you what a pull would
+#      land", and the caller stops. The skipped symlink of point 2 lands here.
+#
+# stderr is NOT captured: ssh writes its own notes there (a new host key), and
+# those are for the user to read, not for this function to parse.
 incoming_names() {
-    rsync "${common[@]}" --dry-run --out-format='%n' "$remote" "$local_dir" \
-        2>/dev/null | grep -v '/$' || true
+    local out chatter
+    out=$(rsync "${common[@]}" --dry-run --out-format='>>%n' \
+            "$remote" "$local_dir") || return 1
+
+    # Anything that is not a formatted name. The status of the pipe is not
+    # read, the CONTENT is, so a grep that matches nothing cannot be mistaken
+    # for a failure.
+    chatter=$(printf '%s\n' "$out" | grep -v '^>>' | grep -v '^$') || true
+    if [ -n "$chatter" ]; then
+        printf '%s\n' "$chatter" >&2
+        return 2
+    fi
+
+    # %n ends a directory with a slash. A name that itself starts with ">>"
+    # arrives as ">>>>name", and one strip leaves it intact.
+    printf '%s\n' "$out" | sed -n 's/^>>//p' | grep -v '/$' || true
+}
+
+# names=() from incoming_names, with the status kept.
+#
+# `mapfile -t names < <(incoming_names)` cannot do this: it reports MAPFILE's
+# status, which is 0 whatever the preview did. That is the defect of point 1
+# again, in the shape that the shell makes convenient. It was in all three
+# callers.
+list_incoming() {
+    local out rc=0 line
+    out=$(incoming_names) || rc=$?
+    case "$rc" in
+        0) ;;
+        2) dr_die "Draugr cannot tell what a pull would land" \
+               "rsync printed the line above where a file name belongs. A symlink" \
+               "or another non-regular file in the mound does that: Draugr does" \
+               "not transfer those, so the preview cannot account for one." \
+               "Look at the mound before you pull:  dr-shell" ;;
+        *) dr_die "could not preview what a pull would land" \
+               "The dry run failed, so the review would be empty - and an empty" \
+               "review is not the same answer as 'nothing to pull'." \
+               "Is the mound reachable?  dr-status" ;;
+    esac
+
+    names=()
+    [ -n "$out" ] || return 0
+    while IFS= read -r line; do names+=("$line"); done <<< "$out"
 }
 
 # Sort a list of incoming files into three groups. It sets arrays and does not
@@ -148,7 +241,11 @@ report_incoming() {
     if [ ${#DR_IN_UNSAFE[@]} -gt 0 ]; then
         dr_error "${#DR_IN_UNSAFE[@]} incoming path(s) REFUSED as unsafe:"
         for f in "${DR_IN_UNSAFE[@]}"; do printf '    %q\n' "$f" >&2; done
-        printf '  %sAbsolute, with .., or with control characters. Draugr does%s\n' \
+        printf '  %sAbsolute, with .., with control characters, or a name that your%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sdrive resolves to something else: .GIT and GIT~1 are both .git%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sthere, and .git/config decides what git runs. Draugr does%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         printf '  %snot write them. Look at the mound before you trust the other files.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
@@ -183,7 +280,7 @@ status)
 
     # Only the inbound direction gets a review. What you send to the agent is
     # already yours. What it sends back is the half that you did not read.
-    mapfile -t names < <(incoming_names)
+    list_incoming
     if [ ${#names[@]} -gt 0 ]; then
         classify_incoming "${names[@]}"
         report_incoming || true
@@ -194,7 +291,7 @@ status)
 # each changed file and compare it costs work and bytes. Thus it runs only on
 # request, not before each transfer.
 diff)
-    mapfile -t names < <(incoming_names)
+    list_incoming
     if [ ${#names[@]} -eq 0 ]; then
         dr_ok "nothing to pull. The data of the mound is the same as yours."
         exit 0
@@ -202,8 +299,9 @@ diff)
     classify_incoming "${names[@]}"
     report_incoming || true
 
-    # The copies go in .draugr/tmp, and dr_data_filters removes that from each
-    # transfer. Thus a later push cannot take them. --files-from names each
+    # The copies go in a host-owned staging directory OUTSIDE the repo (see
+    # dr_stage), so a later push cannot take them and nothing in the tree can
+    # redirect them. --files-from names each
     # file, so the filter rules are not necessary. dr_data_path_safe accepted
     # the names.
     dr_stage
@@ -278,7 +376,7 @@ push|pull)
     # --yes, which dr-go gives for an automatic pull. The record of what arrived
     # is important, not only the chance to say no.
     if [ "$action" = pull ]; then
-        mapfile -t names < <(incoming_names)
+        list_incoming
         if [ ${#names[@]} -gt 0 ]; then
             classify_incoming "${names[@]}"
 

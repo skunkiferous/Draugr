@@ -319,3 +319,58 @@ teardown() { dr_test_teardown; }
     run grep -cF "  $dir/.draugr.conf" "$DR_TRUST_FILE"
     [ "$output" = 1 ]
 }
+
+# --- a name is not a path ----------------------------------------------------
+#
+# Identifiers arrive from places Draugr does not control - a plugin registry
+# that a build sandbox wrote, a marketplace that named itself - and the host
+# then puts them in a path. These two helpers are what stands between such a
+# name and `rm -rf`.
+
+@test "dr_simple_name: accepts what an identifier really looks like" {
+    dr_simple_name "superpowers"
+    dr_simple_name "plug-a"
+    dr_simple_name "my_plugin.v2"
+    dr_simple_name "1.0.0"
+    dr_simple_name "2.0.0+build.7"
+}
+
+@test "dr_simple_name: refuses anything that could become a path" {
+    ! dr_simple_name "" || return 1
+    ! dr_simple_name "." || return 1
+    ! dr_simple_name ".." || return 1
+    ! dr_simple_name "..." || return 1
+    ! dr_simple_name "a/b" || return 1
+    ! dr_simple_name "../../etc" || return 1
+    ! dr_simple_name 'a\b' || return 1
+    # A leading dash is read as an option by whatever runs next.
+    ! dr_simple_name "-rf" || return 1
+    # And the characters that a shell or a path would treat specially.
+    ! dr_simple_name 'a b' || return 1
+    ! dr_simple_name 'a@b' || return 1
+    ! dr_simple_name 'a$b' || return 1
+    ! dr_simple_name "$(printf 'a\nb')"
+}
+
+@test "dr_path_contained: says yes only inside the root" {
+    mkdir -p "$DR_TMP/root/sub/deep" "$DR_TMP/outside"
+    dr_path_contained "$DR_TMP/root" "$DR_TMP/root/sub"
+    dr_path_contained "$DR_TMP/root" "$DR_TMP/root/sub/deep"
+    # Strict: the root is not inside itself. Nothing may delete its own root.
+    ! dr_path_contained "$DR_TMP/root" "$DR_TMP/root" || return 1
+    ! dr_path_contained "$DR_TMP/root" "$DR_TMP/outside" || return 1
+    ! dr_path_contained "$DR_TMP/root" "$DR_TMP/root/../outside"
+}
+
+@test "dr_path_contained: a link out of the root is not inside it" {
+    mkdir -p "$DR_TMP/root" "$DR_TMP/elsewhere"
+    ln -s "$DR_TMP/elsewhere" "$DR_TMP/root/away" 2>/dev/null \
+        || skip "this filesystem does not take a symlink"
+    # The whole reason the check canonicalises: the NAME is innocent.
+    ! dr_path_contained "$DR_TMP/root" "$DR_TMP/root/away"
+}
+
+@test "dr_path_contained: a sibling whose name starts the same is not inside" {
+    mkdir -p "$DR_TMP/root" "$DR_TMP/root-evil"
+    ! dr_path_contained "$DR_TMP/root" "$DR_TMP/root-evil"
+}
