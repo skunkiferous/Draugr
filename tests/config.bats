@@ -556,8 +556,8 @@ DRAUGR_KIT_STORE=/mnt/c/kits
 }
 
 # HOME ITSELF CAN BE A LINK onto a Windows drive, and then the path as written
-# says nothing about where the bytes are. readlink -f resolves a link whose
-# target does not exist, so this needs no Windows drive either.
+# says nothing about where the bytes are. readlink -m answers for a link whose
+# target does not exist, where -f fails, so this needs no Windows drive either.
 @test "dr_private_why: a link onto a Windows drive is refused too" {
     ln -s /mnt/d/elsewhere/trusted "$DR_TMP/linked"
     run dr_private_why "$DR_TMP/linked"

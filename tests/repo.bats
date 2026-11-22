@@ -235,3 +235,30 @@ want_executable() {
     [ "$status" -eq 1 ]
     [ -z "$output" ]
 }
+
+# --- the cure is a location, and not a permission ----------------------------
+#
+# A MECHANISM, NOT A RULE SOMEBODY HAS TO REMEMBER. Hardening 5 of the security
+# review says "validate Windows ACLs", and the other reading of it - repair them
+# - was declined: a Windows permission that gets in the way is something the
+# owner of the machine resets so that they can carry on, which makes it a poor
+# thing to rest a guarantee on, and trusted state is on a Windows drive in the
+# first place only because DRAUGR_CONFIG_HOME was pointed at one. So Draugr
+# reports and names a location to move the file to. docs/SECURITY.md, "Where the
+# trust record itself can live", is where that is written for a reader; this is
+# what keeps it true, because a decision that lives only in prose gets proposed
+# again as a convenience.
+#
+# SCOPE, and why it is not the whole repository like the test above. The forge
+# sets two ACLs, in PowerShell: ssh REFUSES a private key that other accounts
+# can read, and the guest needs a plaintext password on disk. Those are a third
+# party's requirement and a documented trade-off (docs/FORGE.md), not a claim of
+# Draugr's. Thus the rule covers every shell surface - bin/ and every .sh - and
+# the pathspec excludes tests/, which has to name the commands to keep them out.
+@test "no shell command sets a Windows permission: the cure is a location" {
+    cd "$DR_ROOT" || return 1
+    run git grep -n -I -E -i -- 'icacls|Set-Acl|takeown' -- bin '*.sh' ':!tests'
+    # git grep says 1 for "no match", and that is the pass.
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}

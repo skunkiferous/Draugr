@@ -586,6 +586,14 @@ else's answer.**
   Your repository is unaffected: it must be on a Windows drive, and the configuration in it is
   trusted by the hash of its content, which no file system can weaken.
 
+  **What it does not do is tighten the ACL for you.** That is the other reading of the review's
+  "validate Windows ACLs", and it was declined deliberately: on Windows a permission that gets in
+  the way is something the machine's owner resets in order to carry on, which makes it a poor place
+  to rest a guarantee — and the file is on a Windows drive in the first place only because you
+  pointed `DRAUGR_CONFIG_HOME` at one. So the cure Draugr names is a location, and the shell side
+  calls no `icacls`, which `tests/repo.bats` now checks. The forge still sets the ACL that `ssh`
+  refuses to work without; that is sshd's requirement and not a guarantee of Draugr's.
+
 ## [0.9.0] — 2026-11-15
 
 ### Added

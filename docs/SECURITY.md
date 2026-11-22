@@ -219,6 +219,22 @@ the only thing that moves it, and both `dr-trust` and `dr-doctor` say so when it
 somewhere a mode means nothing. `dr-setup` says the same about `~/.ssh/config` and the forge key —
 there, ssh refuses such a key anyway, which is a second guard on the same fact.
 
+**Draugr will not tighten a Windows permission for you, and that is a decision rather than an
+omission.** "Validate the ACL" reads two ways, and repairing one is the reading this project
+declined. On Windows a permission that gets in the way is something the machine's owner resets so
+that they can carry on — a fair instinct on your own PC, and a poor foundation for a guarantee.
+Nor would there be anything to repair that you had not chosen: this state is on a Windows drive
+only because `DRAUGR_CONFIG_HOME` was pointed at one, and silently rewriting the permissions of a
+file somebody moved on purpose is both fragile and surprising. So the cure Draugr names is a
+**location**, never an ACL, and `tests/repo.bats` keeps every shell surface free of `icacls` so that
+the convenient version of this does not get written later by mistake.
+
+The forge is the one part of Draugr that sets a Windows permission at all, and neither case is a
+claim of this kind. `ssh` **refuses** a private key that other accounts can read, so the forge key
+gets the ACL that ssh needs in order to work; a plaintext password that the guest needs (VNC, and
+the SMB share) gets the same treatment for want of anything better, and `docs/FORGE.md` records that
+trade-off where it is made. Neither of them is a protection Draugr claims for itself.
+
 **Your repository is a different question, and it is fine where it is.** It must be on a Windows
 drive, because `sbx` mounts Windows paths. The configuration in it is not trusted by its mode but
 **by the hash of its content**, which is a guarantee no file system can weaken: a `.draugr.conf`

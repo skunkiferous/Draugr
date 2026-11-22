@@ -54,9 +54,11 @@
 # records a child and the verb that reads the record would use two different
 # files, and the protection would disappear without a message. %ProgramData% is
 # the same path for every account on the machine, and is where AppSandbox keeps
-# host.json for the same reason. The ACL of that directory is the subject of
-# hardening 5, not of this file; see the paragraph above for why a weak ACL here
-# costs a false refusal rather than an authorisation.
+# host.json for the same reason. A new file there is readable by every local
+# user (measured), and that is accepted rather than repaired: Draugr sets no
+# Windows permission, and docs/SECURITY.md says why. The paragraph above is what
+# makes that safe here - a weak ACL on this file costs a false refusal and can
+# never produce an authorisation.
 
 # Get-FullPath, Test-LayerName and Test-UnderRoot. layer.ps1 dot-sources this
 # file as well, which only re-defines the same functions.
