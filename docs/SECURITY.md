@@ -188,6 +188,42 @@ Two things still rest only on review:
 The general rule: Draugr does not *run* anything from your repository that you did not accept by
 hash. But it cannot tell a good value from a bad one. Read what you merge.
 
+### Where the trust record itself can live
+
+Everything above rests on one file: `~/.config/draugr/trusted`. A line in it tells Draugr to source
+a `.draugr.conf` without asking, and to source a file is to run it. So **whatever can write that
+file decides what Draugr runs** — and the `chmod 600` that is supposed to prevent that is not
+enforced everywhere. Measured on a Windows 11 host with WSL 2:
+
+| where the file sits | what `chmod 600` achieves there |
+|---|---|
+| the WSL home (ext4) — **the default** | mode 600, enforced. Windows cannot even read an ACL on that path |
+| a Windows drive (`/mnt/c/…`) | **nothing.** It reports 777 before and after; a directory stays 777 after `chmod 700`; a file chmodded 644 is still executable |
+
+The second row is not a weaker mode, it is an inert one: the mount is 9p with no `metadata` option,
+so the file keeps what NTFS hands down from its parent folder instead. What that inherits was
+measured too, for a new file in each place Draugr might be pointed at:
+
+| parent folder | who can read it | who can write it |
+|---|---|---|
+| `%LOCALAPPDATA%`, `%USERPROFILE%` | you, Administrators, SYSTEM | the same |
+| `%ProgramData%` | **every local user** | you, Administrators, SYSTEM |
+| `C:\Temp` | every local user | **any authenticated account** |
+
+And with `options = "metadata"` in `/etc/wsl.conf` the mode does report 600 — and still keeps
+nobody out, because a Linux mode binds Linux processes while every Windows process reads the NTFS
+permissions. That is why Draugr judges this by the **path** and not only by the mode.
+
+**So keep trusted state on a Linux file system.** The default already does, `DRAUGR_CONFIG_HOME` is
+the only thing that moves it, and both `dr-trust` and `dr-doctor` say so when it has been moved
+somewhere a mode means nothing. `dr-setup` says the same about `~/.ssh/config` and the forge key —
+there, ssh refuses such a key anyway, which is a second guard on the same fact.
+
+**Your repository is a different question, and it is fine where it is.** It must be on a Windows
+drive, because `sbx` mounts Windows paths. The configuration in it is not trusted by its mode but
+**by the hash of its content**, which is a guarantee no file system can weaken: a `.draugr.conf`
+that anybody edits stops being trusted, wherever it lives.
+
 ## The data channel has no commit to read
 
 All of the above is about what the agent can *read*. `DRAUGR_DATA` is the other direction.
@@ -610,6 +646,36 @@ does not identify the far end**. The VM that answers is the VM that the tunnel s
 ssh block for one VM that stays after the deletion of its VM thus reaches a *different* guest, and
 does not fail. That is how a `push` arrives in the wrong machine. `dr-setup --forge` writes one
 wildcard block for exactly this reason, and `dr-forge doctor` tells the two apart.
+
+### What claims a layer, and the one file that remembers
+
+`dr-layer thaw` and `dr-layer drop` refuse for a layer that another layer differences from, because
+a write to the parent of a differencing child damages the child with no message anywhere. That guard
+used to find children by **scanning** three places, and a scan is bounded by where it looks: a child
+outside all of them was invisible, and both verbs then reported "children none".
+
+A parent cannot be asked for its children — `Get-VHD` has no such property *(measured)* — so Draugr
+records each edge where it is made, in `%ProgramData%\Draugr\forge-parents.json`, as the pair
+`(child, parent, chain id)`. [FORGE.md](FORGE.md#which-disks-difference-from-this-one-and-why-a-scan-is-not-enough)
+has the table of what each disagreement means.
+
+**It is host state, and it is deliberately not a trust decision.** The file can only ever *add* a
+refusal: nothing in it authorises a delete, a write or a publication, and `drop` still resolves what
+it removes from `-Name` and `-Root` through the same two checks as before. So the worst a corrupt or
+hostile entry can do is make a layer verb refuse to run, and the worst a *deleted* entry can do is
+take the guard back to what the scan alone can see. Both are visible: `dr-layer list` prints the
+file and its contents without elevation, and the refusal names the file and says that deleting it
+is safe.
+
+It is under `%ProgramData%` rather than `%LOCALAPPDATA%` because `dr-layer` re-launches itself
+elevated, and with over-the-shoulder elevation that child runs as *another account* — the verb that
+records a child and the verb that reads the record would then use two different files, and the
+protection would disappear without a message. That choice has a cost, and it was measured rather
+than assumed: a new directory under `%ProgramData%` grants **every local user read** and keeps write
+to the owner, Administrators and SYSTEM. So another account on the machine can learn which layers
+exist and where, and cannot plant an entry — and because the index only ever adds a refusal, an
+entry is not a permission anyway. [Where the trust record itself can live](#where-the-trust-record-itself-can-live)
+has the full table.
 
 ---
 

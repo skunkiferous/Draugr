@@ -250,6 +250,32 @@ else
         "Fix:  dr-setup"
 fi
 
+# --- trusted state ---------------------------------------------------------
+printf '\n%sTrusted state%s\n' "$_DR_BOLD" "$_DR_OFF"
+
+# A LINE IN THE TRUST FILE IS PERMISSION TO RUN CODE. It tells Draugr to source
+# a .draugr.conf, and to source a file is to run it. So "who can write this
+# file" is the same question as "who decides what Draugr runs", and the mode
+# that is supposed to answer it is not enforced on every file system
+# (dr_private_why has the measurements).
+#
+# Tested here because the file is WRITTEN RARELY and the exposure lasts. The
+# warning at dr-trust time is seen once, months ago, by somebody who was
+# thinking about something else.
+if [ ! -f "$DR_TRUST_FILE" ]; then
+    note "trust file" "none yet, so nothing is trusted ($DR_TRUST_FILE)"
+elif _priv_why=$(dr_private_why "$DR_TRUST_FILE"); then
+    ok "trust file" "private to you ($(dr_file_mode "$DR_TRUST_FILE"), $(grep -c . "$DR_TRUST_FILE" 2>/dev/null || echo 0) line(s))"
+else
+    bad "trust file" "$_priv_why" \
+        "$DR_TRUST_FILE" \
+        "Each line in it tells Draugr to SOURCE a .draugr.conf without asking," \
+        "and to source a file is to run it. Whatever can write this file decides" \
+        "that, so the record is not a decision only you can make." \
+        "Keep it on a Linux file system: unset DRAUGR_CONFIG_HOME, or point it" \
+        "inside your WSL home. docs/SECURITY.md names the locations that work."
+fi
+
 # --- this project ----------------------------------------------------------
 printf '\n%sThis project%s\n' "$_DR_BOLD" "$_DR_OFF"
 

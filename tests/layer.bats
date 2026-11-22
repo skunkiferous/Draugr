@@ -1185,3 +1185,89 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     grep -q "if (\$f.Name -like '\*netfx3\*.cab')" "$ps"
     grep -q 'that is not a NetFx3 cab' "$ps"
 }
+
+# --- U05: a scan is bounded by where it looks ---------------------------------------------
+#
+# `thaw` and `drop` refuse to touch a layer that another layer differences from,
+# and both learned about children by scanning three places. A child outside all
+# three was invisible, and the two verbs then did the one thing the guard exists
+# to prevent. The decisions are executed in forge-ps.bats against a mocked
+# Get-VHD; what these say is that the verbs CALL them, which is worth saying
+# because each verb needs Hyper-V, elevation and a closed AppSandbox to run.
+
+@test "layer.ps1: thaw and drop ask the one guard that knows about the index" {
+    local ps="$DR_ROOT/lib/forge/layer.ps1"
+    # The decisions come from the file that forge-ps.bats can dot-source.
+    grep -q "parents.ps1" "$ps"
+    # Both verbs, and nothing else, ask it. Two calls: thaw and drop.
+    [ "$(grep -c 'Get-LayerGuard \$disk' "$ps")" -eq 2 ]
+    # And both decide on the merged answer, not on the scan alone.
+    [ "$(grep -c 'if (\$guard.Blocks)' "$ps")" -eq 2 ]
+    # The scan-only guard is GONE, rather than left beside the new one for
+    # somebody to call by mistake.
+    ! grep -q 'Get-LayerChildren' "$ps" || return 1
+}
+
+# A scan that cannot see a child is the finding; a scan that cannot see a child
+# AND says "children none" is the bug. `drop` deletes a directory recursively,
+# so "I could not tell" has to cost the command and not the disk - and unlike
+# `thaw` it has no -Force to get past that.
+@test "layer.ps1: drop has no way past the child guard" {
+    local ps="$DR_ROOT/lib/forge/layer.ps1"
+    grep -qF 'if ($guard.Blocks) { exit 20 }' "$ps"
+    # thaw is the one that may proceed, and only on an explicit -Force.
+    grep -q 'if (-not \$Force) { exit 20 }' "$ps"
+}
+
+# THE RECORD IS WRITTEN WHERE THE EDGE IS MADE. Nothing else knows about it: a
+# later scan finds this child only if it happens to land in a place the scan
+# looks at.
+@test "layer.ps1: new records the parent reference, before the -KeepRegistered exit" {
+    local ps="$DR_ROOT/lib/forge/layer.ps1" rec keep
+    grep -qF 'Add-ParentRecord -Child $disk -Parent $parentDisk' "$ps"
+    # BEFORE the early return for -KeepRegistered, which is the flag that
+    # leaves a child in no layer store and in no vms.cfg - the one case the
+    # scan cannot reach at all.
+    rec=$(grep -n 'Add-ParentRecord -Child \$disk' "$ps" | cut -d: -f1)
+    keep=$(grep -n 'if (\$KeepRegistered)' "$ps" | cut -d: -f1)
+    [ -n "$rec" ] && [ -n "$keep" ]
+    [ "$rec" -lt "$keep" ]
+    # A disk that exists and was not recorded is said out loud. Silence there
+    # would leave the scan as the only guard, with nothing to show it.
+    grep -q 'the parent reference was NOT recorded' "$ps"
+}
+
+# A record of a disk that no longer exists would be reported as stale by every
+# later guard, and a path that something re-creates is a different layer with
+# the same name.
+@test "layer.ps1: drop forgets the record of the layer it removed" {
+    local ps="$DR_ROOT/lib/forge/layer.ps1"
+    grep -qF 'Remove-ParentRecords -Children @($disk)' "$ps"
+    # And both verbs prune what the guard PROVED stale, never under -WhatIfOnly,
+    # which writes nothing anywhere.
+    [ "$(grep -c 'Remove-ParentRecords -Children \$guard.Prunable' "$ps")" -eq 2 ]
+    [ "$(grep -c 'Prunable).Count -and -not \$WhatIfOnly' "$ps")" -eq 2 ]
+}
+
+# A LISTING THAT FAILED IS NOT A LISTING THAT FOUND NOTHING - the same bug
+# `adopt` had with its stray-disk listing, in the function whose whole job is to
+# find every child.
+@test "layer.ps1: a layer store that could not be listed is not an empty one" {
+    local ps="$DR_ROOT/lib/forge/layer.ps1"
+    grep -q 'ErrorVariable listErr' "$ps"
+    grep -q 'listErr).Count' "$ps"
+    # And it reaches the guard, which turns it into a refusal.
+    grep -q 'ScanErrors \$cand.Errors' "$ps"
+}
+
+# The index decides whether a layer verb refuses, so a corrupt one locks both
+# verbs. `list` is the verb that can show it without elevation, which is what
+# makes that recoverable rather than a mystery.
+@test "layer.ps1: list reports the recorded parent references" {
+    local ps="$DR_ROOT/lib/forge/layer.ps1"
+    grep -q 'Read-ParentIndex -Index \$script:parentIndex' "$ps"
+    grep -q 'recorded parent references' "$ps"
+    # The way out is named where it is needed, in both places: the index only
+    # ever ADDS a refusal, so deleting it is safe and the scan still runs.
+    [ "$(grep -c 'only ever ADDS a refusal' "$ps")" -ge 2 ]
+}

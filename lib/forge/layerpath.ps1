@@ -74,6 +74,17 @@ function Test-UnderRoot([string]$path, [string]$root) {
     return $true
 }
 
+# A path in its canonical spelling, and the path itself when it has none.
+#
+# IT LIVES HERE, AND NOT IN layer.ps1, because parents.ps1 compares paths too
+# and a second copy of a comparison is a second answer. GetFullPath resolves
+# `.`, `..` and a relative path, and nothing else: it does not resolve a
+# junction and it does not need to - Hyper-V stores the real target of one when
+# it writes a parent locator, which tmp/u05-measure.log measured.
+function Get-FullPath([string]$p) {
+    try { return [IO.Path]::GetFullPath($p) } catch { return $p }
+}
+
 function Test-ReparsePoint([string]$p) {
     $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
     if (-not $item) { return $false }

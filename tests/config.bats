@@ -499,3 +499,116 @@ DRAUGR_KIT_STORE=/mnt/c/kits
     [[ "$output" != *"not trusted"* ]]
     [[ "$output" != *"in force"* ]]
 }
+
+# --- a mode is not always a permission --------------------------------------------------
+#
+# Hardening 5 of the security review: "Linux mode 600 and executable bits are
+# not reliably enforced on every DrvFs configuration. Validate Windows ACLs for
+# trusted state and keys, and document supported storage locations."
+#
+# MEASURED on the machine this was written on (tmp/h5-measure.log,
+# tmp/h5-acl.log): under WSL 2 a Windows drive arrives as a 9p mount with no
+# `metadata` option, and there chmod is not weakened, it is INERT - a file
+# reports 777 before and after `chmod 600`, and a 644 file is still executable
+# to the kernel. The file keeps what NTFS hands down instead, and a new file
+# under C:\Temp inherits `Authenticated Users:(M)`: every authenticated account
+# on the machine, with write.
+#
+# WHY IT MATTERS HERE and not only in the abstract: a line in the trust file is
+# permission for Draugr to SOURCE a .draugr.conf, which is to run shell code
+# without asking. Whoever can add a line decides that.
+#
+# None of these tests needs a Windows drive. dr_path_win is a pure function on
+# the path text, so the branch that matters is reachable on the CI runner too.
+
+@test "dr_private_why: a 600 file on a Linux file system is private" {
+    printf 'x\n' > "$DR_TMP/trusted"
+    chmod 600 "$DR_TMP/trusted"
+    run dr_private_why "$DR_TMP/trusted"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+# The reason has to name the mode. "It is not private" sends somebody looking
+# at the ACL of a file whose problem is one chmod.
+@test "dr_private_why: the reason names the mode when the chmod did not take" {
+    printf 'x\n' > "$DR_TMP/trusted"
+    chmod 644 "$DR_TMP/trusted"
+    run dr_private_why "$DR_TMP/trusted"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"644"* ]]
+    [[ "$output" == *"did not take"* ]]
+}
+
+# THE CASE A MODE TEST ALONE MISSES. With `options = "metadata"` in
+# /etc/wsl.conf the mode on a Windows drive reports 600 and still keeps nobody
+# out, because a Linux mode binds Linux processes and a Windows process reads
+# the NTFS permissions instead. So the path decides this, not the mode.
+@test "dr_private_why: a path on a Windows drive is refused whatever the mode says" {
+    run dr_private_why /mnt/c/Users/somebody/.config/draugr/trusted
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Windows drive"* ]]
+    # And a path that is not on one is judged on its mode, so the test above is
+    # not passing for the wrong reason.
+    run dr_private_why "$DR_TMP/does-not-exist"
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"Windows drive"* ]]
+}
+
+# HOME ITSELF CAN BE A LINK onto a Windows drive, and then the path as written
+# says nothing about where the bytes are. readlink -f resolves a link whose
+# target does not exist, so this needs no Windows drive either.
+@test "dr_private_why: a link onto a Windows drive is refused too" {
+    ln -s /mnt/d/elsewhere/trusted "$DR_TMP/linked"
+    run dr_private_why "$DR_TMP/linked"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Windows drive"* ]]
+}
+
+# "I could not read the mode" and "the mode is 777" are different things to go
+# and look at, and neither one of them is "it is private".
+@test "dr_private_why: a mode that cannot be read is not private either" {
+    run dr_private_why "$DR_TMP/no-such-file"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"could not be read"* ]]
+}
+
+@test "dr_private_file: it chmods first, and says nothing when that worked" {
+    printf 'x\n' > "$DR_TMP/trusted"
+    chmod 644 "$DR_TMP/trusted"
+    run dr_private_file "$DR_TMP/trusted" 'the fixture'
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$(stat -c %a "$DR_TMP/trusted")" = 600 ]
+}
+
+# Nothing calls chmod and walks away any more. The message names the file,
+# because the caller knows which file it meant and the reader does not.
+@test "dr_private_file: it warns, names the file and returns 1 when it did not" {
+    run dr_private_file /mnt/c/nowhere/trusted 'the trust file'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"the trust file is not private"* ]]
+    [[ "$output" == *"/mnt/c/nowhere/trusted"* ]]
+    [[ "$output" == *"Windows drive"* ]]
+    # The cure, which is the same sentence everywhere it is needed.
+    [[ "$output" == *"DRAUGR_CONFIG_HOME"* ]]
+}
+
+# The wiring, judged where it is used rather than only where it is defined.
+# dr_private_why is redefined here because the failing case needs a file system
+# that the CI runner does not have, and the question is the seam.
+@test "dr_trust_add: the trust file is left private, and a failure to be is said out loud" {
+    repo=$(dr_make_repo)
+    printf 'DRAUGR_AGENT=codex\n' > "$repo/.draugr.conf"
+    run dr_trust_add "$repo/.draugr.conf"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$(stat -c %a "$DRAUGR_CONFIG_HOME/trusted")" = 600 ]
+
+    dr_private_why() { printf 'it is on a Windows drive, where a Linux mode keeps nobody out'; return 1; }
+    run dr_trust_add "$repo/.draugr.conf"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the trust file is not private"* ]]
+    # And it says what that costs, which is the whole reason the file exists.
+    [[ "$output" == *"not a decision only you can make"* ]]
+}

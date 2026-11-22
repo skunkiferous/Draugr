@@ -1268,6 +1268,95 @@ dr_trust_is_trusted() {
     grep -qxF "$hash  $file" "$DR_TRUST_FILE" 2>/dev/null
 }
 
+# dr_file_mode <file>: the octal mode, or nothing when it cannot be read. It is
+# one line and its own function so that a test can answer for it: no filesystem
+# reachable from CI reports a mode that did not take.
+dr_file_mode() { stat -c %a -- "$1" 2>/dev/null; }
+
+# dr_private_file <file> <what it is>: make it readable by this user alone, and
+# SAY SO WHEN THAT DID NOT HAPPEN. Returns 1 then, so the caller decides what it
+# costs. Nothing here calls chmod and walks away.
+#
+# WHY A CHMOD IS NOT ALWAYS A PERMISSION. Measured on this machine
+# (tmp/h5-measure.log): under WSL 2 a Windows drive arrives as a 9p mount with
+# no `metadata` option, and there chmod is not weakened, it is INERT. A new file
+# reports 777 before and after `chmod 600`, a directory stays 777 after
+# `chmod 700`, and a file chmodded 644 is still executable to the kernel. The
+# file keeps whatever NTFS hands down from its parent instead - and a new file
+# under `C:\Temp` inherits `Authenticated Users:(M)`, which is every
+# authenticated account on the machine, with WRITE (tmp/h5-acl.log).
+#
+# TWO QUESTIONS, because either one alone misses a real case:
+#
+#   - Is the path on a Windows drive at all? Then a mode is not a boundary
+#     there however it reports, because a Linux mode binds Linux processes and
+#     every Windows process reads the NTFS permissions instead. With
+#     `options = "metadata"` in /etc/wsl.conf the mode even reports 600 and
+#     still keeps nothing out, which is the case the mode test alone misses.
+#   - Did the chmod take? That catches every other filesystem, including ones
+#     nobody has measured, without naming any of them.
+#
+# WRITE IS THE HALF THAT MATTERS for the trust file: a line in it is permission
+# for Draugr to SOURCE a .draugr.conf, which is to run shell code without
+# asking. Anyone who can add a line can have anything sourced.
+#
+# THE QUESTION AND THE CHMOD ARE SEPARATE FUNCTIONS, because dr-doctor has to
+# ask it and must change nothing while it reports: a chmod is a write, and a
+# command you run to look at the state may not alter the state it shows you.
+#
+# dr_private_why <file>: nothing and 0 when the file is private; one short
+# reason and 1 when it is not.
+dr_private_why() {
+    local f=$1 real=$1 mode=
+    # Resolved first, because HOME itself can be a link onto a Windows drive,
+    # and then the path as written says nothing about where the bytes are.
+    #
+    # -m, NOT -f. -f fails on a path whose last components do not exist, and
+    # then the fallback below judges the path as written - which is the link,
+    # not where it points. A test showed that: a link to /mnt/d/elsewhere/
+    # was reported as a mode problem instead of a Windows drive. -m answers for
+    # any path. Where readlink has no -m (macOS), it fails and the path as
+    # written is used, which is the old behaviour and not worse.
+    if command -v readlink >/dev/null 2>&1; then
+        real=$(readlink -m -- "$f" 2>/dev/null) || real=$f
+    fi
+    if dr_path_win "$real" >/dev/null 2>&1; then
+        printf 'it is on a Windows drive, where a Linux mode keeps nobody out'
+        return 1
+    fi
+    mode=$(dr_file_mode "$f")
+    if [ "$mode" = 600 ]; then return 0; fi
+    # Reported apart, because "the mode is 777" and "I could not read the mode"
+    # send you to look at different things, and neither one is "it is private".
+    if [ -n "$mode" ]; then
+        printf 'the mode is %s and not 600, so the chmod did not take' "$mode"
+    else
+        printf 'the mode of the file could not be read at all'
+    fi
+    return 1
+}
+
+dr_private_file() {
+    local f=$1 what=$2 why=
+    chmod 600 "$f" 2>/dev/null || :
+    # An `if`, not `&&`: an assignment from a failing command substitution is a
+    # failing command, and under set -e that ends the script instead of the
+    # function.
+    if why=$(dr_private_why "$f"); then return 0; fi
+    dr_warn "$what is not private: $f"
+    dr_warn "  $why"
+    dr_private_file_cure
+    return 1
+}
+
+# The cure, in one place, because both branches above and every caller need the
+# same sentence and a second copy of it would drift.
+dr_private_file_cure() {
+    dr_warn '  Whatever can write such a file decides what it means. Keep this state on a'
+    dr_warn '  Linux filesystem - the default is inside your WSL home, and DRAUGR_CONFIG_HOME'
+    dr_warn '  is what moves it. docs/SECURITY.md names the locations that work.'
+}
+
 dr_trust_add() {
     local file=$1 hash
     # Record the canonical path, so that the lookup above finds it. See
@@ -1281,7 +1370,12 @@ dr_trust_add() {
         mv "$DR_TRUST_FILE.tmp" "$DR_TRUST_FILE"
     fi
     printf '%s  %s\n' "$hash" "$file" >> "$DR_TRUST_FILE"
-    chmod 600 "$DR_TRUST_FILE"
+    # Not a bare chmod. A line in this file is permission for Draugr to SOURCE
+    # a configuration, and where the mode is inert that permission belongs to
+    # anything that can write the file. See dr_private_file.
+    if ! dr_private_file "$DR_TRUST_FILE" 'the trust file'; then
+        dr_warn '  So this record is not a decision only you can make. dr-doctor repeats this.'
+    fi
 }
 
 # The configuration of the user needs no trust. The user wrote it. A prompt

@@ -94,3 +94,54 @@ foreign_skill() {
     run dr-doctor
     [[ "$output" == *"0 of $shipped in the store"* ]]
 }
+
+# --- the trust file, which decides what Draugr will run ---------------------------------
+#
+# A line in it tells Draugr to SOURCE a .draugr.conf, and to source a file is to
+# run it. So "who can write this file" is "who decides what Draugr runs". The
+# mode that is supposed to answer that is inert on a Windows drive (measured -
+# see the block in tests/config.bats), and the file is written so RARELY that a
+# warning at dr-trust time is read once, months before it matters. Hence a
+# standing row here.
+#
+# AND THE LEVEL IS A FAILURE, not a warning and not a note. The two softer
+# levels exist for a change nobody reviewed and for a feature you declined; this
+# is neither.
+
+@test "dr-doctor: a private trust file is one green row" {
+    printf 'deadbeef  /nowhere/.draugr.conf\n' > "$DRAUGR_CONFIG_HOME/trusted"
+    chmod 600 "$DRAUGR_CONFIG_HOME/trusted"
+    run dr-doctor
+    [[ "$output" == *"Trusted state"* ]]
+    [[ "$output" == *"private to you"* ]]
+    [[ "$output" == *"1 line(s)"* ]]
+}
+
+@test "dr-doctor: a trust file that is not private is a failure" {
+    printf 'deadbeef  /nowhere/.draugr.conf\n' > "$DRAUGR_CONFIG_HOME/trusted"
+    chmod 644 "$DRAUGR_CONFIG_HOME/trusted"
+    run dr-doctor
+    [[ "$output" == *"644"* ]]
+    [[ "$output" == *"SOURCE a .draugr.conf"* ]]
+    # The red mark, and not the yellow one or the dot.
+    [[ "$output" == *"✗ trust file"* ]]
+}
+
+# No trust file is the state of a fresh machine. Nothing is trusted, which is
+# the safe end of the scale, so it counts nothing.
+@test "dr-doctor: no trust file at all is a note, not a failure" {
+    rm -f "$DRAUGR_CONFIG_HOME/trusted"
+    run dr-doctor
+    [[ "$output" == *"none yet"* ]]
+    [[ "$output" != *"✗ trust file"* ]]
+}
+
+# dr-doctor REPORTS, and a chmod is a write. A command you run to look at the
+# state may not alter the state it is showing you - which is why the question
+# and the chmod are two functions.
+@test "dr-doctor: reporting on the trust file does not change its mode" {
+    printf 'deadbeef  /nowhere/.draugr.conf\n' > "$DRAUGR_CONFIG_HOME/trusted"
+    chmod 644 "$DRAUGR_CONFIG_HOME/trusted"
+    run dr-doctor
+    [ "$(stat -c %a "$DRAUGR_CONFIG_HOME/trusted")" = 644 ]
+}

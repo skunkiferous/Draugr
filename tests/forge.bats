@@ -1911,3 +1911,18 @@ rm_facts() {
     run bash -c "grep -vE '^[[:space:]]*#' '$h' | grep -F 'if (\$after -lt \$before)'"
     [ -n "$output" ]
 }
+
+# A MODE IS NOT ALWAYS A PERMISSION, and this file writes a private key and an
+# ssh config. The question itself is executed in tests/config.bats; what this
+# says is that dr-setup asks it, which a test cannot see from the outside: the
+# fixture HOME is on ext4, where the chmod always takes and the warning never
+# fires. It lives beside the other dr-setup tests, which are all here.
+@test "dr-setup: the files it writes are verified private, not only chmodded" {
+    local f="$DR_ROOT/bin/dr-setup"
+    grep -qF 'dr_private_file "$forge_key"' "$f"
+    grep -qF 'dr_private_file "$config"' "$f"
+    # ONE bare chmod 600 is left, and it is the one that runs on an empty file
+    # BEFORE anything is written into it. That order is right and it claims
+    # nothing; every claim about the finished file goes through the check.
+    [ "$(grep -c 'chmod 600' "$f")" -eq 1 ]
+}

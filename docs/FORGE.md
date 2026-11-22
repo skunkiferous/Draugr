@@ -794,6 +794,57 @@ The cost, and the conditions:
 create a child, freeze a layer, list a chain, discard and recreate the disposable top, and merge a
 layer down when it earned permanence. **None of it is proven.** The first test is a two-level chain
 on a test VM, which costs almost nothing.
+### Which disks difference from this one, and why a scan is not enough
+
+`dr-layer thaw` and `dr-layer drop` both refuse for a layer that another layer differences from.
+That guard is the reason the read-only attribute exists: **a write to the parent of a differencing
+child damages the child, silently, and nothing in the stack reports it.** It shows up later as a
+guest that boots wrong.
+
+The guard used to answer that question by **scanning**: the layer root of this run, every fixed
+drive's `ForgeLayers`, and each `VhdxPath` in `vms.cfg`. That is wide, and it is the layout people
+actually have — a base on the fast disk, the engine layers on the large one. But a scan is bounded
+by where it looks, and a child outside all three was invisible. `dr-layer new --root <somewhere
+else> --keep-registered` leaves exactly that: a disk in no scanned store and in no `vms.cfg`.
+
+**A parent cannot be asked for its children** *(measured)*. `Get-VHD` exposes no such property, on
+either side of a chain, so discovery is a scan or it is nothing. That is what makes a record the
+only robust answer, rather than a wider glob.
+
+So `new` writes the edge down where it is made, into one machine-wide file:
+
+```text
+%ProgramData%\Draugr\forge-parents.json
+  { "version": 1, "entries": [ { "child": "D:\...\disk.vhdx",
+                                 "parent": "C:\...\disk.vhdx",
+                                 "id": "7B02A3FF-..." } ] }
+```
+
+**An entry is a pair, and a disagreement inside the pair is the alarm.** `ParentPath` is exact about
+which disk an edge points at, and is a path. `DiskIdentifier` is immune to the spelling of a path —
+but it identifies the **chain**, not the edge: a parent, its child and its grandchild all report the
+same value *(measured)*. And `Set-VHD -ParentPath -IgnoreIdMismatch` moves a child to another chain
+without updating it *(measured)*, so it can be left naming a chain the child no longer sits on.
+Neither key is enough alone.
+
+A re-check therefore asks three questions, and `dr-layer` acts on the answers:
+
+| what the child says now | what the verb does |
+|---|---|
+| it still names this disk, with the recorded chain | **refuses.** `thaw` takes `--force`; `drop` does not |
+| it still names this disk, with another chain | **refuses**, and says which chain it expected |
+| it is there and will not answer (a running VM, no elevation) | **refuses.** "Cannot be asked" is not "not a child" |
+| it names another disk, which agrees with it | prunes the record, and carries on |
+| it names another disk, which does **not** agree | **warns loudly**, and carries on: a write here cannot reach it |
+| the file is gone | prunes the record, and carries on |
+
+**The index can only ever add a refusal.** Nothing in it authorises a delete, a write or a
+publication — `drop` still resolves its target from `-Name` and `-Root`, through the same two
+checks as before. So if it is ever corrupt, `thaw` and `drop` refuse (an error that arrives as a
+reassuring answer is the bug this closes), and **deleting the file is safe**: the scan still runs,
+and what is lost is the record of children outside the places it looks. `dr-layer list` prints the
+file and every record, and needs no elevation to do it.
+
 ### One forge per project, which the layers decided
 
 This was [open question 1](#open-questions) while a forge cost 100+ GB. **The only reason to share

@@ -533,6 +533,59 @@ else's answer.**
   `dr-init` stops *before* it creates anything, so there is nothing half-made to clean up. One
   `dr-trust` ends it, and the edit you just made is the reason you wanted it to take effect.
 
+- **`dr-layer thaw` and `dr-layer drop` could say "children none" about a layer that had one.** Both
+  verbs refuse for a layer another layer differences from, because a write to the parent of a
+  differencing child damages the child with no message anywhere in the stack — it shows up later as
+  a guest that boots wrong. Both found children by **scanning**: the layer root of this run, every
+  fixed drive's `ForgeLayers`, and each `VhdxPath` in `vms.cfg`. A scan is bounded by where it looks,
+  and `dr-layer new --root <somewhere else> --keep-registered` leaves a child in none of those three.
+  The verb then reported no children and proceeded.
+
+  A parent cannot be asked for its children — `Get-VHD` exposes no such property, on either side of
+  a chain *(measured)* — so `new` now records each edge as it makes it, in
+  `%ProgramData%\Draugr\forge-parents.json`, and both verbs re-check every record that names the
+  disk they were given. **A record is the pair `(parent path, chain id)`, because neither key is
+  enough alone:** `ParentPath` is exact about which disk an edge points at and is a path, while
+  `DiskIdentifier` identifies the *chain* — a parent, its child and its grandchild all report one
+  value — and `Set-VHD -ParentPath -IgnoreIdMismatch` moves a child to another chain without
+  updating it *(both measured)*. A child that still names the disk refuses the verb whatever its
+  chain says; a disagreement about a chain elsewhere is reported loudly and refuses nothing; a child
+  that cannot be read refuses, because "cannot be asked" is not "not a child". A store that could
+  not be listed now refuses too, instead of contributing no candidates.
+
+  **The file can only ever add a refusal.** Nothing in it authorises a delete, a write or a
+  publication: `drop` still resolves what it removes from `-Name` and `-Root` through the same two
+  checks. So a corrupt one stops both verbs — with a message that names it and says deleting it is
+  safe, after which the scan runs as before — and `dr-layer list` prints it and its records without
+  elevation. It is under `%ProgramData%` and not `%LOCALAPPDATA%` because `dr-layer` re-launches
+  itself elevated, and over-the-shoulder elevation would otherwise split the record and the reader
+  between two accounts' files.
+
+- **`chmod 600` on the trust file was a claim nobody checked, and in one place it achieves nothing.**
+  A line in `~/.config/draugr/trusted` tells Draugr to source a `.draugr.conf` without asking, and
+  to source a file is to run it — so whatever can write that file decides what Draugr runs. The mode
+  that is supposed to prevent that is **inert on a Windows drive** *(measured)*: under WSL 2 such a
+  path is a 9p mount with no `metadata` option, where a file reports 777 before and after
+  `chmod 600`, a directory stays 777 after `chmod 700`, and a file chmodded 644 is still executable
+  to the kernel. It keeps what NTFS hands down from its parent instead — and a new file under
+  `C:\Temp` inherits `Authenticated Users:(M)`, which is every authenticated account on the machine,
+  with write *(measured)*.
+
+  Draugr now **verifies instead of claiming**, and says so when the claim does not hold: `dr-trust`,
+  and `dr-setup` for `~/.ssh/config` and the forge key. The test is on the **path** as well as the
+  mode, because with `options = "metadata"` the mode reports 600 and still keeps nobody out — a
+  Linux mode binds Linux processes while every Windows process reads the NTFS permissions. A
+  symlinked `HOME` is resolved first, so a link onto a Windows drive is caught too. `dr-doctor`
+  gains a standing **Trusted state** row, because that file is written rarely and the exposure
+  lasts; it reports without touching the mode, since a command you run to look at the state may not
+  change it.
+
+  **Nothing moves, and the default was already right:** the WSL home is a Linux file system, where
+  the mode is enforced and Windows cannot even read an ACL on the path. `DRAUGR_CONFIG_HOME` is the
+  only thing that moves this state, and `docs/SECURITY.md` now names the locations that work.
+  Your repository is unaffected: it must be on a Windows drive, and the configuration in it is
+  trusted by the hash of its content, which no file system can weaken.
+
 ## [0.9.0] — 2026-11-15
 
 ### Added

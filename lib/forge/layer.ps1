@@ -122,6 +122,14 @@ $ProgressPreference = 'SilentlyContinue'
 # really inside the layer root. `drop` deletes a directory recursively, so
 # both are load-bearing. They are a separate file so that a test can run them.
 . (Join-Path $PSScriptRoot 'layerpath.ps1')
+# The parent index and the verdicts of the child guard. A scan is bounded by
+# where it looks, so `thaw` and `drop` could not see a child outside the three
+# places they search (U05 of the security review). Separate file for the same
+# reason as layerpath.ps1: the decisions in it are what a test must execute.
+. (Join-Path $PSScriptRoot 'parents.ps1')
+# Resolved once, so that every verb in this run reads and writes the same file,
+# and so that the path appears in a message even when it does not exist yet.
+$script:parentIndex = Get-ParentIndexPath
 
 function Say($m)  { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
 function Note($m) { Write-Host "  $m" }
@@ -415,42 +423,85 @@ function Show-Root([switch]$Creating) {
 #     store. forge-provision.ps1 builds layer-0 in the own directory of AppSandbox, on purpose.
 # The code skips removable drives, on purpose. A spin-up of an absent USB disk
 # to ask about a parent that nobody put there is a slow way to learn nothing.
-function Get-FullPath([string]$p) {
-    try { return [IO.Path]::GetFullPath($p) } catch { return $p }
-}
-function Get-LayerChildren([string]$disk) {
-    $disk = Get-FullPath $disk
+#
+# AND THREE PLACES IS STILL NOT THE GUARD. It is wide, and it is the layout that
+# people have, but a child outside all three was invisible and the verb then
+# reported "children none" - `new --root <somewhere else> --keep-registered`
+# leaves exactly that (U05 of the security review). What closes it is a RECORD
+# of each edge, written where the edge is made. parents.ps1 holds that record,
+# and merges the two halves into one answer.
+#
+# Get-FullPath is in layerpath.ps1, with the other path comparisons, so that
+# parents.ps1 and the tests can use the one copy.
+#
+# EVERY DISK THIS SCAN CAN REACH. The three sources are the subject of the
+# comment above. The enumeration is here, because it reads the real drives of
+# this machine and the vms.cfg of this run; the matching is in parents.ps1,
+# where a test can execute it.
+#
+# A FAILED LISTING IS NOT AN EMPTY ONE. It used to be -ErrorAction
+# SilentlyContinue alone, so a store that could not be read contributed no
+# candidates and the verb reported "children none" - the same bug `adopt` had
+# with its stray-disk listing. The errors travel with the list and the guard
+# turns them into "cannot tell".
+function Get-LayerCandidates {
     $stores = @($Root)
     foreach ($d in [IO.DriveInfo]::GetDrives()) {
         if ($d.DriveType -eq 'Fixed') { $stores += (Join-Path $d.Name 'ForgeLayers') }
     }
     $disks = @()
+    $errs = @()
     foreach ($r in ($stores | Select-Object -Unique)) {
         if (-not (Test-Path $r)) { continue }
-        foreach ($d in (Get-ChildItem $r -Directory -ErrorAction SilentlyContinue)) {
-            $disks += (Join-Path $d.FullName 'disk.vhdx')
-        }
+        $listErr = @()
+        $dirs = @(Get-ChildItem $r -Directory -ErrorAction SilentlyContinue -ErrorVariable listErr)
+        if (@($listErr).Count) { $errs += "$r ($($listErr[0].Exception.Message.Split([char]10)[0]))" }
+        foreach ($d in $dirs) { $disks += (Join-Path $d.FullName 'disk.vhdx') }
     }
+    # A registered disk does not have to be in a layer store at all:
+    # forge-provision.ps1 builds layer-0 in the own directory of AppSandbox.
     foreach ($b in $vmBlocks) { $v = Get-Val $b 'VhdxPath'; if ($v) { $disks += $v } }
+    [pscustomobject]@{ Disks = $disks; Errors = $errs }
+}
 
-    $found = @()
-    foreach ($other in ($disks | ForEach-Object { Get-FullPath $_ } | Select-Object -Unique)) {
-        # -ieq, not -eq. These paths come from three sources: a parameter, a
-        # directory walk, and a configuration file. Windows ignores case, but
-        # the -eq of PowerShell does not. The same reason as the commit "Compare
-        # Windows path case-insensitive" in this repo.
-        if ($other -ieq $disk -or -not (Test-Path $other)) { continue }
-        # A disk that a running VM reads answers with an exception, not a
-        # parent. A child that the code cannot ask must NOT be reported as
-        # missing. Thus it is listed as unreadable, and the caller decides. This
-        # whole function exists to prevent silence here.
-        try { $pp = (Get-VHD -Path $other -ErrorAction Stop).ParentPath }
-        catch { $found += "$other  (unreadable: $($_.Exception.Message.Split([char]10)[0]))"; continue }
-        if ($pp -and (Get-FullPath $pp) -ieq $disk) { $found += $other }
+# The one question `thaw` and `drop` ask. The answer merges the scan with the
+# recorded parent references, so that a child outside every scanned place still
+# refuses the operation.
+function Get-LayerGuard([string]$disk) {
+    $cand = Get-LayerCandidates
+    Get-ChildGuard -Disk $disk -Candidates $cand.Disks -ScanErrors $cand.Errors -Index $script:parentIndex
+}
+
+# ONE PRINTER FOR BOTH VERBS, because they said almost the same thing in two
+# places and only one of them had learned to mention the index. It prints and
+# answers nothing: each verb decides for itself what a refusal costs.
+function Show-ChildGuard($g, [string]$consequence) {
+    if (@($g.Children).Count) {
+        Fail "$(@($g.Children).Count) layer(s) difference from this one:"
+        foreach ($c in $g.Children) { Fail "    $($c.Path)" }
+        foreach ($c in $g.Children) { Note "      $($c.Verdict) [$($c.Source)]: $($c.Why)" }
+        Fail "  $consequence"
     }
-    # The @() at the call is necessary. One child from here arrives as a bare
-    # string, and .Count on a string is $null.
-    $found
+    # A reference that cannot be checked is the state this guard exists for, so
+    # it says what to do about it rather than only that it happened.
+    if ($g.CannotTell) {
+        Fail '"nothing differences from this disk" could NOT be established:'
+        foreach ($w in $g.Why) { Fail "    $w" }
+        Fail "  The parent index is $($g.IndexPath). It only ever ADDS a refusal, so you"
+        Fail '  may delete it and the scan still runs - you then lose the record of any child'
+        Fail '  that lives outside the places the scan looks.'
+    }
+    # An alarm is about ANOTHER chain, so it never blocks this disk. It is still
+    # printed every time, because nothing else in the stack reports it at all.
+    foreach ($a in $g.Alarms) {
+        Warn "$($a.Path)"
+        Warn "  $($a.Verdict): $($a.Why)"
+    }
+    # The index is partial until something records every child. Saying so is
+    # what keeps "children none" from sounding like a proof.
+    if (@($g.Unrecorded).Count -and $g.IndexState -ne 'unreadable') {
+        foreach ($u in $g.Unrecorded) { Note "not in the parent index (found by the scan): $u" }
+    }
 }
 
 function Get-Chain([string]$disk) {
@@ -492,6 +543,38 @@ if ($Mode -eq 'list') {
         Note ("{0,-20} {1,7} GB on disk{2}" -f $d.Name, [math]::Round($i.Length / 1GB, 2),
               $(if ($i.IsReadOnly) { '  frozen' } else { '  WRITABLE' }))
     }
+    # THE RECORDED PARENT REFERENCES, which is the only part of this command
+    # that is NOT about one root. Reported here and nowhere else, because a
+    # corrupt index refuses `thaw` and `drop` and this is the one verb that can
+    # show it without elevation. Test-Path only: Get-VHD needs elevation, and
+    # the full re-check belongs in the guard that acts on it.
+    Say 'recorded parent references'
+    $idx = Read-ParentIndex -Index $script:parentIndex
+    Note "index   $($script:parentIndex)"
+    if ($idx.State -eq 'unreadable') {
+        # Single quotes: a backtick in a double-quoted PowerShell string is the
+        # escape character, so "`thaw`" would print a tab and "haw".
+        Fail 'it cannot be read, so thaw and drop will refuse until this is dealt with:'
+        foreach ($b in $idx.Bad) { Fail "    $b" }
+        Fail '  The index only ever ADDS a refusal, so deleting it is safe: the scan still'
+        Fail '  runs, and what is lost is the record of children outside the places it looks.'
+    } elseif ($idx.State -eq 'absent') {
+        Note 'none yet. `new` records one for each child it creates'
+    } else {
+        Note "$(@($idx.Entries).Count) recorded"
+        foreach ($e in $idx.Entries) {
+            # A missing file on either side is a dead record, not an alarm: the
+            # guard prunes a child that is gone, and `adopt` moving a base
+            # leaves a parent path that nothing will match again.
+            $gone = @()
+            if (-not (Test-Path -LiteralPath $e.child)) { $gone += 'the child is gone' }
+            if (-not (Test-Path -LiteralPath $e.parent)) { $gone += 'the parent is gone' }
+            Note ("  {0}`n      parent {1}{2}" -f $e.child, $e.parent,
+                  $(if (@($gone).Count) { "   [$($gone -join ', ')]" } else { '' }))
+        }
+        foreach ($b in $idx.Bad) { Warn "unusable $b" }
+    }
+
     # ONE ROOT IS NOT EACH ROOT, and nothing above says so. When layers are on
     # two volumes (the usual case: a base on the fast disk, and the engine
     # layers on the large one), no single run of this command shows all. The
@@ -779,6 +862,31 @@ if ($Mode -eq 'new') {
     # install Windows on top of a disk that already has it.
     [IO.File]::WriteAllText((Join-Path $dir 'vm_state.json'), '{"installComplete":1}')
 
+    # THE PARENT REFERENCE IS RECORDED HERE, where the only process that knows
+    # about this edge is running. A later scan can find this child only if it
+    # lands in a place the scan looks, and -KeepRegistered with a -Root of its
+    # own leaves exactly a child that it will not. See parents.ps1.
+    #
+    # The disk already exists at this point, so a failure to record is a WARNING
+    # and not a refusal: the honest outcome is to say that this child is known
+    # to the scan alone. Read with Get-VHD after the resize, because the record
+    # must hold what the file says now.
+    $kid = Get-VhdFacts -Path $disk
+    $recFailed = ''
+    if (-not $kid.Ok) {
+        $recFailed = "the new disk could not be read back: $($kid.Why)"
+    } else {
+        $rec = Add-ParentRecord -Child $disk -Parent $parentDisk -Id $kid.Id -Index $script:parentIndex
+        if ($rec.Ok) { Note "parent reference recorded ($($kid.Id))" } else { $recFailed = $rec.Why }
+    }
+    # One message for both ways it can fail, and it says what is lost rather
+    # than only that something went wrong.
+    if ($recFailed) {
+        Warn "the parent reference was NOT recorded: $recFailed"
+        Warn '  `thaw` and `drop` of the parent then depend on the scan alone, which sees'
+        Warn "  only $Root, every <drive>\ForgeLayers and the disks in vms.cfg."
+    }
+
     if ($KeepRegistered) { Note 'no VM block added (-KeepRegistered)'; return }
 
     # Copy the values that must match. If the VM of the parent is still
@@ -898,17 +1006,22 @@ if ($Mode -eq 'thaw') {
     Say "thaw '$vmName'"
     Show-Root
 
-    $kids = @(Get-LayerChildren $disk)
-    if ($kids.Count) {
-        Fail "$($kids.Count) layer(s) difference from this one:"
-        foreach ($k in $kids) { Fail "    $k" }
-        Fail '  A write to the parent of a differencing child damages the child, and nothing'
-        Fail '  in the stack says so. Drop them first.'
+    $guard = Get-LayerGuard $disk
+    Show-ChildGuard $guard ('A write to the parent of a differencing child damages the child, and' +
+        ' nothing in the stack says so. Drop them first.')
+    if ($guard.Blocks) {
         if (-not $Force) { exit 20 }
         Warn '-Force given: thaw anyway. Each layer in the list above is now suspect. The'
         Warn '  damage gives no message. It shows as a guest that boots wrong.'
     } else {
-        Note 'children none. Nothing differences from this disk'
+        Note "children none. Nothing differences from this disk ($($guard.Recorded) parent reference(s) recorded)"
+    }
+    # The records this guard PROVED stale: the child file is gone, or it belongs
+    # to another chain and says so consistently. Only after the decision above,
+    # and never under -WhatIfOnly, which writes nothing anywhere.
+    if (@($guard.Prunable).Count -and -not $WhatIfOnly) {
+        $pruned = Remove-ParentRecords -Children $guard.Prunable -Index $script:parentIndex
+        if ($pruned) { Note "$pruned stale parent reference(s) removed from the index" }
     }
 
     $i = Get-Item $disk -Force
@@ -1019,13 +1132,18 @@ if ($Mode -eq 'drop') {
 
     # Refuse to remove a layer that another layer differences from. The test is
     # cheap, and it prevents a failure where no descendant can boot. See
-    # Get-LayerChildren for why this no longer scans only -Root.
-    $kids = @(Get-LayerChildren $disk)
-    if ($kids.Count) {
-        Fail "$($kids.Count) layer(s) difference from this one:"
-        foreach ($k in $kids) { Fail "    $k" }
-        Fail '  After a drop of it, none of them can boot. Drop them first.'
-        exit 20
+    # Get-LayerCandidates for why this looks wider than -Root, and parents.ps1
+    # for the children that no scan of any width can reach.
+    $guard = Get-LayerGuard $disk
+    Show-ChildGuard $guard 'After a drop of it, none of them can boot. Drop them first.'
+    # NO -Force HERE, and that is deliberate: `drop` deletes a directory
+    # recursively, so "I could not tell" has to cost the command rather than the
+    # disk. The message that Show-ChildGuard printed names the index and says it
+    # may be deleted, which is the way out that does not involve this verb.
+    if ($guard.Blocks) { exit 20 }
+    if (@($guard.Prunable).Count -and -not $WhatIfOnly) {
+        $pruned = Remove-ParentRecords -Children $guard.Prunable -Index $script:parentIndex
+        if ($pruned) { Note "$pruned stale parent reference(s) removed from the index" }
     }
     if ((Get-Item $disk -Force -ErrorAction SilentlyContinue).IsReadOnly) {
         Warn 'this layer is frozen. That usually means that something was built on it.'
@@ -1045,6 +1163,11 @@ if ($Mode -eq 'drop') {
     Set-ItemProperty -Path $disk -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
     Remove-Item $dir -Recurse -Force
     Note "removed $dir"
+    # Its own record as a CHILD goes with it. A record of a disk that no longer
+    # exists would be reported as stale by every later guard, and a path that
+    # something re-creates later is a different layer with the same name.
+    $own = Remove-ParentRecords -Children @($disk) -Index $script:parentIndex
+    if ($own) { Note 'its parent reference was removed from the index' }
     # ALWAYS, not only after the code found a VM block. A layer comes to `drop`
     # long after its VM block went (`adopt` removes that). With $owner as the
     # condition, the code misses the usual case, exactly the one in the test:
