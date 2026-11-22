@@ -49,6 +49,40 @@ It is loud, but not fatal. Nothing failed, so the exit status stays `0`. `dr-con
 the same answer as a table. `dr-trust` with no arguments offers each configuration and hook that
 you did not accept, all at once.
 
+**And for the settings that decide what the mound may reach, "not read" is not an answer.** The
+table above shows no value *from that file* — but the run does not continue with nothing, it
+continues with the values of the layers below, and those are not the safe values, they are somebody
+else's. Measured with a throwaway repo whose `.draugr.conf` asked for one mount, its own kit and
+`DRAUGR_EXCLUSIVE=true`, none of it trusted: what was in force was a *different* mount and a
+*different* kit from `~/.config/draugr/config`, and `false` from the built-in default. A different
+kit is a different set of network rules.
+
+So every command names them, with the value in force and where that value came from:
+
+```
+dr-status: did not source /mnt/c/src/myproject/.draugr.conf, because it is not trusted
+  This file is shell code. To source it is to run it.
+  Read it, then run:  dr-trust /mnt/c/src/myproject/.draugr.conf
+dr-status: 3 setting(s) that decide what the mound may reach are NOT what the project asked for:
+    DRAUGR_EXCLUSIVE       in force: false                        from built-in default
+    DRAUGR_KIT             in force: .draugr/kit vim              from ~/.config/draugr/config
+    DRAUGR_MOUNTS          in force: /mnt/c/Code/other:ro          from ~/.config/draugr/config
+  Those files set them, and Draugr did not read them, so it cannot tell
+  what you asked for. The values above are the ones in force.
+```
+
+and a command that would **act** on them stops there, naming `dr-trust`. The keys are the kit and
+the kit store, the clone mode, the mounts, the ports and host ports, `DRAUGR_ENV`, the model URL,
+`DRAUGR_EXCLUSIVE` and `DRAUGR_REQUIRES`, the three `DRAUGR_SCAN*` keys, `DRAUGR_DATA`,
+`DRAUGR_DATA_PUSH` and `DRAUGR_DATA_DELETE`, `DRAUGR_AGENT_ARGS` and `DRAUGR_FORGE_NOSCAN`.
+
+Two kinds of command carry on instead. Those that only **report** — `dr-status`, `dr-log`,
+`dr-diff`, `dr-ls`, `dr-doctor`, and the query verbs of `dr-dep`, `dr-mem`, `dr-ports` and
+`dr-policy` — because a command you run to see the state has to work in the state you are looking
+at. And those that only **take away**: `dr-rm` and `dr-stop`, because refusing to remove a mound
+over an untrusted file would leave no way out but trusting it. `dr-up --recreate` is not one of
+those, since it builds a mound afterwards.
+
 ---
 
 ## The agent and the mound

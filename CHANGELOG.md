@@ -419,6 +419,120 @@ either of them had written it.**
   behind by a process that died is broken once it is older than the limit, and a lock whose age
   cannot be read is left alone, because breaking that one would put two claimants inside at once.
 
+And a fifth: **a decision taken about one observation, applied to another.**
+
+- **The review of a `dr-data pull` judged a forecast, and the pull then landed whatever the mound
+  had by the time it ran.** A pull was two separate conversations with the sender: an
+  `rsync --dry-run` produced the list that decided what to refuse and what to ask about, and a
+  second rsync did the transfer. The mound keeps working in between, so a sender could show a tidy
+  tree to the dry run and write something else afterwards. That is not a theoretical gap: the host
+  name check is the only thing that refuses a name like `.git.`, because the exclusion rules are
+  exact patterns that do not match it and a Windows drive resolves it to `.git`, whose `config`
+  decides what git runs.
+
+  A pull now transfers **once**, into the staging directory outside the checkout, and the review
+  reads that tree — names from `find -print0`, and the type of each entry from a test on the entry
+  rather than from a sentence rsync prints on stdout with a zero exit status. One refused name stops
+  the whole pull and nothing is published; the files are removed with the staging directory. What is
+  judged is what is published.
+
+  Reading the names from a disk instead of from rsync's report also ends a second, quieter problem:
+  `%n` is presentation output, and a name is not always what it prints as. Measured with rsync
+  3.2.7, a newline in a name arrives as the four characters `\#012` and a backslash is itself
+  escaped where the result would be ambiguous, while a tab is passed through as itself — so a review
+  of that text reviews an encoding, and feeding it back to `--files-from` finds no such file. It was
+  refused either way, because the escape introduces a backslash that the name rule already refuses,
+  and that is now a test rather than a lucky accident.
+
+  **It is not slower.** Both legs hard-link instead of copying: an unchanged file is linked from the
+  repository into the staging tree on the way in, and a published file is a link to the staged one
+  on the way out. Measured on one host with an ext4 sender and a `/mnt/c` repository, 128 MB of
+  changed data takes 1130 ms this way against 1104 ms straight into the repository, and 128 MB of
+  unchanged data costs 65 ms a leg. The links need the staging root and the repository on one
+  volume, and they need `--no-perms`, because `/mnt/c` reports every file as 0777 whatever `--chmod`
+  asked for and `--link-dest` links only a file that matches in full. `--chmod` therefore now goes
+  to the mound only, where a mode is a mode; on a pull it changed nothing on disk and cost the link.
+
+  `--delete` on a pull moved to the publication step, where the data filters come with it, so it
+  removes data files the mound no longer has and cannot touch anything else. It is also now
+  consistent with the review: it deletes against the tree you were shown. `dr-data status` still
+  prints a dry run, and now says that it is a forecast.
+
+- **`dr-mem export` now judges the tree that arrived, on the host.** Three things looked at an
+  agent's memory before it reached your store, and all three ran *inside the mound*: the agent
+  module refuses a link before it packs, it refuses an entry named `transcripts`, and the hash list
+  the export is compared against is the one that module produced. They run with the mound's own
+  `sh`, `find` and `cp`, on a filesystem the agent can write, so an agent that wants past them
+  replaces a binary rather than defeating a check. And the comparison could not see the problem
+  either way: it lists `-type f`, so a link, a fifo or a socket is absent from *both* sides of it
+  and would travel into the store without being counted. The received tree is now validated here,
+  by the same rule the import path applies in the other direction, before anything is published.
+
+  Measured on sbx 0.53.0 in a disposable sandbox, nothing of that kind gets as far as the new check
+  today: a link in a tree copied out of a mound makes extraction fail with "a required privilege is
+  not held by the client" and status 1. That is `sbx`'s guarantee, not Draugr's, and `sbx` changed
+  its mind about links once already between 0.37.1 and 0.53.0.
+
+- **`dr-cp --verify` lists both sides after a copy and compares them.** In the other direction the
+  same measurement is worse: a copy *into* a mound leaves a link out, keeps every other file, and
+  exits **0**. The only trace is a line on stderr that nothing read. `--verify` takes a listing of
+  the source before the copy and of the destination after it, and refuses if the sets of names and
+  types differ, naming what is missing or extra. By name and type and never by size — `dr-cp
+  out.log .` on a log the agent is still writing is a documented use of this command, and its size
+  differs between the two listings by design. It is a flag rather than the default because two
+  listings are two more conversations with the mound.
+
+- **What `dr-cp` says about a link was wrong, and is now measured in both directions.** The comment
+  and the warning both said that a copy "stops at the first link in the walk, drops everything after
+  it, and exits 0". Measured on sbx 0.53.0 in a disposable sandbox, with the link first in the walk,
+  last in the walk, and inside a subdirectory: **into** the mound the link is skipped, every other
+  file arrives, and the status is 0; **out of** the mound extraction fails with status 1 after
+  writing a part of the tree that is not predictable — one fixture arrived with all four of its
+  regular files, one with a single file out of four, one with nothing. A fifo and a name holding a
+  control character fail the same way with their own messages. `-L` changes nothing in the first
+  direction, and in the second, on a tree that holds a link, it answers `500 Internal Server Error`
+  and copies nothing at all — so the old advice to "copy the target of the link: `dr-cp -L …`" was
+  pointing at a command that cannot do it. A copy *out* of the mound now gets its own warning, which
+  it never had, and the one that fails says that part of the tree is already on your disk.
+
+And a sixth, which is not an error turned into an answer but **a refusal turned into somebody
+else's answer.**
+
+- **A configuration Draugr could not read no longer runs quietly on other people's values.**
+  Draugr executes a project configuration rather than parsing it, so it refuses to source one whose
+  hash it does not know, and every command has always said so. What it did not say is what that
+  means for the settings in the file. The run does not continue with *nothing*: it continues with
+  the values of the layers below, which are not the safe values — they are somebody else's.
+
+  Measured with a throwaway repo whose `.draugr.conf` asked for one mount, its own kit and
+  `DRAUGR_EXCLUSIVE=true`, none of it trusted: what was in force was a **different** mount and a
+  **different** kit from `~/.config/draugr/config`, and `false` from the built-in default. A
+  different kit is a different set of network rules, and `dr-up` would have built that mound.
+
+  So each command now names the settings in question, with the value in force and the layer it came
+  from, and a command that would **act** on them stops and names `dr-trust`. The keys are the ones
+  that decide what the mound may reach, what leaves your host and what Draugr refuses: the kit and
+  the kit store, the clone mode, the mounts, the ports and host ports, `DRAUGR_ENV`, the model URL,
+  `DRAUGR_EXCLUSIVE` and `DRAUGR_REQUIRES`, the three `DRAUGR_SCAN*` keys, `DRAUGR_DATA`,
+  `DRAUGR_DATA_PUSH`, `DRAUGR_DATA_DELETE`, `DRAUGR_AGENT_ARGS` and `DRAUGR_FORGE_NOSCAN`. The file
+  is read as text and never sourced: an assignment at the start of a line, with or without
+  `export`. The `=` is part of that pattern, so `DRAUGR_DATA_CHMOD=` is not reported as
+  `DRAUGR_DATA`.
+
+  **Two kinds of command carry on instead,** and they carry on for different reasons. Those that
+  only report — `dr-status`, `dr-log`, `dr-diff`, `dr-ls`, `dr-doctor`, and the query verbs of
+  `dr-dep`, `dr-mem`, `dr-ports` and `dr-policy` — because a command you run to see the state has
+  to work in the state you are looking at, or the way out is hidden behind the problem. And those
+  that only take away: `dr-rm` and `dr-stop`, on the same reasoning as "fail on create, let destroy
+  proceed" — refusing to remove a mound over an untrusted file would leave no way out but trusting
+  it. `dr-up --recreate` is not one of those, because it builds a mound afterwards. `dr-config` and
+  `dr-trust` are never stopped: one explains this situation and the other ends it.
+
+  **This is new friction on a path you use,** and deliberately so: `dr-up`, `dr-go` and `dr-init`
+  now stop after an edit to `.draugr.conf` instead of running with the previous layers' values.
+  `dr-init` stops *before* it creates anything, so there is nothing half-made to clean up. One
+  `dr-trust` ends it, and the edit you just made is the reason you wanted it to take effect.
+
 ## [0.9.0] — 2026-11-15
 
 ### Added

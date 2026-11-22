@@ -160,6 +160,12 @@ Know these facts:
 - **The delta algorithm works across the boundary.** Measured: 21 bytes added to a 3 MB file sent
   375 bytes on the next push. The first transfer of a large tree is slow. Each later one is almost
   free.
+- **A pull lands in `%LOCALAPPDATA%\Draugr\stage` first, and is reviewed from there.** A dry run
+  would describe a mound that keeps working afterwards; the staged tree is the files themselves, so
+  the names and types that are judged are the ones that get published. Nothing is refused by halves:
+  one bad name stops the whole pull and publishes none of it. It is as fast as a direct transfer
+  because both legs hard-link instead of copying — which needs the staging root and the repository
+  on one volume. `DRAUGR_STAGE_ROOT` moves it.
 - **Files arrive owned by the agent, ready to write.** That is why the transport is `rsync` over
   `ssh`, and not `sbx cp`. `sbx cp` writes as `root:root`. The agent can read such files, but never
   change them. Generated output then fails in a way that looks like a broken script, not a

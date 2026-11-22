@@ -13,6 +13,12 @@
 #   dr-cp --to notes.md docs/    host  -> mound
 #   dr-cp --raw /tmp/x .         mound path as written, not relative to the repo
 #   dr-cp -L dist/ .             copy the targets of symlinks, not the links
+#   dr-cp --verify out/ .        list both sides afterwards and compare them
+#
+# shellcheck disable=SC2016
+# Single-quoted "$1" appears here on purpose. Those strings are scripts for the
+# shell of the MOUND, and the host must not expand them. See dr_mound_sh in
+# lib/common.sh for how the arguments get there.
 set -euo pipefail
 
 DR_PROG=dr-cp
@@ -26,29 +32,49 @@ _dr_bin=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # The direction is a flag. Draugr does not guess it from the paths. If a host
 # file has the same name as a sandbox path, a guess is wrong.
 #
-# -L goes to sbx without change, and it is not the -L of cp(1). What it does
-# depends on the version of sbx, and the newer answer is the dangerous one:
+# WHAT `sbx cp` DOES WITH A LINK. It is not the same in the two directions, and
+# the difference decides everything below. Measured on sbx 0.53.0, in a
+# disposable sandbox, with the link first in the walk, last in the walk, and
+# inside a subdirectory:
 #
-#   0.37.1  it follows links ANYWHERE in the tree, not only the source. A seed
-#           with AGENTS.md as a symlink to CLAUDE.md came out as 2262 real
-#           files, with no link left in them.
-#   0.53.0  the copy STOPS at the first link in the walk, drops everything after
-#           it, and exits 0. Measured with three trees and the same command: a
-#           tree whose link sorted first arrived EMPTY, a tree whose link sorted
-#           last arrived with the files before it, and a link inside a
-#           subdirectory left that subdirectory empty. -L changed none of them.
+#   host -> mound   the link is SKIPPED and every other file arrives, wherever
+#                   the link sits, and `sbx cp` exits 0. The only trace is a
+#                   line on stderr: `level=error msg="Can't add file …\mlink to
+#                   tar: archive/tar: unknown file mode"`. A Windows JUNCTION
+#                   behaves the same way. -L changes nothing: the link is still
+#                   skipped, not followed.
 #
-# The old failure was loud. This one looks like a success. Thus the check below
-# warns before such a copy, and dr-mem compares what it listed in the mound
-# with what arrived in the store.
+#   mound -> host   extraction FAILS - `symlinkat \etc\hostname …: A required
+#                   privilege is not held by the client`, status 1 - after
+#                   writing PART of the tree, and which part is not
+#                   predictable: one tree arrived with all four of its regular
+#                   files, one with a single file out of four, one with
+#                   nothing. A fifo gives `Object Name not found.`, a name
+#                   holding a control character gives `The filename, directory
+#                   name, or volume label syntax is incorrect.`, both status 1.
+#                   -L on a tree that HOLDS a link answers `500 Internal Server
+#                   Error: failed to archive` and copies nothing at all; on a
+#                   tree with no link it behaves like a plain copy.
+#
+#   0.37.1          -L followed links ANYWHERE in the tree, not only the source.
+#                   A seed with AGENTS.md as a symlink to CLAUDE.md came out as
+#                   2262 real files, with no link left in them.
+#
+# So one direction is loud and leaves a half-written tree, and the other looks
+# like a success. The warnings below say which, and the check after the copy
+# compares the two sides by name, because "sbx exited 0" is not "the same files
+# are on both sides". That behaviour has already changed once between two sbx
+# versions, so Draugr does not rest on it: it asks.
 to_mound=
 raw=
+verify=
 follow=()
 args=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --to)      to_mound=1 ;;
         --raw)     raw=1 ;;
+        --verify)  verify=1 ;;
         -L|--follow-link) follow=(-L) ;;
         -h|--help) dr_help "$0"; exit 0 ;;
         -*) dr_die "unknown option: $1" "Try: dr-cp --help" ;;
@@ -115,16 +141,102 @@ else
         "a relative path. Interop resolves it against the Windows directory."
 fi
 
-# A link in a host tree makes a partial copy on a current sbx, with no error.
-# A warning before the copy is all that Draugr can do here: the same flag is
-# still correct on an older sbx, and the files are the ones that you named.
-if [ -n "$to_mound" ] && [ -d "${args[0]}" ] \
-   && [ -n "$(find "${args[0]}" -type l 2>/dev/null | head -1)" ]; then
-    dr_warn "${args[0]} holds a link, and sbx 0.53 stops a copy at the first one"
-    printf '  %sWhat arrives is then a PART of the tree, and sbx still exits 0.%s\n' \
-        "$_DR_DIM" "$_DR_OFF" >&2
-    printf '  %sCopy the targets yourself, or remove the link first.%s\n' \
-        "$_DR_DIM" "$_DR_OFF" >&2
+# --- what is in the tree, before the copy -----------------------------------
+#
+# One listing on each side, in one shape: "<type><TAB><path relative to the
+# tree>", from find's own `-printf`. The type comes first so a link that was
+# dropped shows up as a missing entry rather than as nothing at all.
+#
+# ONE EXPRESSION AND NO SHELL LOOP, because the mound side runs under `sh`.
+# dr_mound_sh sends its script to `sh -c`, where `read -d ''` does not exist -
+# a first version used it and the mound returned an empty listing, which read
+# as "nothing arrived". The host side uses the same expression on purpose: a
+# comparison is only worth anything if both sides were asked the same question.
+#
+# The limit of a line-based listing is a name that CONTAINS a newline. Such a
+# name arrives as two lines on both sides, so a tree that copied correctly
+# still compares equal, and a dropped entry still removes lines. It fails
+# closed, and dr-data's classify_staged is where a name is judged rather than
+# counted.
+_list_expr() {
+    find "$1" -mindepth 1 -printf '%y\t%P\n' 2>/dev/null | LC_ALL=C sort
+}
+
+list_host() {
+    local dir=$1
+    [ -e "$dir" ] || return 0
+    # A single regular file is one entry with no relative path of its own.
+    if [ -f "$dir" ] && [ ! -L "$dir" ]; then printf 'f\t\n'; return 0; fi
+    _list_expr "$dir"
+}
+
+# The same listing, asked of the mound. It runs with the mound's own shell and
+# find, which is why it is used to DESCRIBE a tree and never to decide whether
+# one is safe.
+list_mound_tree() {
+    # shellcheck disable=SC2016  # $1 is the sh of the mound, not this shell
+    dr_mound_sh '
+        [ -e "$1" ] || exit 0
+        if [ -f "$1" ] && [ ! -L "$1" ]; then printf "f\t\n"; exit 0; fi
+        find "$1" -mindepth 1 -printf "%y\t%P\n" 2>/dev/null | LC_ALL=C sort' "$1"
+}
+
+# A warning before the copy, because the two directions fail differently and
+# the one that fails loudly still leaves files behind. See the measurements in
+# the header.
+if [ -n "$to_mound" ]; then
+    if [ -d "${args[0]}" ] && [ -n "$(find "${args[0]}" -type l 2>/dev/null | head -1)" ]; then
+        dr_warn "${args[0]} holds a link, and sbx 0.53 leaves it out of the copy"
+        printf '  %sEverything else arrives and sbx exits 0, so the tree in the mound%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sis missing that entry. -L does not help. Copy the target yourself.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+    fi
+else
+    # The mound side has to be asked. A link there does not make a partial
+    # copy, it makes a FAILED copy with part of the tree already on your disk.
+    #
+    # The answer is a WORD, not "did anything come back". Any output read as
+    # "there is a link" would turn an unreachable mound, or a find that printed
+    # a diagnostic, into a warning about something nobody saw. Only LINK is an
+    # answer; everything else leaves this silent, and a link that is really
+    # there then shows as the loud failure below.
+    # shellcheck disable=SC2016  # $1 is the sh of the mound, not this shell
+    if [ "$(dr_mound_sh \
+                'if find "$1" -type l 2>/dev/null | head -1 | grep -q .; then echo LINK; else echo NONE; fi' \
+                "$(mound_path "${args[0]}")")" = LINK ]; then
+        dr_warn "that path in the mound holds a link, and Windows will not create it"
+        printf '  %ssbx stops with "a required privilege is not held" - after writing%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sPART of the tree here. -L answers 500 for such a tree. Look first:%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %s  dr-shell -- find <path> -type l%s\n' "$_DR_DIM" "$_DR_OFF" >&2
+    fi
+fi
+
+# --verify only. The listing of the source, taken before the copy, and where
+# the copy will land. Measured in both directions: if the destination exists
+# and is a directory, sbx appends the basename of the source to it; if it does
+# not exist, the destination BECOMES the copy.
+before=''
+landed=''
+if [ -n "$verify" ]; then
+    if [ -n "$to_mound" ]; then
+        before=$(list_host "${args[0]}")
+        # shellcheck disable=SC2016  # $1 is the sh of the mound, not this shell
+        if dr_mound_sh 'test -d "$1"' "$(mound_path "${args[1]}")"; then
+            landed=$(mound_path "${args[1]}")/$(basename "${args[0]}")
+        else
+            landed=$(mound_path "${args[1]}")
+        fi
+    else
+        before=$(list_mound_tree "$(mound_path "${args[0]}")")
+        if [ -d "${args[1]}" ]; then
+            landed=${args[1]}/$(basename "${args[0]}")
+        else
+            landed=${args[1]}
+        fi
+    fi
 fi
 
 dr_info "$src -> $dst"
@@ -133,8 +245,10 @@ dr_info "$src -> $dst"
 # times, because the path existed.
 dr_sbx cp ${follow[0]+"${follow[@]}"} "$src" "$dst" || dr_die \
     "copy failed" \
-    "\"a required privilege is not held\" means that the tree has a symlink, and" \
-    "Windows does not create it. Copy the target of the link:  dr-cp -L ..." \
+    "\"a required privilege is not held\" means the tree holds a symlink, which" \
+    "Windows will not create. PART of the tree is on your disk already, and which" \
+    "part is not predictable. -L does not help: on such a tree it answers 500." \
+    "Copy the target of the link instead of the link." \
     "\"not found in container\" means that the path in the mound is wrong. Look with:" \
     "  dr-shell -- ls -la"
 
@@ -151,5 +265,54 @@ if [ -n "$to_mound" ]; then
     dr_sbx exec -u root "$DRAUGR_SANDBOX" chown -R 1000:1000 "$target" 2>/dev/null \
         || dr_warn "copied, but could not chown $target to the agent (uid 1000)"
 fi
+
+# --- --verify: the same entries on both sides -------------------------------
+#
+# "sbx exited 0" is not "the copy is complete". Measured on 0.53.0: a copy INTO
+# the mound leaves a link out, keeps every other file, and exits 0. The only
+# trace is a line on stderr that this command does not read. So --verify
+# compares the two sides, and the comparison is Draugr's own - it does not
+# depend on the copy tool having said anything.
+#
+# IT IS A FLAG AND NOT THE DEFAULT. Two listings are two more conversations
+# with the mound, and the warnings above already name the one condition that
+# causes a silent drop. --verify is for the transfer that is worth the cost -
+# which is the review's own wording, and the shape of every other narrow
+# feature here: off unless asked for.
+#
+# BY NAME AND TYPE, NEVER BY SIZE OR CONTENT. `dr-cp out.log .` on a log the
+# agent is still writing is a documented use of this command, and its size
+# differs between the two listings by design. What a dropped entry changes is
+# the set of names.
+verify_copy() {
+    local after n_before n_after
+    if [ -n "$to_mound" ]; then
+        after=$(list_mound_tree "$landed")
+    else
+        after=$(list_host "$landed")
+    fi
+    n_before=$(printf '%s\n' "$before" | grep -c . || true)
+    if [ "$before" = "$after" ]; then
+        dr_ok "verified: $n_before entr(ies) on both sides"
+        return 0
+    fi
+
+    n_after=$(printf '%s\n' "$after" | grep -c . || true)
+    dr_error "what arrived is not what was there: $n_before entr(ies) on the source, $n_after at the destination"
+    # comm needs both sides sorted. A missing entry is the failure this exists
+    # for; an extra one means the destination already held something, or the
+    # source changed while the copy ran.
+    comm -23 <(printf '%s\n' "$before" | sort) <(printf '%s\n' "$after" | sort) \
+        | head -10 | sed 's/^/    missing  /' >&2
+    comm -13 <(printf '%s\n' "$before" | sort) <(printf '%s\n' "$after" | sort) \
+        | head -10 | sed 's/^/    extra    /' >&2
+    dr_die "the copy is incomplete" \
+        "A leading l is a link: sbx leaves those out of a copy into the mound and" \
+        "still exits 0. Copy the target of the link instead." \
+        "The entries that did arrive ARE at the destination. Nothing was removed." \
+        "A file that appeared or vanished while the copy ran also shows up here."
+}
+
+[ -z "$verify" ] || verify_copy
 
 dr_ok "copied"

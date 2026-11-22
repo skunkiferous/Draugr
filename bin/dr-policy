@@ -48,6 +48,9 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Only --allow changes anything. The rest read the rules of the mound, and a
+# command you run to see the rules must work in the state you are looking at.
+[ "$action" = allow ] || DR_CONFIG_REPORT_ONLY=1
 dr_context
 
 case "$action" in

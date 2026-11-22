@@ -252,12 +252,18 @@ list)
     ;;
 pack)
     rm -rf "$stage"; mkdir -p "$stage"
-    # No link enters the packed tree. `sbx cp` on 0.53 STOPS at the first link
-    # it meets, drops everything after it, and exits 0. A measured copy of a
-    # tree with one link in the middle arrived with the files before it and
-    # nothing after. Thus a link here does not become a link in the store. It
-    # becomes a store that is missing files, with a success message. The Codex
-    # module refuses links for its own reasons, and this is the second one.
+    # No link enters the packed tree. Measured on sbx 0.53.0, copying OUT of a
+    # mound: extraction fails at the link with "a required privilege is not
+    # held by the client" and status 1, after writing a part of the tree that
+    # is not predictable - one fixture arrived with all four of its regular
+    # files, one with a single file out of four, one with nothing. So a link
+    # here does not become a link in the store; it becomes a failed export, or
+    # with an older sbx a store that is missing files. The Codex module refuses
+    # links for its own reasons, and this is the second one.
+    #
+    # This check runs in the MOUND, with the mound's own find. It is the first
+    # of two, and the one that an agent could replace; bin/dr-mem asks the same
+    # question again on the host, about the tree that actually arrived.
     if [ -d "$mem" ] && [ -n "$(find "$mem" -type l 2>/dev/null | head -1)" ]; then
         printf 'the memory holds a link, and a copy stops there\n' >&2
         exit 4

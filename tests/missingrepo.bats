@@ -177,10 +177,31 @@ make_plain_dir() {
 @test "data-only: an existing .draugr.conf is left alone" {
     make_plain_dir || skip "no writable Windows drive path"
     printf 'DRAUGR_DATA="only/this/"\n' > "$DIR/.draugr.conf"
+    # Trusted first, because DRAUGR_DATA decides what leaves this host and
+    # dr-init will not create a repository from a file it could not read. The
+    # test below is the other half of that.
+    dr_load_common
+    dr_trust_add "$DIR/.draugr.conf"
     DRAUGR_ON_MISSING_REPO=create-data-only dr-init >/dev/null 2>&1
 
     grep -q 'only/this/' "$DIR/.draugr.conf"
     ! grep -q 'DRAUGR_DATA="\*"' "$DIR/.draugr.conf"
+}
+
+@test "data-only: an UNTRUSTED .draugr.conf stops dr-init before it creates anything" {
+    # The file names DRAUGR_DATA, which decides what leaves this host, and
+    # Draugr did not read it. Creating a repository and a data pattern from
+    # values nobody established is D4's case, so it stops - and it stops
+    # BEFORE dr_repo_create, so there is nothing half-made to clean up.
+    make_plain_dir || skip "no writable Windows drive path"
+    printf 'DRAUGR_DATA="only/this/"\n' > "$DIR/.draugr.conf"
+
+    DRAUGR_ON_MISSING_REPO=create-data-only run dr-init
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing to act"* ]]
+    [[ "$output" == *"DRAUGR_DATA"* ]]
+    [ ! -d "$DIR/.git" ]
+    grep -q 'only/this/' "$DIR/.draugr.conf"
 }
 
 # --- create-add-all -----------------------------------------------------------

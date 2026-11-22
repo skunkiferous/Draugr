@@ -965,6 +965,42 @@ release_transcript() {
     [ "$status" -ne 0 ]
 }
 
+@test "dr-mem export: an entry the mound never declared is refused on the host" {
+    # The mound-side refusal above runs with the mound's own find, on a
+    # filesystem the agent can write, so it is advisory. This is the same
+    # question asked by the side that keeps the answer.
+    #
+    # A symlink, because that is the entry a hash list cannot see: list_local
+    # reads `-type f`, so the link is absent from BOTH sides of the
+    # completeness comparison and would travel into the store uncounted.
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'real\n' > "$MEMDIR/a.md"
+    printf 'also\n' > "$MEMDIR/b.md"
+
+    DR_MOCK_CP_PLANT=extra.md run dr-mem export
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not a plain tree of files"* ]]
+    local store; store=$(dr_mem_store_dir "$REPO")
+    [ ! -e "$store/memory" ]
+    [ ! -e "$store/memory.incoming" ]
+}
+
+@test "dr-mem export: a clean copy out is not refused by that check" {
+    # The other half: a guard that refuses a normal export protects nothing.
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'real\n' > "$MEMDIR/a.md"
+    mkdir -p "$MEMDIR/sub"
+    printf 'deep\n' > "$MEMDIR/sub/c.md"
+
+    run dr-mem export
+    [ "$status" -eq 0 ]
+    local store; store=$(dr_mem_store_dir "$REPO")
+    [ -f "$store/memory/a.md" ]
+    [ -f "$store/memory/sub/c.md" ]
+}
+
 @test "dr-mem export: an incomplete copy out leaves the store as it was" {
     setup_mound || skip "no writable Windows drive path"
     mkdir -p "$MEMDIR"

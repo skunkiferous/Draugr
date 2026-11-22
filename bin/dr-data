@@ -15,6 +15,11 @@
 # `dr-data diff` shows what a pull writes. Each pull names the files that come,
 # and marks each file that looks like something you run.
 #
+# A pull lands in a host-owned staging directory first, outside the repository,
+# and the review reads THAT tree before anything is published. A dry run would
+# describe a mound that keeps working afterwards; the staged tree is the files
+# themselves. See the `pull` branch at the end of this file.
+#
 #   dr-data status   dry run, BOTH directions: what moves, and how much
 #   dr-data diff     what a pull CHANGES, as a real diff where possible
 #   dr-data push     host -> mound  (the host wins)
@@ -88,8 +93,25 @@ local_dir="$DR_REPO/"
 # Measured with rsync 3.2.7: a skipped symlink prints `skipping non-regular
 # file "x"` and the run still exits 0. The exit code does NOT report it, which
 # is why incoming_names below reads that line instead of trusting the status.
-common=(-a --no-links --no-devices --no-specials
-        -m --chmod="$DRAUGR_DATA_CHMOD" "${filters[@]}")
+common=(-a --no-links --no-devices --no-specials -m "${filters[@]}")
+
+# --chmod belongs to ONE direction, and it used to be in `common`, where it was
+# in both.
+#
+# A push writes into the mound, which is ext4: there a mode is a mode, and
+# without --chmod the 0777 that all of /mnt/c reports goes in with the file.
+#
+# A pull writes onto a Windows drive, where DrvFs reports every file as 0777
+# whatever --chmod says. That measurement is already why dr_data_exec_shaped
+# judges the name and not the mode. So on a pull --chmod changes nothing on
+# disk - but it does change what rsync BELIEVES the destination should be, and
+# --link-dest links only a file that matches in full, permissions included.
+# Measured here, ext4 sender to a /mnt/c destination with the repo as the
+# reference, 128 MB unchanged: 5.9 s with --chmod, 65 ms without it and with
+# --no-perms. The staged pull below needs that link, so the pull legs state
+# both.
+tomound=(--chmod="$DRAUGR_DATA_CHMOD")
+tohost=(--no-perms)
 
 # The summary of rsync is more correct than a number that Draugr calculates. It
 # tells what moved on the wire. That number shows that the delta algorithm works
@@ -140,9 +162,15 @@ human() {
     fi
 }
 
-# The names that a pull writes, relative to the repo, one on each line, without
-# directories. Only a dry run gives the correct list. It uses the same filter
-# rules and delta algorithm as the real transfer, so the two cannot differ.
+# A FORECAST of the names that a pull writes, relative to the repo, one on each
+# line, without directories. It uses the same filter rules and delta algorithm
+# as a real transfer, so it is the best answer available without transferring
+# anything - and `status` and `diff` transfer nothing, which is their point.
+#
+# `pull` does NOT use this. A forecast describes the mound at the moment it was
+# asked, and the mound keeps running; classify_staged below reads the files
+# that actually arrived. Reading a name out of rsync's report is also reading
+# an encoding of it, which the comment there measures.
 #
 # THREE THINGS THIS FUNCTION USED TO GET WRONG, and they are one mistake: it
 # believed output that it had not checked.
@@ -165,7 +193,7 @@ human() {
 # those are for the user to read, not for this function to parse.
 incoming_names() {
     local out chatter
-    out=$(rsync "${common[@]}" --dry-run --out-format='>>%n' \
+    out=$(rsync "${common[@]}" "${tohost[@]}" --dry-run --out-format='>>%n' \
             "$remote" "$local_dir") || return 1
 
     # Anything that is not a formatted name. The status of the pipe is not
@@ -213,20 +241,67 @@ list_incoming() {
 # print, because each caller wants a different group. diff fetches the safe
 # names, and pull stops on the executable ones. All callers report the refused
 # ones.
-DR_IN_SAFE=(); DR_IN_EXEC=(); DR_IN_UNSAFE=()
+DR_IN_SAFE=(); DR_IN_EXEC=(); DR_IN_UNSAFE=(); DR_IN_ODD=()
+
+# The verdict on one name. Both classifiers below call this one, so the order
+# of the two questions cannot drift between the forecast that `status` prints
+# and the decision that `pull` makes.
+_classify_one() {
+    local f=$1
+    # Refuse it, and do not sort it more. Draugr does not write this name,
+    # so it does not read its size either.
+    if ! dr_data_path_safe "$f"; then
+        DR_IN_UNSAFE+=("$f")
+        return 0
+    fi
+    DR_IN_SAFE+=("$f")
+    if dr_data_exec_shaped "$f"; then DR_IN_EXEC+=("$f"); fi
+}
+
+# The three groups, from a list of names. `status` and `diff` use this, and
+# DR_IN_ODD stays empty here: a name on its own says nothing about the type of
+# the thing it names.
 classify_incoming() {
     local f
-    DR_IN_SAFE=(); DR_IN_EXEC=(); DR_IN_UNSAFE=()
-    for f in "$@"; do
-        # Refuse it, and do not sort it more. Draugr does not write this name,
-        # so it does not read its size either.
-        if ! dr_data_path_safe "$f"; then
-            DR_IN_UNSAFE+=("$f")
-            continue
+    DR_IN_SAFE=(); DR_IN_EXEC=(); DR_IN_UNSAFE=(); DR_IN_ODD=()
+    for f in "$@"; do _classify_one "$f"; done
+    return 0
+}
+
+# The same three groups, read from a staged tree on this disk instead of from
+# rsync's report of one. `pull` uses this and nothing else.
+#
+# WHY THE NAMES COME FROM THE FILESYSTEM. `%n` is rsync's presentation output,
+# and a name is not always what it prints as. Measured with rsync 3.2.7: a
+# newline in a name arrives as the four characters `\#012`, a `\001` as
+# `\#001`, and a backslash is itself escaped to `\#134` when the result would
+# otherwise be ambiguous - so a review of that text reviews an encoding, and
+# `--files-from` fed that text back finds no such file (status 23, measured).
+# A raw tab, by contrast, is passed through unescaped. Here the names come
+# from find -print0, where the only separator is the one byte a name cannot
+# contain, so each name arrives exactly as it is on disk.
+#
+# WHY THE TYPE COMES FROM A TEST AND NOT FROM A SENTENCE. The three --no-
+# flags should stop a symlink, a device and a socket at the sender, and a
+# skipped one is announced in prose on stdout with a zero exit status. This
+# asks the file instead. -L comes first, because -d and -f follow a link.
+classify_staged() {
+    local e path
+    DR_IN_SAFE=(); DR_IN_EXEC=(); DR_IN_UNSAFE=(); DR_IN_ODD=()
+    while IFS= read -r -d '' e; do
+        path=${e#"$DR_STAGE/"}
+        if [ -L "$e" ] || { [ ! -d "$e" ] && [ ! -f "$e" ]; }; then
+            DR_IN_ODD+=("$path")
+        elif [ -d "$e" ]; then
+            # A directory lands no bytes, and the name of one that holds a
+            # file is already judged as a component of that file's path. An
+            # EMPTY one is the case this line exists for: -m should prune it,
+            # and a guarantee does not rest on an rsync flag.
+            dr_data_path_safe "$path" || DR_IN_UNSAFE+=("$path")
+        else
+            _classify_one "$path"
         fi
-        DR_IN_SAFE+=("$f")
-        if dr_data_exec_shaped "$f"; then DR_IN_EXEC+=("$f"); fi
-    done
+    done < <(find "$DR_STAGE" -mindepth 1 -print0)
     return 0
 }
 
@@ -248,6 +323,20 @@ report_incoming() {
         printf '  %sthere, and .git/config decides what git runs. Draugr does%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         printf '  %snot write them. Look at the mound before you trust the other files.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        rc=1
+    fi
+
+    # Only a staged pull can report this, because only a staged pull has the
+    # entry on a disk to test. A symlink is the one that matters: it is a name
+    # that points somewhere, and the next host command that writes through it
+    # writes there. --no-links should mean there is never one to report.
+    if [ ${#DR_IN_ODD[@]} -gt 0 ]; then
+        dr_error "${#DR_IN_ODD[@]} incoming entr(ies) are NOT regular files:"
+        for f in "${DR_IN_ODD[@]}"; do printf '    %q\n' "$f" >&2; done
+        printf '  %sDraugr transfers bytes. A symlink, a device or a socket arrived%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sanyway, which means --no-links did not hold. Nothing is published.%s\n' \
             "$_DR_DIM" "$_DR_OFF" >&2
         rc=1
     fi
@@ -274,9 +363,9 @@ case "$action" in
 # direction.
 status)
     dr_heading "host -> mound (what dr-data push transfers)"
-    run_rsync "dry run" "$local_dir" "$remote" --dry-run --stats
+    run_rsync "dry run" "$local_dir" "$remote" --dry-run --stats "${tomound[@]}"
     dr_heading "mound -> host (what dr-data pull transfers)"
-    run_rsync "dry run" "$remote" "$local_dir" --dry-run --stats
+    run_rsync "dry run" "$remote" "$local_dir" --dry-run --stats "${tohost[@]}"
 
     # Only the inbound direction gets a review. What you send to the agent is
     # already yours. What it sends back is the half that you did not read.
@@ -284,6 +373,15 @@ status)
     if [ ${#names[@]} -gt 0 ]; then
         classify_incoming "${names[@]}"
         report_incoming || true
+
+        # Say what this list is. It comes from a dry run, so it describes the
+        # mound as it was a moment ago, and the mound keeps working. `pull`
+        # does not decide from a list like this one - it decides from the files
+        # it received. The two can differ, and only the second one is a gate.
+        printf '  %sA forecast, from a dry run. dr-data pull decides on the files it%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
+        printf '  %sactually receives, which is not always this list.%s\n' \
+            "$_DR_DIM" "$_DR_OFF" >&2
     fi
     ;;
 
@@ -372,44 +470,101 @@ push|pull)
         del=(--delete)
     fi
 
-    # The review of a pull is here, or nowhere. The report also prints with
-    # --yes, which dr-go gives for an automatic pull. The record of what arrived
-    # is important, not only the chance to say no.
-    if [ "$action" = pull ]; then
-        list_incoming
-        if [ ${#names[@]} -gt 0 ]; then
-            classify_incoming "${names[@]}"
-
-            # An unsafe path stops the whole transfer, with no question. rsync
-            # probably makes it safe. But if a mound gives "../..", do not take
-            # the other files from it after a yes or no answer.
-            if [ ${#DR_IN_UNSAFE[@]} -gt 0 ]; then
-                report_incoming || true
-                dr_die "refusing to pull" \
-                    "The mound gave a path that Draugr does not write to your host." \
-                    "Look at the mound before you continue:  dr-shell"
-            fi
-
-            # Content that looks executable gets a question, not a refusal.
-            # Otherwise a project with scripts in its data cannot pull at all.
-            # People turn off a guard that they cannot satisfy.
-            if ! report_incoming; then
-                dr_confirm "Pull them anyway?" || dr_die "cancelled" \
-                    "Read them before you decide:  dr-data diff"
-            fi
-        fi
-    fi
-
-    # The same rsync for both directions. Only the order of the arguments
-    # differs. The message names the direction. The wrong direction overwrites
-    # the side that you wanted to keep.
+    # A push needs no review. What you send to the agent is already yours.
     if [ "$action" = push ]; then
         run_rsync "pushing $DRAUGR_DATA -> $DRAUGR_SANDBOX" \
-            "$local_dir" "$remote" --stats "${del[@]+"${del[@]}"}"
-    else
-        run_rsync "pulling $DRAUGR_DATA <- $DRAUGR_SANDBOX" \
-            "$remote" "$local_dir" --stats "${del[@]+"${del[@]}"}"
+            "$local_dir" "$remote" --stats "${tomound[@]}" "${del[@]+"${del[@]}"}"
+        dr_ok "push complete"
+        exit 0
     fi
-    dr_ok "$action complete"
+
+    # --- a pull lands in staging first, and is reviewed from there -----------
+    #
+    # A PULL USED TO BE TWO CONVERSATIONS WITH THE SENDER. One dry run decided
+    # what to refuse and what to ask about, and a second, separate rsync did
+    # the transfer. Between them the mound keeps running, so the list that was
+    # judged and the files that landed were never the same observation. That is
+    # U01, and it is not academic: dr_data_path_safe is the ONLY thing that
+    # stops a name like `.git.`, which a Windows drive resolves to `.git` and
+    # which the filter rules - exact patterns - do not match. A sender that
+    # shows a tidy tree to the dry run and writes that name afterwards got it
+    # past the one check that would have refused it.
+    #
+    # So the transfer happens FIRST, into a host-owned directory outside the
+    # repository, and the review reads that tree. One conversation with the
+    # sender, and the thing that was judged is the thing that is published.
+    #
+    # IT COSTS ALMOST NOTHING, measured on this host rather than assumed, with
+    # an ext4 sender and a /mnt/c repository:
+    #
+    #   --link-dest=repo on the way in    an unchanged file becomes a hard
+    #                                     link, not a copy: 128 MB in 65 ms
+    #   --link-dest=stage on the way out  a published file is a hard link to
+    #                                     the staged one: 128 MB in 70 ms
+    #
+    # 128 MB of changed data: 1130 ms staged against 1104 ms straight into the
+    # repository. Removing the staging tree afterwards leaves the published
+    # file whole - a hard link is the file, not a reference to it.
+    #
+    # Both links need the staging root and the repository on ONE volume, which
+    # %LOCALAPPDATA% and a checkout on C: normally are. On two, rsync copies
+    # instead of linking: slower, and the same result.
+    dr_stage
+    trap 'rm -rf "$DR_STAGE"' EXIT
+
+    run_rsync "pulling $DRAUGR_DATA <- $DRAUGR_SANDBOX" \
+        "$remote" "$DR_STAGE/" --stats "${tohost[@]}" --link-dest="$local_dir"
+
+    classify_staged
+
+    # Nothing arrived. With deletions confirmed that is still an instruction -
+    # the mound removed its data and this run is told to follow - so the
+    # publication below has to run. Without them there is nothing left to do.
+    if [ ${#DR_IN_SAFE[@]} -eq 0 ] && [ ${#DR_IN_UNSAFE[@]} -eq 0 ] \
+       && [ ${#DR_IN_ODD[@]} -eq 0 ] && [ ${#del[@]} -eq 0 ]; then
+        dr_ok "nothing to pull. The data of the mound is the same as yours."
+        exit 0
+    fi
+
+    # An unsafe path stops the whole pull, with no question. If a mound sends
+    # `../..`, do not take the other files from it after a yes or no answer.
+    # Nothing is in the repository yet, so the refusal costs the bytes and
+    # nothing else.
+    if [ ${#DR_IN_UNSAFE[@]} -gt 0 ] || [ ${#DR_IN_ODD[@]} -gt 0 ]; then
+        report_incoming || true
+        dr_die "refusing to pull" \
+            "The mound sent something that Draugr does not write to your host." \
+            "NOTHING WAS PUBLISHED. The files are in the staging directory," \
+            "which this command removes as it exits." \
+            "Look at the mound before you continue:  dr-shell"
+    fi
+
+    # Content that looks executable gets a question, not a refusal. Otherwise
+    # a project with scripts in its data cannot pull at all. People turn off a
+    # guard that they cannot satisfy.
+    #
+    # The report also prints with --yes, which dr-go gives for an automatic
+    # pull. The record of what arrived is important, not only the chance to
+    # say no.
+    if ! report_incoming; then
+        dr_confirm "Pull them anyway?" || dr_die "cancelled" \
+            "Read them before you decide:  dr-data diff"
+    fi
+
+    # Publication. The filters come with `common`, and they are what makes
+    # --delete safe here: without them it would mean "remove everything in the
+    # repository that is not data", which is the whole source tree. Measured:
+    # a data file absent from the staged tree is deleted, a source file absent
+    # from it is kept.
+    #
+    # --link-dest is the staging tree itself, which reads oddly and is exactly
+    # right: for every file rsync has to write, the reference holds a perfect
+    # match, so it links instead of copying. The repository and the staging
+    # tree then share one inode until the trap above removes the staging name.
+    run_rsync "publishing into $DR_REPO" \
+        "$DR_STAGE/" "$local_dir" "${tohost[@]}" --link-dest="$DR_STAGE/" \
+        "${del[@]+"${del[@]}"}"
+
+    dr_ok "pull complete"
     ;;
 esac

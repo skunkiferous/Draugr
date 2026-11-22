@@ -549,27 +549,64 @@ need_win_stage() {
 # therefore produced an empty list, every caller read it as "this pull lands
 # nothing", and the real transfer ran unreviewed. That is finding F07.
 #
-# A stand-in rsync, because these tests are about what dr-data does with an
-# ANSWER, not about copying. It cannot live in tests/mocks: the filter tests
-# above need the real one, and tests/mocks comes first on PATH for every test.
+# A stand-in rsync, because the mound is the one half of a transfer that no
+# test can reach. It cannot live in tests/mocks: the filter tests above need
+# the real one, and tests/mocks comes first on PATH for every test.
+#
+# IT STANDS IN FOR ONE LEG ONLY. A staged pull has two: mound -> staging,
+# which is the unreachable one, and staging -> repository, which is an
+# ordinary local copy. Faking the second would mean faking the filters,
+# --delete and --link-dest, and those are the part of publication worth
+# testing. So a path with a colon in it is the mound, and every other call is
+# handed to the real rsync.
 fake_rsync() {
     mkdir -p "$DR_TMP/fakebin"
     export DR_FAKE_RSYNC_LOG="$DR_TMP/rsync-real.log"
     export DR_FAKE_RSYNC_MODE=$1
+    export DR_FAKE_MOUND="$DR_TMP/fakemound"
+    # Resolved BEFORE the stand-in goes on PATH, or it would find itself.
+    DR_REAL_RSYNC=$(command -v rsync) || return 1
+    export DR_REAL_RSYNC
+    mkdir -p "$DR_FAKE_MOUND"
     : > "$DR_FAKE_RSYNC_LOG"
     cat > "$DR_TMP/fakebin/rsync" <<'SH'
 #!/usr/bin/env bash
-# The dry run answers the way a measured rsync answers. Every other call is
-# the REAL transfer, and it only writes down that it was asked - so a test can
-# prove that a refusal happened BEFORE any bytes moved.
+# The dry run answers the way a measured rsync answers. A real call from the
+# mound hands over whatever $DR_FAKE_MOUND holds, which is how a test decides
+# what "arrived" - names, types and all.
+#
+# Every call it serves is written down, so a test can prove that a refusal
+# happened BEFORE anything was published:
+#   REAL   a transfer from the mound
+#   LOCAL  a leg handed to the real rsync (publication)
+# A dry run is not logged, so an empty log still means "nothing moved".
 #
 # It renders --out-format itself, exactly as rsync does. So a name arrives
 # with whatever marker the caller asked for, and a caller that asks for none
 # gets none. Without that, a test could not tell the two apart.
+set -u
 fmt='%n'
+pos=()
 for a in "$@"; do
-    case "$a" in --out-format=*) fmt=${a#--out-format=} ;; esac
+    case "$a" in
+        --out-format=*) fmt=${a#--out-format=} ;;
+        -*) ;;
+        *)  pos+=("$a") ;;
+    esac
 done
+# The last two words that are not options are the source and the destination.
+src=''; dst=''
+if [ "${#pos[@]}" -ge 2 ]; then
+    src=${pos[${#pos[@]}-2]}
+    dst=${pos[${#pos[@]}-1]}
+fi
+
+case "$src$dst" in
+    *:*) ;;
+    *)  printf 'LOCAL %s\n' "$*" >> "$DR_FAKE_RSYNC_LOG"
+        exec "$DR_REAL_RSYNC" "$@" ;;
+esac
+
 case " $* " in
     *" --dry-run "*)
         case "$DR_FAKE_RSYNC_MODE" in
@@ -582,13 +619,25 @@ case " $* " in
                 printf 'skipping non-regular file "payload"\n'
                 exit 0 ;;
             *)
-                printf '%s\n' "${fmt//%n/report.csv}"
+                for n in ${DR_FAKE_FORECAST:-report.csv}; do
+                    printf '%s\n' "${fmt//%n/$n}"
+                done
                 exit 0 ;;
         esac ;;
-    *)
-        printf 'REAL %s\n' "$*" >> "$DR_FAKE_RSYNC_LOG"
-        exit 0 ;;
 esac
+
+printf 'REAL %s\n' "$*" >> "$DR_FAKE_RSYNC_LOG"
+case "$DR_FAKE_RSYNC_MODE" in
+    fail)
+        printf 'rsync: connection unexpectedly closed\n' >&2
+        exit 12 ;;
+esac
+# -a, so a symlink in the fixture arrives as a symlink. That is the point of
+# one of the tests below.
+if [ -n "$(ls -A "$DR_FAKE_MOUND" 2>/dev/null)" ]; then
+    cp -a "$DR_FAKE_MOUND/." "$dst" || exit 11
+fi
+exit 0
 SH
     chmod +x "$DR_TMP/fakebin/rsync"
     export PATH="$DR_TMP/fakebin:$PATH"
@@ -599,36 +648,236 @@ setup_pull() {
     cd "$REPO" || return 1
     export DR_MOCK_STATE=running
     export DRAUGR_DATA="*"
+    # Not the real %LOCALAPPDATA%: a refused pull leaves its staged files for
+    # the trap to remove, and some of the names below are ones nobody wants
+    # left in their profile if a test dies between the two.
+    export DRAUGR_STAGE_ROOT="$(dirname "$REPO")/pull-stage"
     return 0
 }
 
-@test "dr-data pull: a failed preview stops the pull" {
+@test "dr-data diff: a failed preview stops the review" {
     setup_pull || skip "no writable Windows drive path"
     fake_rsync fail
-    run dr-data pull -y
+    run dr-data diff
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not preview"* ]]
     # The whole finding in one assertion: no bytes moved on an empty review.
     [ ! -s "$DR_FAKE_RSYNC_LOG" ]
 }
 
-@test "dr-data pull: a line that is not a file name stops the pull" {
+@test "dr-data diff: a line that is not a file name stops the review" {
     setup_pull || skip "no writable Windows drive path"
     fake_rsync chatter
-    run dr-data pull -y
+    run dr-data diff
     [ "$status" -ne 0 ]
     [[ "$output" == *"cannot tell what a pull would land"* ]]
     [ ! -s "$DR_FAKE_RSYNC_LOG" ]
 }
 
-@test "dr-data pull: a clean preview still transfers" {
+@test "dr-data pull: a failed transfer publishes nothing" {
+    # F07's shape, in the place a staged pull keeps it: the transfer IS the
+    # review here, so a failed one cannot become an empty review that passes.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync fail
+    run dr-data pull -y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"rsync failed"* ]]
+    grep -q '^REAL' "$DR_FAKE_RSYNC_LOG"
+    ! grep -q '^LOCAL' "$DR_FAKE_RSYNC_LOG" || return 1
+}
+
+@test "dr-data pull: the files that arrived are published" {
     # The other half. A review that refuses everything protects nothing,
     # because nobody keeps using it.
     setup_pull || skip "no writable Windows drive path"
     fake_rsync names
+    mkdir -p "$DR_FAKE_MOUND/sub"
+    printf 'a,b\n1,2\n' > "$DR_FAKE_MOUND/report.csv"
+    printf 'notes\n' > "$DR_FAKE_MOUND/sub/notes.txt"
     run dr-data pull -y
     [ "$status" -eq 0 ]
-    grep -q '^REAL' "$DR_FAKE_RSYNC_LOG"
+    [[ "$output" == *"pull complete"* ]]
+    # The bytes, not just the names: publication is a second leg now, and a
+    # leg that creates empty files would pass a name check.
+    [ "$(cat "$REPO/report.csv")" = "$(cat "$DR_FAKE_MOUND/report.csv")" ]
+    [ -f "$REPO/sub/notes.txt" ]
+    # And the staging directory is gone, whatever happened.
+    [ -z "$(find "$DRAUGR_STAGE_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)" ]
+}
+
+@test "dr-data pull: the review judges what arrived, not what was forecast" {
+    # THIS IS U01. The forecast is clean and the tree that arrives is not, and
+    # a pull that reviewed the forecast would publish the difference.
+    #
+    # `.git.` is the name that makes it matter. The four metadata excludes are
+    # exact patterns and do not match it, so it crosses; a Windows drive
+    # resolves it to `.git`; and `.git/config` decides what git runs. The only
+    # thing in Draugr that refuses that name is dr_data_path_safe, which used
+    # to be applied to a dry run's output and is now applied to the files.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    printf 'a,b\n' > "$DR_FAKE_MOUND/report.csv"
+    printf '[core]\n' > "$DR_FAKE_MOUND/.git." || skip "no trailing-dot names here"
+    run dr-data pull -y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing to pull"* ]]
+    [[ "$output" == *"NOTHING WAS PUBLISHED"* ]]
+    [[ "$output" == *".git."* ]]
+    # One refused name stops the whole pull, so the file beside it is not
+    # published either.
+    [ ! -e "$REPO/report.csv" ]
+    [ ! -e "$REPO/.git." ]
+    ! grep -q '^LOCAL' "$DR_FAKE_RSYNC_LOG" || return 1
+}
+
+@test "dr-data pull: a runnable file that arrived is named, although the forecast was clean" {
+    # The softer half of the same finding: this one asks rather than refuses,
+    # and the question has to be about the file that came.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    printf 'a,b\n' > "$DR_FAKE_MOUND/report.csv"
+    printf 'Write-Host hi\n' > "$DR_FAKE_MOUND/payload.PS1"
+    run dr-data pull -y
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"look RUNNABLE"* ]]
+    [[ "$output" == *"payload.PS1"* ]]
+    # --yes answers the question, so it is published - with the warning on the
+    # record, which is the point of printing it even then.
+    [ -f "$REPO/payload.PS1" ]
+}
+
+@test "dr-data pull: a non-regular file that arrived is refused by type" {
+    # --no-links should mean there is never one of these to find. This test
+    # asks the entry on disk instead of trusting that, and instead of reading
+    # the sentence rsync prints on stdout with a zero exit status.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    printf 'a,b\n' > "$DR_FAKE_MOUND/report.csv"
+    ln -s /etc/hostname "$DR_FAKE_MOUND/link.txt" || skip "no symlinks here"
+    run dr-data pull -y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"NOT regular files"* ]]
+    [[ "$output" == *"link.txt"* ]]
+    [ ! -e "$REPO/report.csv" ]
+    ! grep -q '^LOCAL' "$DR_FAKE_RSYNC_LOG" || return 1
+}
+
+@test "dr-data pull: deletions are taken from the staged tree, and only for data" {
+    # --delete moved to the publication leg, where the filters come with it.
+    # Without them it would mean "remove everything that is not data", and
+    # everything that is not data is the source tree.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    export DRAUGR_DATA="*.csv"
+    printf 'new\n' > "$DR_FAKE_MOUND/report.csv"
+    printf 'old\n' > "$REPO/gone.csv"
+    printf 'int main(void){return 0;}\n' > "$REPO/main.c"
+    run dr-data pull -y --delete
+    [ "$status" -eq 0 ]
+    [ -f "$REPO/report.csv" ]
+    [ ! -e "$REPO/gone.csv" ]
+    [ -f "$REPO/main.c" ]
+    [ -f "$REPO/README.md" ]
+}
+
+@test "dr-data pull: an empty staged tree still propagates confirmed deletions" {
+    # "Nothing arrived" is not always "nothing to do". A mound that deleted
+    # its data sends an empty tree, and a run that was told to propagate
+    # deletions has been given an instruction by that emptiness.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    export DRAUGR_DATA="*.csv"
+    printf 'old\n' > "$REPO/gone.csv"
+    run dr-data pull -y --delete
+    [ "$status" -eq 0 ]
+    [ ! -e "$REPO/gone.csv" ]
+    [ -f "$REPO/README.md" ]
+    grep -q '^LOCAL' "$DR_FAKE_RSYNC_LOG"
+}
+
+@test "dr-data pull: an empty staged tree with no --delete does nothing at all" {
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    run dr-data pull -y
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to pull"* ]]
+    ! grep -q '^LOCAL' "$DR_FAKE_RSYNC_LOG" || return 1
+}
+
+@test "dr-data pull: both legs link instead of copying" {
+    # What makes a staged pull cost the same as a direct one. Measured on this
+    # host, ext4 sender to a /mnt/c repository: 128 MB unchanged takes 65 ms
+    # with these flags and 5.9 s without them, because --link-dest links only
+    # a file that matches in full, permissions included - and /mnt/c reports
+    # every file as 0777 whatever --chmod asked for.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    printf 'a,b\n' > "$DR_FAKE_MOUND/report.csv"
+    run dr-data pull -y
+    [ "$status" -eq 0 ]
+    grep -q "^REAL .*--no-perms" "$DR_FAKE_RSYNC_LOG"
+    grep -q "^REAL .*--link-dest=$REPO/" "$DR_FAKE_RSYNC_LOG"
+    grep -q "^LOCAL .*--no-perms" "$DR_FAKE_RSYNC_LOG"
+    grep -q "^LOCAL .*--link-dest=" "$DR_FAKE_RSYNC_LOG"
+    # And --chmod is NOT on either of them: it is what defeats the link, and
+    # on a Windows drive it changes nothing anyway.
+    ! grep -q "^REAL .*--chmod" "$DR_FAKE_RSYNC_LOG" || return 1
+    ! grep -q "^LOCAL .*--chmod" "$DR_FAKE_RSYNC_LOG" || return 1
+}
+
+@test "dr-data push: --chmod still goes to the mound" {
+    # The other side of the same split. The mound is ext4, where a mode is a
+    # mode, and without --chmod the 0777 that all of /mnt/c reports goes in
+    # with the file.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    printf 'a,b\n' > "$REPO/report.csv"
+    run dr-data push -y
+    [ "$status" -eq 0 ]
+    grep -q "^REAL .*--chmod=" "$DR_FAKE_RSYNC_LOG"
+    ! grep -q "^REAL .*--no-perms" "$DR_FAKE_RSYNC_LOG" || return 1
+}
+
+@test "dr-data status: the list it prints is labelled a forecast" {
+    # It comes from a dry run, and the mound keeps working afterwards. Saying
+    # so is the difference between a forecast and a promise.
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    run dr-data status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"A forecast"* ]]
+    [[ "$output" == *"dr-data pull decides on the files it"* ]]
+}
+
+@test "rsync reports a control character as an escape, and Draugr refuses that text" {
+    # Why `pull` reads the staged tree and not rsync's report of it. Measured
+    # with rsync 3.2.7 here, so a later rsync that changes its mind fails this
+    # test instead of quietly changing what a review means.
+    dr_load_common
+    local d="$DR_TMP/esc" out
+    mkdir -p "$d/src" "$d/dst"
+    printf 'x\n' > "$d/src/$(printf 'nl\nline.txt')" || skip "no newline names here"
+    printf 'y\n' > "$d/src/$(printf 'tab\tgap.txt')" || skip "no tab names here"
+    printf 'z\n' > "$d/src/plain.txt"
+
+    # The real rsync: this test never calls fake_rsync, and tests/mocks has no
+    # rsync in it, because the filter tests above need the real one too.
+    out=$(rsync -a --dry-run --out-format='>>%n' "$d/src/" "$d/dst/")
+
+    # Three names, three lines - although one of the names contains the very
+    # byte that separates them.
+    [ "$(printf '%s\n' "$out" | grep -c '^>>')" -eq 3 ]
+    # The newline became four printable characters.
+    [[ "$out" == *'nl\#012line.txt'* ]]
+    # The tab did NOT: it is passed through as itself.
+    [[ "$out" == *"$(printf 'tab\tgap.txt')"* ]]
+
+    # So the text that a review of that output would judge is refused - by the
+    # backslash rule, because there is no control character left in it to
+    # catch. Both rules are load-bearing, and for different names.
+    ! dr_data_path_safe 'nl\#012line.txt' || return 1
+    ! dr_data_path_safe "$(printf 'tab\tgap.txt')" || return 1
+    dr_data_path_safe 'nl line.txt'
 }
 
 @test "dr-data: a symlink cannot cross in either direction" {

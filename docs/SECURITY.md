@@ -262,17 +262,86 @@ switch off.
 --no-devices --no-specials`, so a symlink in either direction is skipped rather than recreated. A
 symlink is how two findings chained: a sender ships `.draugr/tmp` as a link to anywhere, and the
 next host command that writes through it writes there. rsync still exits 0 when it skips one
-(measured), so the preview reads the skip from rsync's output instead of trusting the status, and
-refuses the pull rather than reporting an incomplete list.
+(measured), so `dr-data status` and `diff` read the skip from rsync's output instead of trusting
+the status, and refuse rather than reporting an incomplete list. A `pull` does not have to read a
+sentence at all: it tests the entry on disk.
 
-**An empty review is not "nothing to pull".** The preview that `dr-data status`, `diff` and `pull`
-all use was `rsync … 2>/dev/null | grep -v '/$' || true`: the status of *grep*, with even that
-discarded. An unreachable mound or a missing rsync inside it produced an empty list, every caller
-read it as "this pull lands nothing", and the transfer then ran unreviewed. A failed preview is now
-fatal, and so is any line that is not a file name.
+**A pull is reviewed from the files it received, not from a forecast of them.** A pull used to be
+two separate conversations with the sender: one `rsync --dry-run` decided what to refuse and what
+to ask about, and a second rsync did the transfer. The mound keeps running between them, so the
+list that was judged and the files that landed were never the same observation. That matters
+because `dr_data_path_safe` is the only thing that refuses a name like `.git.` — the filter rules
+are exact patterns and do not match it, and a Windows drive resolves it to `.git`, whose `config`
+decides what git runs. A sender that showed a tidy tree to the dry run and wrote that name
+afterwards got it past the one check that would have refused it.
 
-**Staging happens outside your checkout.** `dr-data diff` and `dr-mem export` stage files through a
-directory on a Windows drive, because `sbx cp` can reach nothing else. That used to be
+So the transfer happens **first**, into the staging directory below, and the review reads that
+tree: names from `find -print0`, types from a test on each entry. One conversation with the sender,
+and the thing that was judged is the thing that is published. Anything refused stops the whole
+pull, and nothing is published at all.
+
+Reading the names from the filesystem also removes a second problem. `%n` is rsync's *presentation*
+output, and a name is not always what it prints as: measured with rsync 3.2.7, a newline in a name
+arrives as the four characters `\#012`, a `\001` as `\#001`, and a backslash is itself escaped to
+`\#134` where the result would otherwise be ambiguous — while a tab is passed through as itself. A
+review of that text reviews an encoding. (It was refused either way, as it happens, because the
+escape introduces a backslash, which the name rule above already refuses. That is now a test, so it
+stays true on purpose rather than by luck.)
+
+It costs almost nothing. Measured on one host, ext4 sender and a `/mnt/c` repository: an unchanged
+file becomes a hard link on the way in and the published file is a hard link to the staged one, so
+128 MB of unchanged data costs 65 ms on each leg, and 128 MB of *changed* data takes 1130 ms staged
+against 1104 ms straight into the repository. Both links need `--no-perms`, because `/mnt/c` reports
+every file as 0777 whatever `--chmod` asked for, and `--link-dest` links only a file that matches in
+full. `--chmod` therefore now goes to the mound only, where a mode is a mode.
+
+**An empty review is not "nothing to pull".** The preview that `dr-data status` and `diff` use was
+`rsync … 2>/dev/null | grep -v '/$' || true`: the status of *grep*, with even that discarded. An
+unreachable mound or a missing rsync inside it produced an empty list, every caller read it as
+"this pull lands nothing", and the transfer then ran unreviewed. A failed preview is now fatal, and
+so is any line that is not a file name. `pull` no longer has a preview to get this wrong about: a
+failed transfer is a failed pull.
+
+**A configuration Draugr could not read is not a configuration of defaults.** It refuses to source
+a project configuration whose hash it does not know, and says so on every command. The run then
+continues with the layers below — `~/.config/draugr/config` and the built-in defaults — and those
+are not the safe values, they are somebody else's. Measured with a throwaway repo whose
+`.draugr.conf` asked for one mount, its own kit and `DRAUGR_EXCLUSIVE=true`, none of it trusted:
+what was in force was a *different* mount and a *different* kit from the user-level config, and
+`false` from the default. A different kit is a different set of network rules, and `dr-up` would
+have built that mound.
+
+Each command now names the settings that decide what the mound may reach, with the value in force
+and the layer it came from, and a command that would **act** on them stops until `dr-trust` resolves
+it. Two kinds carry on: those that only report, because a command you run to see the state has to
+work in the state you are looking at; and those that only take away, `dr-rm` and `dr-stop`, on the
+same reasoning as "fail on create, let destroy proceed" — refusing to remove a mound over an
+untrusted file would leave no way out but trusting it. `docs/CONFIG.md` lists the keys.
+
+**What the mound sends is judged by the host, not by the mound.** `dr-mem export` had three things
+looking at the memory before it reached your store: the agent module refuses a link before it packs,
+it refuses an entry named `transcripts`, and the hash list the export is compared against is the one
+that module produced. All three run inside the mound, with the mound's own `sh`, `find` and `cp`, on
+a filesystem the agent can write — an agent that wants past them replaces a binary rather than
+defeating a check. The comparison could not see the problem either way: it lists `-type f`, so a
+link, a fifo or a socket is absent from *both* sides of it and travels into the store uncounted.
+
+The received tree is now validated on the host, by the same rule the import path applies in the
+other direction. Measured on sbx 0.53.0 in a disposable sandbox, nothing of that kind gets as far as
+that check today — a link in a tree copied out of a mound makes extraction fail with "a required
+privilege is not held by the client" and status 1 — but that is `sbx`'s guarantee, and `sbx` changed
+its mind about links once already between 0.37.1 and 0.53.0. This one is Draugr's.
+
+**`dr-cp --verify` compares both sides after a copy.** The same measurement in the other direction:
+a copy *into* a mound leaves a link out, keeps every other file, and exits **0**, with nothing but a
+line on stderr to say so. A `--verify` copy lists the source before and the destination after and
+refuses if the sets of names and types differ. It is a flag rather than the default because two
+listings are two more conversations with the mound, and because the warning `dr-cp` now prints
+before such a copy names the one condition that causes it. The comparison is by name and type and
+never by size: `dr-cp out.log .` on a log the agent is still writing is a documented use.
+
+**Staging happens outside your checkout.** `dr-data pull`, `dr-data diff` and `dr-mem export` stage
+files through a directory on a Windows drive, because `sbx cp` can reach nothing else. That used to be
 `.draugr/tmp/<pid>` inside the repository: a path that a mound with the repo bind-mounted can write,
 deleted and recreated on every run. A link in its place redirected both the deletion and everything
 staged afterwards. Staging is now `%LOCALAPPDATA%\Draugr\stage\stage.XXXXXXXX`, created with a

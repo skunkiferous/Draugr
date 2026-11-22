@@ -161,8 +161,15 @@ cp_line() { grep '^cp ' "$DR_MOCK_LOG" | tail -1; }
     # Before, both real failures came with "check the path exists on the source
     # side". That was wrong in each case, because the path existed both times.
     [[ "$output" == *"privilege"* ]]
-    [[ "$output" == *"dr-cp -L"* ]]
     [[ "$output" == *"not found in container"* ]]
+    # And it says what that failure LEAVES: measured on sbx 0.53.0, extraction
+    # out of a mound stops at the link after writing part of the tree, and
+    # which part is not predictable.
+    [[ "$output" == *"PART of the tree is on your disk"* ]]
+    # It no longer offers -L as the way out. Measured: on a tree that holds a
+    # link, -L out of a mound answers 500 and copies nothing at all.
+    [[ "$output" != *"-L does help"* ]]
+    [[ "$output" == *"-L does not help"* ]]
 }
 
 # --- and one that really moves a file ----------------------------------------
@@ -215,15 +222,22 @@ cp_line() { grep '^cp ' "$DR_MOCK_LOG" | tail -1; }
 
     run dr-cp --raw /home/agent/seed .
     [ "$status" -eq 0 ]
-    ! grep -q '^exec ' "$DR_MOCK_LOG"
+    # Not "no exec at all" any more: a copy OUT asks the mound whether the tree
+    # holds a link, because such a copy FAILS after writing part of the tree
+    # here. What must not happen is a chown.
+    ! grep -q 'chown' "$DR_MOCK_LOG" || return 1
+    grep -q '^exec .*-type l' "$DR_MOCK_LOG"
 }
 
-# --- the copy that stops at a link, measured on sbx 0.53 --------------------
+# --- the copy that leaves a link out, measured on sbx 0.53.0 ----------------
 #
-# A tree with a link copies in PART on a current sbx, and sbx exits 0. Thus the
-# only moment to say something is before the copy. These two tests hold that
-# warning to the one case where Draugr can see the links: a host tree, on its
-# way into the mound.
+# Measured in a disposable sandbox, with the link first in the walk, last in
+# the walk, and inside a subdirectory: a copy INTO the mound leaves the link
+# out, every other file arrives, and sbx exits 0. Out of the mound the same
+# tree FAILS with status 1 after writing an unpredictable part of it. So the
+# moment to say something is before the copy, and the two directions need
+# different sentences. These tests hold the host-tree half, where Draugr can
+# see the links itself without asking anybody.
 
 @test "dr-cp --to: a link in the host tree is named before the copy" {
     setup_mound || skip "no writable Windows drive path"
@@ -235,7 +249,14 @@ cp_line() { grep '^cp ' "$DR_MOCK_LOG" | tail -1; }
     run dr-cp --to tree/ /tmp/dest
     [ "$status" -eq 0 ]
     [[ "$output" == *"holds a link"* ]]
-    [[ "$output" == *"PART of the tree"* ]]
+    # Measured on sbx 0.53.0, in a disposable sandbox, with the link first in
+    # the walk, last in the walk and inside a subdirectory: the link is left
+    # out and EVERY other file arrives, and sbx exits 0. The old text said the
+    # copy stops at the link and drops everything after it, which is what the
+    # OTHER direction does - where the status is 1, not 0.
+    [[ "$output" == *"leaves it out of the copy"* ]]
+    [[ "$output" == *"Everything else arrives"* ]]
+    [[ "$output" == *"-L does not help"* ]]
 }
 
 @test "dr-cp --to: a tree with no link says nothing about links" {
@@ -245,6 +266,144 @@ cp_line() { grep '^cp ' "$DR_MOCK_LOG" | tail -1; }
 ' > "$REPO/tree/a.txt"
 
     run dr-cp --to tree/ /tmp/dest
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"holds a link"* ]]
+}
+
+# --- --verify: the two sides, compared --------------------------------------
+#
+# Measured on sbx 0.53.0: a copy INTO the mound leaves a link out, keeps every
+# other file, and exits 0. The only trace is a line on stderr that dr-cp does
+# not read. --verify is Draugr asking both sides instead, and it is a flag
+# rather than the default because two listings are two more conversations with
+# the mound.
+#
+# These tests set DR_MOCK_MOUND, because a comparison of two trees needs two
+# trees. The argv tests above leave it unset on purpose.
+setup_real_mound() {
+    setup_mound || return 1
+    dr_mound_memory_dir "$REPO"          # sets DR_MOCK_MOUND
+    mkdir -p "$DR_MOCK_MOUND/tmp"
+    return 0
+}
+
+@test "dr-cp --verify: a complete copy into the mound says so" {
+    setup_real_mound || skip "no writable Windows drive path"
+    mkdir -p "$REPO/tree/sub"
+    printf 'a\n' > "$REPO/tree/a.txt"
+    printf 's\n' > "$REPO/tree/sub/s.txt"
+
+    run dr-cp --to --verify tree /tmp/dest
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"verified: 3 entr(ies) on both sides"* ]]
+}
+
+@test "dr-cp --verify: an entry that did not arrive is named, and fails" {
+    setup_real_mound || skip "no writable Windows drive path"
+    mkdir -p "$REPO/tree"
+    printf 'a\n' > "$REPO/tree/a.txt"
+    printf 'b\n' > "$REPO/tree/b.txt"
+
+    # The mock copies a link without trouble, so a link is the wrong way to
+    # reproduce what sbx does with one. DR_MOCK_CP_TRUNCATE is: a copy that
+    # exits 0 with one entry missing.
+    DR_MOCK_CP_TRUNCATE=b.txt run dr-cp --to --verify tree /tmp/dest
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"the copy is incomplete"* ]]
+    [[ "$output" == *"missing"* ]]
+    [[ "$output" == *"b.txt"* ]]
+    # The entry that DID arrive is still there, and the message says so.
+    # /tmp/dest did not exist, so the copy BECOMES /tmp/dest - measured, and
+    # the rule the --verify code resolves the destination with.
+    [ -f "$DR_MOCK_MOUND/tmp/dest/a.txt" ]
+    [[ "$output" == *"did arrive ARE at the destination"* ]]
+}
+
+@test "dr-cp --verify: an entry nobody asked for is named too" {
+    setup_real_mound || skip "no writable Windows drive path"
+    mkdir -p "$REPO/tree"
+    printf 'a\n' > "$REPO/tree/a.txt"
+
+    DR_MOCK_CP_PLANT=surprise run dr-cp --to --verify tree /tmp/dest
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"extra"* ]]
+    [[ "$output" == *"surprise"* ]]
+}
+
+@test "dr-cp --verify: a copy OUT of the mound is compared the same way" {
+    setup_real_mound || skip "no writable Windows drive path"
+    mkdir -p "$DR_MOCK_MOUND/home/agent/out/sub"
+    printf 'o\n' > "$DR_MOCK_MOUND/home/agent/out/a.log"
+    printf 'd\n' > "$DR_MOCK_MOUND/home/agent/out/sub/b.log"
+    mkdir -p "$REPO/landing"
+
+    run dr-cp --raw --verify /home/agent/out "$REPO/landing"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"verified: 3 entr(ies) on both sides"* ]]
+    [ -f "$REPO/landing/out/a.log" ]
+    [ -f "$REPO/landing/out/sub/b.log" ]
+}
+
+@test "dr-cp --verify: an incomplete copy OUT of the mound fails too" {
+    setup_real_mound || skip "no writable Windows drive path"
+    mkdir -p "$DR_MOCK_MOUND/home/agent/out"
+    printf 'o\n' > "$DR_MOCK_MOUND/home/agent/out/a.log"
+    printf 'g\n' > "$DR_MOCK_MOUND/home/agent/out/gone.log"
+    mkdir -p "$REPO/landing"
+
+    DR_MOCK_CP_TRUNCATE=gone.log run dr-cp --raw --verify /home/agent/out "$REPO/landing"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"the copy is incomplete"* ]]
+    [[ "$output" == *"gone.log"* ]]
+}
+
+@test "dr-cp: without --verify neither side is listed" {
+    # The default path must not pay for the flag. Two listings are two `exec`
+    # calls, and this asserts that they do not happen.
+    setup_real_mound || skip "no writable Windows drive path"
+    mkdir -p "$REPO/tree"
+    printf 'a\n' > "$REPO/tree/a.txt"
+
+    # -mindepth, because the listing script reaches the mock's log as several
+    # lines: only its first one starts with "exec", and "find" is on a later
+    # one. Nothing else in dr-cp uses that flag.
+    run dr-cp --to tree /tmp/dest
+    [ "$status" -eq 0 ]
+    [ "$(grep -c mindepth "$DR_MOCK_LOG" || true)" -eq 0 ]
+
+    : > "$DR_MOCK_LOG"
+    run dr-cp --to --verify tree /tmp/dest2
+    [ "$status" -eq 0 ]
+    [ "$(grep -c mindepth "$DR_MOCK_LOG" || true)" -ge 1 ]
+}
+
+# --- and the other direction's warning, which it never had ------------------
+#
+# Out of the mound a link does not make a partial copy, it makes a FAILED copy
+# with part of the tree already on the host. Draugr cannot see that tree from
+# here, so it asks - and the answer is a WORD. Any output read as "there is a
+# link" would turn an unreachable mound, or a find that printed a diagnostic,
+# into a warning about something nobody saw.
+@test "dr-cp: a link in the MOUND tree is named before the copy out" {
+    setup_real_mound || skip "no writable Windows drive path"
+    mkdir -p "$DR_MOCK_MOUND/home/agent/seed"
+    printf 'real\n' > "$DR_MOCK_MOUND/home/agent/seed/a.txt"
+    ln -s a.txt "$DR_MOCK_MOUND/home/agent/seed/b.txt"
+    mkdir -p "$REPO/landing"
+
+    run dr-cp --raw /home/agent/seed "$REPO/landing"
+    [[ "$output" == *"holds a link, and Windows will not create it"* ]]
+    [[ "$output" == *"PART of the tree here"* ]]
+    [[ "$output" == *"500"* ]]
+}
+
+@test "dr-cp: a mound tree with no link says nothing about links" {
+    setup_real_mound || skip "no writable Windows drive path"
+    mkdir -p "$DR_MOCK_MOUND/home/agent/seed"
+    printf 'real\n' > "$DR_MOCK_MOUND/home/agent/seed/a.txt"
+    mkdir -p "$REPO/landing"
+
+    run dr-cp --raw /home/agent/seed "$REPO/landing"
     [ "$status" -eq 0 ]
     [[ "$output" != *"holds a link"* ]]
 }

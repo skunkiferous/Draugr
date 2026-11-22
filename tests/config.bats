@@ -349,3 +349,153 @@ teardown() { dr_test_teardown; }
     DRAUGR_AGENT_ARGS_CLAUDE=--from-env dr_load_config
     [ "$DRAUGR_AGENT_ARGS" = "--from-env" ]
 }
+
+# --- a configuration Draugr could not read ----------------------------------
+#
+# dr_trust_check has always said that a file was not sourced. What it did not
+# say is what that MEANS for the settings in it: the run carries on with the
+# values of the layers BELOW, which are not "the safe values" - they are
+# somebody else's. Measured with a throwaway repo whose .draugr.conf asked for
+# one mount, its own kit and DRAUGR_EXCLUSIVE=true, none of it trusted: what
+# was in force was a different mount and a different kit from
+# ~/.config/draugr/config, and exclusive=false from the built-in default. A
+# different kit is a different set of network rules, and `dr-up` would have
+# built that mound.
+
+# A repo whose .draugr.conf names boundary keys and is NOT trusted.
+h6_repo() {
+    local body=$1
+    REPO=$(dr_make_win_repo h6) || return 1
+    printf '%s' "$body" > "$REPO/.draugr.conf"
+    cd "$REPO" || return 1
+    export DR_MOCK_STATE=running
+    return 0
+}
+
+@test "untrusted config: a command that acts refuses, and names the keys" {
+    h6_repo 'DRAUGR_MOUNTS="/mnt/c/secret:ro"
+DRAUGR_EXCLUSIVE=true
+' || skip "no writable Windows drive path"
+
+    run dr-scan
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing to act on a configuration Draugr could not read"* ]]
+    # Each key, with the value in force and where that value came from. The
+    # pair is the point: "not read" sounds like "no values".
+    [[ "$output" == *"DRAUGR_MOUNTS"* ]]
+    [[ "$output" == *"DRAUGR_EXCLUSIVE"* ]]
+    [[ "$output" == *"in force"* ]]
+    [[ "$output" == *"built-in default"* ]]
+    [[ "$output" == *"dr-trust"* ]]
+}
+
+@test "untrusted config: the create path refuses too" {
+    # dr_context_create is dr-up and dr-init. D4's case exactly: a mound built
+    # from a configuration Draugr could not read.
+    h6_repo 'DRAUGR_KIT=.draugr/project-kit
+' || skip "no writable Windows drive path"
+    dr_load_common
+    DR_PROG=dr-up
+    run dr_context_create
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing to act"* ]]
+}
+
+@test "untrusted config: a command that only reports carries on, with the detail" {
+    h6_repo 'DRAUGR_MOUNTS="/mnt/c/secret:ro"
+' || skip "no writable Windows drive path"
+
+    run dr-status
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"refusing to act"* ]]
+    # It still says everything. A command you run to see the state has to work
+    # in the state you are looking at - and has to describe it.
+    [[ "$output" == *"DRAUGR_MOUNTS"* ]]
+    [[ "$output" == *"carries on"* ]]
+}
+
+@test "untrusted config: removing a mound is never blocked by it" {
+    # D4, and the same reasoning as F09's "or destroying": a refusal here
+    # leaves no way out but trusting a file you may not want to trust.
+    h6_repo 'DRAUGR_MOUNTS="/mnt/c/secret:ro"
+' || skip "no writable Windows drive path"
+
+    run dr-rm --yes
+    [[ "$output" != *"refusing to act"* ]]
+    run dr-stop
+    [[ "$output" != *"refusing to act"* ]]
+}
+
+@test "untrusted config: a query verb carries on where its command's other verbs do not" {
+    h6_repo 'DRAUGR_EXCLUSIVE=true
+' || skip "no writable Windows drive path"
+
+    run dr-dep status
+    [[ "$output" != *"refusing to act"* ]]
+    run dr-dep claim
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing to act"* ]]
+}
+
+@test "untrusted config: a key that decides nothing about the boundary does not stop anything" {
+    # The list is a filter, not "every key". DRAUGR_AGENT is wrong in a way
+    # you see the moment the agent starts.
+    h6_repo 'DRAUGR_AGENT=gemini
+' || skip "no writable Windows drive path"
+
+    run dr-scan
+    [[ "$output" != *"refusing to act"* ]]
+    # The old warning is still there: this adds detail, it replaces nothing.
+    [[ "$output" == *"not trusted"* ]]
+}
+
+@test "untrusted config: a key is matched whole, not as a prefix" {
+    # The = is part of the pattern for exactly this. DRAUGR_DATA decides what
+    # leaves this host and is on the list; DRAUGR_DATA_CHMOD is not on it, and
+    # a `grep` without the = reports a line that assigns the longer key as if
+    # it had assigned the shorter one.
+    #
+    # DRAUGR_KIT_STORE is the other direction: a longer key that IS on the
+    # list, which must be reported under its own name.
+    h6_repo 'DRAUGR_DATA_CHMOD=D755,F644
+DRAUGR_KIT_STORE=/mnt/c/kits
+' || skip "no writable Windows drive path"
+    dr_load_common
+    dr_load_config "$REPO"
+    [[ " ${DR_UNTRUSTED_KEYS[*]} " != *" DRAUGR_DATA "* ]]
+    [[ " ${DR_UNTRUSTED_KEYS[*]} " == *"DRAUGR_KIT_STORE "* ]]
+}
+
+@test "untrusted config: the export form of an assignment is found too" {
+    h6_repo 'export DRAUGR_PORTS=9999
+   DRAUGR_MOUNTS=/mnt/c/x
+' || skip "no writable Windows drive path"
+    dr_load_common
+    dr_load_config "$REPO"
+    [[ " ${DR_UNTRUSTED_KEYS[*]} " == *"DRAUGR_PORTS "* ]]
+    [[ " ${DR_UNTRUSTED_KEYS[*]} " == *"DRAUGR_MOUNTS "* ]]
+}
+
+@test "untrusted config: both repo layers are read for keys" {
+    h6_repo 'DRAUGR_MOUNTS=/mnt/c/x
+' || skip "no writable Windows drive path"
+    printf 'DRAUGR_PORTS=9999\n' > "$REPO/.draugr.local.conf"
+    dr_load_common
+    dr_load_config "$REPO"
+    [[ " ${DR_UNTRUSTED_KEYS[*]} " == *"DRAUGR_MOUNTS "* ]]
+    [[ " ${DR_UNTRUSTED_KEYS[*]} " == *"DRAUGR_PORTS "* ]]
+}
+
+@test "trusted config: nothing is reported and nothing is refused" {
+    # The other half. A guard that fires on a normal project protects nothing,
+    # because nobody keeps it.
+    h6_repo 'DRAUGR_MOUNTS="/mnt/c/secret:ro"
+' || skip "no writable Windows drive path"
+    dr_load_common
+    dr_trust_add "$REPO/.draugr.conf"
+
+    run dr-scan
+    [[ "$output" != *"refusing to act"* ]]
+    [[ "$output" != *"not trusted"* ]]
+    [[ "$output" != *"in force"* ]]
+}

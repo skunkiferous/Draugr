@@ -64,6 +64,11 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# The three verbs that only look. export and import move memory between the
+# mound and your store, so they stop when a layer was not read.
+case "$action" in
+    status|diff|check) DR_CONFIG_REPORT_ONLY=1 ;;
+esac
 dr_context
 
 # Configuration may already name the NEXT agent. Inspect the one that owns
@@ -242,6 +247,32 @@ export)
         "sbx cp reported success, but made no memory directory" \
         "Looked in: $DR_STAGE"
 
+    # THE TREE THAT ARRIVED, JUDGED HERE, BY THIS SIDE.
+    #
+    # Everything that has already looked at this memory looked at it inside the
+    # mound: the agent module refuses a link before it packs, and the hash list
+    # below is the one the module produced. Both run with the mound's own sh,
+    # find and cp, on a filesystem the agent can write. An agent that wants to
+    # get past them replaces a binary; it does not have to defeat a check.
+    #
+    # The list cannot see it either way. list_local reads `-type f`, so a link,
+    # a fifo or a socket in the received tree is absent from both sides of the
+    # comparison and travels into the store without ever being counted.
+    #
+    # Measured on sbx 0.53.0, in a disposable sandbox: a link in a tree copied
+    # OUT of a mound makes extraction fail with "a required privilege is not
+    # held by the client" and status 1, after writing an unpredictable part of
+    # the tree, so today nothing of the sort reaches this line. That is sbx's
+    # guarantee, not Draugr's, and sbx changed its mind about links once
+    # already between 0.37.1 and 0.53.0. This is the same question asked by the
+    # side that keeps the answer - and it is the rule the import path applies
+    # in the other direction, so the store holds one shape of tree.
+    dr_mem_validate_tree "$packed" || dr_die \
+        "what came out of $DRAUGR_SANDBOX is not a plain tree of files" \
+        "The line above names the entry. Your store is UNCHANGED: the copy is in" \
+        "the staging directory, which this command removes as it exits." \
+        "Look at what the agent wrote:  dr-mem diff"
+
     # Put it in place with a rename, never with a write in place. Thus a stopped
     # export cannot leave a store with part of this copy and part of the last
     # one. The replaced copy stays as memory.previous, and is not deleted. An
@@ -251,11 +282,16 @@ export)
     rm -rf "$store_dir/memory.incoming"
     mv "$packed" "$store_dir/memory.incoming"
 
-    # "sbx cp exited 0" is not "the copy is complete". On sbx 0.53 a cp of a
-    # tree that holds a link STOPS at that link and still exits 0, so the
-    # files after it are missing with no message. The agent module already
-    # listed the mound side with hashes, and the names of the packed tree are
-    # the same names by contract. Thus one comparison answers it. Sorted,
+    # "sbx cp exited 0" is not "the copy is complete". Measured on sbx 0.53.0,
+    # out of a mound: a tree holding a link fails at that link with status 1,
+    # after writing a part of the tree that is not predictable - one fixture
+    # arrived with all four of its regular files, one with a single file out of
+    # four, one with nothing. A fifo and a name holding a control character do
+    # the same with their own messages. In the OTHER direction the entry is
+    # skipped and sbx exits 0. So neither the status nor the message is enough
+    # on its own. The agent module already listed the mound side with hashes,
+    # and the names of the packed tree are the same names by contract. Thus one
+    # comparison answers it, for the files that a hash list can see. Sorted,
     # because the module may group its lines while a walk of the store is
     # alphabetic, and the ORDER is not part of the contract.
     #

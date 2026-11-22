@@ -302,12 +302,24 @@ source. On sbx 0.37.1, `sbx` followed links **in all places in the tree**: a see
 marketplaces came out complete, with 2262 files, and `AGENTS.md` arrived as a real 8873-byte file
 with no link left in it.
 
-> **On sbx 0.53 that is no longer true, and the new answer is silent.** A copy stops at the first
-> link in the walk, drops everything after it, and exits 0. Measured: a tree whose link sorted
-> first arrived empty. The same tree with the link last arrived without the link. A link inside a
-> subdirectory left that subdirectory empty. `-L` changed nothing. Thus a seed that holds a link
-> gives a partial tree with a success message, and the warning below about not mounting a partial
-> tree has no failure to warn you first. `dr-cp` now says so before it copies such a tree.
+> **On sbx 0.53 that is no longer true, and the answer differs by direction.** Measured on 0.53.0
+> in a disposable sandbox, with the link first in the walk, last in the walk, and inside a
+> subdirectory:
+>
+> - **Into the mound** the link is left out, every other file arrives, and `sbx cp` exits **0**.
+>   The only trace is a line on stderr: `Can't add file …\mlink to tar: unknown file mode`. A
+>   Windows junction behaves the same way, and `-L` changes nothing.
+> - **Out of the mound** extraction *fails* — `symlinkat …: A required privilege is not held by the
+>   client`, status **1** — after writing a part of the tree that is not predictable: one fixture
+>   arrived with all four of its regular files, one with a single file out of four, one with
+>   nothing. A fifo gives `Object Name not found.`, a name holding a control character gives
+>   `The filename, directory name, or volume label syntax is incorrect.` `-L` on such a tree
+>   answers `500 Internal Server Error: failed to archive` and copies nothing at all.
+>
+> So a seed that holds a link gives a tree with that entry missing and a success message, and the
+> warning below about not mounting a partial tree has no failure to warn you first. `dr-cp` says so
+> before it copies such a tree, in the words of whichever direction you asked for, and `dr-cp
+> --verify` lists both sides afterwards and compares them.
 
 To follow the links is the right answer here, not a compromise. `AGENTS.md` becomes a copy of
 `CLAUDE.md`, not a link to it, and for a plugin that is the same. It also avoids a later question:

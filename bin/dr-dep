@@ -171,6 +171,11 @@ fi
 
 # --- everything else needs to know which repository it is in ----------------
 
+# `status` reports and changes nothing, so it carries on when a configuration
+# layer was not read - with the detail printed, which is how you see that
+# DRAUGR_EXCLUSIVE is not what the file asked for. The other verbs claim,
+# release and stop shared resources on that same key, and they stop.
+[ "$action" = status ] && DR_CONFIG_REPORT_ONLY=1
 dr_context
 
 # _dep_start <repo>: start one dependency, claim it, and start a warden.

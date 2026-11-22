@@ -723,6 +723,82 @@ DR_AGENT_ARGS_REPLACED_BY=
 # necessary for the same reason as above.
 declare -ga DR_UNTRUSTED=()
 
+# The keys that a skipped layer NAMED, out of the list below. One line each,
+# "<key> <file>", because a key can be named in both repo layers.
+declare -ga DR_UNTRUSTED_KEYS=()
+
+# DR_KEYS_BOUNDARY: the keys that decide what the mound may reach, what leaves
+# your host, and what Draugr refuses.
+#
+# WHY THIS LIST EXISTS. A configuration layer that Draugr declines to source is
+# reported (dr_trust_check says so on every command), and the run continues with
+# the values of the layers below it. Those are not "the safe values": they are
+# somebody else's values. Measured with a throwaway repo whose .draugr.conf
+# asked for one mount, its own kit and DRAUGR_EXCLUSIVE=true, none of it
+# trusted - what was in force was a DIFFERENT mount and a DIFFERENT kit from
+# ~/.config/draugr/config, and exclusive=false from the built-in default. A
+# different kit is a different set of network rules. `dr-up` would have built
+# that mound.
+#
+# So for these keys, "the file was skipped" is not an answer, and the commands
+# that ACT stop until it is resolved. The ones that only report do not: a
+# command you run to see the state has to work in the state you are looking at.
+# That split follows D4 - fatal on create, never on destroy - and it is the
+# DEFAULT here, with the reporting commands named, so that a command written
+# later inherits the refusal rather than having to remember it.
+#
+# A key belongs here when a wrong value weakens a boundary. DRAUGR_AGENT does
+# not: the wrong agent is obvious the moment it starts. DRAUGR_REQUIRE_CLEAN
+# does not either - its default is the strict value and no lower layer can make
+# it looser than "refuse to start on a dirty tree".
+declare -gra DR_KEYS_BOUNDARY=(
+    DRAUGR_KIT DRAUGR_KIT_STORE          # the kit carries the network rules
+    DRAUGR_CLONE                         # a clone, or your tree bind-mounted
+    DRAUGR_MOUNTS                        # which of your directories it sees
+    DRAUGR_PORTS DRAUGR_HOST_PORTS       # what crosses the boundary
+    DRAUGR_ENV                           # which variables go in
+    DRAUGR_MODEL_URL                     # the inference endpoint it reaches
+    DRAUGR_EXCLUSIVE DRAUGR_REQUIRES     # the shared-resource guarantee
+    DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL   # the credential guard
+    DRAUGR_DATA DRAUGR_DATA_PUSH DRAUGR_DATA_DELETE     # what leaves, what is deleted
+    DRAUGR_AGENT_ARGS                    # what the agent is told it may do
+    DRAUGR_FORGE_NOSCAN                  # a declaration about guest protection
+)
+
+# The commands that this gate does NOT stop. They print everything it has to
+# say and carry on. Two reasons, and they are different reasons:
+#
+#   they only report       A command you run to see the state has to work in
+#                          the state you are looking at. Otherwise the way out
+#                          of a bad configuration is hidden behind it.
+#
+#   they only take away    D4, and the same reasoning as F09's "or
+#                          destroying": refusing to remove a mound because a
+#                          configuration file is not trusted TRAPS you. The
+#                          keys below decide what a mound may reach; none of
+#                          them decides anything about taking one away.
+#                          `dr-up --recreate` is not here, because it builds
+#                          one afterwards.
+#
+# dr-config and dr-trust are absent because they never call dr_context:
+# dr-config explains this situation and dr-trust ends it, so neither may be
+# stopped by it. A command with both kinds of verb sets DR_CONFIG_REPORT_ONLY
+# itself, once it knows which verb it has - dr-dep status, dr-ports with no
+# port, dr-policy without a change, dr-mem status.
+#
+# THE GATE IS ABOUT THE CONFIGURATION, NOT ABOUT THIS COMMAND'S KEYS. It does
+# not try to prove that the command in hand reads the key that was named. A map
+# of which command depends on which key would be a second list to keep in step
+# with the first, and the state it describes - a file Draugr was asked to use
+# and would not read - is one the whole run is in. One command ends it.
+_dr_config_gate_exempt() {
+    case "${DR_PROG:-}" in
+        dr-status|dr-log|dr-diff|dr-ls|dr-doctor) return 0 ;;   # only report
+        dr-rm|dr-stop)                            return 0 ;;   # only take away
+    esac
+    [ -n "${DR_CONFIG_REPORT_ONLY:-}" ]
+}
+
 # shellcheck disable=SC2034  # these are the configuration keys; each dr-* reads them
 _dr_defaults() {
     DRAUGR_AGENT=claude
@@ -997,6 +1073,33 @@ dr_load_config() {
         _dr_attribute _DR_PREV_ "$layer"
     done
 
+    # STEP 3b: which boundary keys did a skipped layer NAME?
+    #
+    # Read, never sourced. The whole point of skipping the file is that running
+    # it is the thing Draugr will not do, so this reads the text: an assignment
+    # at the start of a line, with or without `export`, with or without leading
+    # space. The `=` is part of the pattern, so DRAUGR_KIT_STORE= is not read as
+    # DRAUGR_KIT=.
+    #
+    # A grep can be fooled - a value built with eval, a key set inside a case.
+    # That costs the DETAIL, not the warning: dr_trust_check already said the
+    # file was not read, on every command. What this adds is the sentence that
+    # names what is therefore not what you asked for.
+    DR_UNTRUSTED_KEYS=()
+    if [ ${#DR_UNTRUSTED[@]} -gt 0 ]; then
+        local pat found
+        pat=$(printf '%s|' "${DR_KEYS_BOUNDARY[@]}")
+        pat=${pat%|}
+        for layer in "${DR_UNTRUSTED[@]}"; do
+            while IFS= read -r found; do
+                [ -n "$found" ] || continue
+                DR_UNTRUSTED_KEYS+=("$found $layer")
+            done < <(grep -Eo "^[[:space:]]*(export[[:space:]]+)?($pat)=" "$layer" 2>/dev/null \
+                     | sed -E 's/^[[:space:]]*(export[[:space:]]+)?//; s/=$//' \
+                     | LC_ALL=C sort -u)
+        done
+    fi
+
     # STEP 4: put the values of the environment back on top, and record the
     # environment as their source. The length test is for bash 4.3 and older.
     # There, with `set -u`, the expansion of an empty array is an error.
@@ -1211,6 +1314,59 @@ dr_context() {
     # shellcheck disable=SC2034  # the dr-* command that called this reads it
     DR_REPO_WIN=$(dr_path_win "$DR_REPO")
     dr_load_config "$DR_REPO"
+    dr_config_require_resolved
+}
+
+# dr_config_require_resolved: stop if a skipped layer set a boundary key.
+#
+# dr_trust_check has already said that a file was not read. This says what that
+# MEANS for the keys in DR_KEYS_BOUNDARY: for each one the skipped file names,
+# the value that is in force and where it came from. The two are rarely the
+# same, and the difference is the whole point - "not read" sounds like "no
+# values", and what it really means is "somebody else's values".
+#
+# It stops, because the review's wording is to require resolution before
+# activating a security-sensitive configuration, and because the cure is one
+# command. Some commands are exempt: see _dr_config_gate_exempt.
+dr_config_require_resolved() {
+    [ ${#DR_UNTRUSTED_KEYS[@]} -gt 0 ] || return 0
+
+    local entry key file shown=()
+
+    # One line for each key, with the value in force and the layer it came
+    # from. The entries are "<key> <file>", so the key is the part before the
+    # first space and the file is the rest - a path can hold a space, a key
+    # cannot.
+    dr_error "${#DR_UNTRUSTED_KEYS[@]} setting(s) that decide what the mound may reach are NOT what the project asked for:"
+    for entry in "${DR_UNTRUSTED_KEYS[@]}"; do
+        key=${entry%% *}
+        file=${entry#* }
+        printf '    %-22s in force: %-28s from %s\n' \
+            "$key" "$(_dr_show_value "$key")" "${DR_ORIGIN[$key]:-built-in default}" >&2
+        shown+=("$file")
+    done
+    printf '  %sThose files set them, and Draugr did not read them, so it cannot tell%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+    printf '  %swhat you asked for. The values above are the ones in force.%s\n' \
+        "$_DR_DIM" "$_DR_OFF" >&2
+
+    # An exempt command has said everything above and goes on. Everything else
+    # stops here, and names the one command that ends it.
+    if _dr_config_gate_exempt; then
+        printf '  %s%s carries on: it changes nothing that these keys decide.%s\n' \
+            "$_DR_DIM" "${DR_PROG:-this command}" "$_DR_OFF" >&2
+        return 0
+    fi
+    dr_die "refusing to act on a configuration Draugr could not read" \
+        "Read it, then:  dr-trust ${shown[0]}" \
+        "Every key and where it came from:  dr-config"
+}
+
+# The value of a key for the report above, with a word for empty, because an
+# empty line in a table reads as "the tool has nothing to say".
+_dr_show_value() {
+    local v=${!1:-}
+    if [ -z "$v" ]; then printf '(empty)'; else printf '%s' "$v"; fi
 }
 
 # dr_context_create: dr_context, for the two commands that can create a repo.
@@ -1232,6 +1388,13 @@ dr_context_create() {
     dir=$(git rev-parse --show-toplevel 2>/dev/null) || dir=$PWD
     dr_require_win_path "$dir"
     dr_load_config "$dir"
+
+    # BEFORE dr_repo_create, so that nothing is created when Draugr could not
+    # read the configuration it was handed. This is D4's case: a mound, or a
+    # repository, built from values nobody established. The file that
+    # dr_repo_create may write itself is trusted the moment it is written, so
+    # this cannot fire on it.
+    dr_config_require_resolved
 
     if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
         dr_repo_create "$dir"
