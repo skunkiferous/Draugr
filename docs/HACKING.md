@@ -665,6 +665,40 @@ that you add later must select the same direction.
 
 ---
 
+## Pattern: receiving a tree from a mound
+
+Three commands bring bytes from a mound onto the host: `dr-data pull`, `dr-mem export` and the
+Codex plugin build in `lib/plugins/codex.sh`. A fourth is easy to imagine — an archive import, a
+second agent's plugin format — and the first three show what it has to do.
+
+The transfer is yours. Everything that decides whether the bytes may land is shared, in
+`lib/common.sh` under *the shared receive path*:
+
+```sh
+dr_stage                            # $DR_STAGE: host-owned, outside the repo
+<your transfer into "$DR_STAGE">    # rsync, sbx cp, cp -a: your business
+dr_incoming_validate_tree "$tree"   # shape: links, special files, odd names
+dr_incoming_within_limits "$tree"   # size: DRAUGR_INCOMING_MAX_FILES / _SIZE
+dr_incoming_dest_ok "$root" "$dest" # place: inside the root, after resolution
+dr_incoming_publish "$staged" "$dest" "$keep"   # the swap, by rename
+```
+
+**The order is part of the contract.** The shape test comes first because the others assume it:
+`-type f` is a complete account of the bytes only once a link cannot point out of the tree.
+
+**A step you do not take, you skip visibly.** `dr-data pull` uses the limit and not the other
+three, and says in its own code why — it publishes by merging rather than replacing, and its shape
+test reports every refusal instead of dying at the first. That is the reason this is five
+functions and not one that owns the transaction: a caller with a callback hides which steps it
+actually took, from a reader and from a test.
+
+**`dr_incoming_publish` takes the name of the copy it replaces** (`memory.previous`, `seed.old`)
+rather than inventing one, because those names are already in the messages their users read.
+
+Each step is a `return 1` with a `dr_error`, so the caller writes the `dr_die` that names its own
+command, its own cure and where the staged copy is. None of them removes the staging directory:
+that is the caller's `trap`, set when it called `dr_stage`.
+
 ## Two traps that cost real time
 
 Draugr did not cause either one, and both are silent.

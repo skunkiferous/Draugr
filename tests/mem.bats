@@ -1107,3 +1107,59 @@ stop_fakes() {
     local store; store=$(dr_mem_store_dir "$REPO")
     [ "$(cat "$store/memory/a.md")" = first ]
 }
+
+# --- the shared receive path, in the memory channel -------------------------
+#
+# Hardening 1. The export is the channel that takes all four steps, so these
+# are about the two that are new to it: how much there may be, and where it
+# may land. The exports are EXPORTED variables, because `run` is a function
+# and dr-mem is a child process that would never see a prefix assignment.
+
+@test "dr-mem export: more than DRAUGR_INCOMING_MAX_FILES leaves the store alone" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'one\n' > "$MEMDIR/a.md"
+    printf 'two\n' > "$MEMDIR/b.md"
+    export DRAUGR_INCOMING_MAX_FILES=1
+    run dr-mem export
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"DRAUGR_INCOMING_MAX_FILES is 1"* ]]
+    store=$(dr_mem_store_dir "$REPO")
+    [ ! -e "$store/memory" ]
+}
+
+# THE PROTECTION THAT DID NOT EXIST BEFORE. The store corner is a link, so the
+# rename would publish the agent's memory wherever that link points - and the
+# receipt would still name the store.
+@test "dr-mem export: a link where the store's memory goes is refused" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'the build is cmake\n' > "$MEMDIR/build.md"
+    store=$(dr_mem_store_dir "$REPO")
+    mkdir -p "$store" "$DR_TMP/outside"
+    ln -s "$DR_TMP/outside" "$store/memory"
+
+    run dr-mem export
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not the place it names"* ]]
+    # Nothing was written through the link, and the link is still a link: a
+    # refusal that had quietly replaced it would be its own surprise.
+    [ -z "$(ls -A "$DR_TMP/outside")" ]
+    [ -L "$store/memory" ]
+}
+
+# The same question one level up: the corner is fine and the store itself is
+# the link. dr_path_contained resolves both sides, so this is the case a name
+# comparison would have called contained.
+@test "dr-mem export: a memory store that is itself a link is refused" {
+    setup_mound || skip "no writable Windows drive path"
+    mkdir -p "$MEMDIR"
+    printf 'the build is cmake\n' > "$MEMDIR/build.md"
+    mkdir -p "$DR_TMP/realstore"
+    ln -s "$DR_TMP/realstore" "$DR_TMP/storelink"
+    export DRAUGR_MEM_STORE="$DR_TMP/storelink"
+
+    run dr-mem export
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not the place it names"* ]]
+}

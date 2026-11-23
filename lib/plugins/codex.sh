@@ -74,7 +74,7 @@ _dr_cp_begin() {
         # never checked for links, and the very first host write below is
         # `library.json.next` - the name the review redirected. So the tree is
         # judged BEFORE anything writes into it, not only before it publishes.
-        dr_mem_validate_tree "$_cp_stage/seed" || dr_die \
+        dr_incoming_validate_tree "$_cp_stage/seed" || dr_die \
             "the Codex library contains a link or an unsupported file" \
             "Draugr will not write into a tree whose names point elsewhere." \
             "It is copied as it was, in $_cp_stage/seed. Your library is unchanged."
@@ -117,7 +117,7 @@ _dr_cp_install() {
     # back into a new package that happens to use the same version string.
     rm -rf "${dest:?}/${ver:?}"
     dr_sbx cp "$_cp_mound:$path" "$(dr_path_win "$dest")" || dr_die "could not export $id"
-    dr_mem_validate_tree "$dest/$ver" || dr_die "plugin contains links or unsupported files: $id"
+    dr_incoming_validate_tree "$dest/$ver" || dr_die "plugin contains links or unsupported files: $id"
     tmp="$_cp_json.next"
     jq --arg id "$id" --arg name "$plug" --arg m "$mkt" --arg v "$ver" \
         '([.plugins[] | select(.id == $id)] | first) as $old |
@@ -155,12 +155,26 @@ _dr_cp_catalogs() {
 _dr_cp_commit() {
     _dr_cp_catalogs
     _dr_cp_stop_mound
-    dr_mem_validate_tree "$_cp_stage/seed" || dr_die \
+    dr_incoming_validate_tree "$_cp_stage/seed" || dr_die \
         "the built Codex library contains a link or an unsupported file" \
         "Nothing was published. The build is in $_cp_stage/seed; look at it there."
-    rm -rf "$_cp_root/seed.old"
-    if [ -d "$_cp_seed" ]; then mv "$_cp_seed" "$_cp_root/seed.old"; fi
-    mv "$_cp_stage/seed" "$_cp_seed"
+    # The same three questions the other two channels ask, in the same order:
+    # what shape, how much, and where. A plugin library is small, so the limit
+    # is not what anybody here will meet - which is the point of a ceiling that
+    # is shared rather than guessed for each channel.
+    dr_incoming_within_limits "$_cp_stage/seed" || dr_die \
+        "the built Codex library is larger than this host accepts" \
+        "Nothing was published. The line above names the key that raises the limit." \
+        "The build is in $_cp_stage/seed; look at it there."
+    dr_incoming_dest_ok "$_cp_root" "$_cp_seed" || dr_die \
+        "the Codex library is not the place it names" \
+        "Nothing was published. The line above says which part of it." \
+        "The build is in $_cp_stage/seed; look at it there."
+    # One swap, shared with the memory export, with seed.old as this library's
+    # own name for the copy it replaces.
+    dr_incoming_publish "$_cp_stage/seed" "$_cp_seed" "$_cp_root/seed.old" || dr_die \
+        "the built Codex library could not be put in place" \
+        "Your library is as it was. The build is in $_cp_stage/seed."
     rm -rf "$_cp_stage" "$_cp_build"
     dr_ok "Codex plugin library updated; previous library is in $_cp_root/seed.old"
 }
@@ -173,7 +187,7 @@ _dr_cp_register() {
     if [ -d "$source" ]; then
         # A local marketplace must be a dedicated package source. Copy it to
         # this build mound. Do not expose any additional host workspace.
-        dr_mem_validate_tree "$source" || dr_die "local marketplace contains links or special files"
+        dr_incoming_validate_tree "$source" || dr_die "local marketplace contains links or special files"
         key=$(printf '%s' "$source" | sha256sum | cut -c1-16)
         dr_sbx exec "$_cp_mound" -- mkdir -p "$_cp_work/sources/$key" || dr_die "could not stage marketplace"
         dr_sbx cp "$(dr_path_win "$source")" "$_cp_mound:$_cp_work/sources/$key/" || dr_die "could not copy marketplace"

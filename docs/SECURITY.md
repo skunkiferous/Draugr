@@ -410,6 +410,48 @@ the day that a later `sbx` accepts them. A test fails if it ever comes back.
 
 ---
 
+## What arrives from a mound, and what it has to pass
+
+Three channels write files on your host with bytes the agent produced:
+
+| channel | the transfer | what it publishes into |
+|---|---|---|
+| `dr-data pull` | rsync over ssh | your working tree |
+| `dr-mem export` | `sbx cp` | `DRAUGR_MEM_STORE` |
+| `dr-plugin` (Codex) | `sbx cp` from a build mound | `DRAUGR_PLUGIN_STORE` |
+
+They used to do the same steps in three different orders, each with its own gaps. The security
+review calls the fix *hardening 1* and asks for one quarantine that owns the whole transaction.
+Draugr does the other half of that on purpose: the three transfers genuinely differ, so **each
+channel keeps its own transfer and they share every question that decides whether the bytes may
+land**.
+
+| step | what it answers |
+|---|---|
+| stage | the bytes land in a host-owned directory outside the repository first, never in the place they are going |
+| shape | no link, no device, no socket, no fifo, no control character or backslash in a name |
+| size | no more files and no more bytes than `DRAUGR_INCOMING_MAX_FILES` and `DRAUGR_INCOMING_MAX_SIZE` |
+| place | the destination is inside the directory Draugr owns for that channel, **after** every link on the way is resolved, and nothing on the path is a link |
+| publish | the swap is a rename, never a write in place, and the copy it replaces is kept |
+
+**Nothing is published until all of them pass**, and a refusal leaves the staging copy to be
+removed as the command exits. That is the whole value of staging first: a refusal costs the bytes
+and nothing else.
+
+**One channel takes two of those steps its own way, and that is visible in its code rather than
+hidden behind a shared function.** `dr-data pull` publishes by merging into your working tree
+instead of replacing a directory, so there is no directory to confine — the repository *is* the
+root, and each incoming name is tested component by component instead (`.GIT`, `GIT~1` and
+`.git.` are all `.git` on a Windows drive). Its shape test is its own too, because it **reports**
+every entry it refuses rather than stopping at the first: a pull you are asked to approve is worth
+reading.
+
+What a destination test would have caught there, rsync's default already does. Measured with rsync
+3.2.7: a staged `data/out.txt` published onto a working tree where `data` is a symlink out of the
+tree replaces that link with a real directory and leaves the outside file untouched; the same holds
+for a symlinked file. One flag reverses it — `--keep-dirlinks` writes straight through the link —
+and `tests/data.bats` keeps that flag out of the command.
+
 ## Two more, worth knowing before they bite
 
 - **Never mount `~/.claude` into a sandbox.** It contains `.credentials.json`, the authentication
@@ -490,6 +532,39 @@ fully legitimate requests. It cannot see which model a request asks for without 
 It cannot stop the use of prompt content as a channel: the application can send all that it can
 read. Path filtering gives you the difference between a *query* and *administration*. That is a
 large difference, but not the same as safety.
+
+## The credential a mound never needs
+
+An agent that cannot reach something will ask for a way in, and the way it names is usually a token.
+For *reading*, there is a cheaper answer, and it is the same answer twice:
+
+- **Something that is not yours.** A private repository you have access to but do not own — an
+  engine, a partner SDK — is not something a mound needs your account for. Clone it on the host,
+  where you already accepted whatever you accepted, and mount it read-only with
+  [`DRAUGR_MOUNTS`](CONFIG.md#draugr_mounts): `/mnt/c/Code/SomeEngine:ro`.
+- **Something that is yours.** The same command, for the same reason. A read-only copy is what the
+  agent actually wanted; your credential was only the route it knew.
+
+So the rule is short. **A mound never needs a credential of yours to look at something.** That is
+not a restriction laid on top of Draugr; it is the boundary Draugr already draws, said for
+credentials. The working tree is a clone, the real repository is mounted read-only, a `git push` to
+`origin` cannot work because that remote *is* the read-only mount, and everything that leaves does
+so on the host, where you look at it first: `dr-sync`, then `dr-diff` and `dr-merge`.
+
+Two things the rule does not say. The agent's **own** sign-in is a credential and it is required —
+`sbx` keeps it on the host and its proxy adds it to each request, so it is not in the mound either,
+and [Running the agent on a local model](#running-the-agent-on-a-local-model) has the measurement.
+And **writing** to a service, such as opening a pull request or publishing a package, is a different
+question whose answer is also the host: you do it, having read what the agent produced.
+
+If you do decide to store one, `sbx secret` is the place, and it is not a Draugr command. Scope it
+with `--sandbox <mound>` instead of globally, and give it the narrowest token that does the job.
+`gh auth token` is not that token: it is your whole account, read and write, on every repository you
+can reach.
+
+And the part that no mount setting changes: **whatever the mound can read, the model provider can
+read.** For source under a licence you accepted, that is a decision to take before an agent opens
+the directory, not after.
 
 ## Running the agent on a local model
 

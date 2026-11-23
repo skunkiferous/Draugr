@@ -1,6 +1,6 @@
 ---
 name: draugr
-description: Where you are when Draugr runs you, and what you cannot change from here. A mound is a sandbox on the machine of the operator, with a copy of their repository, a default-deny network, and none of the tools that change any of that. Use it for "why can I not reach this host", "how does my work get out", "what does a rebuild destroy", "can you open a port for me", and whenever the answer is a command that somebody else must run.
+description: Where you are when Draugr runs you, and what you cannot change from here. A mound is a sandbox on the machine of the operator, with a copy of their repository, a default-deny network, and none of the tools that change any of that. Use it for "why can I not reach this host", "how does my work get out", "what does a rebuild destroy", "can you open a port for me", "I need a credential for a private repository", and whenever the answer is a command that somebody else must run.
 ---
 
 # You are inside a mound
@@ -63,10 +63,38 @@ every edit you make is immediate and real. Check before you assume.
 | open a port they can look at | operator | `dr-ports 5173` |
 | apply a changed kit | operator | `dr-kit apply`, or `dr-up --recreate` |
 | keep your memory and this conversation | operator | `dr-mem export`, later `dr-mem import` |
+| sign in to a service your work needs | operator | no `dr-*` command. `sbx secret set <service> --sandbox <mound>` |
 | see the whole list | operator | `dr` with no arguments |
 
 You own the working tree, your commits, the files in it, and `.draugr/kit/spec.yaml`.
 Everything in the table above belongs to the operator.
+
+## Credentials are not yours to hold
+
+`sbx` keeps them on the host, and its proxy authenticates each request for you.
+Measured, for the credential of the agent itself: a junk bearer token, no
+authorization header at all, and the real sign-in all gave the same answer,
+because the proxy rewrites the header whatever you send. The same store holds a
+credential for `github` and a dozen other services. Therefore:
+
+- **Never ask for a token to be pasted in here**, written to a file, or put in
+  `DRAUGR_ENV`. A credential inside this mound is one you can leak, and it buys
+  nothing that the proxy does not already do.
+- **You never need a credential to read something.** Whether the repository is
+  the operator's or not, the answer is the same: a local copy, mounted read-only
+  with `DRAUGR_MOUNTS=<path>:ro`. Their credential was only the route you knew
+  about. Ask for the mount, and name the path you need.
+- If a login is genuinely the answer, there is no `dr-*` command for it, and this
+  is one of the few cases where what you name is a plain `sbx` one:
+  `sbx secret set <service> --sandbox <mound>`. Scope it to this mound. A global
+  secret is for every mound on the machine, which is not what your task needs.
+- **And say what the token costs.** `gh auth token` is the whole account of the
+  operator, read and write, on every repository they can reach — a password, not
+  a key for one door. Ask for the narrowest token that does your job and say
+  which repository you need, so they can decide what to issue.
+- Whatever you can read, the model provider can read. For source under a licence
+  that the operator accepted — an engine, a partner SDK — that is their call to
+  make, not a detail. Ask before you read it, not after.
 
 ## How to ask, in four lines
 

@@ -539,6 +539,35 @@ push|pull)
             "Look at the mound before you continue:  dr-shell"
     fi
 
+    # HOW MUCH OF IT THERE MAY BE, asked before the question below rather than
+    # after it: a limit that fires after you have agreed to a pull has made you
+    # read a report for nothing.
+    #
+    # This is the one of the three shared receive steps that the data channel
+    # uses as it stands (lib/common.sh, "the shared receive path"). It does not
+    # call dr_incoming_validate_tree, because classify_staged above is this
+    # command's own version of that walk and a better one here: it REPORTS
+    # every entry it refuses instead of dying at the first, which is what makes
+    # the review above worth reading. And it does not call
+    # dr_incoming_dest_ok, because this channel publishes by merging into the
+    # repository rather than by replacing a directory - the repository IS the
+    # root, so there is no strict descendant to confine, and the per-name test
+    # is dr_data_path_safe.
+    #
+    # What a destination test would have caught here, rsync's default already
+    # does, measured with rsync 3.2.7 (tmp/h1-rsync-dest.log): a staged
+    # `data/out.txt` published onto a repository where `data` is a symlink out
+    # of the tree REPLACES the link with a real directory and leaves the
+    # outside file untouched, and the same holds for a symlinked file. One flag
+    # reverses that - --keep-dirlinks writes straight through the link - and
+    # tests/data.bats keeps it out of this file.
+    dr_incoming_within_limits "$DR_STAGE" || dr_die \
+        "refusing to pull" \
+        "The mound sent more than this host accepts. The line above names the" \
+        "limit and the key that raises it." \
+        "NOTHING WAS PUBLISHED. The files are in the staging directory," \
+        "which this command removes as it exits."
+
     # Content that looks executable gets a question, not a refusal. Otherwise
     # a project with scripts in its data cannot pull at all. People turn off a
     # guard that they cannot satisfy.

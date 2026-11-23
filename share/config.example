@@ -200,6 +200,16 @@
 # that. Raise it if you must read a large generated file before you accept it.
 #DRAUGR_DATA_DIFF_MAX=262144
 
+# --- What arrives from a mound ----------------------------------------------
+#
+# The ceiling on a data pull, a memory export and a Codex plugin build: all
+# three write host files with bytes the agent produced. Empty or 0 turns a
+# check off. The size takes K, M, G and T; a bare number is bytes. The bytes
+# are already in the staging directory when this is applied, so it is a limit
+# on what gets PUBLISHED, not a disk quota (docs/CONFIG.md says more).
+#DRAUGR_INCOMING_MAX_FILES=100000
+#DRAUGR_INCOMING_MAX_SIZE=8G
+
 # --- Git behavior -----------------------------------------------------------
 
 # Empty tracks your current branch.

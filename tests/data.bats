@@ -926,3 +926,71 @@ setup_pull() {
     [[ "$output" == *"DRAUGR_STAGE_ROOT"* ]]
     [ ! -d "$DR_REPO/.draugr/tmp" ]
 }
+
+# --- the shared ceiling, in the channel with the biggest trees ---------------
+#
+# Hardening 1. The data pull takes one of the shared receive steps and leaves
+# three, for reasons its own code states; these are about the one it takes.
+#
+# The variable is EXPORTED, not written as a prefix of `run`. `run` is a shell
+# function, so a prefix assignment stays in this shell and never reaches
+# dr-data, which is a child process. A test written the other way passes for
+# the wrong reason: no limit is set, and nothing is refused.
+@test "dr-data pull: more than DRAUGR_INCOMING_MAX_FILES publishes nothing" {
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    printf 'a\n' > "$DR_FAKE_MOUND/one.csv"
+    printf 'b\n' > "$DR_FAKE_MOUND/two.csv"
+    export DRAUGR_INCOMING_MAX_FILES=1
+    run dr-data pull -y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"DRAUGR_INCOMING_MAX_FILES is 1"* ]]
+    # The transfer happened - it is the review - and the publication did not.
+    grep -q '^REAL' "$DR_FAKE_RSYNC_LOG"
+    [ ! -e "$REPO/one.csv" ]
+    [ ! -e "$REPO/two.csv" ]
+}
+
+@test "dr-data pull: more than DRAUGR_INCOMING_MAX_SIZE publishes nothing" {
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    head -c 4096 /dev/zero > "$DR_FAKE_MOUND/big.bin"
+    export DRAUGR_INCOMING_MAX_SIZE=1K
+    run dr-data pull -y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"DRAUGR_INCOMING_MAX_SIZE is 1K (1024)"* ]]
+    [ ! -e "$REPO/big.bin" ]
+}
+
+# ORDER, asked without a prompt rather than by reading the source. The tree is
+# over the limit AND holds a runnable file, and the command runs without -y:
+# if the limit came after the question, this would end in "cancelled" at an
+# EOF on stdin instead of naming the limit.
+@test "dr-data pull: the limit is applied before you are asked to approve" {
+    setup_pull || skip "no writable Windows drive path"
+    fake_rsync names
+    printf 'echo one\n' > "$DR_FAKE_MOUND/one.sh"
+    printf 'echo two\n' > "$DR_FAKE_MOUND/two.sh"
+    export DRAUGR_INCOMING_MAX_FILES=1
+    run dr-data pull < /dev/null
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"DRAUGR_INCOMING_MAX_FILES is 1"* ]]
+    [[ "$output" != *"Pull them anyway"* ]]
+}
+
+# MEASURED, and the reason this command needs no destination check of its own
+# (tmp/h1-rsync-dest.log, rsync 3.2.7): publishing `data/out.txt` onto a repo
+# where `data` is a symlink out of the tree REPLACES the link with a real
+# directory and leaves the outside file alone - and the same for a symlinked
+# file. --keep-dirlinks reverses exactly that, and writes through the link.
+# It is not a flag anybody adds on purpose here; it is one somebody copies
+# from an rsync recipe.
+@test "dr-data: --keep-dirlinks is never passed, because it writes through a link" {
+    run bash -c "grep -n 'keep-dirlinks' '$DR_ROOT/bin/dr-data' | grep -vE '^[0-9]+:[[:space:]]*#'"
+    [ -z "$output" ]
+    # Not passing because the grep is broken: the same command sees the flag
+    # in a fixture that has it.
+    printf 'rsync -a --keep-dirlinks src dst\n' > "$DR_TMP/fixture.sh"
+    run bash -c "grep -n 'keep-dirlinks' '$DR_TMP/fixture.sh' | grep -vE '^[0-9]+:[[:space:]]*#'"
+    [ -n "$output" ]
+}

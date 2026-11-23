@@ -683,6 +683,7 @@ DR_KEYS=(
     DRAUGR_STOP_ON_EXIT
     DRAUGR_MEM_SYNC DRAUGR_MEM_STORE DRAUGR_MEM_TRANSCRIPTS
     DRAUGR_PLUGIN_STORE
+    DRAUGR_INCOMING_MAX_FILES DRAUGR_INCOMING_MAX_SIZE
     DRAUGR_REQUIRES DRAUGR_EXCLUSIVE DRAUGR_LINGER
     DRAUGR_SCAN DRAUGR_SCAN_PATTERNS DRAUGR_SCAN_FAIL
     DRAUGR_FORGE DRAUGR_FORGE_NOSCAN DRAUGR_FORGE_LAYERS
@@ -871,6 +872,18 @@ _dr_defaults() {
     # 256 KB is enough for the scripts and configuration files that you read
     # carefully.
     DRAUGR_DATA_DIFF_MAX=262144
+
+    # THE CEILING ON EVERYTHING THAT ARRIVES FROM A MOUND: a data pull, a
+    # memory export, a Codex plugin build. One pair of keys, because all three
+    # write onto this host and a limit for each channel is three limits to keep
+    # in step. The defaults are far above every real data set, memory store and
+    # plugin library measured in this project, so reaching one means something
+    # surprising arrived - and the refusal names the key. Empty, or 0, is no
+    # limit at all, which is a decision you are allowed to make. The size takes
+    # K, M, G and T; a bare number is bytes. dr_incoming_within_limits says
+    # what this does and does not prevent.
+    DRAUGR_INCOMING_MAX_FILES=100000
+    DRAUGR_INCOMING_MAX_SIZE=8G
 
     DRAUGR_BRANCH=               # empty => the branch currently checked out
     DRAUGR_REMOTE=draugr
@@ -3950,18 +3963,6 @@ dr_mem_store_dir() {
         "${DRAUGR_AGENT:-claude}"
 }
 
-# Staging is inside the read-only source mount. A link must be refused before
-# a copy can expose its target, including links inside an approved directory.
-dr_mem_validate_tree() {
-    local path=$1 bad
-    [ -d "$path" ] && [ ! -L "$path" ] || return 1
-    bad=$(find "$path" \( -type l -o ! -type f -a ! -type d \) -print -quit) || return 1
-    [ -z "$bad" ] || { dr_error "context contains a link or special file: $bad"; return 1; }
-    # The escaped-name output of sha256sum cannot be compared by the line protocol.
-    bad=$(find "$path" -name '*[[:cntrl:]\\]*' -print -quit) || return 1
-    [ -z "$bad" ] || { dr_error "context contains an unsafe file name"; return 1; }
-}
-
 # dr_mem_store_migrate <repo>: move a store from before 0.2.0 under its agent.
 #
 # Before the store had a directory for each agent, the memory of this repo was
@@ -4129,6 +4130,220 @@ dr_stage() {
     DR_STAGE_WIN=$(dr_path_win "$DR_STAGE")
 
     _dr_stage_prune "$root"
+}
+
+# ---------------------------------------------------------------------------
+# the shared receive path
+# ---------------------------------------------------------------------------
+#
+# THREE CHANNELS CARRY UNTRUSTED BYTES ONTO THIS HOST, and each one used to do
+# the same steps in its own order, with its own gaps: the data pull (rsync out
+# of the mound), the memory export (sbx cp out of the mound) and the Codex
+# plugin build (sbx cp out of a build mound). The security review calls the fix
+# hardening 1 and proposes one quarantine that owns the whole transaction.
+#
+# THIS IS THE OTHER SHAPE, AND IT IS DELIBERATE. The three transfers genuinely
+# differ - rsync over ssh, sbx cp, a local copy - so one function owning the
+# transaction would need a callback for the only part that is not shared, and
+# three readable flows would become one indirect one. What IS the same in all
+# three is every question that decides whether the bytes may land, and that is
+# what lives here:
+#
+#   dr_stage                    a host-owned directory outside the repository
+#   dr_incoming_validate_tree   what shape the tree may have
+#   dr_incoming_within_limits   how much of it there may be
+#   dr_incoming_dest_ok         where it may be published
+#   dr_incoming_publish         the swap itself, by rename and never in place
+#
+# A caller that skips a step now skips it visibly, in its own code, where a
+# reader and a test can see it. docs/SECURITY.md states the sequence for a
+# user; docs/HACKING.md states it for whoever adds a fourth channel.
+#
+# THE ORDER IS PART OF THE CONTRACT. The shape test comes first, because every
+# later step assumes it: `-type f` is a complete account of the bytes only once
+# links and special files are refused, and a destination test on a tree that
+# still holds a link would be answering about the wrong place.
+
+# dr_incoming_validate_tree <tree>: may a tree of this SHAPE be published?
+#
+# This was dr_mem_validate_tree. The name was already wrong - the Codex plugin
+# library and, with this change, the data pull ask the same question - and a
+# name that says `mem` invites a fourth channel to write its own copy.
+#
+# Staging can be inside a read-only source mount. A link must be refused before
+# a copy can expose its target, including a link inside an approved directory.
+dr_incoming_validate_tree() {
+    local path=$1 bad
+    [ -d "$path" ] && [ ! -L "$path" ] || return 1
+    bad=$(find "$path" \( -type l -o ! -type f -a ! -type d \) -print -quit) || return 1
+    [ -z "$bad" ] || { dr_error "the incoming tree holds a link or a special file: $bad"; return 1; }
+    # The escaped-name output of sha256sum cannot be compared by the line protocol.
+    bad=$(find "$path" -name '*[[:cntrl:]\\]*' -print -quit) || return 1
+    [ -z "$bad" ] || { dr_error "the incoming tree holds an unsafe file name"; return 1; }
+}
+
+# dr_size_bytes <value>: a size written as 4096, 64K, 512M, 8G or 2T, in bytes.
+#
+# A bare number is bytes, which is what DRAUGR_DATA_DIFF_MAX has always been.
+# The suffixes exist because a limit nobody can read is a limit nobody sets,
+# and 8589934592 is not a number a person checks. Anything else is a refusal
+# rather than a guess: a typo in a limit must not read as "no limit".
+dr_size_bytes() {
+    local v=$1 n unit mult=1
+    [ -n "$v" ] || return 1
+    n=${v%[KkMmGgTt]}
+    unit=${v#"$n"}
+    case "$n" in ''|*[!0-9]*) return 1 ;; esac
+    case "$unit" in
+        '')   mult=1 ;;
+        [Kk]) mult=1024 ;;
+        [Mm]) mult=$((1024 * 1024)) ;;
+        [Gg]) mult=$((1024 * 1024 * 1024)) ;;
+        [Tt]) mult=$((1024 * 1024 * 1024 * 1024)) ;;
+        *)    return 1 ;;
+    esac
+    printf '%s' "$((n * mult))"
+}
+
+# dr_incoming_within_limits <tree>: is there a sane amount of it?
+#
+# WHAT THIS DOES NOT DO, said here because the review's word is "quota" and a
+# quota is not what any of the three channels can have. In all three the bytes
+# are already on this disk when this runs: the whole point of the staged pull
+# is that the transfer and the review are one observation, and sbx cp has no
+# cap of its own either. So this bounds what gets PUBLISHED - into your
+# repository, your memory store, your plugin library - and the staging copy
+# goes when the caller's trap removes it. A mound that sends an absurd tree
+# fills the staging root for the length of one command, and changes nothing
+# that outlives it.
+#
+# Bounded at all is the point. The defaults are far above every real memory
+# store, plugin library and data set measured in this project, so a refusal
+# here means something surprising arrived - and it names the key, because a
+# limit somebody cannot raise is a limit they work around.
+#
+# It runs AFTER dr_incoming_validate_tree. `-type f` is the whole of the bytes
+# only once a link cannot point out of the tree.
+dr_incoming_within_limits() {
+    local tree=$1 maxf maxb files bytes
+    maxf=${DRAUGR_INCOMING_MAX_FILES:-}
+    maxb=''
+    if [ -n "${DRAUGR_INCOMING_MAX_SIZE:-}" ]; then
+        maxb=$(dr_size_bytes "$DRAUGR_INCOMING_MAX_SIZE") || {
+            dr_error "DRAUGR_INCOMING_MAX_SIZE is not a size: $DRAUGR_INCOMING_MAX_SIZE"
+            return 1
+        }
+    fi
+    # Both off is "no limit", which is a decision the user is allowed to make.
+    # A tree nobody set a limit for is not walked at all.
+    #
+    # THE COUNT IS CHECKED THE SAME WAY THE SIZE IS, and for the same reason: a
+    # value that is not a number must not reach `[ "$files" -gt "$maxf" ]`,
+    # where the test answers 2 ("integer expression expected"), the `if` does
+    # not fire, and the function returns 0. That is a typo reading as "no
+    # limit", which is the whole defect this review is about.
+    case "$maxf" in
+        ''|0)      maxf='' ;;
+        *[!0-9]*)  dr_error "DRAUGR_INCOMING_MAX_FILES is not a number: $maxf"; return 1 ;;
+    esac
+    case "$maxb" in ''|0) maxb='' ;; esac
+    [ -n "$maxf" ] || [ -n "$maxb" ] || return 0
+
+    # One walk for both answers. A size printed per file and summed costs what
+    # du costs, and needs no second traversal for the count.
+    read -r files bytes < <(find "$tree" -type f -printf '%s\n' 2>/dev/null |
+        awk '{ n++; b += $1 } END { printf "%d %d\n", n, b }')
+
+    # Each refusal names the key, and the byte one names the value as written
+    # as well as in bytes: "8G" is what the user typed and the number is what
+    # the comparison used, and a surprise is usually in the difference.
+    if [ -n "$maxf" ] && [ "$files" -gt "$maxf" ]; then
+        dr_error "the incoming tree holds $files files, and DRAUGR_INCOMING_MAX_FILES is $maxf"
+        return 1
+    fi
+    if [ -n "$maxb" ] && [ "$bytes" -gt "$maxb" ]; then
+        dr_error "the incoming tree holds $bytes bytes, and DRAUGR_INCOMING_MAX_SIZE is $DRAUGR_INCOMING_MAX_SIZE ($maxb)"
+        return 1
+    fi
+    return 0
+}
+
+# dr_incoming_dest_ok <root> <dest>: may the published tree land at <dest>?
+#
+# THE NAME OF A PLACE IS NOT THE PLACE. dr_path_contained resolves both sides
+# first, so a link anywhere above <dest> that leaves <root> is already caught
+# by the containment test - the resolved path is simply somewhere else. What it
+# cannot answer is the two questions that only matter when something is about
+# to be REPLACED there, and those are here:
+#
+#   the parent must exist and be a real directory, because a rename into a
+#   link publishes into whatever the link names, with the right path printed
+#   in the receipt
+#
+#   <dest> itself, if it exists, must be a real directory, because the publish
+#   below moves the old one aside, and moving a link aside leaves the tree it
+#   pointed at exactly where it was
+#
+# <root> is the directory Draugr owns for this channel: the repository, the
+# memory store of this repo, the plugin library. It is NOT the user's
+# %LOCALAPPDATA% or home - what they do above the root is their business, and
+# dr_stage says the same thing about the staging root.
+dr_incoming_dest_ok() {
+    local root=$1 dest=$2 parent
+    [ -n "$root" ] && [ -n "$dest" ] || return 1
+    if [ ! -d "$root" ] || [ -L "$root" ]; then
+        dr_error "the destination root is not a directory of its own: $root"
+        return 1
+    fi
+    parent=${dest%/*}
+    [ "$parent" != "$dest" ] || parent=.
+    if [ ! -d "$parent" ] || [ -L "$parent" ]; then
+        dr_error "the directory that would hold the published tree is a link, or is absent: $parent"
+        return 1
+    fi
+    if [ -e "$dest" ] && { [ -L "$dest" ] || [ ! -d "$dest" ]; }; then
+        dr_error "what is at the destination is a link or not a directory: $dest"
+        return 1
+    fi
+    if ! dr_path_contained "$root" "$dest"; then
+        dr_error "the destination is not inside $root: $dest"
+        return 1
+    fi
+    return 0
+}
+
+# dr_incoming_publish <staged> <dest> [<keep>]: the swap, by rename.
+#
+# Never a write in place: a stopped publication must leave the destination as
+# it was, not as a mixture of this tree and the last one. A rename within one
+# file system is the only step here that cannot be half done.
+#
+# <keep> is where the copy being replaced goes, and the CALLER names it. The
+# two callers already have names their users know - memory.previous, which one
+# mv brings back, and seed.old - and renaming those to one shared spelling
+# would be churn with no security in it. With no <keep>, the old copy is
+# removed instead; nothing uses that today, and the day something does, a
+# reviewer sees that it chose to.
+#
+# It does NOT call dr_incoming_dest_ok itself. The callers have more to say
+# about their own destination than this function could, and a check that is
+# also made somewhere else is a check that one of the two copies will outlive.
+dr_incoming_publish() {
+    local staged=$1 dest=$2 keep=${3:-}
+    if [ ! -d "$staged" ] || [ -L "$staged" ]; then
+        dr_error "there is no staged tree to publish at $staged"
+        return 1
+    fi
+    if [ -e "$dest" ] || [ -L "$dest" ]; then
+        if [ -n "$keep" ]; then
+            rm -rf -- "$keep" || return 1
+            mv -- "$dest" "$keep" || return 1
+        else
+            rm -rf -- "$dest" || return 1
+        fi
+    fi
+    mv -- "$staged" "$dest" || return 1
+    return 0
 }
 
 # ---------------------------------------------------------------------------

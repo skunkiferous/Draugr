@@ -392,7 +392,7 @@ dr_agent_mem_unpack() {
 # The source of Claude already is the memory directory of one project. Reject links
 # before copying, since staging itself is visible through the source mount.
 dr_agent_mem_prepare_source() {
-    dr_mem_validate_tree "$1" || return 1
+    dr_incoming_validate_tree "$1" || return 1
     mkdir -p "$2"
     cp -a "$1/." "$2/"
 }

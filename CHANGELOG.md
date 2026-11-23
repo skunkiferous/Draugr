@@ -12,6 +12,40 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- **`DRAUGR_INCOMING_MAX_FILES` and `DRAUGR_INCOMING_MAX_SIZE`** — one ceiling for everything that
+  arrives from a mound: a data pull, a memory export and a Codex plugin build. Defaults `100000`
+  and `8G`; empty or `0` turns a check off; the size takes `K`, `M`, `G` and `T` and a bare number
+  is bytes. See the entry under Fixed for what they do and what they do not: the bytes are already
+  in the staging directory when a limit is applied, so this is a ceiling on what gets **published**
+  into your repository, memory store and plugin library, and not a disk quota.
+
+- **The `draugr` skill now answers "my work needs a credential."** Its who-does-what table had no
+  row for a service login, so an agent that needed one looked, found nothing under `dr-*`, and
+  named `sbx secret set github --sandbox <mound> -t "$(gh auth token)"`: the right mechanism with
+  the widest possible key, and without the cost that the skill's own four-part rule asks for. The
+  row is there now, and a section with it. **Never ask for a token to be pasted into the mound**,
+  written to a file or put in `DRAUGR_ENV` — `sbx` keeps service credentials on the host and its
+  proxy authenticates each request, so a credential inside a mound buys nothing and can leak.
+  Scope a secret to one mound with `--sandbox` instead of globally. Offer the cheaper answer first:
+  for a private repository the operator can clone it on the host and mount it read-only with
+  `DRAUGR_MOUNTS=<path>:ro`, and then no credential exists near the agent at all. And if a token
+  really is the answer, say what it costs — `gh auth token` is the whole account, read and write,
+  on every repository the operator can reach, which is a password and not a key for one door. The
+  section ends with the part no command can check: whatever the agent reads, the model provider
+  reads, so for source under a licence the operator accepted, the agent asks before reading it.
+  Nothing in `dr-*` changes. `sbx secret` stays a command the operator types, as
+  [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) already says, and `dr-doctor` still reports only
+  the agent's own credential, because that is the one Draugr needs to build a working mound.
+  [SECURITY.md](docs/SECURITY.md) states the rule the skill follows from, under **The credential a
+  mound never needs**: for a repository that is yours and for one that is not, the answer is the
+  same read-only mount, so a mound never needs a credential of yours to *look* at something. That
+  is not a new restriction. It is the boundary Draugr already draws — a clone to work in, the real
+  repository read-only, a `git push` to `origin` that cannot work because that remote **is** the
+  read-only mount, and everything leaving on the host where you read it first — said for
+  credentials. The two things it does not cover are named there too: the agent's own sign-in, which
+  is required and which the proxy holds on the host, and *writing* to a service, which is yours to
+  do.
+
 ### Removed
 
 ### Changed
@@ -72,6 +106,50 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- **Three channels brought bytes out of a mound, and each one decided for itself what was allowed
+  to stay.** `dr-data pull` (rsync), `dr-mem export` (`sbx cp`) and the Codex plugin build
+  (`sbx cp` from a build mound) all write host files with content the agent produced, and all three
+  did the same steps in their own order with their own gaps: none of them had any limit at all, and
+  only the plugin build asked whether the place it was publishing to was the place it named. The
+  security review calls this one defect — *hardening 1* — and asks for one quarantine that owns the
+  whole transaction.
+
+  **Draugr shares every step that decides, and leaves each channel its own transfer.** The three
+  transfers genuinely differ, so one owning function would have needed a callback for the only part
+  that is not shared, and three readable flows would have become one indirect one. What is shared
+  now is the whole of the decision: a host-owned staging directory outside the repository, a shape
+  test (no link, no device, no socket, no fifo, no control character or backslash in a name), a
+  size test, a destination test, and a publication that is a rename and never a write in place.
+  `docs/SECURITY.md` states the sequence, and `docs/HACKING.md` states it for whoever adds a fourth
+  channel.
+
+  **What this catches that nothing caught before.** A memory store whose `memory/` is a symlink out
+  of the store published the agent's context wherever that link pointed, and printed the store's
+  own path in the receipt afterwards; so did a store that was itself a link, because the old
+  containment test compared names and a name cannot see a link. Both are now a refusal that names
+  the entry and leaves the store untouched. And nothing in any of the three channels had an upper
+  bound of any kind.
+
+  **What a limit here does not do**, said plainly because the review's word is "quota": in all
+  three channels the bytes are already on this disk when the limit is applied — a staged pull
+  transfers first on purpose, so that the tree that was reviewed is the tree that is published, and
+  `sbx cp` has no cap of its own either. The limit is a ceiling on what reaches the things that
+  outlive the command, and a refused transfer leaves its bytes in the staging directory for the
+  trap to remove.
+
+  **`dr-data pull` takes one of the shared steps and states in its own code why it leaves three**,
+  which is the point of a shared checklist rather than a shared owner: it publishes by merging into
+  the working tree instead of replacing a directory, so the repository *is* the root and each name
+  is judged component by component instead; and its shape test is its own because it reports every
+  entry it refuses rather than stopping at the first, which is what makes the review worth reading.
+  Measured with rsync 3.2.7 while deciding that: publishing a staged `data/out.txt` onto a working
+  tree where `data` is a symlink out of the tree replaces that link with a real directory and
+  leaves the outside file untouched, and the same holds for a symlinked file. The one flag that
+  reverses it, `--keep-dirlinks`, is now kept out of the command by `tests/data.bats`.
+
+  Internal, for anyone reading the source: `dr_mem_validate_tree` is now
+  `dr_incoming_validate_tree`. The old name said `mem` while the plugin build already used it, and
+  a name that is wrong is an invitation for a fourth caller to write its own copy.
 The next ten entries come from a security review of 0.9.0. They are one defect in different
 places: **an error was turned into a reassuring answer.** A probe that failed, a listing that could
 not be read, a removal that was refused — each of them arrived at the code that had to decide as

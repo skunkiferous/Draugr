@@ -941,6 +941,40 @@ missing. Refer to [docs/CLAUDE_PLUGINS.md](CLAUDE_PLUGINS.md).
 
 ---
 
+---
+
+## What arrives from a mound
+
+Three channels write files on your host with bytes the agent produced: a **data pull**
+(`dr-data pull`), a **memory export** (`dr-mem export`) and a **Codex plugin build**
+(`dr-plugin`). They use different transfer tools, and they ask the same questions before anything
+is published — what shape the tree may have, how much of it there may be, and where it may land.
+[`docs/SECURITY.md`](SECURITY.md#what-arrives-from-a-mound-and-what-it-has-to-pass) describes the
+sequence; these two keys are the only part of it you set.
+
+Both apply to all three channels. One pair rather than three is deliberate: a limit for each
+channel is three limits to keep in step, and the one that gets forgotten is the one that matters.
+
+### `DRAUGR_INCOMING_MAX_FILES`
+Default `100000`. The largest number of files Draugr publishes from one transfer. Empty or `0`
+turns the check off.
+
+### `DRAUGR_INCOMING_MAX_SIZE`
+Default `8G`. The largest total size Draugr publishes from one transfer. Takes `K`, `M`, `G` and
+`T`; a bare number is bytes. Empty or `0` turns the check off. A value that is not a size is a
+refusal, not a guess — a typo in a limit must not read as "no limit".
+
+**What these do, and what they do not.** In all three channels the bytes are already on this disk
+when the limit is applied: a staged pull transfers first on purpose, so that the tree that was
+reviewed is the tree that gets published, and `sbx cp` has no cap of its own either. So this is a
+ceiling on what reaches your **repository, memory store and plugin library** — the things that
+outlive the command — and not a disk quota. A transfer that is refused leaves its bytes in the
+staging directory, which the command removes as it exits.
+
+The defaults are far above every real data set, memory store and plugin library this project has
+measured, so a refusal means something surprising arrived. Raise the key if your data genuinely is
+that large; the refusal names which of the two fired and what it measured.
+
 ## Run-state dependencies
 
 One `dr-up` starts the mounds that the mound of this repository needs, if they are not already

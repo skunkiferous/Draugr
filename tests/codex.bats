@@ -268,7 +268,7 @@ codex_library() {
     local f="$DR_ROOT/lib/plugins/codex.sh" body stop judge
     body=$(sed -n '/^_dr_cp_commit() {/,/^}/p' "$f")
     stop=$(printf '%s\n' "$body" | grep -n '_dr_cp_stop_mound' | head -1 | cut -d: -f1)
-    judge=$(printf '%s\n' "$body" | grep -n 'dr_mem_validate_tree' | head -1 | cut -d: -f1)
+    judge=$(printf '%s\n' "$body" | grep -n 'dr_incoming_validate_tree' | head -1 | cut -d: -f1)
     [ -n "$stop" ] && [ -n "$judge" ]
     # A check is worth nothing if the thing it checked can still be edited
     # afterwards.
@@ -469,4 +469,38 @@ YAML
     run dr_kit_allow_list "$REPO/.draugr/kit"
     [ "$output" = opened.example.com ]
     grep -q 'build.example.com' "$REPO/.draugr/kit/spec.yaml"
+}
+
+# THE FOUR QUESTIONS, IN THE ORDER THAT IS THE CONTRACT. A plugin build cannot
+# be run from here - it needs a build mound and a Codex that has the native
+# plugin CLI - so the order is read out of the source, the same way the test
+# above reads the one that matters most.
+#
+# Why the order is a contract and not a style: the shape test is what makes
+# `-type f` a complete account of the bytes, so the size question after it is
+# answering about the whole tree, and the destination question is about the
+# place the tree will actually go.
+@test "codex plugins: the commit asks the four shared questions, in order" {
+    local f="$DR_ROOT/lib/plugins/codex.sh" body
+    body=$(sed -n '/^_dr_cp_commit() {/,/^}/p' "$f")
+    local shape size place publish
+    shape=$(printf '%s\n' "$body" | grep -n 'dr_incoming_validate_tree' | head -1 | cut -d: -f1)
+    size=$(printf '%s\n' "$body" | grep -n 'dr_incoming_within_limits' | head -1 | cut -d: -f1)
+    place=$(printf '%s\n' "$body" | grep -n 'dr_incoming_dest_ok' | head -1 | cut -d: -f1)
+    publish=$(printf '%s\n' "$body" | grep -n 'dr_incoming_publish' | head -1 | cut -d: -f1)
+    [ -n "$shape" ] && [ -n "$size" ] && [ -n "$place" ] && [ -n "$publish" ]
+    [ "$shape" -lt "$size" ]
+    [ "$size" -lt "$place" ]
+    [ "$place" -lt "$publish" ]
+}
+
+# The swap is the one step where a mistake is not recoverable, so there is one
+# copy of it. A hand-rolled mv here would drift from the memory export's.
+@test "codex plugins: the library is published with the shared helper, not its own mv" {
+    local f="$DR_ROOT/lib/plugins/codex.sh" body
+    body=$(sed -n '/^_dr_cp_commit() {/,/^}/p' "$f")
+    ! printf '%s\n' "$body" | grep -qE '^[[:space:]]*mv ' || return 1
+    # The one rm that is left is the build workspace, after the swap.
+    [ "$(printf '%s\n' "$body" | grep -cE '^[[:space:]]*rm -rf ')" -eq 1 ]
+    printf '%s\n' "$body" | grep -q 'dr_incoming_publish'
 }

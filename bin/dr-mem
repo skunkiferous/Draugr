@@ -267,10 +267,20 @@ export)
     # already between 0.37.1 and 0.53.0. This is the same question asked by the
     # side that keeps the answer - and it is the rule the import path applies
     # in the other direction, so the store holds one shape of tree.
-    dr_mem_validate_tree "$packed" || dr_die \
+    dr_incoming_validate_tree "$packed" || dr_die \
         "what came out of $DRAUGR_SANDBOX is not a plain tree of files" \
         "The line above names the entry. Your store is UNCHANGED: the copy is in" \
         "the staging directory, which this command removes as it exits." \
+        "Look at what the agent wrote:  dr-mem diff"
+
+    # How much of it there may be. The staging copy is already on this disk
+    # when this asks - see dr_incoming_within_limits for what that does and
+    # does not prevent - so this decides what reaches the store, and the trap
+    # takes the rest away with the staging directory.
+    dr_incoming_within_limits "$packed" || dr_die \
+        "what came out of $DRAUGR_SANDBOX is larger than this host accepts" \
+        "The line above names the limit and the key that raises it. Your store is" \
+        "UNCHANGED: the copy is in the staging directory, which this command removes." \
         "Look at what the agent wrote:  dr-mem diff"
 
     # Put it in place with a rename, never with a write in place. Thus a stopped
@@ -279,6 +289,17 @@ export)
     # export always overwrites. The painful case is a mound that started empty,
     # and overwrites a store that was not empty. Then one `mv` brings it back.
     mkdir -p "$store_dir"
+
+    # And where it may land, asked once the directory it lands in exists. The
+    # root is the whole store, not this repo's corner of it: a link anywhere on
+    # the way down to memory/ publishes into whatever that link names, and the
+    # receipt afterwards still prints the path that was asked for.
+    dr_incoming_dest_ok "$DRAUGR_MEM_STORE" "$store_dir/memory" || dr_die \
+        "the memory store is not the place it names" \
+        "The line above says which part of it. Your store is UNCHANGED, and the" \
+        "copy is in the staging directory, which this command removes as it exits." \
+        "DRAUGR_MEM_STORE is $DRAUGR_MEM_STORE"
+
     rm -rf "$store_dir/memory.incoming"
     mv "$packed" "$store_dir/memory.incoming"
 
@@ -306,11 +327,14 @@ export)
                "A link in the tree stops sbx cp without an error. Look with:  dr-mem diff"
     fi
 
-    if [ -d "$store_dir/memory" ]; then
-        rm -rf "$store_dir/memory.previous"
-        mv "$store_dir/memory" "$store_dir/memory.previous"
-    fi
-    mv "$store_dir/memory.incoming" "$store_dir/memory"
+    # The swap itself is the shared one, so that the three channels that bring
+    # bytes onto this host cannot drift apart in the one step where a mistake
+    # is not recoverable. memory.previous is this command's own name for the
+    # copy it replaces, and the helper takes it as an argument for that reason.
+    dr_incoming_publish "$store_dir/memory.incoming" "$store_dir/memory" \
+        "$store_dir/memory.previous" || dr_die \
+        "the export could not be put in place, and the store is unchanged" \
+        "The copy is at $store_dir/memory.incoming"
 
     n=$(list_local "$store_dir/memory" | count_lines)
 
@@ -418,7 +442,7 @@ import)
         || dr_die "could not prepare a safe context import" \
             "Use a curated source directory, not an agent home with credentials."
     # Check the copied tree too, in case a source changed during preparation.
-    dr_mem_validate_tree "$DR_STAGE/$stage_name" || dr_die "prepared context contains unsafe paths"
+    dr_incoming_validate_tree "$DR_STAGE/$stage_name" || dr_die "prepared context contains unsafe paths"
     n=$(list_local "$DR_STAGE/$stage_name" | count_lines)
     if [ "$n" -eq 0 ]; then
         [ -n "$if_empty" ] && exit 0
