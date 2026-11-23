@@ -193,6 +193,11 @@ SH
 #
 # Publish the whole recovery set or fail without rotating the previous store.
 # A successful markdown-only copy cannot stand in for a conversation backup.
+#
+# THREE ANSWERS, like the probe it is built on: 0 packed, 1 definitely not safe
+# to pack, 2 could not find out. This function prints which it was, so the
+# caller reports the status and does not guess at a cause of its own. See
+# "Pattern: a reporter with three answers" in docs/HACKING.md.
 dr_agent_mem_pack() {
     # $1 is the repo, and this agent does not use it. Codex stores nothing under
     # the name of the project. It is in the signature, because all modules
@@ -216,22 +221,30 @@ dr_agent_mem_pack() {
             printf '  %sthe databases, because a copy could be incomplete.%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
         fi
-        return 1
+        # The answer of the probe, not a flattened 1. "codex is running" and
+        # "Draugr could not find out" need different advice, and only this
+        # function knows which of the two it printed.
+        return "$rc"
     fi
 
     # The -wal file is half of the current state of the database. Thus it goes
     # with the database, or the copy is old. -shm does not go. It is a
     # shared-memory index that SQLite builds again, and an old one is worse
     # than none.
-    before=$(dr_agent_mem_list) || return 1
-    dr_mound_run 'rm -rf "$1"; mkdir -p "$1"' "$stage" || return 1
-    dr_mound_run "$(_dr_codex_state_script)" pack "$home" "$stage" || return 1
+    # A step that does not answer is "could not find out", not "not safe": the
+    # mound is what the caller should then look at, not the agent. That is the
+    # whole difference between 1 and 2 below.
+    before=$(dr_agent_mem_list) || return 2
+    dr_mound_run 'rm -rf "$1"; mkdir -p "$1"' "$stage" || return 2
+    dr_mound_run "$(_dr_codex_state_script)" pack "$home" "$stage" || return 2
     # Catch an agent started during the copy. The caller publishes nothing
     # after a failed pack, even if the temporary files already exist.
-    dr_agent_mem_quiesce || return 1
-    after=$(dr_agent_mem_list) || return 1
-    packed=$(dr_mound_sh "$(_dr_codex_state_script)" list "$stage") || return 1
+    dr_agent_mem_quiesce || return $?
+    after=$(dr_agent_mem_list) || return 2
+    packed=$(dr_mound_sh "$(_dr_codex_state_script)" list "$stage") || return 2
     # A writer that started and stopped between probes still changes hashes.
+    # This one IS 1: the probes answered, and what they say is that the context
+    # moved. Nothing about the mound is in doubt.
     if [ "$before" != "$after" ] || [ "$before" != "$packed" ]; then
         dr_error "Codex context changed during export. The store is unchanged"
         return 1
@@ -248,7 +261,8 @@ dr_agent_mem_unpack() {
     home=$(_dr_codex_home)
 
     # Restore sessions without changing consent to use or generate memories.
-    dr_agent_mem_import_ready || return 1
+    # The answer of the probe, so that "in use" and "could not tell" stay apart.
+    dr_agent_mem_import_ready || return $?
     dr_mound_run "$(_dr_codex_state_script)" unpack "$stage" "$home"
 }
 

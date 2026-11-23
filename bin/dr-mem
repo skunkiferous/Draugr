@@ -232,9 +232,22 @@ export)
     # them into one directory, and this code moves it in one copy. You can test
     # the result of that copy, and you do not have to trust it.
     dr_info "exporting $DRAUGR_SANDBOX memory"
-    dr_agent_mem_pack "$DR_REPO" "$DR_MOUND_STAGE" \
-        || dr_die "could not collect the memory of $(dr_agent_mem_label) in the mound" \
-                  "Is the mound running?  dr-status"
+    # THE MODULE HAS ALREADY SAID WHY. This used to add "Is the mound running?
+    # dr-status" to every failure, including the one whose own report, one line
+    # above, was "codex runs in <mound>" - which can only be true of a running
+    # mound. A caller that answers a diagnosis with a guess costs the reader the
+    # diagnosis. So report the status and add nothing that the module did not
+    # measure. See "Pattern: a reporter with three answers" in docs/HACKING.md.
+    pack_rc=0
+    dr_agent_mem_pack "$DR_REPO" "$DR_MOUND_STAGE" || pack_rc=$?
+    case "$pack_rc" in
+        0) ;;
+        1) dr_die "could not collect the memory of $(dr_agent_mem_label) in the mound" \
+                  "The lines above say why. Nothing was exported, and the store is unchanged." ;;
+        *) dr_die "could not collect the memory of $(dr_agent_mem_label) in the mound" \
+                  "A step of the copy did not answer, so the state is unknown." \
+                  "Is the mound running?  dr-status" ;;
+    esac
 
     dr_sbx cp "$DRAUGR_SANDBOX:$DR_MOUND_STAGE" "$DR_STAGE_WIN" \
         || dr_die "sbx cp failed" "Is the mound running?  dr-status"
@@ -433,8 +446,19 @@ import)
 
     # Filter BEFORE staging. Neither a final-destination filter nor a later
     # removal can undo a credential that already crossed the boundary.
-    dr_agent_mem_import_ready || dr_die "the context of the agent is in use" \
-        "Leave the agent and its background server, then retry dr-mem import."
+    # Three answers, and the middle one used to be reported as the first: a
+    # probe that could not tell was announced as "in use", which sends the
+    # reader to close an agent that may not be running.
+    ready_rc=0
+    dr_agent_mem_import_ready || ready_rc=$?
+    case "$ready_rc" in
+        0) ;;
+        1) dr_die "the context of the agent is in use" \
+                  "Leave the agent and its background server, then retry dr-mem import." ;;
+        *) dr_die "Draugr could not find out whether the context of the agent is in use" \
+                  "It imported nothing, because writing over a live database destroys it." \
+                  "Is the mound running?  dr-status" ;;
+    esac
     stage_name=$(basename "$DR_MOUND_STAGE")
     dr_stage
     trap 'rm -rf "$DR_STAGE"' EXIT

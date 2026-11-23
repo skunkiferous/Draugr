@@ -352,6 +352,11 @@ dr_agent_mem_transcript_paths() { printf 'transcripts\n'; }
 # that started and stopped between the probes still changes a hash, and that
 # is what the comparison is for. On any failure the caller publishes nothing,
 # so the store keeps the complete copy that it already had.
+#
+# THREE ANSWERS, like the probe it is built on: 0 packed, 1 definitely not safe
+# to pack, 2 could not find out. This function prints which it was, so the
+# caller reports the status and does not guess at a cause of its own. See
+# "Pattern: a reporter with three answers" in docs/HACKING.md.
 dr_agent_mem_pack() {
     local repo=$1 stage=$2 before after rc=0
     dr_agent_mem_quiesce "$repo" || rc=$?
@@ -370,12 +375,20 @@ dr_agent_mem_pack() {
             printf '  %swritten. Thus it did not copy it, because the copy can be half of one.%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
         fi
-        return 1
+        # The answer of the probe, not a flattened 1. "something holds the
+        # conversation" and "Draugr could not find out" need different advice,
+        # and only this function knows which of the two it printed.
+        return "$rc"
     fi
-    before=$(dr_agent_mem_list "$repo") || return 1
-    _dr_claude_state pack "$repo" "$stage" || return 1
-    dr_agent_mem_quiesce "$repo" || return 1
-    after=$(dr_agent_mem_list "$repo") || return 1
+    # A step that does not answer is "could not find out", not "not safe": the
+    # mound is what the caller should then look at, not the agent. That is the
+    # whole difference between 1 and 2 below.
+    before=$(dr_agent_mem_list "$repo") || return 2
+    _dr_claude_state pack "$repo" "$stage" || return 2
+    dr_agent_mem_quiesce "$repo" || return $?
+    after=$(dr_agent_mem_list "$repo") || return 2
+    # This one IS 1: the probes answered, and what they say is that the context
+    # moved. Nothing about the mound is in doubt.
     if [ "$before" != "$after" ]; then
         dr_error "the context changed during the export. The store is unchanged"
         return 1
@@ -385,7 +398,8 @@ dr_agent_mem_pack() {
 # dr_agent_mem_unpack <repo> <stage>: the copy in the other direction.
 dr_agent_mem_unpack() {
     local repo=$1 stage=$2
-    dr_agent_mem_import_ready "$repo" || return 1
+    # The answer of the probe, so that "in use" and "could not tell" stay apart.
+    dr_agent_mem_import_ready "$repo" || return $?
     _dr_claude_state unpack "$repo" "$stage"
 }
 

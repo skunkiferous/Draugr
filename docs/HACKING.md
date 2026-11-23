@@ -665,6 +665,70 @@ that you add later must select the same direction.
 
 ---
 
+## Pattern: a reporter with three answers
+
+Draugr is full of commands and functions that answer a yes/no question by asking something that
+can fail to answer: a mound, `sbx`, a process table, the network. Every one of them has **three**
+results, not two. The rule was first written at `bin/dr-sync:52` and it is the whole pattern:
+
+> Three results, not two. Do not report "I could not connect to the mound" as "nothing to lose".
+> That opens the gate on the one command that destroys work.
+
+```
+0   the clean answer                 nothing to lose, quiet, no credential needed
+1   the definite other answer        unfetched commits, the agent is running, in use
+2   could not find out               the mound did not answer, the probe is missing
+```
+
+**`2` must never collapse into `0`.** That is the half most people get right, because it is the
+half that loses data. These follow it: `dr-sync --check-only`, `dr-mem check`,
+`dr_agent_mem_quiesce` and `dr_agent_mem_pack` in both agent modules, `dr_model_probe`,
+`dr_dep_claim_valid`, the policy queries in `lib/common.sh`, and `Get-VaultAccess` in
+`lib/forge/vault-access.ps1`, which spells `2` as an empty string because PowerShell has no exit
+code there.
+
+**And `2` must not collapse into `1` either, which is the half that gets missed.** Merging them
+costs nothing in behaviour — both mean "do not proceed" — so the temptation is to write
+`probe || return 1` and move on. What it costs is the message. A reader who is told "the agent is
+running" closes an agent; a reader who is told "Draugr could not find out" looks at the mound.
+Send the first to do the second and you have spent their time on your behalf.
+
+So: **propagate with `|| return $?`, never `|| return 1`**, and let the branch that knows the
+cause be the one that prints it.
+
+**A consumer handles all three, even when two of them do the same thing.** The model is
+`bin/dr-status`:
+
+```sh
+mcheck=0
+"$_dr_bin/dr-mem" check >/dev/null 2>&1 || mcheck=$?
+case "$mcheck" in
+    0) row mound "nothing unexported" ;;
+    1) row mound "has memory that is not in the store. Use dr-mem export." ;;
+    *) row mound "could not be read" ;;
+esac
+```
+
+`bin/dr-rm` and `bin/dr-up` go one step further: a status they do not recognise at all is named in
+the refusal (`"dr-sync --check-only ended with status $check, which dr-rm does not know"`), because
+a reporter that grows a fourth answer must not be silently read as one of the first three.
+
+**Never answer a diagnosis with a guess.** The failure that made this a written rule: `dr-mem
+export` printed the module's own report — "codex runs in <mound>" — and then added its own line,
+"Is the mound running? dr-status". The hint is right for a mound that did not answer and wrong for
+every other case, and it arrived one line after proof that the mound was running. A caller that
+appends a generic cause to a specific report deletes the report.
+
+**What is not a reporter:** a stub whose answer is already known. `lib/agents/default.sh` returns
+fixed values because the agent has no memory support at all — nothing is asked, so nothing can go
+unanswered, and its comment says so rather than leaving the next reader to "fix" it.
+
+**Testing it needs fault injection, and the levers exist.** `tests/mocks/pgrep` reads
+`DR_MOCK_AGENT_RUNNING` (which names are running) and `DR_MOCK_PGREP_BROKEN` (answer 2, as the real
+`pgrep` does for its own errors), so both non-zero answers are the test's to choose. A test that
+only ever sees `0` and `1` is how the `2` branch of a three-answer function gets written wrong and
+stays wrong — which is exactly what happened to `dr_agent_mem_quiesce` before it had one.
+
 ## Pattern: receiving a tree from a mound
 
 Three commands bring bytes from a mound onto the host: `dr-data pull`, `dr-mem export` and the

@@ -106,6 +106,33 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- **Two refusals in `dr-mem` named a cause nobody had measured.** On export, the agent module
+  reports why it would not copy — "codex runs in `<mound>`. Its databases cannot be copied safely
+  while it writes them" — and then the caller added a line of its own: "Is the mound running?
+  `dr-status`". That hint is right for a mound that never answered and wrong for every other case,
+  and it arrived directly under proof that the mound *had* answered, as the last thing the reader
+  sees. On import, a probe that could not *tell* whether the context was in use was announced as
+  "the context of the agent is in use", which sends you to close an agent that may not be running.
+
+  The probes always had three answers — `0` safe, `1` definitely not, `2` could not find out — and
+  the callers had been throwing two of them away. Now `dr_agent_mem_pack` carries the same three
+  answers (and a step of the copy that does not answer is a `2`, because the mound and not the
+  agent is what to look at), both agent modules propagate with `|| return $?` instead of
+  `|| return 1`, and each refusal in `dr-mem` says only what was measured: on a `1`, that the lines
+  above say why; on a `2`, that a step did not answer and the mound is worth a look.
+
+  **None of this changes whether a command succeeds.** Both non-zero answers refuse, before and
+  after. What changes is the sentence you act on — which is why it was mutation-tested rather than
+  eyeballed: nine mutations, each seen to fail first, and a test that asserted only "the command
+  refused" would have passed under every one of them.
+
+  The rule is now written down as **"Pattern: a reporter with three answers"** in
+  [HACKING.md](docs/HACKING.md), with the list of reporters that follow it, `bin/dr-status` as the
+  model consumer, `bin/dr-rm` and `bin/dr-up` as the ones that also name a status they do not
+  recognise, and the two mock levers (`DR_MOCK_AGENT_RUNNING`, `DR_MOCK_PGREP_BROKEN`) that make
+  both non-zero answers the test's to choose. `lib/agents/default.sh` says why it is exempt: its
+  answers are fixed because the agent has no memory support, so nothing there can go unanswered.
+
 - **Three channels brought bytes out of a mound, and each one decided for itself what was allowed
   to stay.** `dr-data pull` (rsync), `dr-mem export` (`sbx cp`) and the Codex plugin build
   (`sbx cp` from a build mound) all write host files with content the agent produced, and all three

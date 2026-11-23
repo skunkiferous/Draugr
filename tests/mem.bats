@@ -646,6 +646,125 @@ seed_codex() {
     [ "$status" -eq 2 ]
 }
 
+
+# --- the three answers reaching the person who reads them -------------------
+#
+# The probe kept its three answers and the caller threw two of them away. These
+# tests are about the MESSAGE, not the exit code: both non-zero answers refuse,
+# so behaviour alone cannot tell them apart, and a refusal that names the wrong
+# cause sends the reader to do the wrong thing.
+@test "dr-mem export: a running agent is reported without a guess about the mound" {
+    setup_codex || skip "no writable Windows drive path"
+    seed_codex
+    export DR_MOCK_AGENT_RUNNING=codex
+
+    run dr-mem export
+    [ "$status" -ne 0 ]
+    # The module's own diagnosis survives.
+    [[ "$output" == *"codex runs in"* ]]
+    # And nothing is appended that the module did not measure. This line used to
+    # arrive directly under "codex runs in <mound>", which can only be true of a
+    # mound that answered.
+    [[ "$output" != *"Is the mound running?"* ]] || return 1
+    # A refusal publishes nothing.
+    [ ! -e "$(dr_mem_store_dir "$REPO")/memory" ]
+}
+
+@test "dr-mem export: a probe with no answer DOES send you to the mound" {
+    setup_codex || skip "no writable Windows drive path"
+    seed_codex
+    export DR_MOCK_PGREP_BROKEN=1
+
+    run dr-mem export
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not find out"* ]]
+    # Here the hint is right: nothing answered, so the mound is what to look at.
+    [[ "$output" == *"Is the mound running?"* ]]
+    [ ! -e "$(dr_mem_store_dir "$REPO")/memory" ]
+}
+
+@test "dr_agent_mem_pack: not quiet is 1, and a probe with no answer is 2" {
+    setup_codex || skip "no writable Windows drive path"
+    seed_codex
+
+    # The stage path is never used: both runs stop at the first probe.
+    export DR_MOCK_AGENT_RUNNING=codex
+    run dr_agent_mem_pack "$REPO" /tmp/h2-pack-stage
+    [ "$status" -eq 1 ]
+
+    unset DR_MOCK_AGENT_RUNNING
+    export DR_MOCK_PGREP_BROKEN=1
+    run dr_agent_mem_pack "$REPO" /tmp/h2-pack-stage
+    [ "$status" -eq 2 ]
+}
+
+@test "dr_agent_mem_pack: a copy step that does not answer is 2, not 1" {
+    setup_codex || skip "no writable Windows drive path"
+    seed_codex
+
+    # The agent is quiet and the MOUND is what fails. Every failure in pack used
+    # to be 1, so this was indistinguishable from a running agent, and the
+    # caller's advice was wrong for one of the two whichever it chose.
+    #
+    # TWO steps, and the filters are chosen with care. The mock matches the whole
+    # argv, and the state script travels with EVERY call, so a filter that looks
+    # like it names the staging call ('mkdir -p') in fact stops the hash probe
+    # before it. A mutation of the staging line then survived a test that passed.
+    export DR_MOCK_FAIL_AT='sha256sum'      # in the script, so the FIRST call
+    run dr_agent_mem_pack "$REPO" /tmp/h2-pack-stage
+    [ "$status" -eq 2 ]
+
+    export DR_MOCK_FAIL_AT='rm -rf "$1"'    # the staging call, and only it
+    run dr_agent_mem_pack "$REPO" /tmp/h2-pack-stage
+    [ "$status" -eq 2 ]
+}
+
+@test "dr-mem import: a running agent is reported as in use" {
+    setup_codex || skip "no writable Windows drive path"
+    store=$(dr_mem_store_dir "$REPO")
+    mkdir -p "$store/memory"
+    printf 'remember this\n' > "$store/memory/note.md"
+    export DR_MOCK_AGENT_RUNNING=codex
+
+    run dr-mem import --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"in use"* ]]
+}
+
+@test "dr-mem import: a probe with no answer is not reported as in use" {
+    setup_codex || skip "no writable Windows drive path"
+    store=$(dr_mem_store_dir "$REPO")
+    mkdir -p "$store/memory"
+    printf 'remember this\n' > "$store/memory/note.md"
+    export DR_MOCK_PGREP_BROKEN=1
+
+    run dr-mem import --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"dr-mem: Draugr could not find out"* ]]
+    # "the context of the agent is in use" as the VERDICT sends the reader to
+    # close an agent that may not be running. The honest message contains that
+    # phrase too ("could not find out whether the context ... is in use"), so
+    # anchor on the headline that dr_die prints rather than on the words.
+    [[ "$output" != *"dr-mem: the context of the agent is in use"* ]] || return 1
+}
+
+# A source guard, because the `2` branch of the claude module has no injection
+# lever: its unknown answer comes from a missing /proc. The shape is what both
+# modules must keep, and that can be read.
+@test "the agent modules propagate a probe's answer, never a flattened 1" {
+    cd "$DR_ROOT" || return 1
+    run grep -n -E 'dr_agent_mem_(quiesce|import_ready)[^|]*\|\| return 1' \
+        lib/agents/claude.sh lib/agents/codex.sh
+    # grep says 1 for "no match", and that is the pass.
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+
+    # And the reported branch of pack must hand the answer out, not a literal.
+    # This is the one shape the claude module cannot prove by behaviour here.
+    for _f in lib/agents/claude.sh lib/agents/codex.sh; do
+        grep -q 'return "\$rc"' "$_f" || return 1
+    done
+}
 # --- the first dr-up of a project that never had a session ------------------
 
 @test "dr-mem import --if-empty: an empty store is not a failure" {
