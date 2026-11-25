@@ -12,6 +12,35 @@ people reading the source, not for people calling it.
 
 ### Added
 
+- **`dr-doctor` now measures what a `0.0.0.0` bind inside WSL reaches, where three documents used
+  to assert it.** `share/ollama-proxy` binds `0.0.0.0`, and its own header, its README and
+  [SECURITY.md](docs/SECURITY.md) all stated flatly that nothing off the host could reach it. That
+  holds for a WSL on NAT, which is the default, and it held here when it was measured: WSL 2.6.1,
+  no `.wslconfig`, no portproxy rule, `eth0` on a NAT subnet behind the host. It is not a fact
+  about every machine. `networkingMode=mirrored` makes the distro share the interfaces of the host,
+  so the same bind answers the whole network, and a `netsh interface portproxy` rule forwards a
+  port of the LAN in whatever the mode says. Both are the machine owner's settings, and Draugr can
+  change neither.
+
+  **It does not bind somewhere else instead.** A mound reaches that proxy from *outside* the
+  distro, so a loopback bind would turn the feature off — and under mirrored networking an address
+  of the distro *is* an address of the host, so narrowing the bind is not the fix it looks like.
+  The change is detection and a report: a `WSL networking` section with two lines, the networking
+  mode and the forwarding rules. No new configuration key, and nothing binds differently.
+
+  Both lines follow the three-answer contract in [HACKING.md](docs/HACKING.md) — confined to this
+  machine, also on your LAN, or **not established** — and the reassuring answer is never printed
+  for something nobody measured. `consomme` reports as not established, because WSL falls back to
+  it from a failed NAT, so it is only *probably* as confined as NAT. A `networkingMode` written in
+  a section other than `[wsl2]` reports as not established too: the key shipped under
+  `[experimental]` in WSL 2.0.0 and errors in the wild still name `experimental.networkingMode`, so
+  ignoring one there is the single path that could print a false "not on your LAN". A value WSL
+  itself does not recognise reports as confined, because Microsoft's documentation says such a
+  value means NAT. The level follows what the project actually opens: with no `DRAUGR_HOST_PORTS`
+  and no `DRAUGR_MODEL`, mirrored networking is a note and not a warning, because Draugr exposes
+  nothing on such a machine, and a warning there is the false colour that teaches people to ignore
+  the real one.
+
 - **`DRAUGR_INCOMING_MAX_FILES` and `DRAUGR_INCOMING_MAX_SIZE`** — one ceiling for everything that
   arrives from a mound: a data pull, a memory export and a Codex plugin build. Defaults `100000`
   and `8G`; empty or `0` turns a check off; the size takes `K`, `M`, `G` and `T` and a bare number
@@ -105,6 +134,53 @@ people reading the source, not for people calling it.
   half of this, and are not done: they need a disposable VM to change safely.
 
 ### Fixed
+
+- **A memory export that a still-running Codex refused stayed undone, and the next failure was
+  blamed on the agent.** A Codex project was left with `DRAUGR_STOP_ON_EXIT` and
+  `DRAUGR_MEM_SYNC=auto`. The export at exit refused, correctly: `codex` still ran in the mound, 40
+  idle minutes after its last commit. Codex can keep a process after its window closes ("Any running
+  work continues"). The advice was "Leave the agent, then run: `dr-mem export`", and the user had
+  already left it. A moment later the stop ended that process, so the databases were quiet. But
+  nothing exported them, and the memory stayed in the only copy that `dr-rm` destroys.
+
+  Three changes. `dr-mem export` exits **3** when the agent was still writing its context, and
+  `dr-go` uses that answer: under `DRAUGR_STOP_ON_EXIT`, it runs the export again after the stop,
+  then stops the mound again. Without the key, it no longer says "try again", because a retry fails
+  in the same way while the agent runs. The Codex advice is now `dr-stop && dr-mem export`. That
+  sequence was checked twice on the real mound. After a stop nothing writes, so each database and
+  its WAL are one consistent pair, which is what the export copies. Both exports were complete, and
+  `dr-mem diff` found the store and the mound the same.
+
+  **The manual `dr-mem export` then failed with "could not locate the context of the agent".** The
+  real cause was in sbx. It had lost the junction from its short state path
+  (`C:\Temp\sboxd-<hash>`) to its state directory, so every start of every mound failed with a 500.
+  sbx said so on its stderr, and the quiet probe of `dr_agent_mem_init` dropped that stderr. The
+  function now has the three answers of [HACKING.md](docs/HACKING.md). An unsupported layout is a
+  `1`, and still says which layout. A probe with no answer is a `2`, and `dr-mem` then asks sbx once
+  more and quotes its reply. The same function read its config probe by exit code, so an sbx failure
+  there counted as "the default layout": a `2` that became a `0`. That probe now prints a word, which
+  sbx cannot print. The sbx failure and its cure are in [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+  under "sbx cannot find its own files". The cure deletes only a plain directory, after a look
+  inside, and never deletes through the junction.
+
+  **`dr-doctor` now checks that junction: the `sbx state alias` line.** Where sbx puts it is not
+  documented, and on the machine measured TEMP, TMP and `C:\Temp` were one directory, so a guessed
+  location would report "missing" on a healthy machine. The daemon names the alias in ordinary log
+  lines at each start, so `dr_sbx_state_alias` reads the last mention from `daemon.log`. WSL shows
+  a junction as a symlink to its target, so the check needs no call to Windows. Three answers: a
+  junction to this state, or nothing there while the daemon is stopped, is fine. A plain directory,
+  a link elsewhere, or nothing there while the daemon runs is a failure, with the path in the fix.
+  A log that names no alias is a note, never a tick. The alias is read before the daemon line is
+  printed. Thus a daemon that the alias stops is sent to the alias, and not to the Hypervisor
+  Platform advice. The fixes delete with `rm` from WSL, and that was measured on throwaway
+  junctions: `rm` of a junction removes only the junction, and `rm -r` of a directory that holds
+  one leaves its target intact. Ten mutations, run in a clone and not in the live tree, and each one
+  turned a test red. On the real machine the line reads `C:\Temp\sboxd-933c2433, a junction to its
+  state`.
+
+  Mutation-tested: twelve mutations of the new code and of its mock lever, and each one turned a
+  test red. The new lever is `DR_MOCK_AGENT_UNTIL_STOP`: with it, the agent of the pgrep mock ends at
+  the first `stop`, as each process in a real mound does.
 
 - **Two refusals in `dr-mem` named a cause nobody had measured.** On export, the agent module
   reports why it would not copy — "codex runs in `<mound>`. Its databases cannot be copied safely

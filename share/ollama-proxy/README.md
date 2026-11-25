@@ -28,9 +28,18 @@ this proxy    0.0.0.0:11435      the only way in, query-only
 your sandbox  DRAUGR_HOST_PORTS="11435"
 ```
 
-This exposes **less** than an Ollama bound to `0.0.0.0`, not more. Nothing outside the host can
-reach a listener for the management API. If you set `OLLAMA_HOST=0.0.0.0` before, so that a mound
-can reach Ollama, remove it. This replaces it.
+This exposes **less** than an Ollama bound to `0.0.0.0`, not more: the management API then has no
+listener that anything off this machine can reach. If you set `OLLAMA_HOST=0.0.0.0` before, so that
+a mound can reach Ollama, remove it. This replaces it.
+
+**Who "off this machine" is depends on your WSL networking, not on this proxy.** `0.0.0.0` here is
+every interface of the distro. On the default NAT networking those sit behind the host, so the
+audience is this machine and its other distros. With `networkingMode=mirrored` in
+`%USERPROFILE%\.wslconfig`, or a `netsh interface portproxy` rule pointing in here, the same bind
+answers the LAN — and then the allowlist below is the only thing between the network and your model
+server. **`dr-doctor` reports which of those this machine is**, and says so rather than assuming it.
+`OLLAMA_PROXY_LISTEN` is yours to narrow, but under mirrored networking an address of the distro
+*is* an address of the host, so it is not the fix it looks like.
 
 ## Use
 

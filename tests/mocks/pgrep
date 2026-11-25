@@ -13,9 +13,18 @@
 #                           spaces. Unset means none, which is the quiet answer.
 #   DR_MOCK_PGREP_BROKEN    exit 2, as the real pgrep does for its own errors.
 #                           Thus a test can cover "could not tell".
+#   DR_MOCK_AGENT_UNTIL_STOP  the processes of DR_MOCK_AGENT_RUNNING end when the
+#                           mock sbx logs a `stop`, as every process in a real
+#                           mound does. Thus a test can see what happens AFTER
+#                           the stop, for example the export that dr-go repeats.
 set -euo pipefail
 
 [ -n "${DR_MOCK_PGREP_BROKEN:-}" ] && exit 2
+
+if [ -n "${DR_MOCK_AGENT_UNTIL_STOP:-}" ] && [ -n "${DR_MOCK_LOG:-}" ] \
+   && grep -q '^stop ' "$DR_MOCK_LOG" 2>/dev/null; then
+    exit 1
+fi
 
 # Only the last word that is not a flag is the pattern. -x and -f change what
 # the real pgrep compares. This mock always compares the whole name, because

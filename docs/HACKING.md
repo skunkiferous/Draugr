@@ -682,7 +682,8 @@ results, not two. The rule was first written at `bin/dr-sync:52` and it is the w
 
 **`2` must never collapse into `0`.** That is the half most people get right, because it is the
 half that loses data. These follow it: `dr-sync --check-only`, `dr-mem check`,
-`dr_agent_mem_quiesce` and `dr_agent_mem_pack` in both agent modules, `dr_model_probe`,
+`dr_agent_mem_quiesce` and `dr_agent_mem_pack` in both agent modules, `dr_agent_mem_init` in the
+Codex module, `dr_sbx_state_alias`, `dr_model_probe`,
 `dr_dep_claim_valid`, the policy queries in `lib/common.sh`, and `Get-VaultAccess` in
 `lib/forge/vault-access.ps1`, which spells `2` as an empty string because PowerShell has no exit
 code there.

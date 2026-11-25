@@ -296,8 +296,11 @@ files on older images, selected indexes, and the metadata and transcript databas
 exported a real thread and resumed it in a fresh mound after import.
 
 Leave Codex and its background server before import or export. An active or unknown writer fails
-the whole transfer and preserves the last complete export. Hash comparisons also catch changes
-during export. Do not attach while a transfer runs.
+the whole transfer and preserves the last complete export. Codex can keep a process running after
+you leave it. A stop of the mound ends that process, and the export then works:
+`dr-stop && dr-mem export`. With [`DRAUGR_STOP_ON_EXIT`](CONFIG.md#draugr_stop_on_exit), `dr-go`
+exports again after its own stop. Hash comparisons also catch changes during export. Do not attach
+while a transfer runs.
 
 **Import preserves feature choices.** Restoring a conversation does not enable memory generation.
 `dr-mem status` reports its native feature state when the mound runs. Enable generation separately

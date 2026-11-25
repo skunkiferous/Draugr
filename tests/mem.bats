@@ -659,15 +659,69 @@ seed_codex() {
     export DR_MOCK_AGENT_RUNNING=codex
 
     run dr-mem export
-    [ "$status" -ne 0 ]
+    # 3, not 1. dr-go reads it to export again after the stop that ends the agent.
+    [ "$status" -eq 3 ]
     # The module's own diagnosis survives.
     [[ "$output" == *"codex runs in"* ]]
     # And nothing is appended that the module did not measure. This line used to
     # arrive directly under "codex runs in <mound>", which can only be true of a
     # mound that answered.
     [[ "$output" != *"Is the mound running?"* ]] || return 1
+    # The advice works for a codex that kept running AFTER you left it, which is
+    # the case that was seen. "Leave the agent" was the advice, and you had.
+    [[ "$output" == *"dr-stop && dr-mem export"* ]]
+    [[ "$output" != *"Leave the agent"* ]] || return 1
     # A refusal publishes nothing.
     [ ! -e "$(dr_mem_store_dir "$REPO")/memory" ]
+}
+
+# A mound whose start fails in sbx. The quiet probe used to drop the reason, and
+# the refusal named the layout of the agent: "could not locate the context of
+# the agent". The cause was in sbx, which gave it on its stderr.
+@test "dr-mem export: a mound that does not answer is named, in the words of sbx" {
+    setup_codex || skip "no writable Windows drive path"
+    seed_codex
+    export DR_MOCK_FAIL=exec
+
+    run dr-mem export
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"did not answer"* ]]
+    # What sbx itself said, and not a paraphrase of it.
+    [[ "$output" == *"sbx: mock sbx: exec failed"* ]]
+    [[ "$output" != *"could not locate the context"* ]] || return 1
+
+    # check keeps its own contract: "cannot judge the loss" is 2.
+    run dr-mem check
+    [ "$status" -eq 2 ]
+}
+
+# The other refusal of the same probe. Here the mound answered, and what it
+# said is a layout that transfer does not support. That must still be named
+# as the layout, and not as a mound that did not answer.
+@test "dr-mem export: a layout that is not supported is still named as the layout" {
+    setup_codex || skip "no writable Windows drive path"
+    seed_codex
+    export DRAUGR_ENV=CODEX_SQLITE_HOME=/home/agent/separate
+
+    run dr-mem export
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"separate CODEX_SQLITE_HOME"* ]]
+    [[ "$output" == *"could not locate the context"* ]]
+    [[ "$output" != *"did not answer"* ]] || return 1
+}
+
+# The config probe said "no config.toml" with exit 1, and an sbx that fails
+# also exits 1. So a mound that did not answer was read as the DEFAULT layout:
+# a 2 that became a 0, which is the half of the rule that loses data. Only the
+# config probe fails here, so the two probes before it have answered.
+@test "dr_agent_mem_init: a config probe with no answer is 2, never the default layout" {
+    setup_codex || skip "no writable Windows drive path"
+    seed_codex
+    export DR_MOCK_FAIL_AT='grep -q sqlite_home'
+
+    run dr_agent_mem_init
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"could not inspect Codex configuration"* ]]
 }
 
 @test "dr-mem export: a probe with no answer DOES send you to the mound" {
@@ -676,7 +730,8 @@ seed_codex() {
     export DR_MOCK_PGREP_BROKEN=1
 
     run dr-mem export
-    [ "$status" -ne 0 ]
+    # 1, not 3: nothing says that a stop would help, so dr-go must not repeat it.
+    [ "$status" -eq 1 ]
     [[ "$output" == *"could not find out"* ]]
     # Here the hint is right: nothing answered, so the mound is what to look at.
     [[ "$output" == *"Is the mound running?"* ]]

@@ -427,6 +427,49 @@ sbx ls                 # confirm it is actually stopped
 
 If it stays, reboot. This is a host problem, below all that Draugr can reach.
 
+### sbx cannot find its own files: every start fails with `GetFileAttributesEx …\sboxd-…`
+
+Either of these:
+
+- A start fails, for every mound. `dr-mem` says the mound did not answer, and quotes sbx:
+  `failed to find valid erofs layer blob: GetFileAttributesEx
+  C:\Temp\sboxd-<hash>\containerd\root\…: The system cannot find the path specified.`
+- sbx does not start its daemon at all, and `daemon-stderr.log` (beside `daemon.log`, see above)
+  says `socket state alias "C:\Temp\sboxd-<hash>" is not a directory junction`.
+
+sbx keeps its state in `%LOCALAPPDATA%\DockerSandboxes\sandboxes\state\sandboxd`, and reaches it
+through a short path: a directory junction named `sboxd-<hash>`, in `C:\Temp` on the machine where
+this was measured. When that junction is gone, each path below it points at nothing. A start then
+creates a part of the path as a plain directory, and the daemon refuses that directory at its next
+start. **Your mounds are not lost.** Their disks are still under the long path, and they start again
+once the junction is back.
+
+It was seen after `sbx daemon stop`, and once while the daemon ran, with nothing in the daemon log
+about what removed it (sbx 0.53.0). Draugr never touches this path.
+
+**`dr-doctor` checks it.** Its line `sbx state alias` reads the path from the daemon log, says which
+of the cases above it is, and prints the fix with the path filled in. That fix deletes with `rm`
+from WSL. `rm` never follows a link: tested on throwaway junctions, `rm` of a junction removed only
+the junction, and `rm -r` of a directory that held one left the target intact. By hand, on the
+Windows side:
+
+```powershell
+sbx daemon stop
+Get-Item C:\Temp\sboxd-* -Force | Select-Object FullName, LinkType, Target
+```
+
+`LinkType` says what it is. **`Junction` is the healthy state: leave it alone.** Do not delete
+through a junction. A recursive delete can follow it into the real state. If `LinkType` is empty,
+it is the plain directory. Look inside first. It holds a few empty directories and a `resolv.conf`,
+nothing more:
+
+```powershell
+Get-ChildItem C:\Temp\sboxd-<hash> -Recurse -Force
+Remove-Item C:\Temp\sboxd-<hash> -Recurse      # only after LinkType was empty
+sbx ls                                         # starts the daemon, which makes the junction again
+Get-Item C:\Temp\sboxd-* -Force | Select-Object LinkType, Target   # Junction, to ...\sandboxd
+```
+
 ### `sbx rm` fails with "stdin is not a terminal"
 
 `dr-rm` already passes `--force` for this reason. It also removes a sandbox with an old SSH connection

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# A stand-in for the netsh.exe of Windows, so that dr_wsl_portproxy has a fixed
+# answer. The real one exists only on a Windows host, so without this mock the
+# same test answers "no rules" here and "could not ask" on the CI runner.
+#
+#   DR_MOCK_PORTPROXY   unset or empty   no rules. What a clean host answers:
+#                                        status 0 and a single newline, which
+#                                        was measured on one
+#                       rules            one v4tov4 rule, in the shape and the
+#                                        column order the real tool prints
+#                       broken           netsh itself fails
+set -euo pipefail
+
+case "$*" in
+    *"portproxy show"*)
+        case "${DR_MOCK_PORTPROXY:-}" in
+            broken)
+                printf 'The following command was not found: interface portproxy show all.\n' >&2
+                exit 1
+                ;;
+            rules)
+                # The real header is localised, which is why dr_wsl_portproxy
+                # tests for emptiness and not for these words.
+                printf '\nListen on ipv4:             Connect to ipv4:\n\n'
+                printf 'Address         Port        Address         Port\n'
+                printf -- '--------------- ----------  --------------- ----------\n'
+                printf '0.0.0.0         11435       172.19.192.26   11435\n'
+                ;;
+            *)
+                # A clean host prints one newline and nothing else.
+                printf '\n'
+                ;;
+        esac
+        ;;
+    *)
+        printf 'mock netsh: unhandled: %s\n' "$*" >&2
+        exit 1
+        ;;
+esac

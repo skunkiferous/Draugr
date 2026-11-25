@@ -1102,6 +1102,47 @@ go_output() {
     [[ "$(tail -1 "$DR_MOCK_LOG")" == stop* ]]
 }
 
+# Codex can keep a process after you leave it. The export at exit then refuses,
+# correctly, and DRAUGR_STOP_ON_EXIT ended that process a moment later. The
+# memory stayed in the mound until somebody ran dr-mem export by hand, and that
+# is the copy dr-rm destroys. The stop is what makes the export possible, so
+# the export runs after it.
+@test "dr-go: an export that the running agent refused runs again after the stop" {
+    export DRAUGR_STOP_ON_EXIT=true DRAUGR_AGENT=codex
+    dr_mound_codex_dir
+    mkdir -p "$DR_CODEXDIR/memories"
+    printf 'the build is cmake\n' > "$DR_CODEXDIR/memories/MEMORY.md"
+    printf 'threads\n' > "$DR_CODEXDIR/state_5.sqlite"
+    export DR_MOCK_AGENT_RUNNING=codex DR_MOCK_AGENT_UNTIL_STOP=1
+
+    run go_output
+    [[ "$output" == *"codex runs in"* ]]
+    [[ "$output" == *"exporting the memory again"* ]]
+    # This file does not source lib/common.sh, so the store is found, not named.
+    [ -n "$(find "${XDG_DATA_HOME:-$HOME/.local/share}/draugr/memory" \
+               -path '*/codex/memory/memories/MEMORY.md' 2>/dev/null)" ]
+    # Still stopped at the end, as the key asks: the export started it again.
+    [[ "$(tail -1 "$DR_MOCK_LOG")" == stop* ]]
+    [ "$(calls stop | wc -l)" -eq 2 ]
+}
+
+@test "dr-go: without DRAUGR_STOP_ON_EXIT, a refused export is not retried or blamed" {
+    # The agent still runs, and nothing here ends it. "Try again with: dr-mem
+    # export" would fail again in the same way. The module has already said
+    # what to run.
+    export DRAUGR_AGENT=codex
+    dr_mound_codex_dir
+    mkdir -p "$DR_CODEXDIR/memories"
+    printf 'the build is cmake\n' > "$DR_CODEXDIR/memories/MEMORY.md"
+    export DR_MOCK_AGENT_RUNNING=codex
+
+    run go_output
+    [[ "$output" == *"dr-stop && dr-mem export"* ]]
+    [[ "$output" != *"auto memory export failed"* ]] || return 1
+    [[ "$output" != *"exporting the memory again"* ]] || return 1
+    [ -z "$(calls stop)" ]
+}
+
 @test "dr-go: a mound that will not stop warns rather than failing" {
     # The session is over and the work is fetched, so this is untidy, not
     # dangerous. An exit here hides the exit code of the agent.

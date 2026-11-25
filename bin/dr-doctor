@@ -157,16 +157,76 @@ if sbx_path=$(dr_find_sbx 2>/dev/null); then
         soft "sbx version" "could not parse the output of 'sbx version'"
     fi
 
-    # An 'ls' that works is the cheapest proof that the daemon runs.
-    if "$sbx_path" ls --json >/dev/null 2>&1; then
+    # An 'ls' that works is the cheapest proof that the daemon runs. It also
+    # STARTS a stopped daemon, and that start makes the state alias below.
+    _daemon=stopped
+    if "$sbx_path" ls --json >/dev/null 2>&1; then _daemon=running; fi
+
+    # The short path from sbx to its own state. It is read BEFORE the daemon
+    # line is printed: a broken alias is a cause of a daemon that does not
+    # start, and then that line must point here, and not at the hypervisor.
+    # See dr_sbx_state_alias for what each answer means and how it was seen.
+    _alias_rc=0
+    _alias=$(dr_sbx_state_alias "$_daemon") || _alias_rc=$?
+    _alias_win=${_alias#* }
+    _alias_p=$(dr_path_from_win "$_alias_win" 2>/dev/null) || _alias_p=$_alias_win
+
+    # The daemon line. Its usual advice is for a daemon that cannot start for
+    # its own reasons, so a measured broken alias replaces that advice.
+    if [ "$_daemon" = running ]; then
         _list=$("$sbx_path" ls --json 2>/dev/null)
         count=$(dr_sbx_json "$_list" | jq '(.sandboxes // []) | length' 2>/dev/null || echo '?')
         ok "sandbox daemon" "reachable, $count sandbox(es)"
+    elif [ "$_alias_rc" -eq 1 ]; then
+        bad "sandbox daemon" "not reachable" \
+            "The cause is the state alias, on the next line."
     else
         bad "sandbox daemon" "not reachable" \
             "Start it, or find the cause with:  sbx diagnose" \
             "On Windows, the Hypervisor Platform feature must be on."
     fi
+
+    # The remedies use rm from WSL, and not a delete on the Windows side.
+    # Measured on throwaway junctions: rm of a junction removes only the
+    # junction, and rm -r of a directory that holds one leaves its target
+    # alone. Windows PowerShell 5.1 Remove-Item -Recurse can follow it.
+    _alias_doc='Details: "sbx cannot find its own files" in docs/TROUBLESHOOTING.md'
+    case "$_alias_rc:${_alias%% *}" in
+        0:junction)
+            ok "sbx state alias" "$_alias_win, a junction to its state" ;;
+        0:*)
+            ok "sbx state alias" "none yet. The daemon makes it when it starts" ;;
+        1:plain)
+            bad "sbx state alias" "$_alias_win is not a junction" \
+                "sbx reaches its state through a junction there. While something" \
+                "else stands in its place, no mound starts, and the daemon refuses" \
+                "its next start. Your mounds are not lost: their disks are intact." \
+                "Fix:  sbx daemon stop" \
+                "      find $(printf '%q' "$_alias_p")   (some empty directories and a resolv.conf)" \
+                "      rm -r $(printf '%q' "$_alias_p")  (rm never follows a link)" \
+                "      sbx ls      (starts the daemon, which makes the junction again)" \
+                "$_alias_doc" ;;
+        1:elsewhere)
+            bad "sbx state alias" "$_alias_win points to another directory" \
+                "It is a link, but not to the state of this sbx, and sbx refuses it." \
+                "No mound starts. Remove the link itself, not what it points to:" \
+                "Fix:  sbx daemon stop" \
+                "      rm $(printf '%q' "$_alias_p")     (removes the link, and does not follow it)" \
+                "      sbx ls      (starts the daemon, which makes the junction again)" \
+                "$_alias_doc" ;;
+        1:*)
+            bad "sbx state alias" "$_alias_win is gone, while the daemon runs" \
+                "sbx reaches its state through a junction there. Mounds that run now" \
+                "do not notice, but each start fails with 'GetFileAttributesEx" \
+                "...\\sboxd-...'. Your mounds are not lost: their disks are intact." \
+                "Fix:  sbx daemon stop   (this also stops each mound that runs)" \
+                "      sbx ls            (starts the daemon, which makes the junction)" \
+                "If sbx ls then refuses a directory in its place, run dr-doctor again." \
+                "$_alias_doc" ;;
+        *)
+            # Not a tick: nothing was measured, and a 2 must never read as a 0.
+            note "sbx state alias" "not checked: the daemon log of sbx does not name it" ;;
+    esac
 else
     bad "sbx.exe" "not found" \
         "sbx is a Windows binary. By default, it is not on the PATH of WSL." \
@@ -529,6 +589,68 @@ else
     soft "git repository" "$PWD is not one" \
         "Draugr works on one repository at a time. Go to a project, or run 'git init'."
 fi
+
+# --- what a 0.0.0.0 bind inside WSL reaches --------------------------------
+printf '\n%sWSL networking%s\n' "$_DR_BOLD" "$_DR_OFF"
+
+# THE LEVEL DEPENDS ON WHETHER THIS PROJECT OPENS THAT DIRECTION. On a machine
+# with mirrored networking, no host port and no local model, Draugr exposes
+# nothing, and a warning there is the false colour that teaches people to
+# ignore the real one. With DRAUGR_HOST_PORTS or DRAUGR_MODEL set, the same
+# fact is a warning, because then something of yours is meant to listen.
+# Outside a repository both are unset, so the line is a note about the machine.
+#
+# NOT DRAUGR_MODEL_URL: it has a built-in default of 11435, so it is never
+# empty, and the test on it made every machine a warning. DRAUGR_MODEL is the
+# key that says the agent is pointed at a model you host, and it is the same
+# one the model block above gates on.
+_wslnet=note
+if [ -n "${DRAUGR_HOST_PORTS:-}" ] || [ -n "${DRAUGR_MODEL:-}" ]; then
+    _wslnet=soft
+fi
+
+# Three answers, and the mode is named in every one of them. $_wslnet is called
+# as a command on purpose: the two levels take the same arguments, and writing
+# the message twice is how the two copies drift apart.
+_mode_rc=0
+_mode=$(dr_wsl_net_mode) || _mode_rc=$?
+case "$_mode_rc" in
+    0)
+        ok "0.0.0.0 inside WSL" "reaches this host and its distros, not the LAN (networkingMode: $_mode)" ;;
+    1)
+        "$_wslnet" "0.0.0.0 inside WSL" "is also on your LAN (networkingMode: $_mode)" \
+            "This distro shares the network interfaces of the host, so anything" \
+            "that binds 0.0.0.0 in here - share/ollama-proxy does - answers the" \
+            "whole network. The proxy is query-only, which is why it exists, but" \
+            "that is the only thing between the LAN and your model server." \
+            "Close it on the host, or set networkingMode=nat in %USERPROFILE%\\.wslconfig" ;;
+    *)
+        # $_wslnet here too, and not a hardcoded note. On a WSL host cmd.exe is
+        # there, so this answer means consomme or a key in the wrong section -
+        # both of them actionable, and both worth your attention while a port of
+        # yours is open. With nothing open it stays a note, as the other arms do.
+        "$_wslnet" "0.0.0.0 inside WSL" "Draugr did not establish what it reaches (networkingMode: $_mode)" \
+            "The documented place for the setting is the [wsl2] section of" \
+            "%USERPROFILE%\\.wslconfig, and nat is the default. Draugr reports this" \
+            "rather than assuming the answer, because the assumption would be" \
+            "about which machines can reach a port of yours." ;;
+esac
+
+# The second way the same claim breaks, and it is independent of the mode: a
+# rule on the Windows side that forwards a port of the LAN into this distro.
+# Draugr does not judge the rules, because only their author knows whether one
+# points at WSL. It names them.
+_pp_rc=0
+_pp=$(dr_wsl_portproxy) || _pp_rc=$?
+case "$_pp_rc" in
+    0) ok "netsh portproxy" "no rules, so nothing forwards a LAN port in here" ;;
+    1)
+        "$_wslnet" "netsh portproxy" "$(printf '%s' "$_pp" | grep -c .) line(s) of rules on this host" \
+            "A rule that forwards to the address of this distro puts the port on" \
+            "the LAN whatever networkingMode says. Read them:" \
+            "  netsh.exe interface portproxy show all" ;;
+    *) note "netsh portproxy" "could not ask netsh.exe about forwarding rules" ;;
+esac
 
 # --- verdict ---------------------------------------------------------------
 #

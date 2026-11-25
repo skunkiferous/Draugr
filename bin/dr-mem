@@ -23,6 +23,11 @@
 # that the mound holds memory that was never exported. 2 means no connection.
 # These are the three answers of dr-sync --check-only, for the same reason.
 #
+# export exits 3 when the agent was still writing its context, so that nothing
+# was exported. A stop of the mound ends the agent, and the export after it
+# works. dr-go reads the 3 to export again after DRAUGR_STOP_ON_EXIT stopped the
+# mound. Each other failure of export exits 1.
+#
 # shellcheck disable=SC2016
 # Single-quoted "$1" is in many places, on purpose. Those strings are scripts
 # for the shell of the MOUND, and the host must not expand them. See dr_mound_sh
@@ -103,13 +108,59 @@ if ! dr_agent_mem_supported; then
            "Turn the automatic export off with:  DRAUGR_MEM_SYNC=off"
 fi
 
+# A probe of the module got no answer. It was quiet on purpose, so the only
+# sentence that says why, the one from sbx, is gone. Thus ask one more time,
+# and keep what sbx says. This costs one call, and only on this path.
+#
+# The case that made this necessary: sbx lost the junction from its short state
+# path (C:\Temp\sboxd-<hash>) to its state directory, and each start of a mound
+# failed with a 500. sbx gave the reason on its stderr. dr-mem printed "could
+# not locate the context of the agent". A reader then looks at the agent, and
+# the cause is in sbx. See "sbx cannot find its own files" in
+# docs/TROUBLESHOOTING.md.
+#
+# The daemon log does not help here. In the window of that failed start, each
+# ERROR line was a RESULT ("endpoint not connected"). The cause was in a WARN
+# line, and in the reply of sbx.
+mound_unanswered() {
+    local err lines=()
+    if err=$(dr_sbx exec "$DRAUGR_SANDBOX" -- true 2>&1); then
+        # It answers now. Say only what is known: the module printed a cause
+        # above, or it printed nothing, and then the failure was transient.
+        dr_die "Draugr could not find out where the agent keeps its context" \
+               "$DRAUGR_SANDBOX answers now. If no line above names the cause, run the command again."
+    fi
+    # sbx.exe ends its lines with CR. Five lines are enough for an error, and
+    # a long one must not fill the screen.
+    mapfile -t lines < <(printf '%s\n' "$err" | tr -d '\r' | grep . | head -n 5)
+    # Also when sbx printed only blank lines. And bash 4.3 refuses an empty
+    # array under set -u.
+    [ ${#lines[@]} -gt 0 ] || lines=("it gave no reason")
+    dr_die "$DRAUGR_SANDBOX did not answer, so the context of the agent was not inspected" \
+           "${lines[@]/#/sbx: }" \
+           "The state of the mound:  dr-status"
+}
+
 # The directory that the agent reads, and its parent. The code creates the
 # parent and copies into it. The parent comes from the child, and the code does
 # not ask for both. Thus the two cannot differ.
 # Unknown layouts are not empty context. In particular they cannot satisfy
 # the loss guard used by dr-rm or by agent switching.
+#
+# Three answers from the module, and check maps both refusals to its own 2: an
+# unknown layout and a mound that did not answer both mean "the loss cannot be
+# judged". The other actions say which one it was.
 if dr_sandbox_exists "$DRAUGR_SANDBOX" && { [ "$action" != status ] || [ "$(dr_sandbox_state "$DRAUGR_SANDBOX")" = running ]; }; then
-    dr_agent_mem_init || { [ "$action" = check ] && exit 2; dr_die "could not locate the context of the agent"; }
+    init_rc=0
+    dr_agent_mem_init || init_rc=$?
+    case "$init_rc" in
+        0) ;;
+        1) [ "$action" = check ] && exit 2
+           dr_die "could not locate the context of the agent" \
+                  "The line above says why." ;;
+        *) [ "$action" = check ] && exit 2
+           mound_unanswered ;;
+    esac
 fi
 mem_dir=$(dr_agent_mem_dir "$DR_REPO")
 dr_mem_store_migrate "$DR_REPO"
@@ -242,8 +293,12 @@ export)
     dr_agent_mem_pack "$DR_REPO" "$DR_MOUND_STAGE" || pack_rc=$?
     case "$pack_rc" in
         0) ;;
-        1) dr_die "could not collect the memory of $(dr_agent_mem_label) in the mound" \
-                  "The lines above say why. Nothing was exported, and the store is unchanged." ;;
+        # Its own exit code, not dr_die's 1. See the top of this file: dr-go
+        # exports again after a stop, and only for this answer.
+        1) dr_error "could not collect the memory of $(dr_agent_mem_label) in the mound"
+           printf '  %sThe lines above say why. Nothing was exported, and the store is unchanged.%s\n' \
+               "$_DR_DIM" "$_DR_OFF" >&2
+           exit 3 ;;
         *) dr_die "could not collect the memory of $(dr_agent_mem_label) in the mound" \
                   "A step of the copy did not answer, so the state is unknown." \
                   "Is the mound running?  dr-status" ;;

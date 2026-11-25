@@ -521,6 +521,29 @@ the mound     DRAUGR_HOST_PORTS="11435"
 That is strictly **less** exposed than the service itself on `0.0.0.0`, because the management API
 then has no listener that anything outside the host can reach.
 
+**But "outside the host" depends on a setting that is not Draugr's.** Inside WSL, `0.0.0.0` means
+every interface *of the distro*, and on the default NAT networking those sit behind the host: the
+audience is this machine and its other WSL distros, not the LAN. Two host settings change that, and
+both belong to whoever owns the machine:
+
+| setting | what the same bind then reaches |
+|---|---|
+| `networkingMode=mirrored` in `%USERPROFILE%\.wslconfig` | the distro shares the interfaces of the host, so the proxy answers the whole network |
+| a `netsh interface portproxy` rule into the distro | Windows forwards a port of the LAN in, whatever the mode is |
+
+Draugr can change neither, and deliberately does not bind somewhere else instead: a mound reaches
+that proxy from *outside* the distro, so a loopback bind would turn the feature off. What it does is
+measure and report. `dr-doctor` reads `networkingMode` from the `[wsl2]` section and asks `netsh`
+for the rules, and prints which of three answers it got: confined to this machine, also on your
+LAN, or not established.
+
+**It never prints the reassuring answer for a mode it has not measured.** `consomme`, and a
+`networkingMode` written in a section other than `[wsl2]`, both report as *not established* —
+the first because WSL falls back to it from a failed NAT so it is only probably confined, the
+second because the key shipped under `[experimental]` once and ignoring it is the one path that
+could print a false "not on your LAN". A value WSL itself does not recognise reports as confined,
+because its own documentation says such a value means NAT.
+
 [`share/ollama-proxy/`](../share/ollama-proxy/) is a worked example of exactly this, for Ollama. It is
 a private nginx instance that touches nothing under `/etc/nginx`, and needs no root. It is optional,
 and independent of Draugr. Read its README before you run it. Start it from a `post-up` hook, and do

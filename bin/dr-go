@@ -418,8 +418,22 @@ fi
 # of DRAUGR_MEM_SYNC. You can always do the import again. But what the agent
 # learned in this session is only inside the mound until now. dr-rm deletes it,
 # and you cannot get it back.
+#
+# A 3 is "the agent still writes its context". You left it, and it still runs:
+# Codex can keep a process after its window closes. The export is then refused,
+# and that is correct. A stop of the mound ends the agent. Thus under
+# DRAUGR_STOP_ON_EXIT, the export runs again after the stop below. Without that
+# key, the module has already printed the two commands to run, and "try again"
+# would fail again in the same way while the agent runs.
+mem_after_stop=
 if [ "$DRAUGR_MEM_SYNC" = auto ] && [ -x "$_dr_bin/dr-mem" ]; then
-    "$_dr_bin/dr-mem" export --yes || dr_warn "auto memory export failed. Try again with:  dr-mem export"
+    mem_rc=0
+    "$_dr_bin/dr-mem" export --yes || mem_rc=$?
+    case "$mem_rc" in
+        0) ;;
+        3) mem_after_stop=1 ;;
+        *) dr_warn "auto memory export failed. Try again with:  dr-mem export" ;;
+    esac
 fi
 
 # A pull overwrites host files with the files of the sandbox. Thus the
@@ -442,6 +456,19 @@ if dr_is_true "$DRAUGR_STOP_ON_EXIT"; then
     # mound that does not stop is untidy, not dangerous.
     if dr_sbx stop "$DRAUGR_SANDBOX" >/dev/null 2>&1; then
         dr_ok "stopped $DRAUGR_SANDBOX (DRAUGR_STOP_ON_EXIT)"
+        # The export that the running agent refused. The stop ended the agent,
+        # and the export starts the mound again to read it, with no agent in
+        # it. That costs a cold start. The other choice is a memory that exists
+        # only in the mound until somebody remembers to export it, and dr-rm
+        # destroys it. Then stop again, because this key asks for a stopped
+        # mound.
+        if [ -n "$mem_after_stop" ]; then
+            dr_info "exporting the memory again, now that the stop ended the agent"
+            "$_dr_bin/dr-mem" export --yes \
+                || dr_warn "auto memory export failed. Try again with:  dr-mem export"
+            dr_sbx stop "$DRAUGR_SANDBOX" >/dev/null 2>&1 \
+                || dr_warn "could not stop $DRAUGR_SANDBOX after the export. It still runs."
+        fi
         # This repo no longer uses what it required. At the next warden tick,
         # the claim becomes old by itself. A release here starts the linger at
         # the time that you left.

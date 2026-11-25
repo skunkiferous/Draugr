@@ -353,3 +353,173 @@ load_helpers() {
     [ "$status" -eq 0 ]
     grep -q "DRAUGR_HOST_ADDR=172.19.192.26" "$DR_MOCK_LOG"
 }
+
+# --- what a 0.0.0.0 bind inside WSL reaches ---------------------------------
+#
+# The two reporters behind the dr-doctor lines. Each answers a question about
+# somebody's network, so the test that matters most is the one proving that a
+# "could not find out" never arrives as "not on your LAN".
+#
+# The seam is _dr_wslconfig: these tests source common.sh and then replace it,
+# which is why there is no cmd.exe mock. The value set, the default and the
+# "unknown values use NAT" rule are from the wsl-config documentation of
+# Microsoft; dr_wsl_net_mode holds the mapping and the reasons.
+
+# wslconfig <text>: make that text the .wslconfig of this machine. Call it
+# after load_helpers, which defines the function this one replaces.
+wslconfig() {
+    printf '%s' "$1" > "$DR_TMP/wslconfig"
+    eval '_dr_wslconfig() { printf "%s" "'"$DR_TMP"'/wslconfig"; }'
+}
+
+@test "dr_wsl_net_mode: no .wslconfig is the documented default, and it is confined" {
+    load_helpers
+    eval '_dr_wslconfig() { printf "%s" "'"$DR_TMP"'/absent"; }'
+    run dr_wsl_net_mode
+    [ "$status" -eq 0 ]
+    [ "$output" = "default" ]
+}
+
+@test "dr_wsl_net_mode: mirrored is 1, and the mode is named" {
+    load_helpers
+    wslconfig '[wsl2]
+networkingMode=mirrored
+'
+    run dr_wsl_net_mode
+    [ "$status" -eq 1 ]
+    [ "$output" = "mirrored" ]
+}
+
+@test "dr_wsl_net_mode: bridged is 1 too, because that bind is on the LAN as well" {
+    load_helpers
+    wslconfig '[wsl2]
+networkingMode=bridged
+'
+    run dr_wsl_net_mode
+    [ "$status" -eq 1 ]
+    [ "$output" = "bridged" ]
+}
+
+@test "dr_wsl_net_mode: nat is read whatever the case and the spacing" {
+    # The documentation spells one of its own keys two ways and uses both
+    # key=value and key = value, so neither can be assumed.
+    load_helpers
+    wslconfig '[WSL2]
+  NetworkingMode   =   NAT
+'
+    run dr_wsl_net_mode
+    [ "$status" -eq 0 ]
+    [ "$output" = "nat" ]
+}
+
+@test "dr_wsl_net_mode: consomme is 2, not a quiet 0" {
+    # WSL falls back to consomme from a failed NAT, so it is probably confined.
+    # "Probably" is not a thing to print about somebody's LAN.
+    load_helpers
+    wslconfig '[wsl2]
+networkingMode=consomme
+'
+    run dr_wsl_net_mode
+    [ "$status" -eq 2 ]
+    [ "$output" = "consomme" ]
+}
+
+@test "dr_wsl_net_mode: a value WSL does not know is NAT, as its documentation says" {
+    # "If the value is nat or an unknown value, NAT network mode is used." The
+    # answer is 0, and the printed mode is still what was read, not "nat".
+    load_helpers
+    wslconfig '[wsl2]
+networkingMode=banana
+'
+    run dr_wsl_net_mode
+    [ "$status" -eq 0 ]
+    [ "$output" = "banana" ]
+}
+
+@test "dr_wsl_net_mode: networkingMode outside [wsl2] is 2, never a silent 0" {
+    # The key shipped under [experimental] in WSL 2.0.0 and errors in the wild
+    # still name experimental.networkingMode. Ignoring it is the one path that
+    # could print a false "not on your LAN".
+    load_helpers
+    wslconfig '[experimental]
+networkingMode=mirrored
+'
+    run dr_wsl_net_mode
+    [ "$status" -eq 2 ]
+    [ "$output" = "mirrored" ]
+}
+
+@test "dr_wsl_net_mode: a [wsl2] value settles it, whatever another section says" {
+    load_helpers
+    wslconfig '[experimental]
+networkingMode=mirrored
+[wsl2]
+networkingMode=nat
+'
+    run dr_wsl_net_mode
+    [ "$status" -eq 0 ]
+    [ "$output" = "nat" ]
+}
+
+@test "dr_wsl_net_mode: CRLF and a UTF-8 BOM do not hide the section" {
+    # The file is edited on Windows. Notepad writes both.
+    load_helpers
+    printf '\xef\xbb\xbf[wsl2]\r\nnetworkingMode=mirrored\r\n' > "$DR_TMP/wslconfig"
+    eval '_dr_wslconfig() { printf "%s" "'"$DR_TMP"'/wslconfig"; }'
+    run dr_wsl_net_mode
+    [ "$status" -eq 1 ]
+    [ "$output" = "mirrored" ]
+}
+
+@test "dr_wsl_net_mode: a commented-out mode is not a mode" {
+    load_helpers
+    wslconfig '[wsl2]
+# networkingMode=mirrored
+; networkingMode=bridged
+'
+    run dr_wsl_net_mode
+    [ "$status" -eq 0 ]
+    [ "$output" = "default" ]
+}
+
+@test "dr_wsl_net_mode: a profile Draugr cannot resolve is 2, not nat" {
+    # This is the CI answer, and the answer on any host without cmd.exe.
+    load_helpers
+    eval '_dr_wslconfig() { return 1; }'
+    run dr_wsl_net_mode
+    [ "$status" -eq 2 ]
+    [ "$output" = "unknown" ]
+}
+
+@test "dr_wsl_portproxy: no rules is 0, and a clean host prints only a newline" {
+    load_helpers
+    run dr_wsl_portproxy
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "dr_wsl_portproxy: a rule is 1, and the lines are printed for the reader" {
+    export DR_MOCK_PORTPROXY=rules
+    load_helpers
+    run dr_wsl_portproxy
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"11435"* ]]
+    [[ "$output" == *"172.19.192.26"* ]]
+}
+
+@test "dr_wsl_portproxy: a netsh that fails is 2, not 'no rules'" {
+    export DR_MOCK_PORTPROXY=broken
+    load_helpers
+    run dr_wsl_portproxy
+    [ "$status" -eq 2 ]
+    [ -z "$output" ]
+}
+
+@test "dr_wsl_portproxy: a missing netsh.exe answers 2, held by the source" {
+    # There is no lever for "netsh.exe is not on this machine": the mock is on
+    # PATH for every test, which is the point of it - the CI runner and this
+    # host must answer the same. The shape is held here instead, as the claude
+    # quiesce probe is in tests/mem.bats.
+    cd "$DR_ROOT" || return 1
+    grep -q 'command -v netsh.exe >/dev/null 2>&1 || return 2' lib/common.sh
+}

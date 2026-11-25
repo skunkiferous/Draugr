@@ -768,6 +768,12 @@ the time in which a second `dr-go` attaches to the running mound, and does not s
 that time, an attach costs 0.36 s, and a cold start costs 4.2 s. After that time, you pay for the
 cold start, with or without the key.
 
+It also decides one case of the memory export. An agent can still run after you leave it: Codex can
+keep a process after its window closes. The export at exit then refuses, because the databases of
+the agent can still change. The stop ends that process. Thus with this key, `dr-go` runs the export
+again after the stop, at the cost of one cold start, and then stops the mound again. Without the
+key, the export says what to run: `dr-stop && dr-mem export`.
+
 | measured on one machine | |
 |---|---|
 | RAM that a running mound holds | ~1.4 GB, all of it freed on stop |

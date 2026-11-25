@@ -33,10 +33,19 @@ dr_agent_mem_survey() { _dr_codex_home; }
 
 # Read the effective image location once. Attach-only CODEX_HOME overrides
 # must also select the same context when dr-mem runs outside that session.
+#
+# THREE ANSWERS, like every probe that asks the mound (see "Pattern: a reporter
+# with three answers" in docs/HACKING.md): 0 the layout is known, 1 it is a
+# layout that context transfer does not support, and this function says which,
+# 2 a probe got no answer, so nothing is known about the layout. The 2 used to
+# be a 1. A mound whose start failed in sbx with a 500 was then reported as
+# "could not locate the context of the agent", and the reason from sbx went
+# away with the stderr of the quiet probe. That sends the reader to look at
+# Codex. The cause was sbx.
 dr_agent_mem_init() {
-    local home entry sql pairs layout_rc=0
+    local home entry sql pairs layout
     local entries=()
-    home=$(dr_mound_sh 'printf "%s" "${CODEX_HOME:-/home/agent/.codex}"') || return 1
+    home=$(dr_mound_sh 'printf "%s" "${CODEX_HOME:-/home/agent/.codex}"') || return 2
     pairs=$(dr_env_pairs) || return 1
     if [ -n "$pairs" ]; then mapfile -t entries <<< "$pairs"; fi
     for entry in "${entries[@]}"; do
@@ -46,7 +55,7 @@ dr_agent_mem_init() {
     DR_CODEX_HOME=$home
     # A relocated database requires a different recovery layout. Refuse it
     # instead of exporting an empty default directory as a complete backup.
-    sql=$(dr_mound_sh 'printf "%s" "${CODEX_SQLITE_HOME:-}"') || return 1
+    sql=$(dr_mound_sh 'printf "%s" "${CODEX_SQLITE_HOME:-}"') || return 2
     for entry in "${entries[@]}"; do
         case "$entry" in CODEX_SQLITE_HOME=*) sql=${entry#*=} ;; esac
     done
@@ -59,12 +68,21 @@ dr_agent_mem_init() {
     case "${DRAUGR_AGENT_ARGS:-}" in
         *sqlite_home*) dr_error "sqlite_home in Codex arguments is not supported by context transfer"; return 1 ;;
     esac
-    dr_mound_sh '[ -e "$1/config.toml" ] || exit 1
-        grep -q sqlite_home "$1/config.toml"' "$home" || layout_rc=$?
-    case "$layout_rc" in
-        0) dr_error "custom sqlite_home needs a measured context transfer layout"; return 1 ;;
-        1) return 0 ;;
-        *) dr_error "could not inspect Codex configuration for its database location"; return 1 ;;
+    #
+    # The answer is a WORD on stdout, not an exit code. When the mound answers,
+    # the exit code of `sbx exec` is the exit code of the script. When the mound
+    # does not answer, it is the exit code of sbx. The old script said "no
+    # config.toml" with `exit 1`, and an sbx that failed also exits 1. So a
+    # mound that did not answer was read as the default layout: a 2 became a 0.
+    # sbx cannot print one of these words. Only the script can.
+    layout=$(dr_mound_sh '[ -e "$1/config.toml" ] || { printf default; exit 0; }
+        grep -q sqlite_home "$1/config.toml"
+        case $? in 0) printf custom ;; 1) printf default ;; *) printf unknown ;; esac' \
+        "$home") || layout=
+    case "$layout" in
+        custom)  dr_error "custom sqlite_home needs a measured context transfer layout"; return 1 ;;
+        default) return 0 ;;
+        *)       dr_error "could not inspect Codex configuration for its database location"; return 2 ;;
     esac
 }
 
@@ -211,9 +229,25 @@ dr_agent_mem_pack() {
     if [ "$rc" -ne 0 ]; then
         dr_warn "Codex context was not exported. The previous store is unchanged"
         if [ "$rc" -eq 1 ]; then
+            # "Leave the agent" was the advice here, and it is wrong for the
+            # case that is actually seen. The probe ran in dr-go after you left
+            # the agent, and codex still ran. Codex can keep a process after its
+            # window closes ("Any running work continues"). Seen once: the probe
+            # found codex after 40 idle minutes, with the last commit and the
+            # last transcript write long before the exit. That session had
+            # started two sub-agents. The session before it had none, and its
+            # export at exit worked. Which process stays, and when, is not
+            # measured. A stop of the mound ends it. After the stop nothing
+            # writes, so each database and its -wal are one consistent pair,
+            # and that pair is what pack copies. Seen twice: the exports after
+            # the stop were complete, once with the -wal files gone and once
+            # with them still there. dr-go does this by itself under
+            # DRAUGR_STOP_ON_EXIT. The advice is for the other case.
             printf '  %scodex runs in %s. Its databases cannot be copied safely%s\n' \
                 "$_DR_DIM" "$DRAUGR_SANDBOX" "$_DR_OFF" >&2
-            printf '  %swhile it writes them. Leave the agent, then run:  dr-mem export%s\n' \
+            printf '  %swhile it writes them. Codex can keep running after you leave it.%s\n' \
+                "$_DR_DIM" "$_DR_OFF" >&2
+            printf '  %sA stop ends it, and the export then works:  dr-stop && dr-mem export%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
         else
             printf '  %sDraugr could not find out if codex runs. Thus it did not copy%s\n' \

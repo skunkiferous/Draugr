@@ -18,8 +18,17 @@
 #   this proxy      0.0.0.0:11435     the only way in, query-only
 #   the sandbox     DRAUGR_HOST_PORTS="11435"
 #
-# That exposes LESS than an Ollama bound to 0.0.0.0. Nothing off the host can
-# reach a listener for the management API.
+# That exposes LESS than an Ollama bound to 0.0.0.0: the management API then has
+# no listener that anything off this machine can reach.
+#
+# WHO "OFF THIS MACHINE" IS DEPENDS ON YOUR WSL NETWORKING, NOT ON THIS SCRIPT.
+# 0.0.0.0 here is every interface of the distro, and on the default NAT those
+# sit behind the host. With networkingMode=mirrored in %USERPROFILE%\.wslconfig,
+# or a netsh portproxy rule pointing in here, the same bind answers the LAN, and
+# then the allowlist is the only thing in front of your model server. dr-doctor
+# measures which of those this machine is and reports it. Narrowing LISTEN is
+# not the fix it looks like: under mirrored networking an address of the distro
+# IS an address of the host.
 #
 # --- it does not disturb another nginx ---------------------------------------
 #

@@ -58,8 +58,10 @@ of shared memory, logs, credentials, configuration, plugin caches, and connectio
 Draugr refuses selected links and special files before staging or upload.
 
 Leave Codex and its background server before either transfer. An active or unknown
-writer fails the transfer. A failed export preserves the last complete store.
-Draugr also compares hashes around the copy. These probes cannot lock an external
+writer fails the transfer. Codex can keep a process running after you leave it. A stop
+of the mound ends that process, and the export then works: `dr-stop && dr-mem export`.
+With `DRAUGR_STOP_ON_EXIT`, `dr-go` exports again after its own stop. A failed export
+preserves the last complete store. Draugr also compares hashes around the copy. These probes cannot lock an external
 launcher, so do not attach during an import or an export. An import removes the stale
 database WAL files and shared-memory indexes before it restores the supplied pair.
 

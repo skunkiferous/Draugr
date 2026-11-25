@@ -314,6 +314,65 @@ dr_sbx_log_error() {
     printf '%s\n' "$out"
 }
 
+# dr_sbx_state_alias <running|stopped>: is the short path of sbx intact?
+#
+# sbx keeps its state in <root>/sandboxes/state/sandboxd, and reaches it
+# through a short path: a directory junction named sboxd-<hash>. Each path
+# that containerd uses goes through it. Two failures were seen on sbx 0.53.0.
+# After `sbx daemon stop`, a plain directory stood in its place, and the daemon
+# refused to start: "socket state alias ... is not a directory junction". And
+# while the daemon ran, the junction went away. Running mounds did not notice,
+# and the next start failed with a 500: "failed to find valid erofs layer blob:
+# GetFileAttributesEx ...\sboxd-...". That failed start then made the plain
+# directory of the first failure. In both, the disks of the mounds were intact.
+#
+# WHERE IT IS comes from sbx, and not from a guess. sbx does not document it.
+# On the one machine measured, TEMP, TMP and C:\Temp were the same directory,
+# so no rule could be told from another. But the daemon names the alias in
+# ordinary log lines at each start (the fsverity check, the FIFO cleanup, the
+# shims it loads). Thus the last mention in daemon.log is the alias of the
+# daemon that runs now, or that ran last.
+#
+# WSL shows a junction as a symlink to its target. Measured: -L is true, and
+# readlink gives /mnt/c/.../sandboxes/state/sandboxd. A plain directory is a
+# directory. Thus this needs no call to Windows.
+#
+# THREE ANSWERS (docs/HACKING.md), and "<what> <windows path>" on stdout:
+#   0  junction   a junction to this state directory
+#      absent     nothing there, and the daemon is stopped. It makes one at start
+#   1  plain      something that is not a link stands in its place
+#      elsewhere  a link to another directory. sbx refuses that too
+#      absent     nothing there, while the daemon runs. Each start fails
+#   2  nothing on stdout: no daemon log, or a log that names no alias
+dr_sbx_state_alias() {
+    local daemon=${1:-stopped} log state win p target
+    log=$(dr_sbx_daemon_log) || return 2
+    state=$(dirname "$log")
+    # JSON doubles each backslash. A component can hold a space, but never a
+    # quote or a backslash, so a match cannot run into the next field.
+    win=$(grep -oE '[A-Za-z]:(\\\\[^"\\]+)*\\\\sboxd-[0-9a-f]+' "$log" 2>/dev/null | tail -n 1) || :
+    [ -n "$win" ] || return 2
+    win=${win//\\\\/\\}
+    p=$(dr_path_from_win "$win") || return 2
+
+    # -L first: a junction whose target is gone is a link, and -e says no.
+    if [ -L "$p" ]; then
+        target=$(readlink -f "$p" 2>/dev/null) || target=
+        if [ -n "$target" ] && [ "$target" = "$(readlink -f "$state")" ]; then
+            printf 'junction %s\n' "$win"
+            return 0
+        fi
+        printf 'elsewhere %s\n' "$win"
+        return 1
+    fi
+    if [ -e "$p" ]; then
+        printf 'plain %s\n' "$win"
+        return 1
+    fi
+    printf 'absent %s\n' "$win"
+    [ "$daemon" != running ]
+}
+
 # ---------------------------------------------------------------------------
 # Path translation
 #
@@ -3560,6 +3619,167 @@ dr_host_ip() {
              awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }')
     [ -n "$ip" ] || return 1
     printf '%s\n' "$ip"
+}
+
+# ---------------------------------------------------------------------------
+# What a 0.0.0.0 bind inside WSL actually reaches
+# ---------------------------------------------------------------------------
+#
+# share/ollama-proxy binds 0.0.0.0, and its README said, as a flat fact, that
+# nothing off this host can reach it. That holds for a WSL on NAT, and NAT is
+# the default. It was measured on the machine this was written on: WSL 2.6.1,
+# no .wslconfig, no portproxy rule, eth0 on a 172.19.192.0/20 subnet behind the
+# host. It does not hold everywhere, and the two settings that break it both
+# belong to the owner of the machine, not to Draugr:
+#
+#   networkingMode=mirrored   the distro shares the interfaces of the host, so
+#                             the same bind is on the LAN
+#   a netsh portproxy rule    Windows forwards a port of the LAN into the distro
+#
+# Draugr can change neither, and must not bind somewhere else instead: a mound
+# reaches that proxy from OUTSIDE the distro, so a loopback bind would turn the
+# feature off. What it can do is stop asserting, and report. The two reporters
+# below are the measurement, and dr-doctor is the report.
+#
+# BOTH FOLLOW THE THREE-ANSWER CONTRACT of docs/HACKING.md: 0 the claim holds,
+# 1 it definitely does not, 2 could not find out. A 2 must never collapse into
+# a 0 here, because a 0 is a sentence about somebody else's network.
+
+# _dr_win_home: the Windows user profile of this machine, as WSL sees it.
+#
+# WSL does not export USERPROFILE into the distro. Measured: unset inside WSL,
+# while cmd.exe answers C:\Users\<name>. Thus the second branch is the one that
+# runs in practice, and it is the same method, with the same test for an
+# unexpanded %VAR%, that dr_find_sbx uses for LOCALAPPDATA.
+#
+# `dr_agent_mem_host_dir` in lib/agents/claude.sh resolves the same profile with
+# its own copy of these four lines. It should call this instead, and that is
+# deliberately NOT part of this change: it would alter where the memory of an
+# agent is looked for, which is not a security fix, and this batch is one.
+_dr_win_home() {
+    local profile=${USERPROFILE:-}
+    if [ -z "$profile" ] && command -v cmd.exe >/dev/null 2>&1; then
+        profile=$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r\n')
+        # cmd prints the name back unchanged when the variable does not exist.
+        case "$profile" in '%USERPROFILE%') profile='' ;; esac
+    fi
+    [ -n "$profile" ] || return 1
+    dr_path_from_win "$profile"
+}
+
+# _dr_wslconfig: the path of %USERPROFILE%\.wslconfig, as WSL sees it. A
+# function of its own because it is the seam: a unit test sources common.sh,
+# replaces this one, and points it at a fixture.
+_dr_wslconfig() {
+    local home
+    home=$(_dr_win_home) || return 1
+    printf '%s/.wslconfig' "$home"
+}
+
+# dr_wsl_net_mode: which networkingMode this host sets, and whether a 0.0.0.0
+# bind inside the distro stays off the LAN. It PRINTS the mode as it found it.
+# The STATUS is the verdict:
+#
+#   0  default, nat, none, or a value that WSL does not recognise
+#   1  mirrored, bridged
+#   2  consomme, a networkingMode outside [wsl2], or no file to read
+#
+# The values and the default are from the wsl-config documentation of Microsoft,
+# not from a guess: none, nat, bridged (deprecated), mirrored, and consomme
+# (named virtioproxy in the past), the default is NAT, and "if the value is nat
+# or an unknown value, NAT network mode is used". That sentence is the reason an
+# unrecognised value answers 0 and not 2. consomme answers 2 on purpose: WSL
+# falls back to it when NAT fails, so it is probably as confined as NAT is, and
+# "probably" is not a thing to print about somebody's LAN.
+#
+# [wsl2] is the documented section. The key shipped under [experimental] in WSL
+# 2.0.0, and errors in the wild still name experimental.networkingMode, so a
+# networkingMode found in another section answers 2 instead of being ignored.
+# Ignoring it is the one path that could print a false "not on your LAN".
+dr_wsl_net_mode() {
+    local file line section='' key value mode='' outside=''
+    file=$(_dr_wslconfig) || { printf 'unknown\n'; return 2; }
+
+    # No file is the documented default, and the documented default is NAT. A
+    # file that exists and cannot be read is not an answer at all.
+    if [ ! -f "$file" ]; then printf 'default\n'; return 0; fi
+    [ -r "$file" ] || { printf 'unknown\n'; return 2; }
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        # The file is edited on Windows, so it arrives with CRLF line ends and,
+        # from Notepad, a UTF-8 BOM. Only the BOM needs its own strip: a
+        # carriage return IS in [:space:], so the trim below takes it off, and
+        # a second strip for it was dead code that no test could tell from its
+        # absence. A mutation run established that, and the CRLF test stayed.
+        line=${line#$'\xef\xbb\xbf'}
+
+        # Trim both ends, then drop blank lines and comments.
+        line=${line#"${line%%[![:space:]]*}"}
+        line=${line%"${line##*[![:space:]]}"}
+        case "$line" in ''|'#'*|';'*) continue ;; esac
+
+        case "$line" in
+            '['*']')
+                # A section header. Only [wsl2] is the documented home.
+                section=${line#\[}
+                section=${section%\]}
+                section=${section,,}
+                ;;
+            *=*)
+                # key = value. The documentation itself varies the spacing, so
+                # both ends of both halves get trimmed.
+                key=${line%%=*}
+                value=${line#*=}
+                key=${key%"${key##*[![:space:]]}"}
+                value=${value#"${value%%[![:space:]]*}"}
+                value=${value%"${value##*[![:space:]]}"}
+
+                # The keys are not case-sensitive: that page spells one of its
+                # own keys two ways. A repeated key takes the last value, as an
+                # INI reader does.
+                if [ "${key,,}" = networkingmode ]; then
+                    if [ "$section" = wsl2 ]; then mode=${value,,}
+                    else                           outside=${value,,}
+                    fi
+                fi
+                ;;
+        esac
+    done < "$file"
+
+    # The key only outside [wsl2]: name what was found, and vouch for nothing.
+    if [ -z "$mode" ] && [ -n "$outside" ]; then
+        printf '%s\n' "$outside"
+        return 2
+    fi
+
+    # The verdict. Every arm prints what was read, so that the report can name
+    # the mode instead of translating it.
+    case "${mode:-default}" in
+        default|nat|none)     printf '%s\n' "${mode:-default}"; return 0 ;;
+        mirrored|bridged)     printf '%s\n' "$mode";            return 1 ;;
+        consomme|virtioproxy) printf '%s\n' "$mode";            return 2 ;;
+        *)                    printf '%s\n' "$mode";            return 0 ;;
+    esac
+}
+
+# dr_wsl_portproxy: the netsh portproxy rules of this machine, if it has any.
+#
+#   0  none, so nothing on the Windows side forwards a LAN port into the distro
+#   1  at least one. The lines are PRINTED, because which rule it is decides
+#      whether it matters, and only a reader can judge that
+#   2  no netsh.exe, so not a Windows host, or netsh answered with an error
+#
+# EMPTINESS IS THE TEST, not a match on the header. The output of netsh is
+# localised, so a header in English is not a fact about every machine. Measured
+# here with no rules: status 0 and one byte, a newline, thus no non-blank line.
+dr_wsl_portproxy() {
+    local out
+    command -v netsh.exe >/dev/null 2>&1 || return 2
+    out=$(netsh.exe interface portproxy show all 2>/dev/null) || return 2
+    # grep answers 1 when no line holds a non-space character. That is "none".
+    out=$(printf '%s\n' "$out" | tr -d '\r' | grep '[^[:space:]]') || return 0
+    printf '%s\n' "$out"
+    return 1
 }
 
 # dr_hostport_rules <port>: the ids of the rules that dr-hostport wrote for <port>.
