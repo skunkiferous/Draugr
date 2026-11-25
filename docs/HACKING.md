@@ -697,6 +697,17 @@ Send the first to do the second and you have spent their time on your behalf.
 So: **propagate with `|| return $?`, never `|| return 1`**, and let the branch that knows the
 cause be the one that prints it.
 
+**A fourth answer is allowed, and `dr-mem export` has one.** It exits **3** for exactly one case:
+the agent was still writing its context, so nothing was exported. Every other failure stays `1`.
+That is a *narrowing* of `1` and not a new kind of answer, which is what makes it safe — a caller
+that has never heard of `3` still reads it as "non-zero, so it refused", and is still right.
+`bin/dr-go` is the caller that does know: it treats a `3` as "export again once the stop has ended
+the agent", which is the whole fix for a memory export that a running Codex refused.
+
+Add one the same way, or not at all. The reason `bin/dr-rm` and `bin/dr-up` name a status they do
+not recognise, rather than folding it into their last branch, is precisely so that a reporter which
+grows a fourth answer cannot be silently read as one of the first three.
+
 **A consumer handles all three, even when two of them do the same thing.** The model is
 `bin/dr-status`:
 

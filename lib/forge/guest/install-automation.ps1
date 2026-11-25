@@ -23,8 +23,11 @@
 # install` registers that task. Do not replace it with a plain `serve`.
 #
 # Traps that tests found, and each one cost time:
-#   - When the response has no charset, Invoke-WebRequest -UseBasicParsing gives .Content as
-#     a **Byte[]**, and Invoke-Expression refuses a Byte[]. Decode it.
+#   - This script used to fetch a vendor's install script and Invoke-Expression it, and the
+#     trap recorded here was that Invoke-Expression refuses the Byte[] which
+#     -UseBasicParsing hands back when the response carries no charset. BOTH ARE GONE:
+#     nothing here runs downloaded text any more. Every artifact is a pinned version
+#     checked against a hash in the param block, through Get-PinnedFile.
 #   - The default host of `windows-mcp auth` is **0.0.0.0**. Always give 127.0.0.1. The guest
 #     has no adapter now, but do not leave the bind of all interfaces to a default.
 #   - The endpoint is **/mcp**, not /mcp/. The trailing slash answers 307, and a client that
@@ -49,6 +52,22 @@
 param(
     [int]$Port = 8765,
     [string]$AhkDir = 'C:\Tools\AutoHotkey',
+    # PINNED, AND EACH PAIR MOVES TOGETHER. Before this, uv came from a script
+    # that this file fetched and ran, and AutoHotkey from whatever the vendor's
+    # version.txt named that day. So the same sources built two different base
+    # layers depending on the morning, and neither download was ever checked
+    # against anything. The hashes below are the `Get-FileHash -Algorithm
+    # SHA256` of the files those two URLs served, and each vendor publishes the
+    # same value beside its artifact (uv as a .sha256 asset on the release,
+    # AutoHotkey as AutoHotkey_<v>.zip.sha256). Both were compared.
+    #
+    # To raise one: change its version AND its hash, never one alone. A version
+    # with the old hash fails closed, which is the point, but it fails at the
+    # end of a long guest run rather than here.
+    [string]$UvVersion  = '0.13.10',
+    [string]$UvSha256   = '297b3881fe1adfb922becc2c1613202abb41dc83ea5ff43d472aa087ca1f8683',
+    [string]$AhkVersion = '2.0.32',
+    [string]$AhkSha256  = '384a4c125e8d7b5b77ddbd5a593ec761d3e9e96e97a95931cf56e9a077fda114',
     # PINNED, AND IT MUST BE. uv with no version request installs the NEWEST
     # CPython. The ecosystem always had the least time to build wheels for that
     # one. A TEST on a new guest showed this. Without a pin, uv gave 3.15.2.
@@ -162,9 +181,27 @@ function Set-McpWindow([string]$StartCmd, [string]$Mode, [string]$Title) {
     }
 }
 
-function Get-Text([string]$url) {
-    $r = Invoke-WebRequest -UseBasicParsing $url
-    if ($r.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($r.Content) } else { $r.Content }
+# Get-PinnedFile: download one artifact and refuse it unless it is the pinned
+# one. Nothing in this script downloads any other way.
+#
+# The shape is taken from install-msys2.ps1 and install-vscode.ps1, which each
+# do this inline for their single artifact. There are two here, so it is a
+# function. DELETED ON MISMATCH, for the reason those two give: a refused
+# download left on the disk is one careless double-click away from running.
+function Get-PinnedFile([string]$Url, [string]$Dest, [string]$Sha256, [string]$What) {
+    Invoke-WebRequest -UseBasicParsing $Url -OutFile $Dest
+    $got = (Get-FileHash $Dest -Algorithm SHA256).Hash.ToLower()
+    if ($got -ne $Sha256.ToLower()) {
+        Remove-Item $Dest -Force -EA SilentlyContinue
+        throw ("$What does not match its pin. NOTHING was installed, and the file was deleted." +
+               "`n  from     $Url" +
+               "`n  expected $($Sha256.ToLower())" +
+               "`n  got      $got" +
+               "`n  Either the vendor published that version again - then change the version" +
+               " and the hash together - or this is not the file it claims to be.")
+    }
+    Write-Host ("  the sha256 is the same as the pin ({0} MB)" -f `
+                [math]::Round((Get-Item $Dest).Length / 1MB, 1))
 }
 # Add-ToMachinePath: put a directory on the MACHINE PATH, once, JUST BEFORE
 # System32.
@@ -236,9 +273,20 @@ if (-not $VerifyOnly) {
     if (Test-Path $uv) {
         Write-Host "uv already present: $(& $uv --version)"
     } else {
-        Write-Host 'installing uv...'
-        $env:UV_INSTALL_DIR = $uvBin
-        Invoke-Expression (Get-Text 'https://astral.sh/uv/install.ps1')
+        # NOT `Invoke-Expression (Get-Text 'https://astral.sh/uv/install.ps1')`,
+        # which is what this was. That ran whatever that host served at that
+        # moment, in the guest, with no version and no integrity test of any
+        # kind - the newest uv on the day the layer happened to be built. The
+        # release archive is pinned and hashed instead, which is what the other
+        # two installers in this directory already do. github.com is in the
+        # allowlist of kits/base already, so this needs no policy change.
+        Write-Host "installing uv $UvVersion..."
+        $zip = Join-Path $env:TEMP "uv-$UvVersion-x86_64-pc-windows-msvc.zip"
+        Get-PinnedFile "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-x86_64-pc-windows-msvc.zip" `
+                       $zip $UvSha256 "uv $UvVersion"
+        New-Item -ItemType Directory -Force -Path $uvBin | Out-Null
+        Expand-Archive -Path $zip -DestinationPath $uvBin -Force
+        Remove-Item $zip -Force
         if (-not (Test-Path $uv)) { throw "uv did not appear at $uv" }
         Write-Host "  $(& $uv --version)"
     }
@@ -373,14 +421,18 @@ if (-not $VerifyOnly) {
                   -Mode $McpWindow -Title 'Draugr: UIA MCP server (leave it running)'
 
     # --- AutoHotkey v2 from the zip: no installer, no elevation, no file association ---
-    $v = (Get-Text 'https://www.autohotkey.com/download/2.0/version.txt').Trim()
+    # PINNED, like uv above. This used to read version.txt from the vendor and
+    # install whatever it named, then extract the zip with no integrity test at
+    # all - so the version was the vendor's choice of the day, and the bytes
+    # were whatever arrived.
     $exe = Join-Path $AhkDir 'AutoHotkey64.exe'
-    if ((Test-Path $exe) -and (Get-Item $exe).VersionInfo.ProductVersion -eq $v) {
-        Write-Host "AutoHotkey $v already present"
+    if ((Test-Path $exe) -and (Get-Item $exe).VersionInfo.ProductVersion -eq $AhkVersion) {
+        Write-Host "AutoHotkey $AhkVersion already present"
     } else {
-        Write-Host "installing AutoHotkey $v..."
-        $zip = Join-Path $env:TEMP "AutoHotkey_$v.zip"
-        Invoke-WebRequest -UseBasicParsing "https://www.autohotkey.com/download/2.0/AutoHotkey_$v.zip" -OutFile $zip
+        Write-Host "installing AutoHotkey $AhkVersion..."
+        $zip = Join-Path $env:TEMP "AutoHotkey_$AhkVersion.zip"
+        Get-PinnedFile "https://www.autohotkey.com/download/2.0/AutoHotkey_$AhkVersion.zip" `
+                       $zip $AhkSha256 "AutoHotkey $AhkVersion"
         New-Item -ItemType Directory -Force -Path $AhkDir | Out-Null
         Expand-Archive -Path $zip -DestinationPath $AhkDir -Force
         Remove-Item $zip -Force

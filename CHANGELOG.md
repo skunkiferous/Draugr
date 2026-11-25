@@ -135,6 +135,43 @@ people reading the source, not for people calling it.
 
 ### Fixed
 
+- **The forge's automation installer ran a script it downloaded, and installed whatever two
+  vendors published that morning.** `lib/forge/guest/install-automation.ps1` fetched
+  `https://astral.sh/uv/install.ps1` and handed the text straight to `Invoke-Expression` inside the
+  guest, with no version and no integrity test of any kind; separately it read AutoHotkey's
+  `version.txt` and extracted whatever zip that named, also unchecked. Two base layers built from
+  the same sources on two mornings could therefore hold different binaries — and the forge *seals*
+  base layers and reuses them, so "the same layer" has to mean it.
+
+  Both are pinned now, as `-UvVersion`/`-UvSha256` and `-AhkVersion`/`-AhkSha256`, downloaded
+  through one `Get-PinnedFile` that hashes before anything is used, refuses on a mismatch and
+  deletes the file — the shape [install-msys2.ps1](lib/forge/guest/install-msys2.ps1) and
+  [install-vscode.ps1](lib/forge/guest/install-vscode.ps1) already used for their own artifacts.
+  **Nothing in the repository executes downloaded text any more**, and uv comes from its release
+  archive on `github.com`, which the base kit's allowlist already permits, so no policy changes.
+  Each pinned hash was compared against the vendor's own published `.sha256` for that artifact.
+
+  Three source guards in [tests/repo.bats](tests/repo.bats) keep it that way, because a decision
+  that lives only in prose gets proposed again as a convenience: no `.ps1` may call
+  `Invoke-Expression`, every guest installer that writes a download to disk must hash it, compare
+  that hash with its pin and refuse, and `install-automation.ps1` must carry both halves of each
+  pin with a full 64-character hash. The second guard's first draft asked only that a hash be
+  *computed* — a mutation showed that a comparison deleted outright would have passed it, which is
+  why it now reads the comparison and the refusal too. **Six mutations, all caught.**
+
+  **Both pins are verified in a guest**, in a throwaway child of `layer-0`: each archive
+  downloaded, each hash matched — uv at `14.9 MB`, the same 15,641,577 bytes measured on the host
+  — and `uv 0.13.10` ran. The phase then reported `automation ok`.
+
+  For anyone repeating it, because three separate things make a careless run prove nothing.
+  `-VerifyOnly` proves nothing at all: the single `if (-not $VerifyOnly)` wraps the whole install
+  section, so it never reaches a download. A plain child of `layer-0` proves nothing either —
+  that layer already carries both tools, and the installer reports them present. And removing
+  `%USERPROFILE%\.local\bin` is not enough on its own: the `windows-mcp-server` task starts at
+  logon and holds `%APPDATA%\uv\tools\windows-mcp` open, so a later `uv tool install` fails with
+  `Access is denied` two steps past anything this change touches. Stop that task and remove that
+  directory too.
+
 - **A memory export that a still-running Codex refused stayed undone, and the next failure was
   blamed on the agent.** A Codex project was left with `DRAUGR_STOP_ON_EXIT` and
   `DRAUGR_MEM_SYNC=auto`. The export at exit refused, correctly: `codex` still ran in the mound, 40

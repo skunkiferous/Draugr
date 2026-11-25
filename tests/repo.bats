@@ -262,3 +262,76 @@ want_executable() {
     [ "$status" -eq 1 ]
     [ -z "$output" ]
 }
+
+# --- what may enter a guest, and on whose word ------------------------------
+#
+# A MECHANISM, NOT A RULE SOMEBODY HAS TO REMEMBER, like the two guards above.
+# Hardening 4 of the security review asks for pinned versions. Its CI half
+# pinned `actions/checkout` to a commit; this is the guest half.
+#
+# What it was. `install-automation.ps1` fetched https://astral.sh/uv/install.ps1
+# and handed the text to Invoke-Expression, and separately read a vendor's
+# version.txt and installed whatever it named. So a base layer built on two
+# mornings from the same sources could hold two different uvs and two different
+# AutoHotkeys, and the bytes of neither were ever compared with anything. The
+# forge seals base layers and reuses them, so "the same layer" has to mean it.
+#
+# The two rules below are what the fix rests on, and both are cheap to keep.
+# They are a source check and not a behaviour test ON PURPOSE: the behaviour
+# needs a disposable Windows guest, which needs AppSandbox.exe and admin, and
+# this project never raises that on anybody's behalf. The guest run is the
+# user's, and these keep the shape true in the meantime.
+
+@test "no PowerShell in this repository executes text that it downloaded" {
+    cd "$DR_ROOT" || return 1
+    # Comment lines are excluded because the fix's own comment names the call it
+    # removed - the clearest way to stop it coming back is to say what it was.
+    # `iex` needs the non-letter guards or it matches words that contain it.
+    run bash -c "git grep -n -I -E -- 'Invoke-Expression|[^A-Za-z-]iex[^A-Za-z-]' -- '*.ps1' \
+                 | grep -vE ':[[:space:]]*#'"
+    # grep says 1 for "nothing left after the filter", and that is the pass.
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+@test "every guest installer that downloads a file checks it against a pin" {
+    cd "$DR_ROOT" || return 1
+    # The invariant: if a script writes a download to disk (-OutFile), it also
+    # hashes it, COMPARES that hash with the pin, and refuses.
+    #
+    # The first draft of this test asked only for Get-FileHash, and that is a
+    # hole worth recording: a hash computed and then ignored passes such a test.
+    # All three installers already share one shape, so the comparison itself is
+    # checkable, and the throw after it is what makes the comparison mean
+    # something.
+    local f unchecked=()
+    for f in lib/forge/guest/*.ps1; do
+        grep -q -- '-OutFile' "$f" || continue
+        grep -q 'Get-FileHash' "$f"                            || { unchecked+=("$f: no Get-FileHash"); continue; }
+        grep -qF '$got -ne $Sha256.ToLower()' "$f"              || { unchecked+=("$f: hashes, never compares"); continue; }
+        grep -A 6 -F '$got -ne $Sha256.ToLower()' "$f" | grep -q 'throw' \
+            || unchecked+=("$f: compares, never refuses")
+    done
+    # The guard on the guard: if the loop matched nothing, this test passes by
+    # finding nothing, which is the failure mode the mode check above has too.
+    [ "$(grep -l -- '-OutFile' lib/forge/guest/*.ps1 | wc -l)" -ge 3 ]
+    if [ ${#unchecked[@]} -gt 0 ]; then
+        printf 'downloads a file and never hashes it:\n' >&2
+        printf '  %s\n' "${unchecked[@]}" >&2
+        return 1
+    fi
+}
+
+@test "the pins of install-automation.ps1 are a version and a hash, in pairs" {
+    cd "$DR_ROOT" || return 1
+    # Both halves of each pin, in the param block, because a version raised
+    # without its hash is the one mistake that fails late: it downloads, and
+    # then throws at the end of a long guest run.
+    local f=lib/forge/guest/install-automation.ps1 k
+    for k in UvVersion UvSha256 AhkVersion AhkSha256; do
+        grep -qE "^\s*\[string\]\\\$$k\s*=" "$f" || { printf 'no pin for %s\n' "$k" >&2; return 1; }
+    done
+    # A hash is 64 hex characters. A truncated or placeholder one is caught here
+    # rather than by a mismatch inside a guest.
+    [ "$(grep -cE "^\s*\[string\]\\\$(Uv|Ahk)Sha256\s*=\s*'[0-9a-f]{64}'" "$f")" -eq 2 ]
+}
