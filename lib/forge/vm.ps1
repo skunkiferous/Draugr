@@ -224,8 +224,8 @@ function Install-GuestKeys([int]$Port, [string]$User, [string]$Via) {
 
     # The directory this run owns in the guest. One mkdir before the first copy,
     # because scp does not make its destination. The old destination was
-    # C:\Windows\Temp itself, so a copy that failed left the installer - or the
-    # .pub - of an earlier run under the name this run was about to use. See
+    # C:\Windows\Temp itself, so a copy that failed left the installer, or the
+    # .pub, of an earlier run under the name this run was about to use. See
     # lib/forge/guestexec.ps1.
     $gdir = New-GuestRunDir
     & ssh.exe -n -i $asbKey -p $Port -o IdentitiesOnly=yes -o BatchMode=yes `
@@ -277,7 +277,7 @@ function Install-GuestKeys([int]$Port, [string]$User, [string]$Via) {
             $ok = $false
         }
         # Do not leave the public key in the guest. The installer already read
-        # it, and the whole directory goes below - but not until both jobs are
+        # it, and the whole directory goes below, but not until both jobs are
         # done, and a failure between them must not leave a key behind.
         & ssh.exe -n -i $asbKey -p $Port -o IdentitiesOnly=yes -o BatchMode=yes `
             -o StrictHostKeyChecking=accept-new -o HostKeyAlias=draugr-$Vm `

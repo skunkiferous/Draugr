@@ -371,8 +371,8 @@ tmp/x.bin" ]
 #
 # The sender is Linux, where .GIT and .git are two directories. The destination
 # is a Windows drive, where they are one. Measured with real rsync 3.2.7 and
-# `--exclude=.git` in force: a sender's `.GIT/hooks-marker` arrived as
-# `.git/hooks-marker`, and a sender's `GIT~1/config` OVERWROTE `.git/config`
+# `--exclude=.git` in force: a `.GIT/hooks-marker` from the sender arrived as
+# `.git/hooks-marker`, and a `GIT~1/config` from the sender OVERWROTE `.git/config`
 # through the 8.3 short name that this volume still generates.
 #
 # .git/config decides what git RUNS for you, so this is the file the review was
@@ -388,7 +388,7 @@ tmp/x.bin" ]
     run transferred
     [[ "$output" != *".GIT"* ]]
     [[ "$output" != *".Draugr"* ]]
-    # The real data still moves. A refusal of everything would pass this test
+    # The real data still moves. A refusal of everything passes this test
     # and break the command.
     [[ "$output" == *"a.parquet"* ]]
 }
@@ -545,8 +545,8 @@ need_win_stage() {
 # --- an empty preview is not "nothing to pull" ------------------------------
 #
 # The review of an incoming pull was `rsync … 2>/dev/null | grep -v '/$' ||
-# true`, which is GREP's status with even that discarded. An unreachable mound
-# therefore produced an empty list, every caller read it as "this pull lands
+# true`, which is the status of GREP with even that discarded. An unreachable mound
+# thus produced an empty list, every caller read it as "this pull lands
 # nothing", and the real transfer ran unreviewed. That is finding F07.
 #
 # A stand-in rsync, because the mound is the one half of a transfer that no
@@ -555,7 +555,7 @@ need_win_stage() {
 #
 # IT STANDS IN FOR ONE LEG ONLY. A staged pull has two: mound -> staging,
 # which is the unreachable one, and staging -> repository, which is an
-# ordinary local copy. Faking the second would mean faking the filters,
+# ordinary local copy. Faking the second means faking the filters,
 # --delete and --link-dest, and those are the part of publication worth
 # testing. So a path with a colon in it is the mound, and every other call is
 # handed to the real rsync.
@@ -564,7 +564,7 @@ fake_rsync() {
     export DR_FAKE_RSYNC_LOG="$DR_TMP/rsync-real.log"
     export DR_FAKE_RSYNC_MODE=$1
     export DR_FAKE_MOUND="$DR_TMP/fakemound"
-    # Resolved BEFORE the stand-in goes on PATH, or it would find itself.
+    # Resolved BEFORE the stand-in goes on PATH, or it finds itself.
     DR_REAL_RSYNC=$(command -v rsync) || return 1
     export DR_REAL_RSYNC
     mkdir -p "$DR_FAKE_MOUND"
@@ -573,7 +573,7 @@ fake_rsync() {
 #!/usr/bin/env bash
 # The dry run answers the way a measured rsync answers. A real call from the
 # mound hands over whatever $DR_FAKE_MOUND holds, which is how a test decides
-# what "arrived" - names, types and all.
+# what "arrived", names, types and all.
 #
 # Every call it serves is written down, so a test can prove that a refusal
 # happened BEFORE anything was published:
@@ -698,7 +698,7 @@ setup_pull() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"pull complete"* ]]
     # The bytes, not just the names: publication is a second leg now, and a
-    # leg that creates empty files would pass a name check.
+    # leg that creates empty files passes a name check.
     [ "$(cat "$REPO/report.csv")" = "$(cat "$DR_FAKE_MOUND/report.csv")" ]
     [ -f "$REPO/sub/notes.txt" ]
     # And the staging directory is gone, whatever happened.
@@ -707,13 +707,13 @@ setup_pull() {
 
 @test "dr-data pull: the review judges what arrived, not what was forecast" {
     # THIS IS U01. The forecast is clean and the tree that arrives is not, and
-    # a pull that reviewed the forecast would publish the difference.
+    # a pull that reviews the forecast publishes the difference.
     #
     # `.git.` is the name that makes it matter. The four metadata excludes are
-    # exact patterns and do not match it, so it crosses; a Windows drive
-    # resolves it to `.git`; and `.git/config` decides what git runs. The only
+    # exact patterns and do not match it, so it crosses. A Windows drive
+    # resolves it to `.git`, and `.git/config` decides what git runs. The only
     # thing in Draugr that refuses that name is dr_data_path_safe, which used
-    # to be applied to a dry run's output and is now applied to the files.
+    # to be applied to the output of a dry run and is now applied to the files.
     setup_pull || skip "no writable Windows drive path"
     fake_rsync names
     printf 'a,b\n' > "$DR_FAKE_MOUND/report.csv"
@@ -741,7 +741,7 @@ setup_pull() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"look RUNNABLE"* ]]
     [[ "$output" == *"payload.PS1"* ]]
-    # --yes answers the question, so it is published - with the warning on the
+    # --yes answers the question, so it is published, with the warning on the
     # record, which is the point of printing it even then.
     [ -f "$REPO/payload.PS1" ]
 }
@@ -764,7 +764,7 @@ setup_pull() {
 
 @test "dr-data pull: deletions are taken from the staged tree, and only for data" {
     # --delete moved to the publication leg, where the filters come with it.
-    # Without them it would mean "remove everything that is not data", and
+    # Without them it means "remove everything that is not data", and
     # everything that is not data is the source tree.
     setup_pull || skip "no writable Windows drive path"
     fake_rsync names
@@ -808,7 +808,7 @@ setup_pull() {
     # What makes a staged pull cost the same as a direct one. Measured on this
     # host, ext4 sender to a /mnt/c repository: 128 MB unchanged takes 65 ms
     # with these flags and 5.9 s without them, because --link-dest links only
-    # a file that matches in full, permissions included - and /mnt/c reports
+    # a file that matches in full, permissions included, and /mnt/c reports
     # every file as 0777 whatever --chmod asked for.
     setup_pull || skip "no writable Windows drive path"
     fake_rsync names
@@ -850,7 +850,7 @@ setup_pull() {
 }
 
 @test "rsync reports a control character as an escape, and Draugr refuses that text" {
-    # Why `pull` reads the staged tree and not rsync's report of it. Measured
+    # Why `pull` reads the staged tree and not the report of rsync on it. Measured
     # with rsync 3.2.7 here, so a later rsync that changes its mind fails this
     # test instead of quietly changing what a review means.
     dr_load_common
@@ -864,7 +864,7 @@ setup_pull() {
     # rsync in it, because the filter tests above need the real one too.
     out=$(rsync -a --dry-run --out-format='>>%n' "$d/src/" "$d/dst/")
 
-    # Three names, three lines - although one of the names contains the very
+    # Three names, three lines, although one of the names contains the very
     # byte that separates them.
     [ "$(printf '%s\n' "$out" | grep -c '^>>')" -eq 3 ]
     # The newline became four printable characters.
@@ -872,7 +872,7 @@ setup_pull() {
     # The tab did NOT: it is passed through as itself.
     [[ "$out" == *"$(printf 'tab\tgap.txt')"* ]]
 
-    # So the text that a review of that output would judge is refused - by the
+    # So the text that a review of that output has to judge is refused by the
     # backslash rule, because there is no control character left in it to
     # catch. Both rules are load-bearing, and for different names.
     ! dr_data_path_safe 'nl\#012line.txt' || return 1
@@ -883,7 +883,7 @@ setup_pull() {
 @test "dr-data: a symlink cannot cross in either direction" {
     # The flags, on the real transfer, in both directions. -a is -rlptgoD, so
     # without these three a symlink, a device and a socket are recreated on
-    # the other side - and a symlink is a name that points anywhere.
+    # the other side, and a symlink is a name that points anywhere.
     setup_pull || skip "no writable Windows drive path"
     fake_rsync names
     run dr-data pull -y
@@ -919,7 +919,7 @@ setup_pull() {
 @test "dr_stage: no host-owned root is a refusal, not a repo-local fallback" {
     need_win_stage
     # No override, no LOCALAPPDATA, and no cmd.exe to ask Windows. The answer
-    # must be a refusal that names the override - never a return to
+    # must be a refusal that names the override, and never a return to
     # .draugr/tmp, which is the directory this change exists to leave.
     DRAUGR_STAGE_ROOT= LOCALAPPDATA= PATH=/usr/bin:/bin run dr_stage
     [ "$status" -ne 0 ]
@@ -930,7 +930,7 @@ setup_pull() {
 # --- the shared ceiling, in the channel with the biggest trees ---------------
 #
 # Hardening 1. The data pull takes one of the shared receive steps and leaves
-# three, for reasons its own code states; these are about the one it takes.
+# three, for reasons its own code states. These are about the one it takes.
 #
 # The variable is EXPORTED, not written as a prefix of `run`. `run` is a shell
 # function, so a prefix assignment stays in this shell and never reaches
@@ -945,7 +945,7 @@ setup_pull() {
     run dr-data pull -y
     [ "$status" -ne 0 ]
     [[ "$output" == *"DRAUGR_INCOMING_MAX_FILES is 1"* ]]
-    # The transfer happened - it is the review - and the publication did not.
+    # The transfer happened (it is the review) and the publication did not.
     grep -q '^REAL' "$DR_FAKE_RSYNC_LOG"
     [ ! -e "$REPO/one.csv" ]
     [ ! -e "$REPO/two.csv" ]
@@ -964,7 +964,7 @@ setup_pull() {
 
 # ORDER, asked without a prompt rather than by reading the source. The tree is
 # over the limit AND holds a runnable file, and the command runs without -y:
-# if the limit came after the question, this would end in "cancelled" at an
+# if the limit came after the question, this ends in "cancelled" at an
 # EOF on stdin instead of naming the limit.
 @test "dr-data pull: the limit is applied before you are asked to approve" {
     setup_pull || skip "no writable Windows drive path"
@@ -981,9 +981,9 @@ setup_pull() {
 # MEASURED, and the reason this command needs no destination check of its own
 # (tmp/h1-rsync-dest.log, rsync 3.2.7): publishing `data/out.txt` onto a repo
 # where `data` is a symlink out of the tree REPLACES the link with a real
-# directory and leaves the outside file alone - and the same for a symlinked
+# directory and leaves the outside file alone, and the same for a symlinked
 # file. --keep-dirlinks reverses exactly that, and writes through the link.
-# It is not a flag anybody adds on purpose here; it is one somebody copies
+# It is not a flag anybody adds on purpose here. It is one somebody copies
 # from an rsync recipe.
 @test "dr-data: --keep-dirlinks is never passed, because it writes through a link" {
     run bash -c "grep -n 'keep-dirlinks' '$DR_ROOT/bin/dr-data' | grep -vE '^[0-9]+:[[:space:]]*#'"

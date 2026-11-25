@@ -243,9 +243,9 @@ if ($PageFileInitialMb -le 0) {
 
 # --- Defender: read it, report it, change nothing -------------------------------------------
 # NOTHING HERE CHANGES DEFENDER, and no file in Draugr holds a command that
-# would. A test keeps it that way (tests/repo.bats).
+# changes it. A test keeps it that way (tests/repo.bats).
 #
-# THE REASON IS MEASURED, not caution. Defender's own signature
+# THE REASON IS MEASURED, not caution. The signature of Defender called
 # Trojan:PowerShell/Killav.VDA matches the TEXT of a real-time-protection-off
 # command, in any file, and does not care whether anything ever runs it. It
 # removed the session transcript of an agent that had only READ the earlier
@@ -256,7 +256,7 @@ if ($PageFileInitialMb -le 0) {
 #
 # THE REASON TO WANT THE CHANGE IS UNCHANGED. Real-time protection reads each
 # file that a build writes and reads back, and that scattered pattern is what a
-# 2 MB differencing block punishes most. So DRAUGR_FORGE_NOSCAN now DECLARES
+# 2 MB differencing block punishes most. Thus DRAUGR_FORGE_NOSCAN now DECLARES
 # the state that you want, this reads the state of the guest, and the two are
 # compared. You make the change yourself, once, in the guest. Windows Security
 # > Virus & threat protection > Manage settings has both settings, and needs no
@@ -301,7 +301,7 @@ if (-not $NoScanFile) {
         # READING THE EXCLUSIONS NEEDS ADMINISTRATOR RIGHTS, AND A SHELL WITHOUT
         # THEM DOES NOT FAIL. Measured, and the first version of this block had
         # it wrong: the call RETURNS, and ExclusionPath holds one entry that is a
-        # MESSAGE and not a path - "N/A: Must be an administrator to view
+        # MESSAGE and not a path: "N/A: Must be an administrator to view
         # exclusions". A comparison against that reports every declared path as
         # missing, which is a false alarm and not a report.
         #

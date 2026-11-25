@@ -105,7 +105,7 @@ foreign_skill() {
 # standing row here.
 #
 # AND THE LEVEL IS A FAILURE, not a warning and not a note. The two softer
-# levels exist for a change nobody reviewed and for a feature you declined; this
+# levels exist for a change nobody reviewed and for a feature you declined. This
 # is neither.
 
 @test "dr-doctor: a private trust file is one green row" {
@@ -137,7 +137,7 @@ foreign_skill() {
 }
 
 # dr-doctor REPORTS, and a chmod is a write. A command you run to look at the
-# state may not alter the state it is showing you - which is why the question
+# state must not alter the state it is showing you. This is why the question
 # and the chmod are two functions.
 @test "dr-doctor: reporting on the trust file does not change its mode" {
     printf 'deadbeef  /nowhere/.draugr.conf\n' > "$DRAUGR_CONFIG_HOME/trusted"
@@ -148,10 +148,10 @@ foreign_skill() {
 
 # --- what a 0.0.0.0 bind inside WSL reaches ---------------------------------
 #
-# dr-doctor is the report half of hardening 3; the two reporters behind it are
+# dr-doctor is the report half of hardening 3. The two reporters behind it are
 # tested in tests/hostport.bats. These tests are about the LEVEL, and about one
 # sentence that must never appear: on a host whose networking Draugr did not
-# establish, nobody may be told that the bind stays off the LAN.
+# establish, nobody is to be told that the bind stays off the LAN.
 
 # wsl_profile <text>: that text as the .wslconfig of this machine, reached
 # through the USERPROFILE that dr-doctor resolves. It needs a /mnt/<letter>
@@ -356,7 +356,7 @@ alias_log_line() {
 }
 
 @test "dr-doctor: a daemon log that names no alias is a note, never a tick" {
-    # Nothing was measured, so nothing may look measured. A 2 is not a 0.
+    # Nothing was measured, so nothing is to look measured. A 2 is not a 0.
     STATE="$DR_TMP/sbxroot/sandboxes/state/sandboxd"
     mkdir -p "$STATE"
     printf '%s\n' '{"time":"t","level":"INFO","msg":"nothing about paths"}' > "$STATE/daemon.log"

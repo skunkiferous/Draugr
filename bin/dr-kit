@@ -469,7 +469,7 @@ adopt)
         "The rules are part of the mound, so there is nothing to adopt."
 
     # Captured, and not `mapfile < <(...)`: mapfile reports its own status, so
-    # a failed query would print "nothing to adopt" — and you would then run
+    # a failed query would print "nothing to adopt", and you would then run
     # the recreate that destroys the rules, believing they are written down.
     _unadopted=$(dr_policy_unadopted) || dr_die \
         "cannot tell which hosts are open for $DRAUGR_SANDBOX" \

@@ -221,9 +221,9 @@ installed() {
 # The same question that `clean` asks, asked at the other end: a build mound
 # writes installed_plugins.json, and this is where that file becomes YOUR
 # library. Refusing here names the build that produced the bad entry. Refusing
-# only at cleanup time would blame a command that is weeks away and innocent.
+# only at cleanup time blames a command that is weeks away and innocent.
 #
-# A version of "?" is jq's own placeholder for an entry that records none (see
+# A version of "?" is the placeholder that jq uses for an entry that records none (see
 # installed()), not text from the registry, so it is allowed through. `clean`
 # leaves such a plugin alone rather than deleting every version of it.
 registry_names_ok() {
@@ -465,7 +465,7 @@ build_commit() {
         "the built library names a plugin that cannot be one" \
         "An id or a version in its installed_plugins.json is not a simple name," \
         "and this host turns those into paths." \
-        "Your library is unchanged. The build is in $BUILD/seed; look at it there."
+        "Your library is unchanged. The build is in $BUILD/seed. Look at it there."
 
     rm -rf "$PREV"
     # An `if`, not `[ ] && mv`. Under set -e, that form exits the script the
@@ -878,7 +878,7 @@ clean)
     # build produced inside a sandbox. An id of `x@../../..` made the path
     # `$SEED/cache/../../../x`, and the loop below deletes the directories it
     # finds there, with your authority. A security review reproduced it: a
-    # planted entry deleted a directory outside the fixture's plugin store.
+    # planted entry deleted a directory outside the plugin store of the fixture.
     #
     # Two gates, because neither one covers the other:
     #
@@ -889,7 +889,7 @@ clean)
     #                     and whose destination is not.
     #
     # Both refuse the whole run. A library that names something impossible is
-    # not a library to delete files by, and a partial clean would leave you
+    # not a library to delete files by, and a partial clean leaves you
     # guessing which half ran.
     _cache="$SEED/cache"
     [ ! -L "$_cache" ] || dr_die \
@@ -906,13 +906,13 @@ clean)
         if ! dr_simple_name "$_plug" || ! dr_simple_name "$_mkt"; then
             dr_die \
                 "the plugin library names something that cannot be a plugin: $_id" \
-                "A plugin and a marketplace are simple names, and this one would" \
+                "A plugin and a marketplace are simple names, and this one can" \
                 "become a path. Nothing was deleted." \
                 "Look at $SEED/installed_plugins.json."
         fi
 
-        # A version of "?" is jq's placeholder for an entry that records none
-        # (see installed()). Keeping nothing would delete EVERY version of
+        # A version of "?" is the placeholder that jq uses for an entry that records none
+        # (see installed()). Keeping nothing deletes EVERY version of
         # that plugin, which is a decision made on missing data.
         if [ "$_ver" = '?' ]; then
             dr_warn "$_id records no version. Leaving its cache alone."
@@ -927,7 +927,7 @@ clean)
         [ -d "$_dir" ] || continue
 
         # One directory for each version that is on disk. The live one stays,
-        # every other one goes - and each is asked where it really is first.
+        # every other one goes, and each is asked where it really is first.
         for _v in "$_dir"/*; do
             [ -d "$_v" ] || continue
             dr_path_contained "$_cache" "$_v" || dr_die \

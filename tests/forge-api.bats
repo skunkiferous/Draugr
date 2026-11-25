@@ -419,9 +419,9 @@ api_rm_fixture() {
     python3 -c 'import json, sys; print(json.dumps({"test": {"running": False, "diskDirectory": sys.argv[1], "ramMb": 8192, "snapshots": [], "current": {"snapIndex": -1, "branchIndex": -1}}}))' "$win"
 }
 
-# THE WORST ONE. The delete answered, and then nothing could confirm it. The old
+# THE WORST ONE. The delete answered, and then nothing was able to confirm it. The old
 # code read any error as "it is gone", printed phase=gone, and cleared the
-# pinned host key of a VM that may still be registered.
+# pinned host key of a VM that possibly is still registered.
 @test "rm.ps1 delete: a daemon that goes quiet after the delete is not a VM that is gone" {
     local vms
     vms=$(api_rm_fixture)
@@ -453,12 +453,12 @@ api_rm_fixture() {
     run api_run snap.ps1 -Mode base -Vm test -Name probe -GraceSec 6
     api_is 22
     # The point of the refusal: a baseline of a guest that is still writing is
-    # a corrupt baseline, and nothing here could tell whether it is.
+    # a corrupt baseline, and nothing here is able to tell whether it is.
     run grep -cE '^POST /v1/vms/test/snapshots$' "$API_LOG"
     [ "$output" = 0 ]
     # AND IT ASKED FOR NOTHING EITHER. The refusal comes before the stop, the
     # same as the other refusals in this script: a guest whose state nobody
-    # could read is not one to send an ACPI power-off to and then wait for.
+    # was able to read is not one to send an ACPI power-off to and then wait for.
     run grep -cE '^POST /v1/vms/test/shutdown$' "$API_LOG"
     [ "$output" = 0 ]
 }

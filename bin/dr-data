@@ -16,8 +16,8 @@
 # and marks each file that looks like something you run.
 #
 # A pull lands in a host-owned staging directory first, outside the repository,
-# and the review reads THAT tree before anything is published. A dry run would
-# describe a mound that keeps working afterwards; the staged tree is the files
+# and the review reads THAT tree before anything is published. A dry run
+# describes a mound that keeps working afterwards. The staged tree is the files
 # themselves. See the `pull` branch at the end of this file.
 #
 #   dr-data status   dry run, BOTH directions: what moves, and how much
@@ -104,7 +104,7 @@ common=(-a --no-links --no-devices --no-specials -m "${filters[@]}")
 # A pull writes onto a Windows drive, where DrvFs reports every file as 0777
 # whatever --chmod says. That measurement is already why dr_data_exec_shaped
 # judges the name and not the mode. So on a pull --chmod changes nothing on
-# disk - but it does change what rsync BELIEVES the destination should be, and
+# disk, but it does change what rsync BELIEVES the destination should be, and
 # --link-dest links only a file that matches in full, permissions included.
 # Measured here, ext4 sender to a /mnt/c destination with the repo as the
 # reference, 128 MB unchanged: 5.9 s with --chmod, 65 ms without it and with
@@ -165,24 +165,24 @@ human() {
 # A FORECAST of the names that a pull writes, relative to the repo, one on each
 # line, without directories. It uses the same filter rules and delta algorithm
 # as a real transfer, so it is the best answer available without transferring
-# anything - and `status` and `diff` transfer nothing, which is their point.
+# anything, and `status` and `diff` transfer nothing, which is their point.
 #
 # `pull` does NOT use this. A forecast describes the mound at the moment it was
-# asked, and the mound keeps running; classify_staged below reads the files
-# that actually arrived. Reading a name out of rsync's report is also reading
+# asked, and the mound keeps running. classify_staged below reads the files
+# that actually arrived. Reading a name out of the report of rsync is also reading
 # an encoding of it, which the comment there measures.
 #
 # THREE THINGS THIS FUNCTION USED TO GET WRONG, and they are one mistake: it
 # believed output that it had not checked.
 #
 #   1. `rsync … 2>/dev/null | grep -v '/$' || true` is the status of GREP, and
-#      `|| true` discards even that. A dry run that FAILED - an unreachable
-#      mound, a refused ssh, a missing rsync in there - arrived as an empty
+#      `|| true` discards even that. A dry run that FAILED, such as an unreachable
+#      mound, a refused ssh or a missing rsync in there, arrived as an empty
 #      list, which every caller reads as "a pull lands nothing". The pull then
 #      ran unreviewed, with the real transfer doing the work. That is F07.
 #   2. rsync writes its own remarks to STDOUT, mixed in with the names.
 #      Measured on 3.2.7: `skipping non-regular file "alink"` is a stdout
-#      line. So a symlink in the sender's tree turned into an incoming "file"
+#      line. So a symlink in the tree of the sender turned into an incoming "file"
 #      with that sentence for a name. The >> marker below tells the two apart:
 #      a name is a line that rsync FORMATTED, not any line it printed.
 #   3. A line it cannot read is not a line to drop. If rsync has something to
@@ -212,8 +212,8 @@ incoming_names() {
 
 # names=() from incoming_names, with the status kept.
 #
-# `mapfile -t names < <(incoming_names)` cannot do this: it reports MAPFILE's
-# status, which is 0 whatever the preview did. That is the defect of point 1
+# `mapfile -t names < <(incoming_names)` cannot do this: it reports the status of
+# MAPFILE, which is 0 whatever the preview did. That is the defect of point 1
 # again, in the shape that the shell makes convenient. It was in all three
 # callers.
 list_incoming() {
@@ -227,7 +227,7 @@ list_incoming() {
                "not transfer those, so the preview cannot account for one." \
                "Look at the mound before you pull:  dr-shell" ;;
         *) dr_die "could not preview what a pull would land" \
-               "The dry run failed, so the review would be empty - and an empty" \
+               "The dry run failed, so the review would be empty, and an empty" \
                "review is not the same answer as 'nothing to pull'." \
                "Is the mound reachable?  dr-status" ;;
     esac
@@ -269,13 +269,13 @@ classify_incoming() {
 }
 
 # The same three groups, read from a staged tree on this disk instead of from
-# rsync's report of one. `pull` uses this and nothing else.
+# the report of rsync on one. `pull` uses this and nothing else.
 #
-# WHY THE NAMES COME FROM THE FILESYSTEM. `%n` is rsync's presentation output,
+# WHY THE NAMES COME FROM THE FILESYSTEM. `%n` is the presentation output of rsync,
 # and a name is not always what it prints as. Measured with rsync 3.2.7: a
 # newline in a name arrives as the four characters `\#012`, a `\001` as
 # `\#001`, and a backslash is itself escaped to `\#134` when the result would
-# otherwise be ambiguous - so a review of that text reviews an encoding, and
+# otherwise be ambiguous, so a review of that text reviews an encoding, and
 # `--files-from` fed that text back finds no such file (status 23, measured).
 # A raw tab, by contrast, is passed through unescaped. Here the names come
 # from find -print0, where the only separator is the one byte a name cannot
@@ -486,7 +486,7 @@ push|pull)
     # judged and the files that landed were never the same observation. That is
     # U01, and it is not academic: dr_data_path_safe is the ONLY thing that
     # stops a name like `.git.`, which a Windows drive resolves to `.git` and
-    # which the filter rules - exact patterns - do not match. A sender that
+    # which the filter rules (exact patterns) do not match. A sender that
     # shows a tidy tree to the dry run and writes that name afterwards got it
     # past the one check that would have refused it.
     #
@@ -504,7 +504,7 @@ push|pull)
     #
     # 128 MB of changed data: 1130 ms staged against 1104 ms straight into the
     # repository. Removing the staging tree afterwards leaves the published
-    # file whole - a hard link is the file, not a reference to it.
+    # file whole. A hard link is the file, not a reference to it.
     #
     # Both links need the staging root and the repository on ONE volume, which
     # %LOCALAPPDATA% and a checkout on C: normally are. On two, rsync copies
@@ -517,8 +517,8 @@ push|pull)
 
     classify_staged
 
-    # Nothing arrived. With deletions confirmed that is still an instruction -
-    # the mound removed its data and this run is told to follow - so the
+    # Nothing arrived. With deletions confirmed that is still an instruction
+    # (the mound removed its data and this run is told to follow), so the
     # publication below has to run. Without them there is nothing left to do.
     if [ ${#DR_IN_SAFE[@]} -eq 0 ] && [ ${#DR_IN_UNSAFE[@]} -eq 0 ] \
        && [ ${#DR_IN_ODD[@]} -eq 0 ] && [ ${#del[@]} -eq 0 ]; then
@@ -545,8 +545,8 @@ push|pull)
     #
     # This is the one of the three shared receive steps that the data channel
     # uses as it stands (lib/common.sh, "the shared receive path"). It does not
-    # call dr_incoming_validate_tree, because classify_staged above is this
-    # command's own version of that walk and a better one here: it REPORTS
+    # call dr_incoming_validate_tree, because classify_staged above is the
+    # version of that walk that belongs to this command, and a better one here: it REPORTS
     # every entry it refuses instead of dying at the first, which is what makes
     # the review above worth reading. And it does not call
     # dr_incoming_dest_ok, because this channel publishes by merging into the
@@ -554,7 +554,7 @@ push|pull)
     # root, so there is no strict descendant to confine, and the per-name test
     # is dr_data_path_safe.
     #
-    # What a destination test would have caught here, rsync's default already
+    # What a destination test would have caught here, the default of rsync already
     # does, measured with rsync 3.2.7 (tmp/h1-rsync-dest.log): a staged
     # `data/out.txt` published onto a repository where `data` is a symlink out
     # of the tree REPLACES the link with a real directory and leaves the

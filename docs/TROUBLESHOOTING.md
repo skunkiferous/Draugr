@@ -286,8 +286,8 @@ If `sbx` itself gives `duplicate kit name`, that is the same thing.
 
 Then `sbx` can never add a kit to it in place, and only a rebuild applies one. `sbx kit add` keeps
 the mound by committing the container to an image, and it names that image after the sandbox:
-`sandboxes-swap/<sandbox>`. An image name takes neither a capital letter nor a `+`. So on
-`draugr-MyApp`, `sbx` answers this — after it has started the mound, which stops the agent:
+`sandboxes-swap/<sandbox>`. An image name takes neither a capital letter nor a `+`. Thus on
+`draugr-MyApp`, `sbx` answers this, after it has started the mound, which stops the agent:
 
 ```text
 500 Internal Server Error: swap-image: commit original container:
@@ -295,12 +295,12 @@ invalid reference format: repository name (sandboxes-swap/draugr-MyApp) must be 
 ```
 
 `dr-kit apply` tests the name first and says so before anything moves. Draugr derives a lower-case
-name, so a mound built by 0.10 or later is never of this kind; one built by 0.9 or older is, since
+name, so a mound built by 0.10 or later is never of this kind. One built by 0.9 or older is of this kind, since
 it kept the case of the repo folder, and `sbx` has no rename.
 
 ### `dr-up` says this repo already has a mound under an older name
 
-Draugr 0.9 and older derived `draugr-MyApp` for `C:\Code\MyApp`; this one derives `draugr-myapp`,
+Draugr 0.9 and older derived `draugr-MyApp` for `C:\Code\MyApp`. This one derives `draugr-myapp`,
 for the reason above. The mound you have is untouched and still works, so `dr-up` refuses rather
 than building a second one beside it and leaving the first holding its disk. Pick one:
 
@@ -320,7 +320,7 @@ dr-up                       # builds draugr-myapp, with every kit of the list
 Use `dr-rm`, not `sbx rm`: only `dr-rm` asks the mound whether the agent committed something you
 never fetched, or holds memory you never exported, and it refuses rather than destroying it.
 
-`dr-ls` marks either mound as this repo's, so the one you keep does not look like a stranger's.
+`dr-ls` marks either mound as the mound of this repo, so the one you keep does not look like the mound of a stranger.
 
 ### `dr-up` fails with `500 Internal Server Error: failed to run sandbox container`
 

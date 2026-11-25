@@ -32,7 +32,7 @@
 #   2   the arguments are wrong
 #   3   only for `status`: the daemon is down. Not a failure, a fact
 #   4   only for `status`: the daemon answers, and did not list its VMs. Thus
-#       this cannot say which run, and an empty list would be a guess
+#       this cannot say which run, and to report an empty list is to guess
 #   20  nothing was confirmed down, so the daemon did not change: a VM that did
 #       not stop, or a list of VMs that could not be read
 #   21  the daemon did not stop
@@ -81,13 +81,13 @@ function Get-Daemon {
 # $null means "I could not ask". THE CALLERS ARE WHAT MAKES THAT TRUE, and this
 # function cannot do it alone: PowerShell unrolls an array on the way out of a
 # function, so `return @()` and `return $null` arrive at `$v = Get-Vms $d` as
-# exactly the same $null. A mutation run proved it - putting `return @()` back
-# changed no behaviour at all. The defect was never the value here; it was that
+# exactly the same $null. A mutation run proved it, putting `return @()` back
+# changed no behaviour at all. The defect was never the value here. It was that
 # nobody tested it.
 #
 # Both callers read the failure as "nothing runs": the status line said "no VM
 # runs, so the daemon can stop directly", and the wait below treated a VM
-# missing from a failed listing as one that had shut down - after which this
+# missing from a failed listing as one that had shut down, after which this
 # script asks the daemon to stop while a guest is still writing to its disk.
 # Each caller now has its own test for $null, and each of those is mutated in
 # tmp/run-mut-a6.sh.

@@ -36,7 +36,7 @@ a mound can reach Ollama, remove it. This replaces it.
 every interface of the distro. On the default NAT networking those sit behind the host, so the
 audience is this machine and its other distros. With `networkingMode=mirrored` in
 `%USERPROFILE%\.wslconfig`, or a `netsh interface portproxy` rule pointing in here, the same bind
-answers the LAN — and then the allowlist below is the only thing between the network and your model
+answers the LAN. Then the allowlist below is the only thing between the network and your model
 server. **`dr-doctor` reports which of those this machine is**, and says so rather than assuming it.
 `OLLAMA_PROXY_LISTEN` is yours to narrow, but under mirrored networking an address of the distro
 *is* an address of the host, so it is not the fix it looks like.

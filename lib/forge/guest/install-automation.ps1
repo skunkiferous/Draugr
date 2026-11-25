@@ -23,7 +23,7 @@
 # install` registers that task. Do not replace it with a plain `serve`.
 #
 # Traps that tests found, and each one cost time:
-#   - This script used to fetch a vendor's install script and Invoke-Expression it, and the
+#   - This script used to fetch an install script of a vendor and Invoke-Expression it, and the
 #     trap recorded here was that Invoke-Expression refuses the Byte[] which
 #     -UseBasicParsing hands back when the response carries no charset. BOTH ARE GONE:
 #     nothing here runs downloaded text any more. Every artifact is a pinned version
@@ -53,8 +53,8 @@ param(
     [int]$Port = 8765,
     [string]$AhkDir = 'C:\Tools\AutoHotkey',
     # PINNED, AND EACH PAIR MOVES TOGETHER. Before this, uv came from a script
-    # that this file fetched and ran, and AutoHotkey from whatever the vendor's
-    # version.txt named that day. So the same sources built two different base
+    # that this file fetched and ran, and AutoHotkey from whatever the
+    # version.txt of the vendor named that day. Thus the same sources built two different base
     # layers depending on the morning, and neither download was ever checked
     # against anything. The hashes below are the `Get-FileHash -Algorithm
     # SHA256` of the files those two URLs served, and each vendor publishes the
@@ -197,8 +197,8 @@ function Get-PinnedFile([string]$Url, [string]$Dest, [string]$Sha256, [string]$W
                "`n  from     $Url" +
                "`n  expected $($Sha256.ToLower())" +
                "`n  got      $got" +
-               "`n  Either the vendor published that version again - then change the version" +
-               " and the hash together - or this is not the file it claims to be.")
+               "`n  Either the vendor published that version again (then change the version" +
+               " and the hash together) or this is not the file it claims to be.")
     }
     Write-Host ("  the sha256 is the same as the pin ({0} MB)" -f `
                 [math]::Round((Get-Item $Dest).Length / 1MB, 1))
@@ -276,7 +276,7 @@ if (-not $VerifyOnly) {
         # NOT `Invoke-Expression (Get-Text 'https://astral.sh/uv/install.ps1')`,
         # which is what this was. That ran whatever that host served at that
         # moment, in the guest, with no version and no integrity test of any
-        # kind - the newest uv on the day the layer happened to be built. The
+        # kind: the newest uv on the day the layer happened to be built. The
         # release archive is pinned and hashed instead, which is what the other
         # two installers in this directory already do. github.com is in the
         # allowlist of kits/base already, so this needs no policy change.
@@ -423,7 +423,7 @@ if (-not $VerifyOnly) {
     # --- AutoHotkey v2 from the zip: no installer, no elevation, no file association ---
     # PINNED, like uv above. This used to read version.txt from the vendor and
     # install whatever it named, then extract the zip with no integrity test at
-    # all - so the version was the vendor's choice of the day, and the bytes
+    # all, so the version was the choice of the vendor on the day, and the bytes
     # were whatever arrived.
     $exe = Join-Path $AhkDir 'AutoHotkey64.exe'
     if ((Test-Path $exe) -and (Get-Item $exe).VersionInfo.ProductVersion -eq $AhkVersion) {
@@ -508,15 +508,15 @@ if ($c) {
 # 1. Without a token, the answer must be the documented 401. Before, ONLY an
 #    answered request marked the phase bad: any other outcome printed a yellow
 #    "(expected 401)" and the run still ended in "automation ready". A timeout,
-#    a 500, a connection that was refused - each of them left the claim "the
+#    a 500, a connection that was refused. Each of them left the claim "the
 #    desktop is behind a token" with nothing behind it. An answer this probe
 #    did not get is not a refusal.
 #
 # 2. With the token, the answer must NOT be 401. A server that refuses
-#    everything would otherwise prove its own security by being broken: a
+#    everything otherwise proves its own security by being broken: a
 #    different process on the port, a token file the server cannot read, or a
 #    half-written config all answer 401 to everyone. Any other status passes,
-#    including a 400 for an empty JSON-RPC body - the question here is
+#    including a 400 for an empty JSON-RPC body. The question here is
 #    authentication, not whether '{}' is a valid request.
 #
 # The status, or 0 when the request got no answer at all. $ErrorActionPreference

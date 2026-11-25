@@ -96,7 +96,7 @@ dr_agent_mem_survey() { printf '%s' "$DR_MOUND_HOME"; }
 # then gets an empty answer, not "command not found" three calls deep.
 #
 # THESE ARE NOT PROBE ANSWERS, so the three-answer rule in docs/HACKING.md does
-# not apply to them: nothing here asks a question that could fail to be
+# not apply to them: nothing here asks a question that can fail to be
 # answered. The state is known, and it is "this agent has no memory support".
 # `pack` is 1 rather than 2 for that reason, and `import_ready` can be 0
 # because `unpack` below refuses regardless, so no import follows a 0.

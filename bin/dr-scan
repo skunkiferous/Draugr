@@ -66,7 +66,7 @@ if [ -z "$skills_only" ]; then
     # git quotes such a name in its default output ("a\nb"), which arrives here
     # as a name that matches no pattern.
     # A file, not `$(...)`: bash DISCARDS NUL bytes in a command substitution,
-    # which would join every name into one string.
+    # which joins every name into one string.
     _ls_out=$(mktemp); _ls_err=$(mktemp)
     if ! git -C "$DR_REPO" ls-files --others -z > "$_ls_out" 2>"$_ls_err"; then
         _err=$(cat "$_ls_err" 2>/dev/null); rm -f "$_ls_out" "$_ls_err"
@@ -79,8 +79,8 @@ if [ -z "$skills_only" ]; then
     rm -f "$_ls_out" "$_ls_err"
 
     # The match itself is dr_scan_name_matches in lib/common.sh, not a loop
-    # here. The same question is asked in one other place - of the files that
-    # the FIRST COMMIT of a Draugr-created repository is about to include -
+    # here. The same question is asked in one other place, for the files that
+    # the FIRST COMMIT of a Draugr-created repository is about to include,
     # and the two answers have to be the same answer. The comment there
     # carries the reason the patterns are split with `read -ra`.
     hits=()

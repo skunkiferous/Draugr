@@ -354,13 +354,13 @@ teardown() { dr_test_teardown; }
 #
 # dr_trust_check has always said that a file was not sourced. What it did not
 # say is what that MEANS for the settings in it: the run carries on with the
-# values of the layers BELOW, which are not "the safe values" - they are
-# somebody else's. Measured with a throwaway repo whose .draugr.conf asked for
+# values of the layers BELOW, which are not "the safe values". They are
+# the values of somebody else. Measured with a throwaway repo whose .draugr.conf asked for
 # one mount, its own kit and DRAUGR_EXCLUSIVE=true, none of it trusted: what
 # was in force was a different mount and a different kit from
 # ~/.config/draugr/config, and exclusive=false from the built-in default. A
-# different kit is a different set of network rules, and `dr-up` would have
-# built that mound.
+# different kit is a different set of network rules, and `dr-up` was going to
+# build that mound.
 
 # A repo whose .draugr.conf names boundary keys and is NOT trusted.
 h6_repo() {
@@ -409,14 +409,14 @@ DRAUGR_EXCLUSIVE=true
     [ "$status" -eq 0 ]
     [[ "$output" != *"refusing to act"* ]]
     # It still says everything. A command you run to see the state has to work
-    # in the state you are looking at - and has to describe it.
+    # in the state you are looking at, and it has to describe it.
     [[ "$output" == *"DRAUGR_MOUNTS"* ]]
     [[ "$output" == *"carries on"* ]]
 }
 
 @test "untrusted config: removing a mound is never blocked by it" {
     # D4, and the same reasoning as F09's "or destroying": a refusal here
-    # leaves no way out but trusting a file you may not want to trust.
+    # leaves no way out but trusting a file you possibly do not want to trust.
     h6_repo 'DRAUGR_MOUNTS="/mnt/c/secret:ro"
 ' || skip "no writable Windows drive path"
 
@@ -451,7 +451,7 @@ DRAUGR_EXCLUSIVE=true
 
 @test "untrusted config: a key is matched whole, not as a prefix" {
     # The = is part of the pattern for exactly this. DRAUGR_DATA decides what
-    # leaves this host and is on the list; DRAUGR_DATA_CHMOD is not on it, and
+    # leaves this host and is on the list. DRAUGR_DATA_CHMOD is not on it, and
     # a `grep` without the = reports a line that assigns the longer key as if
     # it had assigned the shorter one.
     #
@@ -508,7 +508,7 @@ DRAUGR_KIT_STORE=/mnt/c/kits
 #
 # MEASURED on the machine this was written on (tmp/h5-measure.log,
 # tmp/h5-acl.log): under WSL 2 a Windows drive arrives as a 9p mount with no
-# `metadata` option, and there chmod is not weakened, it is INERT - a file
+# `metadata` option, and there chmod is not weakened. It is INERT: a file
 # reports 777 before and after `chmod 600`, and a 644 file is still executable
 # to the kernel. The file keeps what NTFS hands down instead, and a new file
 # under C:\Temp inherits `Authenticated Users:(M)`: every authenticated account

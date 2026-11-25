@@ -39,7 +39,7 @@ done
 
 # No port named is a query, and the comment below says why that must change
 # nothing. Opening or closing one does change the boundary, on a key that a
-# skipped layer may have set.
+# skipped layer can have set.
 [ ${#open[@]} -eq 0 ] && [ ${#close[@]} -eq 0 ] && DR_CONFIG_REPORT_ONLY=1
 dr_context
 

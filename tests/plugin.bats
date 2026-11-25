@@ -204,7 +204,7 @@ JSON
 # which runs in a sandbox. `_mkt=${_id#*@}` of `x@../../..` used to build
 # $SEED/cache/../../../x, and the loop deleted the version directories it
 # found there. A security review reproduced that with a planted entry: it
-# deleted a disposable directory outside the fixture's store.
+# deleted a disposable directory outside the store of the fixture.
 
 # A registry that names one plugin, with whatever id and version the caller
 # gives. The second argument is the version string.
@@ -221,7 +221,7 @@ JSON
     outside="$(dirname "$STORE")/victim"
     mkdir -p "$outside/1.0.0"
 
-    # ../../victim from $STORE/seed/cache is exactly the fixture's sibling.
+    # ../../victim from $STORE/seed/cache is exactly the sibling of the fixture.
     plant_registry "plug-a@../../victim" "9.9.9"
     run dr-plugin clean
     [ "$status" -ne 0 ]
@@ -248,7 +248,7 @@ JSON
     outside="$(dirname "$STORE")/linked-away"
     mkdir -p "$outside/keepme"
     # The NAME is innocent: letters only. The destination is not. Only a
-    # canonicalising check can tell the difference.
+    # canonicalizing check can tell the difference.
     ln -s "$outside" "$STORE/seed/cache/mkt-a/plug-a/0.9.0" 2>/dev/null \
         || skip "this drive does not take a symlink"
 
@@ -262,7 +262,7 @@ JSON
     setup_store || skip "no writable Windows drive path"
     mkdir -p "$STORE/seed/cache/mkt-a/plug-a/0.9.0"
     # No version field at all: jq reports "?", and "keep only the live one"
-    # would then delete every version of this plugin on missing data.
+    # then deletes every version of this plugin on missing data.
     cat > "$STORE/seed/installed_plugins.json" <<'JSON'
 {"version": 2, "plugins": {"plug-a@mkt-a": [{"scope": "user"}]}}
 JSON
@@ -277,8 +277,8 @@ JSON
     setup_store || skip "no writable Windows drive path"
     # The registry the BUILD produced. build_begin copies the library into
     # .build/seed, the mocked CLI changes nothing, and build_commit is where
-    # those bytes become yours. Refusing there names the build; refusing only
-    # at cleanup time would blame a command weeks away and innocent.
+    # those bytes become yours. Refusing there names the build. Refusing only
+    # at cleanup time blames a command weeks away and innocent.
     plant_registry "plug-a@../../escape" "1.0.0"
     run dr-plugin add owner/repo plug-b@mkt-b
     [ "$status" -ne 0 ]

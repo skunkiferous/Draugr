@@ -3,13 +3,13 @@
 # ==> YOU DO NOT TYPE THIS. lib/forge/layer.ps1 dot-sources it. <==
 #
 # WHY THESE TWO LIVE IN A FILE OF THEIR OWN. `dr-layer drop` removes a
-# directory recursively, elevated, and it built that directory's path out of a
+# directory recursively, elevated, and it built the path of that directory out of a
 # bare [string]$Name with no check at all:
 #
 #     $dir = Join-Path $Root $Name
 #     Remove-Item $dir -Recurse -Force
 #
-# So `..\..\something` left the layer store, and `.` selected the ROOT, which
+# Thus `..\..\something` left the layer store, and `.` selected the ROOT, which
 # is every layer in one call. A security review reproduced the first of those
 # against a fixture root. `new` has always checked ITS name, but that check is
 # about the 15-character limit of a Windows guest name, and it lives in the
@@ -30,7 +30,7 @@ function Test-LayerName([string]$n) {
     # Letters and digits first, so no name is read as an option by whatever
     # runs next, and none begins with a dot. That first character is also what
     # refuses `.` and `..`, so there is no separate test for those: a mutation
-    # run showed the explicit one could be deleted without a single test
+    # run showed the explicit one can be deleted without a single test
     # noticing, which is the definition of a guard that guards nothing.
     if ($n -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { return $false }
     # Win32 strips a trailing dot or space before it looks a name up, so such
@@ -50,9 +50,9 @@ function Test-LayerName([string]$n) {
 #
 # Strict: a path equal to the root answers false. Nothing in this tool should
 # ever delete or replace the root it is confined to. That falls out of the one
-# comparison below - the root does not start with itself PLUS a separator -
+# comparison below (the root does not start with itself PLUS a separator)
 # and an extra test for it was deleted after a mutation run found that no test
-# could tell whether it was there. The separator is also what keeps
+# was able to tell whether it was there. The separator is also what keeps
 # `C:\ForgeLayersEvil` from counting as a child of `C:\ForgeLayers`.
 function Test-UnderRoot([string]$path, [string]$root) {
     if (-not $path -or -not $root) { return $false }
@@ -79,7 +79,7 @@ function Test-UnderRoot([string]$path, [string]$root) {
 # IT LIVES HERE, AND NOT IN layer.ps1, because parents.ps1 compares paths too
 # and a second copy of a comparison is a second answer. GetFullPath resolves
 # `.`, `..` and a relative path, and nothing else: it does not resolve a
-# junction and it does not need to - Hyper-V stores the real target of one when
+# junction and it does not need to. Hyper-V stores the real target of one when
 # it writes a parent locator, which tmp/u05-measure.log measured.
 function Get-FullPath([string]$p) {
     try { return [IO.Path]::GetFullPath($p) } catch { return $p }

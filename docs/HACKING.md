@@ -689,23 +689,23 @@ Codex module, `dr_sbx_state_alias`, `dr_model_probe`,
 code there.
 
 **And `2` must not collapse into `1` either, which is the half that gets missed.** Merging them
-costs nothing in behaviour — both mean "do not proceed" — so the temptation is to write
+costs nothing in behavior (both mean "do not proceed"), so the temptation is to write
 `probe || return 1` and move on. What it costs is the message. A reader who is told "the agent is
 running" closes an agent; a reader who is told "Draugr could not find out" looks at the mound.
 Send the first to do the second and you have spent their time on your behalf.
 
-So: **propagate with `|| return $?`, never `|| return 1`**, and let the branch that knows the
+Thus **propagate with `|| return $?`, never `|| return 1`**, and let the branch that knows the
 cause be the one that prints it.
 
 **A fourth answer is allowed, and `dr-mem export` has one.** It exits **3** for exactly one case:
 the agent was still writing its context, so nothing was exported. Every other failure stays `1`.
-That is a *narrowing* of `1` and not a new kind of answer, which is what makes it safe — a caller
+That is a *narrowing* of `1` and not a new kind of answer, which is what makes it safe: a caller
 that has never heard of `3` still reads it as "non-zero, so it refused", and is still right.
 `bin/dr-go` is the caller that does know: it treats a `3` as "export again once the stop has ended
 the agent", which is the whole fix for a memory export that a running Codex refused.
 
 Add one the same way, or not at all. The reason `bin/dr-rm` and `bin/dr-up` name a status they do
-not recognise, rather than folding it into their last branch, is precisely so that a reporter which
+not recognize, rather than folding it into their last branch, is precisely so that a reporter which
 grows a fourth answer cannot be silently read as one of the first three.
 
 **A consumer handles all three, even when two of them do the same thing.** The model is
@@ -721,33 +721,33 @@ case "$mcheck" in
 esac
 ```
 
-`bin/dr-rm` and `bin/dr-up` go one step further: a status they do not recognise at all is named in
+`bin/dr-rm` and `bin/dr-up` go one step further: a status they do not recognize at all is named in
 the refusal (`"dr-sync --check-only ended with status $check, which dr-rm does not know"`), because
 a reporter that grows a fourth answer must not be silently read as one of the first three.
 
 **Never answer a diagnosis with a guess.** The failure that made this a written rule: `dr-mem
-export` printed the module's own report — "codex runs in <mound>" — and then added its own line,
+export` printed the report of the module, "codex runs in <mound>", and then added its own line,
 "Is the mound running? dr-status". The hint is right for a mound that did not answer and wrong for
 every other case, and it arrived one line after proof that the mound was running. A caller that
 appends a generic cause to a specific report deletes the report.
 
 **What is not a reporter:** a stub whose answer is already known. `lib/agents/default.sh` returns
-fixed values because the agent has no memory support at all — nothing is asked, so nothing can go
+fixed values because the agent has no memory support at all. Nothing is asked, so nothing can go
 unanswered, and its comment says so rather than leaving the next reader to "fix" it.
 
 **Testing it needs fault injection, and the levers exist.** `tests/mocks/pgrep` reads
 `DR_MOCK_AGENT_RUNNING` (which names are running) and `DR_MOCK_PGREP_BROKEN` (answer 2, as the real
-`pgrep` does for its own errors), so both non-zero answers are the test's to choose. A test that
+`pgrep` does for its own errors), so the test chooses both non-zero answers. A test that
 only ever sees `0` and `1` is how the `2` branch of a three-answer function gets written wrong and
-stays wrong — which is exactly what happened to `dr_agent_mem_quiesce` before it had one.
+stays wrong, which is exactly what happened to `dr_agent_mem_quiesce` before it had one.
 
 ## Pattern: receiving a tree from a mound
 
 Three commands bring bytes from a mound onto the host: `dr-data pull`, `dr-mem export` and the
-Codex plugin build in `lib/plugins/codex.sh`. A fourth is easy to imagine — an archive import, a
-second agent's plugin format — and the first three show what it has to do.
+Codex plugin build in `lib/plugins/codex.sh`. A fourth is easy to imagine, such as an archive import or a
+plugin format of a second agent, and the first three show what it has to do.
 
-The transfer is yours. Everything that decides whether the bytes may land is shared, in
+The transfer is yours. Everything that decides whether the bytes are allowed to land is shared, in
 `lib/common.sh` under *the shared receive path*:
 
 ```sh
@@ -763,7 +763,7 @@ dr_incoming_publish "$staged" "$dest" "$keep"   # the swap, by rename
 `-type f` is a complete account of the bytes only once a link cannot point out of the tree.
 
 **A step you do not take, you skip visibly.** `dr-data pull` uses the limit and not the other
-three, and says in its own code why — it publishes by merging rather than replacing, and its shape
+three, and says in its own code why: it publishes by merging rather than replacing, and its shape
 test reports every refusal instead of dying at the first. That is the reason this is five
 functions and not one that owns the transaction: a caller with a callback hides which steps it
 actually took, from a reader and from a test.
@@ -773,7 +773,7 @@ rather than inventing one, because those names are already in the messages their
 
 Each step is a `return 1` with a `dr_error`, so the caller writes the `dr_die` that names its own
 command, its own cure and where the staged copy is. None of them removes the staging directory:
-that is the caller's `trap`, set when it called `dr_stage`.
+that is the `trap` of the caller, set when it called `dr_stage`.
 
 ## Two traps that cost real time
 

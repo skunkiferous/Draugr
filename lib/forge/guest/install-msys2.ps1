@@ -199,7 +199,7 @@ Write-Host '--- msys2 ---'
 $bad = @()
 
 # The STATUS and the line. `uname -srm` has no pipe in it, so the status is
-# bash's own: a shell that cannot start, or a uname that is not there, is a
+# the one of bash itself: a shell that cannot start, or a uname that is not there, is a
 # non-zero status, and a line of text is not the test for either.
 $ver = Invoke-Msys 'uname -srm' | Where-Object { $_ } | Select-Object -First 1
 $verRc = $script:rc

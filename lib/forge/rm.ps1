@@ -199,8 +199,8 @@ try {
 # Proved by effect. A 200 from a young API is not the same as a VM that is gone.
 #
 # AND AN ERROR IS NOT A PROOF EITHER. This was `try { Asb GET } catch { $still =
-# $false }`, so a timeout, a 500 or an expired token all read as "it is gone" —
-# and the line below then cleared the pinned host key of a VM that may still be
+# $false }`, so a timeout, a 500 or an expired token all read as "it is gone",
+# and the line below then cleared the pinned host key of a VM that can still be
 # registered, after printing phase=gone. Only the documented 404, confirmed
 # against the list of VMs, means absent. See vmstate.ps1.
 Start-Sleep -Seconds 2

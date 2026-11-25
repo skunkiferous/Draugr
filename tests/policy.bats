@@ -372,13 +372,13 @@ make_kit_deny_only() {
 # A QUERY THAT FAILED IS NOT AN EMPTY LIST. dr_policy_adhoc piped sbx into jq
 # into sort, and a pipeline reports the status of its LAST command. sort is
 # content with nothing. Thus a daemon that could not answer gave an empty list,
-# which reads as "nobody opened a host here" — and the guards above, whose whole
+# which reads as "nobody opened a host here", and the guards above, whose whole
 # purpose is to protect that list, found nothing to protect, at the one moment
 # where the rules are about to be destroyed.
 #
 # DR_MOCK_FAIL_AT matches the full command line, so only `policy ls` fails. A
-# whole-subcommand DR_MOCK_FAIL=policy would also break dr_policy_denied and the
-# rules of dr-hostport, and the refusal could then come from anywhere.
+# whole-subcommand DR_MOCK_FAIL=policy also breaks dr_policy_denied and the
+# rules of dr-hostport, and then the refusal can come from anywhere.
 
 @test "dr_policy_adhoc: a query that failed is not an empty list" {
     DR_MOCK_FAIL_AT="policy ls" run dr_policy_adhoc
@@ -402,8 +402,8 @@ make_kit_deny_only() {
     dr_mound_answers
     DR_MOCK_FAIL_AT="policy ls" run dr-rm -y
     [ "$status" -ne 0 ]
-    # The words of dr-rm's own guard. "cannot tell" alone also comes out of
-    # dr_sandbox_exists further down the chain, so it would pass with this
+    # The words of the guard of dr-rm itself. "cannot tell" alone also comes out of
+    # dr_sandbox_exists further down the chain, so it passes with this
     # guard deleted.
     [[ "$output" == *"so nothing was removed"* ]]
     ! grep -q "^rm " "$DR_MOCK_LOG"

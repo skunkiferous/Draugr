@@ -92,8 +92,8 @@ case " ${DR_MOCK_FAIL:-} " in
     *" $sub "*) printf 'mock sbx: %s failed\n' "$sub" >&2; exit 1 ;;
 esac
 
-# The guard matters: with DR_MOCK_FAIL_AT unset, the pattern would be *""* and
-# every call would fail.
+# The guard matters: with DR_MOCK_FAIL_AT unset, the pattern is *""* and
+# every call fails.
 if [ -n "${DR_MOCK_FAIL_AT:-}" ]; then
     case "$*" in
         *"$DR_MOCK_FAIL_AT"*)
@@ -262,8 +262,8 @@ cp)
     fi
     # The opposite: an entry at the DESTINATION that the source never had, and
     # that no listing of the source mentions. That is the shape a sender gets
-    # when the check it had to pass ran on its own side - the agent module
-    # refuses a link in the mound, with the mound's own find, and this knob
+    # when the check it had to pass ran on its own side: the agent module
+    # refuses a link in the mound, with the find that is in the mound, and this knob
     # stands in for a mound where that refusal did not happen.
     #
     # A symlink by default, because it is the entry that a list of `-type f`
@@ -336,7 +336,7 @@ policy)
 # inspect: the shape of `sbx inspect <name> --json`, measured on sbx 0.53, with
 # only the fields that Draugr reads. This is the one source that can say
 # whether a mound has the host tree READ-WRITE, and it is the one a mound
-# cannot edit - unlike .draugr.conf and .draugr/create.applied, which live in
+# cannot edit, unlike .draugr.conf and .draugr/create.applied, which live in
 # the repository that a bind-mounted agent can write.
 #
 #   DR_MOCK_TREE=clone      this repo mounted READ-ONLY at /run/sandbox/source,
@@ -348,7 +348,7 @@ policy)
 #                           the CURRENT DIRECTORY, because that is the repo
 #                           whenever a dr-* command asks this question, and a
 #                           fixture repo is never at a fixed path. Draugr
-#                           compares by path, so a fixed default would answer
+#                           compares by path, so a fixed default answers
 #                           "I know nothing about your repo" to every test
 #                           that merely runs dr-go.
 inspect)

@@ -40,7 +40,7 @@ mktree() {
 }
 
 # A typo in a limit must not read as "no limit", which is what a parser that
-# guesses would do with 8GB.
+# guesses does with 8GB.
 @test "dr_size_bytes: anything that is not a size is a refusal" {
     local bad
     for bad in 8GB eight '' '-1' '8 G' 1.5G 10X; do
@@ -170,7 +170,7 @@ mktree() {
 }
 
 # Moving a link aside leaves the tree it pointed at exactly where it was, so
-# the publication would not replace what the user thinks it replaces.
+# the publication does not replace what the user thinks it replaces.
 @test "dr_incoming_dest_ok: a destination that exists as a link is refused" {
     mkdir -p "$DR_TMP/root/corner" "$DR_TMP/outside"
     ln -s "$DR_TMP/outside" "$DR_TMP/root/corner/memory"
@@ -186,7 +186,7 @@ mktree() {
     [[ "$output" == *"not inside"* ]]
 }
 
-# Strict: nothing here may ever replace the root it is confined to.
+# Strict: nothing here is allowed to replace the root it is confined to.
 @test "dr_incoming_dest_ok: the root itself is not a destination" {
     mkdir -p "$DR_TMP/root"
     run dr_incoming_dest_ok "$DR_TMP/root" "$DR_TMP/root"
@@ -230,7 +230,7 @@ mktree() {
 }
 
 # The destination must survive a publication that had nothing to publish. This
-# is the case where a caller's transfer failed and its status was discarded.
+# is the case where the transfer of a caller failed and its status was discarded.
 @test "dr_incoming_publish: no staged tree leaves the destination alone" {
     mkdir -p "$DR_TMP/store/seed"
     printf 'old\n' > "$DR_TMP/store/seed/f"
@@ -250,7 +250,7 @@ mktree() {
 }
 
 # The count is read the same way the size is. A value that is not a number
-# reaches `[ "$files" -gt "$maxf" ]`, which answers 2 and takes no branch - and
+# reaches `[ "$files" -gt "$maxf" ]`, which answers 2 and takes no branch, and
 # a function that then returns 0 has turned a typo into "no limit".
 @test "dr_incoming_within_limits: a file count that is not a number is a refusal" {
     mktree typo2 1 10 > /dev/null

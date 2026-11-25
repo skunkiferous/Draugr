@@ -89,12 +89,12 @@ credential for `github` and a dozen other services. Therefore:
   `sbx secret set <service> --sandbox <mound>`. Scope it to this mound. A global
   secret is for every mound on the machine, which is not what your task needs.
 - **And say what the token costs.** `gh auth token` is the whole account of the
-  operator, read and write, on every repository they can reach — a password, not
+  operator, read and write, on every repository they can reach. It is a password, not
   a key for one door. Ask for the narrowest token that does your job and say
   which repository you need, so they can decide what to issue.
-- Whatever you can read, the model provider can read. For source under a licence
-  that the operator accepted — an engine, a partner SDK — that is their call to
-  make, not a detail. Ask before you read it, not after.
+- Whatever you can read, the model provider can read. For source under a license
+  that the operator accepted, such as an engine or a partner SDK, that is their
+  call to make, not a detail. Ask before you read it, not after.
 
 ## How to ask, in four lines
 

@@ -529,8 +529,8 @@ EOF
 # The claim is bookkeeping, and it is made LAST, after the forge is usable. A
 # lock on the claims that cannot be taken stops dr_dep_claim -- which is right
 # where a claim decides whether to go on -- so here it must be contained, or a
-# working `up` would end in a failure. It must not pass in silence either:
-# without the claim, another project's `dr-forge down` cannot see this one.
+# working `up` ends in a failure. It must not pass in silence either:
+# without the claim, `dr-forge down` of another project cannot see this one.
 @test "dr-forge up: a claim it cannot record warns, and the forge still succeeds" {
     local repo dir
     repo=$(dr_make_win_repo forgeclaim) || skip "no writable path under /mnt/<drive> on this machine"
@@ -1913,7 +1913,7 @@ rm_facts() {
 }
 
 # A MODE IS NOT ALWAYS A PERMISSION, and this file writes a private key and an
-# ssh config. The question itself is executed in tests/config.bats; what this
+# ssh config. The question itself is executed in tests/config.bats. What this
 # says is that dr-setup asks it, which a test cannot see from the outside: the
 # fixture HOME is on ext4, where the chmod always takes and the warning never
 # fires. It lives beside the other dr-setup tests, which are all here.
@@ -1923,6 +1923,6 @@ rm_facts() {
     grep -qF 'dr_private_file "$config"' "$f"
     # ONE bare chmod 600 is left, and it is the one that runs on an empty file
     # BEFORE anything is written into it. That order is right and it claims
-    # nothing; every claim about the finished file goes through the check.
+    # nothing. Every claim about the finished file goes through the check.
     [ "$(grep -c 'chmod 600' "$f")" -eq 1 ]
 }

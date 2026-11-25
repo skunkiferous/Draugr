@@ -328,7 +328,7 @@ dr_sbx_log_error() {
 #
 # WHERE IT IS comes from sbx, and not from a guess. sbx does not document it.
 # On the one machine measured, TEMP, TMP and C:\Temp were the same directory,
-# so no rule could be told from another. But the daemon names the alias in
+# so one rule was no better than another. But the daemon names the alias in
 # ordinary log lines at each start (the fsverity check, the FIFO cleanup, the
 # shims it loads). Thus the last mention in daemon.log is the alias of the
 # daemon that runs now, or that ran last.
@@ -480,8 +480,8 @@ dr_path_from_win() {
 # dr_simple_name <text>: is this ONE path component, and nothing else?
 #
 # The question behind it is always the same: a name arrived from somewhere
-# that Draugr does not control — a plugin registry that a build mound wrote, a
-# marketplace that named itself, a version string from a CLI — and the host is
+# that Draugr does not control (a plugin registry that a build mound wrote, a
+# marketplace that named itself, a version string from a CLI), and the host is
 # about to put it in a path. `_mkt=${_id#*@}` of an id like `x@../../..`
 # builds `<store>/cache/../../../x`, and the cleanup then deletes what it
 # finds there. A security review reproduced exactly that with a planted
@@ -793,9 +793,9 @@ declare -ga DR_UNTRUSTED_KEYS=()
 # WHY THIS LIST EXISTS. A configuration layer that Draugr declines to source is
 # reported (dr_trust_check says so on every command), and the run continues with
 # the values of the layers below it. Those are not "the safe values": they are
-# somebody else's values. Measured with a throwaway repo whose .draugr.conf
+# the values of somebody else. Measured with a throwaway repo whose .draugr.conf
 # asked for one mount, its own kit and DRAUGR_EXCLUSIVE=true, none of it
-# trusted - what was in force was a DIFFERENT mount and a DIFFERENT kit from
+# trusted. What was in force was a DIFFERENT mount and a DIFFERENT kit from
 # ~/.config/draugr/config, and exclusive=false from the built-in default. A
 # different kit is a different set of network rules. `dr-up` would have built
 # that mound.
@@ -803,13 +803,13 @@ declare -ga DR_UNTRUSTED_KEYS=()
 # So for these keys, "the file was skipped" is not an answer, and the commands
 # that ACT stop until it is resolved. The ones that only report do not: a
 # command you run to see the state has to work in the state you are looking at.
-# That split follows D4 - fatal on create, never on destroy - and it is the
+# That split follows D4 (fatal on create, never on destroy), and it is the
 # DEFAULT here, with the reporting commands named, so that a command written
 # later inherits the refusal rather than having to remember it.
 #
 # A key belongs here when a wrong value weakens a boundary. DRAUGR_AGENT does
 # not: the wrong agent is obvious the moment it starts. DRAUGR_REQUIRE_CLEAN
-# does not either - its default is the strict value and no lower layer can make
+# does not either: its default is the strict value and no lower layer can make
 # it looser than "refuse to start on a dirty tree".
 declare -gra DR_KEYS_BOUNDARY=(
     DRAUGR_KIT DRAUGR_KIT_STORE          # the kit carries the network rules
@@ -843,14 +843,14 @@ declare -gra DR_KEYS_BOUNDARY=(
 # dr-config and dr-trust are absent because they never call dr_context:
 # dr-config explains this situation and dr-trust ends it, so neither may be
 # stopped by it. A command with both kinds of verb sets DR_CONFIG_REPORT_ONLY
-# itself, once it knows which verb it has - dr-dep status, dr-ports with no
+# itself, once it knows which verb it has: dr-dep status, dr-ports with no
 # port, dr-policy without a change, dr-mem status.
 #
 # THE GATE IS ABOUT THE CONFIGURATION, NOT ABOUT THIS COMMAND'S KEYS. It does
 # not try to prove that the command in hand reads the key that was named. A map
-# of which command depends on which key would be a second list to keep in step
-# with the first, and the state it describes - a file Draugr was asked to use
-# and would not read - is one the whole run is in. One command ends it.
+# of which command depends on which key is a second list to keep in step
+# with the first, and the state it describes (a file Draugr was asked to use
+# and declined to read) is one the whole run is in. One command ends it.
 _dr_config_gate_exempt() {
     case "${DR_PROG:-}" in
         dr-status|dr-log|dr-diff|dr-ls|dr-doctor) return 0 ;;   # only report
@@ -937,7 +937,7 @@ _dr_defaults() {
     # write onto this host and a limit for each channel is three limits to keep
     # in step. The defaults are far above every real data set, memory store and
     # plugin library measured in this project, so reaching one means something
-    # surprising arrived - and the refusal names the key. Empty, or 0, is no
+    # surprising arrived, and the refusal names the key. Empty, or 0, is no
     # limit at all, which is a decision you are allowed to make. The size takes
     # K, M, G and T; a bare number is bytes. dr_incoming_within_limits says
     # what this does and does not prevent.
@@ -1034,7 +1034,7 @@ _dr_defaults() {
     # build output and do not need a scan.
     #
     # DRAUGR NEVER CHANGES DEFENDER, and no file here holds a command that
-    # would. lib/forge/guest/reduce-churn.ps1 has the measured reason, and
+    # does. lib/forge/guest/reduce-churn.ps1 has the measured reason, and
     # docs/CONFIG.md says how to make the change yourself.
     DRAUGR_FORGE_NOSCAN=
     # Where dr-layer keeps the disk layers of the forge. Empty means
@@ -1153,7 +1153,7 @@ dr_load_config() {
     # space. The `=` is part of the pattern, so DRAUGR_KIT_STORE= is not read as
     # DRAUGR_KIT=.
     #
-    # A grep can be fooled - a value built with eval, a key set inside a case.
+    # A grep can be fooled: a value built with eval, a key set inside a case.
     # That costs the DETAIL, not the warning: dr_trust_check already said the
     # file was not read, on every command. What this adds is the sentence that
     # names what is therefore not what you asked for.
@@ -1354,7 +1354,7 @@ dr_file_mode() { stat -c %a -- "$1" 2>/dev/null; }
 # no `metadata` option, and there chmod is not weakened, it is INERT. A new file
 # reports 777 before and after `chmod 600`, a directory stays 777 after
 # `chmod 700`, and a file chmodded 644 is still executable to the kernel. The
-# file keeps whatever NTFS hands down from its parent instead - and a new file
+# file keeps whatever NTFS hands down from its parent instead, and a new file
 # under `C:\Temp` inherits `Authenticated Users:(M)`, which is every
 # authenticated account on the machine, with WRITE (tmp/h5-acl.log).
 #
@@ -1376,7 +1376,7 @@ dr_file_mode() { stat -c %a -- "$1" 2>/dev/null; }
 # ask it and must change nothing while it reports: a chmod is a write, and a
 # command you run to look at the state may not alter the state it shows you.
 #
-# dr_private_why <file>: nothing and 0 when the file is private; one short
+# dr_private_why <file>: nothing and 0 when the file is private, and one short
 # reason and 1 when it is not.
 dr_private_why() {
     local f=$1 real=$1 mode=
@@ -1384,11 +1384,11 @@ dr_private_why() {
     # and then the path as written says nothing about where the bytes are.
     #
     # -m, NOT -f. -f fails on a path whose last components do not exist, and
-    # then the fallback below judges the path as written - which is the link,
+    # then the fallback below judges the path as written, which is the link,
     # not where it points. A test showed that: a link to /mnt/d/elsewhere/
     # was reported as a mode problem instead of a Windows drive. -m answers for
     # any path. Where readlink has no -m (macOS), it fails and the path as
-    # written is used, which is the old behaviour and not worse.
+    # written is used, which is the old behavior and not worse.
     if command -v readlink >/dev/null 2>&1; then
         real=$(readlink -m -- "$f" 2>/dev/null) || real=$f
     fi
@@ -1422,10 +1422,10 @@ dr_private_file() {
 }
 
 # The cure, in one place, because both branches above and every caller need the
-# same sentence and a second copy of it would drift.
+# same sentence and a second copy of it drifts.
 dr_private_file_cure() {
     dr_warn '  Whatever can write such a file decides what it means. Keep this state on a'
-    dr_warn '  Linux filesystem - the default is inside your WSL home, and DRAUGR_CONFIG_HOME'
+    dr_warn '  Linux filesystem: the default is inside your WSL home, and DRAUGR_CONFIG_HOME'
     dr_warn '  is what moves it. docs/SECURITY.md names the locations that work.'
 }
 
@@ -1488,10 +1488,10 @@ dr_context() {
 # dr_trust_check has already said that a file was not read. This says what that
 # MEANS for the keys in DR_KEYS_BOUNDARY: for each one the skipped file names,
 # the value that is in force and where it came from. The two are rarely the
-# same, and the difference is the whole point - "not read" sounds like "no
-# values", and what it really means is "somebody else's values".
+# same, and the difference is the whole point: "not read" sounds like "no
+# values", and what it really means is "the values of somebody else".
 #
-# It stops, because the review's wording is to require resolution before
+# It stops, because the wording of the review is to require resolution before
 # activating a security-sensitive configuration, and because the cure is one
 # command. Some commands are exempt: see _dr_config_gate_exempt.
 dr_config_require_resolved() {
@@ -1501,7 +1501,7 @@ dr_config_require_resolved() {
 
     # One line for each key, with the value in force and the layer it came
     # from. The entries are "<key> <file>", so the key is the part before the
-    # first space and the file is the rest - a path can hold a space, a key
+    # first space and the file is the rest. A path can hold a space, and a key
     # cannot.
     dr_error "${#DR_UNTRUSTED_KEYS[@]} setting(s) that decide what the mound may reach are NOT what the project asked for:"
     for entry in "${DR_UNTRUSTED_KEYS[@]}"; do
@@ -1692,12 +1692,12 @@ dr_repo_create() {
         # find it then says nothing.
         # AN EXISTING .gitignore USED TO MEAN NO PROTECTION AT ALL. The test
         # was `[ ! -f "$dir/.gitignore" ]`, so an ordinary pre-existing ignore
-        # file - one `*.log` is enough - skipped every rule below, and the
+        # file (one `*.log` is enough) skipped every rule below, and the
         # `git add -A` further down then committed the credential beside it.
         # A security review staged a `private.key` that way.
         #
         # So the rules are APPENDED when the file exists, inside a marked
-        # block, and nothing of the user's is rewritten or reordered. Appended
+        # block, and nothing that the user wrote is rewritten or reordered. Appended
         # at the END on purpose: gitignore gives the last matching rule, so
         # these win over an earlier `!negation` without touching it.
         local pat pats=() marker='# >>> Draugr (managed): credential and checkout patterns'
@@ -1743,13 +1743,13 @@ dr_repo_create() {
         # THE STAGED SET, NOT THE RULES. The block above is a rule, and a rule
         # is a claim about what git will do. This asks git what it DID, with
         # the same predicate dr-scan uses, because the one thing that must not
-        # happen here is a credential entering history - where no later scan
+        # happen here is a credential entering history, where no later scan
         # can see it.
         #
         # A hit is unstaged and named in the block, and the commit goes ahead
         # without it. Not a question: the file stays on disk, untouched and
         # untracked, dr-scan reports it from now on, and committing it anyway
-        # is one `git add -f` away. A prompt here would be a prompt about
+        # is one `git add -f` away. A prompt here asks about
         # something Draugr can simply not do.
         #
         # -z, because a file name can hold a newline, and git quotes such a
@@ -1762,7 +1762,7 @@ dr_repo_create() {
             done < "$_ls"
         else
             rm -f "$_ls"
-            dr_die "cannot list what the first commit of $dir would contain" \
+            dr_die "cannot list what the first commit of $dir will contain" \
                    "Without that list, nothing here can promise that no credential" \
                    "goes into the history of this repository."
         fi
@@ -2538,8 +2538,8 @@ dr_sandbox_exists() {
 
 # dr_mound_tree_state <sandbox> <repo>: clone | writable | unknown
 #
-# "CAN THE AGENT IN THIS MOUND WRITE MY WORKING TREE?" - asked of the thing
-# that knows, which is sandboxd. Three sources could answer, and two of them
+# "CAN THE AGENT IN THIS MOUND WRITE MY WORKING TREE?" is asked of the thing
+# that knows, which is sandboxd. Three sources can answer, and two of them
 # are wrong to ask:
 #
 #   the configuration   DRAUGR_CLONE is what you want NEXT time. dr-up REUSES
@@ -2549,7 +2549,7 @@ dr_sandbox_exists() {
 #                       exactly that mound with no question asked.
 #
 #                       It is also the wrong source for a second reason. The
-#                       key lives in .draugr.conf, INSIDE the repository - and
+#                       key lives in .draugr.conf, INSIDE the repository, and
 #                       in the case that matters, the agent can write that
 #                       file. Editing it breaks the trust hash, dr_load_config
 #                       then SKIPS the layer, and the built-in default
@@ -2558,9 +2558,9 @@ dr_sandbox_exists() {
 #
 #   .draugr/create.applied  better: it records what dr-up really passed. But
 #                       it is in the repository too, so a bind-mounted mound
-#                       can rewrite it, and a forged `DRAUGR_CLONE=true` would
-#                       buy silence. It stays useful for naming DRIFT, which
-#                       is dr_create_drift's job, and it is not consulted here.
+#                       can rewrite it, and a forged `DRAUGR_CLONE=true` buys
+#                       silence. It stays useful for naming DRIFT, which
+#                       is the job of dr_create_drift, and it is not consulted here.
 #
 #   sandboxd            outside the repository, and no mound can reach it.
 #
@@ -2713,7 +2713,7 @@ _dr_data_entries() {
 # Linux filesystem where `.GIT` and `.git` are two directories. The destination
 # is a Windows drive, where they are the SAME directory, and dr_require_win_path
 # makes a Windows drive the only destination Draugr supports. So an rsync
-# `--exclude=.git` does not exclude the host's `.git`: it excludes one spelling
+# `--exclude=.git` does not exclude the `.git` of the host: it excludes one spelling
 # of it. That matters because `.git/config` decides what git RUNS for you
 # (core.sshCommand, core.fsmonitor, every alias).
 #
@@ -2724,7 +2724,7 @@ _dr_data_entries() {
 #   .GIT/hooks-marker    arrives as .git/hooks-marker
 #   GIT~1/config         .git/config OVERWRITTEN
 #
-# The second one is not a case problem, and lowercasing would not have caught
+# The second one is not a case problem, and lowercasing does not catch
 # it. `GIT~1` is the 8.3 short name of `.git`, which this volume still
 # generates: `dir /x` lists `GIT~1  .git` for a directory created seconds
 # earlier. Win32 resolves the alias, so a write through it is a write to the
@@ -2734,7 +2734,7 @@ _dr_data_entries() {
 #
 # Hence this file does not try to enumerate spellings in the rsync filters and
 # call it done. The filters still carry the cheap ones (defence in depth, and
-# they keep a push from sending the host's own metadata), but the guarantee is
+# they keep a push from sending the metadata of the host), but the guarantee is
 # the host-side refusal in dr_data_path_safe, which stops the whole transfer.
 #
 # dr_name_reserved_meta <component>: is this one name host metadata?
@@ -2764,8 +2764,8 @@ dr_name_reserved_meta() {
 
 # dr_data_reserved_path <path>: does ANY component name host metadata?
 #
-# Every component, not just the first: `data/.GIT/config` is the host's
-# `data/.git/config`, and a repo can hold a nested checkout.
+# Every component, not just the first: `data/.GIT/config` is the
+# `data/.git/config` of the host, and a repo can hold a nested checkout.
 dr_data_reserved_path() {
     local comp
     local -a comps=()
@@ -2828,7 +2828,7 @@ dr_data_matches() {
     # spellings above (`.GIT`, `GIT~1`, `.git.`). Those cannot exist next to
     # the real `.git` on a Windows drive, so "not data" is the only answer
     # that can be right for them, and being stricter here never hides a file
-    # that a transfer would carry.
+    # that a transfer carries.
     if dr_data_reserved_path "$path"; then return 1; fi
 
     local _DR_DATA_ENTRIES=()
@@ -2998,7 +2998,7 @@ dr_data_path_safe() {
 #
 # THE NAME IS LOWERCASED FIRST, and that is not tidying. A `case` pattern is
 # case sensitive, so the old list answered "not runnable" for `payload.PS1`,
-# `SETUP.CMD` and `tool.EXE` — on a destination that runs all three, because
+# `SETUP.CMD` and `tool.EXE`, on a destination that runs all three, because
 # Windows resolves an extension without regard to case. The old list had
 # `*.appimage|*.AppImage` written out by hand, which is the same bug seen once
 # and fixed in one place. One lowercase conversion covers every entry and
@@ -3571,7 +3571,7 @@ dr_policy_denied() {
 # Status 2 means "cannot tell". The query is captured, not piped straight into
 # jq and sort, because the status of a pipeline is the status of its LAST
 # command, and sort is content with nothing. A sandbox that sbx cannot reach
-# would thus give an empty list, which reads as "nobody opened a host here".
+# thus gives an empty list, which reads as "nobody opened a host here".
 # dr-rm and dr-up --recreate use this list to refuse, so an empty list removes
 # their reason to refuse, at the one moment where the rules are destroyed.
 dr_policy_adhoc() {
@@ -3637,13 +3637,13 @@ dr_host_ip() {
 #   a netsh portproxy rule    Windows forwards a port of the LAN into the distro
 #
 # Draugr can change neither, and must not bind somewhere else instead: a mound
-# reaches that proxy from OUTSIDE the distro, so a loopback bind would turn the
+# reaches that proxy from OUTSIDE the distro, so a loopback bind turns the
 # feature off. What it can do is stop asserting, and report. The two reporters
 # below are the measurement, and dr-doctor is the report.
 #
 # BOTH FOLLOW THE THREE-ANSWER CONTRACT of docs/HACKING.md: 0 the claim holds,
 # 1 it definitely does not, 2 could not find out. A 2 must never collapse into
-# a 0 here, because a 0 is a sentence about somebody else's network.
+# a 0 here, because a 0 is a sentence about the network of somebody else.
 
 # _dr_win_home: the Windows user profile of this machine, as WSL sees it.
 #
@@ -3654,7 +3654,7 @@ dr_host_ip() {
 #
 # `dr_agent_mem_host_dir` in lib/agents/claude.sh resolves the same profile with
 # its own copy of these four lines. It should call this instead, and that is
-# deliberately NOT part of this change: it would alter where the memory of an
+# deliberately NOT part of this change: it would change where the memory of an
 # agent is looked for, which is not a security fix, and this batch is one.
 _dr_win_home() {
     local profile=${USERPROFILE:-}
@@ -3690,12 +3690,12 @@ _dr_wslconfig() {
 # or an unknown value, NAT network mode is used". That sentence is the reason an
 # unrecognised value answers 0 and not 2. consomme answers 2 on purpose: WSL
 # falls back to it when NAT fails, so it is probably as confined as NAT is, and
-# "probably" is not a thing to print about somebody's LAN.
+# "probably" is not a thing to print about the LAN of somebody.
 #
 # [wsl2] is the documented section. The key shipped under [experimental] in WSL
 # 2.0.0, and errors in the wild still name experimental.networkingMode, so a
 # networkingMode found in another section answers 2 instead of being ignored.
-# Ignoring it is the one path that could print a false "not on your LAN".
+# Ignoring it is the one path that can print a false "not on your LAN".
 dr_wsl_net_mode() {
     local file line section='' key value mode='' outside=''
     file=$(_dr_wslconfig) || { printf 'unknown\n'; return 2; }
@@ -3709,7 +3709,7 @@ dr_wsl_net_mode() {
         # The file is edited on Windows, so it arrives with CRLF line ends and,
         # from Notepad, a UTF-8 BOM. Only the BOM needs its own strip: a
         # carriage return IS in [:space:], so the trim below takes it off, and
-        # a second strip for it was dead code that no test could tell from its
+        # a second strip for it was dead code that no test was able to tell from its
         # absence. A mutation run established that, and the CRLF test stayed.
         line=${line#$'\xef\xbb\xbf'}
 
@@ -3913,7 +3913,7 @@ dr_policy_unadopted() {
 $(dr_kit_allow_list "$kit")"
     done < <(dr_kit_refs)
     # Captured before the loop, and not `done < <(dr_policy_adhoc)`, because a
-    # process substitution throws the status away. The loop would end because
+    # process substitution throws the status away. The loop ends because
     # the input ended, and input that ended because the query failed looks
     # exactly like input with no hosts in it.
     #
@@ -4268,7 +4268,7 @@ dr_mound_run() {
 #      before the check above learned to refuse one.
 #   2. `.draugr/tmp` was not validated. If it is a link, every step below
 #      acts somewhere else: the `rm -rf` deletes there and the staged files
-#      land there. A link is the whole of the attack; nothing else is needed.
+#      land there. A link is the whole of the attack, and nothing else is needed.
 #   3. The name was the pid, which is predictable and reused. The `rm -rf`
 #      in front of it was there to clear a stale one, and a deletion of a
 #      predictable path is the primitive an attacker wants.
@@ -4304,9 +4304,9 @@ dr_stage_root() {
     printf '%s/Draugr/stage' "$lad"
 }
 
-# Staging holds memory files and the files a pull would land. The old path
-# deleted the previous run's directory on the way IN, which is how a crashed
-# run's bytes left the disk. A random name cannot do that, so the sweep is
+# Staging holds memory files and the files that a pull lands. The old path
+# deleted the directory of the previous run on the way IN, which is how the
+# bytes of a crashed run left the disk. A random name cannot do that, so the sweep is
 # explicit, and it names only what this function creates.
 _dr_stage_prune() {
     # -type d is false for a link, so a planted link is not followed and not
@@ -4330,7 +4330,7 @@ dr_stage() {
 
     # The two components Draugr creates get the link test. Either one, if it is
     # a link, moves everything below it, which is the hole this root closes.
-    # Above them is the user's own LOCALAPPDATA, and what they do there is
+    # Above them is the LOCALAPPDATA of the user, and what they do there is
     # their business.
     local parent=${root%/*}
     if [ -L "$parent" ] || [ -L "$root" ]; then
@@ -4363,9 +4363,9 @@ dr_stage() {
 # hardening 1 and proposes one quarantine that owns the whole transaction.
 #
 # THIS IS THE OTHER SHAPE, AND IT IS DELIBERATE. The three transfers genuinely
-# differ - rsync over ssh, sbx cp, a local copy - so one function owning the
-# transaction would need a callback for the only part that is not shared, and
-# three readable flows would become one indirect one. What IS the same in all
+# differ (rsync over ssh, sbx cp, a local copy), so one function that owns the
+# transaction needs a callback for the only part that is not shared, and
+# three readable flows become one indirect one. What IS the same in all
 # three is every question that decides whether the bytes may land, and that is
 # what lives here:
 #
@@ -4382,12 +4382,12 @@ dr_stage() {
 # THE ORDER IS PART OF THE CONTRACT. The shape test comes first, because every
 # later step assumes it: `-type f` is a complete account of the bytes only once
 # links and special files are refused, and a destination test on a tree that
-# still holds a link would be answering about the wrong place.
+# still holds a link answers about the wrong place.
 
 # dr_incoming_validate_tree <tree>: may a tree of this SHAPE be published?
 #
-# This was dr_mem_validate_tree. The name was already wrong - the Codex plugin
-# library and, with this change, the data pull ask the same question - and a
+# This was dr_mem_validate_tree. The name was already wrong, because the Codex plugin
+# library and, with this change, the data pull ask the same question. A
 # name that says `mem` invites a fourth channel to write its own copy.
 #
 # Staging can be inside a read-only source mount. A link must be refused before
@@ -4427,19 +4427,19 @@ dr_size_bytes() {
 
 # dr_incoming_within_limits <tree>: is there a sane amount of it?
 #
-# WHAT THIS DOES NOT DO, said here because the review's word is "quota" and a
+# WHAT THIS DOES NOT DO, said here because the word of the review is "quota" and a
 # quota is not what any of the three channels can have. In all three the bytes
 # are already on this disk when this runs: the whole point of the staged pull
 # is that the transfer and the review are one observation, and sbx cp has no
-# cap of its own either. So this bounds what gets PUBLISHED - into your
-# repository, your memory store, your plugin library - and the staging copy
-# goes when the caller's trap removes it. A mound that sends an absurd tree
+# cap of its own either. So this bounds what gets PUBLISHED: into your
+# repository, your memory store, your plugin library. The staging copy
+# goes when the trap of the caller removes it. A mound that sends an absurd tree
 # fills the staging root for the length of one command, and changes nothing
 # that outlives it.
 #
 # Bounded at all is the point. The defaults are far above every real memory
 # store, plugin library and data set measured in this project, so a refusal
-# here means something surprising arrived - and it names the key, because a
+# here means something surprising arrived, and it names the key, because a
 # limit somebody cannot raise is a limit they work around.
 #
 # It runs AFTER dr_incoming_validate_tree. `-type f` is the whole of the bytes
@@ -4492,7 +4492,7 @@ dr_incoming_within_limits() {
 #
 # THE NAME OF A PLACE IS NOT THE PLACE. dr_path_contained resolves both sides
 # first, so a link anywhere above <dest> that leaves <root> is already caught
-# by the containment test - the resolved path is simply somewhere else. What it
+# by the containment test, because the resolved path is simply somewhere else. What it
 # cannot answer is the two questions that only matter when something is about
 # to be REPLACED there, and those are here:
 #
@@ -4505,8 +4505,8 @@ dr_incoming_within_limits() {
 #   pointed at exactly where it was
 #
 # <root> is the directory Draugr owns for this channel: the repository, the
-# memory store of this repo, the plugin library. It is NOT the user's
-# %LOCALAPPDATA% or home - what they do above the root is their business, and
+# memory store of this repo, the plugin library. It is NOT the %LOCALAPPDATA%
+# or home of the user. What they do above the root is their business, and
 # dr_stage says the same thing about the staging root.
 dr_incoming_dest_ok() {
     local root=$1 dest=$2 parent
@@ -4518,7 +4518,7 @@ dr_incoming_dest_ok() {
     parent=${dest%/*}
     [ "$parent" != "$dest" ] || parent=.
     if [ ! -d "$parent" ] || [ -L "$parent" ]; then
-        dr_error "the directory that would hold the published tree is a link, or is absent: $parent"
+        dr_error "the directory that is to hold the published tree is a link, or is absent: $parent"
         return 1
     fi
     if [ -e "$dest" ] && { [ -L "$dest" ] || [ ! -d "$dest" ]; }; then
@@ -4539,14 +4539,14 @@ dr_incoming_dest_ok() {
 # file system is the only step here that cannot be half done.
 #
 # <keep> is where the copy being replaced goes, and the CALLER names it. The
-# two callers already have names their users know - memory.previous, which one
-# mv brings back, and seed.old - and renaming those to one shared spelling
-# would be churn with no security in it. With no <keep>, the old copy is
-# removed instead; nothing uses that today, and the day something does, a
+# two callers already have names their users know (memory.previous, which one
+# mv brings back, and seed.old), and renaming those to one shared spelling
+# is churn with no security in it. With no <keep>, the old copy is
+# removed instead. Nothing uses that today, and the day something does, a
 # reviewer sees that it chose to.
 #
 # It does NOT call dr_incoming_dest_ok itself. The callers have more to say
-# about their own destination than this function could, and a check that is
+# about their own destination than this function has, and a check that is
 # also made somewhere else is a check that one of the two copies will outlive.
 dr_incoming_publish() {
     local staged=$1 dest=$2 keep=${3:-}
@@ -4842,7 +4842,7 @@ DR_DEP_GRACE=${DR_DEP_GRACE:-300}
 
 # How long a claimant waits for the lock on a resource, and how old a lock must
 # be before a claimant treats it as abandoned. Everything under the lock is
-# filesystem work -- sbx is asked BEFORE it is taken -- so a lock still held
+# filesystem work (sbx is asked BEFORE it is taken), so a lock still held
 # after minutes belongs to a process that died, not to one that is slow.
 DR_DEP_LOCK_WAIT=${DR_DEP_LOCK_WAIT:-30}
 DR_DEP_LOCK_STALE=${DR_DEP_LOCK_STALE:-300}
@@ -4942,7 +4942,7 @@ dr_dep_claims() {
 # _dr_dep_claims_with <dir> <running-list>: the same, from a list already held.
 #
 # dr_dep_claim asks sbx ONCE and then prunes and tests for a holder with that
-# one answer. Two calls never guaranteed one moment: a mound could stop between
+# one answer. Two calls never guaranteed one moment: a mound can stop between
 # them, so the prune kept a claim that the test then read as stale, or the other
 # way round. Taking the answer first is also what keeps the lock below cheap,
 # because no part of the locked section waits on a daemon.
@@ -4968,9 +4968,9 @@ _dr_dep_claims_with() {
 #
 # This one does NOT take the lock that dr_dep_claim holds, and that is a
 # decision rather than an omission. Its caller is the warden, which prunes each
-# tick, and a lock there would put a 30-second wait inside a 60-second loop. It
+# tick, and a lock there puts a 30-second wait inside a 60-second loop. It
 # also opens no hole: a claim is written with an atomic rename, so this loop
-# never sees half of one, and the claim it could delete in the gap is one the
+# never sees half of one, and the claim it can delete in the gap is one the
 # rules already call stale. What must not interleave is the exclusivity test
 # and the write, and both of those are inside the lock.
 dr_dep_prune() {
@@ -4997,7 +4997,7 @@ _dr_dep_prune_with() {
 
 # dr_dep_others <key> <repo>: the OTHER projects that claim this resource.
 #
-# 0 with a possibly empty list, or 2 when the claimants' liveness is unknown.
+# 0 with a possibly empty list, or 2 when the liveness of the claimants is unknown.
 dr_dep_others() {
     local key=$1 me=$2 claims
     claims=$(dr_dep_claims "$key") || return 2
@@ -5014,7 +5014,7 @@ dr_dep_others() {
 #
 # The point of the function is that else branch. Four commands in dr-forge asked
 # this by piping dr_dep_claims into awk, which replaces its exit status with
-# awk's, so "I could not tell" and "nobody else" produced the same empty list
+# the one of awk, so "I could not tell" and "nobody else" produced the same empty list
 # and the same silence before a permanent delete.
 dr_dep_report_others() {
     local key=$1 me=$2 what=$3 others
@@ -5055,18 +5055,19 @@ _dr_dep_lock_age() {
 #
 # mkdir is the primitive. It creates the directory or it fails, and two
 # processes cannot both create the same one, because the kernel decides. A lock
-# FILE would need O_EXCL, which a shell cannot ask for portably.
+# FILE needs O_EXCL, which a shell cannot ask for portably.
 #
 # The lock lives INSIDE the claim directory, not beside it. A sibling named
-# "<key>.lock" is itself a legal claim directory -- the key "foo.lock" spells
-# exactly that one -- so breaking an abandoned lock would delete another
-# resource's claims. Nothing here globs ".lock": the readers match "*.claim".
+# "<key>.lock" is itself a legal claim directory, and the key "foo.lock" spells
+# exactly that one. Beside the directory, breaking an abandoned lock would
+# delete the claims of another resource. Nothing here globs ".lock": the
+# readers match "*.claim".
 _dr_dep_lock() {
     local dir=$1 lock=$1/.lock waited=0 broke=0 age
 
     while ! mkdir "$lock" 2>/dev/null; do
         # Break a lock only when its age can be READ and is past the limit. A
-        # lock of unknown age is left alone, because breaking it would put two
+        # lock of unknown age is left alone, because breaking it puts two
         # claimants in the section at once, which is the one thing this exists
         # to stop. Breaks are counted, so a clock that reports every directory
         # as ancient cannot spin here.
@@ -5081,7 +5082,7 @@ _dr_dep_lock() {
     done
 
     # A lock that nobody can be identified from is worse than no lock, because
-    # the owner test below would have to guess. If the mark cannot be written,
+    # the owner test below has to guess. If the mark cannot be written,
     # give the lock straight back and fail the acquisition.
     printf '%s\n' "$$" > "$lock/owner" 2>/dev/null && return 0
     rm -rf "$lock"
@@ -5090,10 +5091,10 @@ _dr_dep_lock() {
 
 # _dr_dep_unlock <dir>: give the lock back, if it is still ours.
 #
-# The owner test is what makes breaking a lock safe. If this process were ever
-# slow enough that another claimant declared the lock abandoned and took it,
-# the directory in place would belong to that claimant, and removing it would
-# hand a third process the same section.
+# The owner test is what makes breaking a lock safe. If this process is ever
+# slow enough that another claimant declares the lock abandoned and takes it,
+# the directory in place belongs to that claimant, and removing it
+# hands a third process the same section.
 _dr_dep_unlock() {
     local lock=$1/.lock owner
     owner=$(cat "$lock/owner" 2>/dev/null) || return 0
@@ -5125,7 +5126,7 @@ dr_dep_claim() {
     mkdir -p "$dir"
 
     # One answer from sbx, taken BEFORE the lock, and used by both steps below.
-    # Asking can take seconds, and a lock held across it would make every other
+    # Asking can take seconds, and a lock held across it makes every other
     # claimant wait on a daemon that is not theirs.
     running=$(dr_sandboxes_running) || rst=$?
 
@@ -5172,8 +5173,8 @@ dr_dep_claim() {
     fi
 
     # The refusals are down here on purpose, after the lock is back. A dr_die
-    # inside the section above would leave the lock behind, and the next
-    # claimant would wait DR_DEP_LOCK_WAIT seconds on a process that is gone.
+    # inside the section above leaves the lock behind, and the next
+    # claimant waits DR_DEP_LOCK_WAIT seconds on a process that is gone.
     _dr_dep_unlock "$dir"
 
     case $refuse in

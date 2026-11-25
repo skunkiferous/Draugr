@@ -212,21 +212,21 @@ want_executable() {
 # --- the one command this repository must never hold -------------------------
 #
 # MEASURED, and the reason this test exists rather than a note in a review.
-# Defender's signature Trojan:PowerShell/Killav.VDA matches the TEXT of a
+# The signature of Defender, Trojan:PowerShell/Killav.VDA, matches the TEXT of a
 # real-time-protection-off command, in ANY file, and does not care whether
 # anything ever runs it. On this project it quarantined the session transcript
-# of an agent that had merely READ such a line out of lib/forge/guest/ - a data
+# of an agent that had merely READ such a line out of lib/forge/guest/, a data
 # file that nothing executes. The signature is right about what the line does.
 #
 # Thus the rule covers the whole repository, docs and comments included. A doc
 # is scanned exactly like a script, and an agent copies what it reads into
 # logs, patches and transcripts that this project does not control. dr-forge
-# READS the state of Defender and reports it; the person makes the change by
+# READS the state of Defender and reports it. The person makes the change by
 # hand, in Windows Security. See docs/CONFIG.md, DRAUGR_FORGE_NOSCAN.
 @test "no file in the repository writes to Defender, docs and comments included" {
     cd "$DR_ROOT" || return 1
-    # Assembled from pieces on purpose. A test that spelled the names out would
-    # match itself, and would also BE one more copy of the thing it keeps out.
+    # Assembled from pieces on purpose. A test that spelled the names out matches
+    # itself, and is also one more copy of the thing it keeps out.
     pat="(Set|Add|Remove)-Mp""Preference|Mp""CmdRun|Disable""Realtime""Monitoring"
     # Tracked files only, which is exactly what this project publishes.
     run git grep -n -I -E -i -- "$pat"
@@ -239,21 +239,21 @@ want_executable() {
 # --- the cure is a location, and not a permission ----------------------------
 #
 # A MECHANISM, NOT A RULE SOMEBODY HAS TO REMEMBER. Hardening 5 of the security
-# review says "validate Windows ACLs", and the other reading of it - repair them
-# - was declined: a Windows permission that gets in the way is something the
+# review says "validate Windows ACLs", and the other reading of it (repair them)
+# was declined: a Windows permission that gets in the way is something the
 # owner of the machine resets so that they can carry on, which makes it a poor
 # thing to rest a guarantee on, and trusted state is on a Windows drive in the
 # first place only because DRAUGR_CONFIG_HOME was pointed at one. So Draugr
 # reports and names a location to move the file to. docs/SECURITY.md, "Where the
-# trust record itself can live", is where that is written for a reader; this is
+# trust record itself can live", is where that is written for a reader. This is
 # what keeps it true, because a decision that lives only in prose gets proposed
 # again as a convenience.
 #
 # SCOPE, and why it is not the whole repository like the test above. The forge
 # sets two ACLs, in PowerShell: ssh REFUSES a private key that other accounts
-# can read, and the guest needs a plaintext password on disk. Those are a third
-# party's requirement and a documented trade-off (docs/FORGE.md), not a claim of
-# Draugr's. Thus the rule covers every shell surface - bin/ and every .sh - and
+# can read, and the guest needs a plaintext password on disk. Those are the requirement
+# of a third party and a documented trade-off (docs/FORGE.md), not a claim of
+# Draugr. Thus the rule covers every shell surface (bin/ and every .sh) and
 # the pathspec excludes tests/, which has to name the commands to keep them out.
 @test "no shell command sets a Windows permission: the cure is a location" {
     cd "$DR_ROOT" || return 1
@@ -263,29 +263,29 @@ want_executable() {
     [ -z "$output" ]
 }
 
-# --- what may enter a guest, and on whose word ------------------------------
+# --- what is allowed to enter a guest, and on whose word ------------------------------
 #
 # A MECHANISM, NOT A RULE SOMEBODY HAS TO REMEMBER, like the two guards above.
 # Hardening 4 of the security review asks for pinned versions. Its CI half
-# pinned `actions/checkout` to a commit; this is the guest half.
+# pinned `actions/checkout` to a commit. This is the guest half.
 #
 # What it was. `install-automation.ps1` fetched https://astral.sh/uv/install.ps1
-# and handed the text to Invoke-Expression, and separately read a vendor's
-# version.txt and installed whatever it named. So a base layer built on two
-# mornings from the same sources could hold two different uvs and two different
+# and handed the text to Invoke-Expression, and separately read the
+# version.txt of a vendor and installed whatever it named. So a base layer built on two
+# mornings from the same sources can hold two different uvs and two different
 # AutoHotkeys, and the bytes of neither were ever compared with anything. The
 # forge seals base layers and reuses them, so "the same layer" has to mean it.
 #
 # The two rules below are what the fix rests on, and both are cheap to keep.
-# They are a source check and not a behaviour test ON PURPOSE: the behaviour
+# They are a source check and not a behavior test ON PURPOSE: the behavior
 # needs a disposable Windows guest, which needs AppSandbox.exe and admin, and
-# this project never raises that on anybody's behalf. The guest run is the
-# user's, and these keep the shape true in the meantime.
+# this project never raises that on behalf of anybody. The guest run is the
+# run of the user, and these keep the shape true in the meantime.
 
 @test "no PowerShell in this repository executes text that it downloaded" {
     cd "$DR_ROOT" || return 1
-    # Comment lines are excluded because the fix's own comment names the call it
-    # removed - the clearest way to stop it coming back is to say what it was.
+    # Comment lines are excluded because the comment of the fix itself names the call it
+    # removed. The clearest way to stop it coming back is to say what it was.
     # `iex` needs the non-letter guards or it matches words that contain it.
     run bash -c "git grep -n -I -E -- 'Invoke-Expression|[^A-Za-z-]iex[^A-Za-z-]' -- '*.ps1' \
                  | grep -vE ':[[:space:]]*#'"

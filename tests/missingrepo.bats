@@ -191,7 +191,7 @@ make_plain_dir() {
 @test "data-only: an UNTRUSTED .draugr.conf stops dr-init before it creates anything" {
     # The file names DRAUGR_DATA, which decides what leaves this host, and
     # Draugr did not read it. Creating a repository and a data pattern from
-    # values nobody established is D4's case, so it stops - and it stops
+    # values nobody established is the case D4, so it stops, and it stops
     # BEFORE dr_repo_create, so there is nothing half-made to clean up.
     make_plain_dir || skip "no writable Windows drive path"
     printf 'DRAUGR_DATA="only/this/"\n' > "$DIR/.draugr.conf"
@@ -260,10 +260,10 @@ make_plain_dir() {
 }
 
 # THE FINDING. The credential rules were written only when there was NO
-# .gitignore at all, so one ordinary pre-existing ignore file - a single
-# `*.log` is enough - skipped every rule, and the `git add -A` then committed
+# .gitignore at all, so one ordinary pre-existing ignore file (a single
+# `*.log` is enough) skipped every rule, and the `git add -A` then committed
 # the credential beside it. A security review staged a private.key that way.
-# In history it is also invisible to dr-scan for ever, because that scan
+# In history it is also invisible to dr-scan forever, because that scan
 # reports untracked files.
 @test "add-all: an existing .gitignore no longer disables the credential rules" {
     make_plain_dir || skip "no writable Windows drive path"
@@ -286,7 +286,7 @@ make_plain_dir() {
     # block gives that the index check cannot: a credential written later is
     # ignored, so the next `git add -A` of your own does not stage it. Without
     # the block the two files above are still kept out of the first commit (the
-    # index check drops them), which is why this assertion is here - a mutation
+    # index check drops them), which is why this assertion is here. A mutation
     # run showed that removing the block broke nothing else in this test.
     printf 'KEY\n' > "$DIR/later.pem"
     run git -C "$DIR" status --porcelain
@@ -297,7 +297,7 @@ make_plain_dir() {
     make_plain_dir || skip "no writable Windows drive path"
     # A rule and a negation that really applies. (`notes/` + `!notes/keep.md`
     # does NOT: git cannot re-include a file whose parent directory is
-    # excluded, so that pair would prove nothing about precedence.)
+    # excluded, so that pair proves nothing about precedence.)
     printf '# my own header\n*.csv\n!notes/data.csv\n' > "$DIR/.gitignore"
     printf 'rows\n' > "$DIR/other.csv"
     DRAUGR_ON_MISSING_REPO=create-add-all dr-init >/dev/null 2>&1
@@ -322,10 +322,10 @@ make_plain_dir() {
 
 @test "add-all: a credential in the INDEX is dropped, not committed" {
     make_plain_dir || skip "no writable Windows drive path"
-    # The rules are a claim about what git will do; this is the check of what
+    # The rules are a claim about what git will do. This is the check of what
     # git DID. Reached here by a .gitignore that already carries the marker
-    # line and none of the rules - an older Draugr block, or one somebody
-    # emptied - so the block is not written again and nothing ignores the key.
+    # line and none of the rules (an older Draugr block, or one somebody
+    # emptied) so the block is not written again and nothing ignores the key.
     printf '# >>> Draugr (managed): credential and checkout patterns\n# <<< Draugr (managed)\n' \
         > "$DIR/.gitignore"
     printf 'PRIVATE KEY\n' > "$DIR/private.key"

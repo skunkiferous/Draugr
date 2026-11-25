@@ -225,7 +225,7 @@ teardown() { dr_test_teardown; }
     [[ "$output" == *"did not fetch"* ]]
 }
 
-# A name that is no mound of this repo keeps the old behaviour. There is
+# A name that is no mound of this repo keeps the old behavior. There is
 # nothing to compare it with, so the test cannot run at all.
 @test "dr-rm: an unrelated name is still removed without that test" {
     export DR_MOCK_NAME=someone-else DR_MOCK_STATE=running
@@ -255,7 +255,7 @@ teardown() { dr_test_teardown; }
 # AN UNREACHABLE MOUND IS NOT AN EMPTY MOUND. Status 2 from --check-only used to
 # print a warning and then ask the question anyway. The answer to that question
 # was worth nothing: you were agreeing to a destruction without the one fact
-# that the question exists to give you, and in the one case where nobody could
+# that the question exists to give you, and in the one case where nobody can
 # get that fact back afterwards. Thus both commands refuse, and --force is how
 # you say "destroy it without that fact".
 #

@@ -62,7 +62,7 @@ Write-Host '--- cleanup ---'
 # C:\Windows\Temp\draugr-<id>\ and puts its copies in there (lib/forge/
 # guestexec.ps1 says why). The top level still holds the copies of a guest that
 # an older Draugr provisioned, and this script also runs on those. A report
-# that counted only the top level would say "staged scripts (0)" with a
+# that counted only the top level says "staged scripts (0)" with a
 # directory full of them one level down.
 $stagedNames = '^(install-|preflight|write-manifest|cleanup|audit)'
 $staged = @(Get-ChildItem 'C:\Windows\Temp' -Filter '*.ps1' -EA SilentlyContinue |

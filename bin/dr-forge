@@ -368,12 +368,12 @@ if [ "$action" = up ]; then
     if [ -n "$repo" ]; then
         # In a subshell, because dr_dep_claim STOPS the shell when it cannot
         # take the lock on the claims of that resource. That refusal is right
-        # where a claim decides whether to go on; here the forge is already up,
+        # where a claim decides whether to go on. Here the forge is already up,
         # and ending a working `up` over bookkeeping would be the worse answer.
-        # Not silent either: without the claim, another project's `dr-forge
-        # down` cannot see that this one needs the VM.
+        # Not silent either: without the claim, `dr-forge down`
+        # of another project cannot see that this one needs the VM.
         if ! ( dr_dep_claim "vm:$vm" "$repo" "${DRAUGR_SANDBOX:-}" false ) 2>/dev/null; then
-            dr_warn "the forge is up, but this project's claim on it was not recorded"
+            dr_warn "the forge is up, but the claim on it was not recorded for this project"
             printf '  %sAnother project stopping the VM will not see you:  dr-dep status%s\n' \
                 "$_DR_DIM" "$_DR_OFF" >&2
         fi

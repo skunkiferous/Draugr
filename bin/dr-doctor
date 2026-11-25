@@ -595,7 +595,7 @@ printf '\n%sWSL networking%s\n' "$_DR_BOLD" "$_DR_OFF"
 
 # THE LEVEL DEPENDS ON WHETHER THIS PROJECT OPENS THAT DIRECTION. On a machine
 # with mirrored networking, no host port and no local model, Draugr exposes
-# nothing, and a warning there is the false colour that teaches people to
+# nothing, and a warning there is the false color that teaches people to
 # ignore the real one. With DRAUGR_HOST_PORTS or DRAUGR_MODEL set, the same
 # fact is a warning, because then something of yours is meant to listen.
 # Outside a repository both are unset, so the line is a note about the machine.
@@ -620,14 +620,14 @@ case "$_mode_rc" in
     1)
         "$_wslnet" "0.0.0.0 inside WSL" "is also on your LAN (networkingMode: $_mode)" \
             "This distro shares the network interfaces of the host, so anything" \
-            "that binds 0.0.0.0 in here - share/ollama-proxy does - answers the" \
+            "that binds 0.0.0.0 in here (share/ollama-proxy does) answers the" \
             "whole network. The proxy is query-only, which is why it exists, but" \
             "that is the only thing between the LAN and your model server." \
             "Close it on the host, or set networkingMode=nat in %USERPROFILE%\\.wslconfig" ;;
     *)
         # $_wslnet here too, and not a hardcoded note. On a WSL host cmd.exe is
-        # there, so this answer means consomme or a key in the wrong section -
-        # both of them actionable, and both worth your attention while a port of
+        # there, so this answer means consomme or a key in the wrong section.
+        # Both are actionable, and both are worth your attention while a port of
         # yours is open. With nothing open it stays a note, as the other arms do.
         "$_wslnet" "0.0.0.0 inside WSL" "Draugr did not establish what it reaches (networkingMode: $_mode)" \
             "The documented place for the setting is the [wsl2] section of" \

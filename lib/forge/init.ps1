@@ -85,7 +85,7 @@ function Phase([string]$n, [string]$s) { Write-Host ("  {0,-22} {1}" -f $n, $s) 
 # collected and decide the exit code at the end of the file.
 #
 # NOT EVERY PHASE IS IN HERE. The disk-churn phase tunes a disk, and a guest
-# that refuses the tuning is still a correct guest - that is also what -NoTune
+# that refuses the tuning is still a correct guest. That is also what -NoTune
 # exists for. A phase that was SKIPPED because its input was not given (no
 # tunnel key, no WSL key) is a declaration by absence, not a failure.
 $script:failed = @()
@@ -176,8 +176,8 @@ function Get-SshArgs { @('-i', $AdminKey, '-p', $script:port, '-o', 'IdentitiesO
 # else, and the last phase removes the whole directory. See guestexec.ps1 for
 # why a directory, and why two spellings of its path.
 #
-# A FAILURE IS FATAL. Without it, each copy below would land in a directory
-# that does not exist, and the run would report a list of failures that all
+# A FAILURE IS FATAL. Without it, each copy below lands in a directory
+# that does not exist, and the run reports a list of failures that all
 # have one cause.
 $script:gdir = New-GuestRunDir
 & ssh.exe -n @(Get-SshArgs) "forge@127.0.0.1" (Get-GuestMkdirCommand $script:gdir.Win) 2>&1 |
@@ -211,10 +211,10 @@ function Invoke-GuestScript([string]$Name, [string]$ScriptArgs = '') {
     # THE COPY DECIDES WHETHER THE RUN MAY HAPPEN. Its status was discarded,
     # and the line below ran the destination anyway. When the destination was a
     # fixed path shared by every run of every VM, a failed copy left whatever an
-    # earlier run had put there — a stale script that runs, succeeds, and
-    # reports its result as this phase's. The phase it belongs to may be the one
+    # earlier run had put there: a stale script that runs, succeeds, and
+    # reports its result as the result of this phase. The phase it belongs to can be the one
     # that turns password logins off. The run directory makes that impossible
-    # now; this check makes the failure say so at once, and in the right words.
+    # now. This check makes the failure say so at once, and in the right words.
     if ($LASTEXITCODE -ne 0) {
         Warn "the copy of $Name into the guest failed ($LASTEXITCODE), so it was not run"
         return 1
@@ -225,7 +225,7 @@ function Invoke-GuestScript([string]$Name, [string]$ScriptArgs = '') {
     # The marker is for this script, not for a reader, so the code does not
     # print it.
     @($out) | Where-Object { "$_" -notmatch 'DRAUGR_CHANGED=' } | ForEach-Object { Note $_ }
-    # 127 comes from the guest's own cmd.exe, and only when the file is not at
+    # 127 comes from the own cmd.exe of the guest, and only when the file is not at
     # $remote although scp reported success. That is a defect of THIS script,
     # not a state of the guest, and nothing below the call was tested. It is
     # fatal, and not one more code for each caller to judge differently.
@@ -244,7 +244,7 @@ function Test-Changed([string]$Text) { -not ($Text -match 'DRAUGR_CHANGED=0') }
 
 # A data file, not a script: the guest scripts above read these as an argument.
 # Into the run directory, like everything else, so that the argument cannot
-# name a file from an earlier run. The caller must still read the status - two
+# name a file from an earlier run. The caller must still read the status. Two
 # of these files are PUBLIC KEYS that a script then authorizes.
 function Copy-ToGuest([string]$Local, [string]$RemoteName) {
     & scp.exe @(Get-SshArgs | ForEach-Object { if ($_ -eq '-p') { '-P' } else { $_ } }) `
@@ -335,8 +335,8 @@ if (-not (Test-Path "$TunnelKey.pub")) {
 } else {
     # A STALE PUBLIC KEY IS WORSE THAN NO KEY. The destination used to be the
     # fixed C:\Windows\Temp\draugr_tunnel.pub and the status of this copy was
-    # discarded (`$null =`), so a failed copy left the .pub of an earlier run —
-    # or of another VM — in place, and the line below authorized THAT key with
+    # discarded (`$null =`), so a failed copy left the .pub of an earlier run,
+    # or of another VM, in place, and the line below authorized THAT key with
     # the permitopen, then reported 'permitopen set'. The 127 wrapper cannot see
     # this one: a data file is not run, it is read as an argument. Hence both
     # halves: the run directory, which is empty until this run fills it, and
@@ -484,13 +484,13 @@ if ($NoTune) {
         if (Test-Path -LiteralPath $NoScanFile) {
             # The third fixed destination. This one is only READ, so a stale
             # file means a report about the wrong paths rather than a wrong
-            # key - but a report about the wrong paths is the thing this
+            # key, but a report about the wrong paths is the thing this
             # declaration exists to prevent. Without the file, the guest
             # script says that nothing was declared.
             $crc = Copy-ToGuest $NoScanFile 'draugr_noscan.txt'
             if ($crc -ne 0) {
                 Warn "the copy of $NoScanFile into the guest failed ($crc)"
-                Warn 'the Defender check is skipped: an older list would report the wrong paths'
+                Warn 'the Defender check is skipped: an older list reports the wrong paths'
             } else {
                 $churnArgs += " -NoScanFile $($script:gdir.Win)\draugr_noscan.txt"
             }
@@ -552,8 +552,8 @@ if ($rc -ne 0) { Add-FailedPhase 'computer name' }
 # forgotten here stayed in the guest, including a public key. Now this run owns
 # a directory, so the cleanup is the directory.
 #
-# Two of the files in it are public keys. They are not secret - that is what a
-# .pub is - but they are a record of which credentials were offered to this
+# Two of the files in it are public keys. They are not secret (that is what a
+# .pub is) but they are a record of which credentials were offered to this
 # guest, and they have no reason to stay.
 #
 # NOT fatal, and nothing reads its status: the run is finished here, and a

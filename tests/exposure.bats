@@ -128,8 +128,8 @@ teardown() { dr_test_teardown; }
 # The key is also the wrong source for a second reason, which the two tests
 # above demonstrate: it lives in .draugr.conf, and in bind mode the agent can
 # write that file. Editing it breaks the trust hash, the layer is then SKIPPED,
-# and the built-in default (DRAUGR_CLONE=true) applies. The agent would be
-# removing its own warning. So sandboxd is asked instead, and only a confirmed
+# and the built-in default (DRAUGR_CLONE=true) applies. Thus the agent removes
+# its own warning. So sandboxd is asked instead, and only a confirmed
 # clone goes quiet.
 
 # dr-go needs a terminal for the question, so these go through a pty. The
@@ -201,7 +201,7 @@ clone_pty() {
 @test "dr_mound_tree_state: a mound that holds ANOTHER repo read-only is not this one's clone" {
     dr_load_common
     local repo; repo=$(dr_make_win_repo) || skip "no writable Windows drive path"
-    # The sandbox has a read-only clone source - of a different repository.
+    # The sandbox has a read-only clone source, of a different repository.
     # "Some repo is safe" must not answer "my repo is safe".
     export DR_MOCK_TREE=other DR_MOCK_OTHER_WIN='C:\Code\someone-elses-repo'
     [ "$(dr_mound_tree_state draugr-x "$repo")" = unknown ]

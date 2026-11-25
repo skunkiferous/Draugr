@@ -5,25 +5,25 @@
 #
 # THE FINDING (U05 of the security review). `thaw` and `drop` both refuse to
 # touch a layer that another layer differences from, and both learn about
-# children by SCANNING three places: -Root, every fixed drive's ForgeLayers, and
+# children by SCANNING three places: -Root, the ForgeLayers of every fixed drive, and
 # each VhdxPath in vms.cfg. A scan is bounded by where it looks. A child outside
 # all three is invisible, and the two verbs then do the one thing the guard
 # exists to prevent: a write to the parent of a differencing child, which
 # damages the child with no message anywhere in the stack.
 #
-# MEASURED, elevated, on throwaway 64 MB disks that nothing else could see
+# MEASURED, elevated, on throwaway 64 MB disks that nothing else was able to see
 # (tmp/u05-measure.log and tmp/u05-identity.log hold the full runs):
 #
 #   - A PARENT CANNOT BE ASKED FOR ITS CHILDREN. Get-VHD exposes no such
-#     property, on either side of a chain. So the scan is not a lazy choice, it
-#     is the only thing the platform offers - and an INVENTORY is the only way
+#     property, on either side of a chain. Thus the scan is not a lazy choice, it
+#     is the only thing the platform offers, and an INVENTORY is the only way
 #     to know about a child that the scan cannot reach.
 #   - A CHILD STAYS READABLE after its parent is renamed AND after it is
-#     deleted, still reporting the old ParentPath. So a record can always be
+#     deleted, still reporting the old ParentPath. Thus a record can always be
 #     re-checked against the disk it names, which is what makes a guard out of
 #     an inventory rather than a list of hopes.
 #   - A JUNCTION IN -ParentPath IS RESOLVED when the child is created: Hyper-V
-#     stores the real target. So the path matching below is sound. That was NOT
+#     stores the real target. Thus the path matching below is sound. That was NOT
 #     the assumption this was written under, and the measurement overturned it.
 #   - DiskIdentifier IS THE IDENTITY OF THE CHAIN, not of one edge. A parent, its
 #     child and its grandchild all report the same value. And `Set-VHD
@@ -37,12 +37,12 @@
 # three questions: does the child still name this parent, is its identifier
 # still the recorded one, and does its identifier agree with the disk its
 # ParentPath actually names? The third is what catches an -IgnoreIdMismatch
-# re-parent, which is the one state that Hyper-V's own check would have refused.
+# re-parent, which is the one state that the check built into Hyper-V refuses.
 #
-# WHAT THIS INDEX MAY NEVER DO, and the reason it needs no trust decision of its
+# WHAT THIS INDEX MUST NEVER DO, and the reason it needs no trust decision of its
 # own: it can only ever ADD A REFUSAL. Nothing here authorises a delete, a write
 # or a publication. A corrupt or hostile entry can make a layer verb refuse to
-# run, or - by being removed - take the guard back to what the scan alone can
+# run, or, by being removed, take the guard back to what the scan alone can
 # see. It can never make `drop` remove something, because `drop` still resolves
 # its target from -Name and -Root, through Test-LayerName and Test-UnderRoot, as
 # it always did. That is why this file sits beside the other host state and not
@@ -50,14 +50,14 @@
 #
 # WHERE IT LIVES, AND WHY NOT %LOCALAPPDATA%. layer.ps1 re-launches itself
 # elevated. With over-the-shoulder elevation that child runs as ANOTHER account,
-# and %LOCALAPPDATA% then names that account's profile - so the verb that
-# records a child and the verb that reads the record would use two different
-# files, and the protection would disappear without a message. %ProgramData% is
+# and %LOCALAPPDATA% then names the profile of that account, so the verb that
+# records a child and the verb that reads the record use two different
+# files, and the protection disappears without a message. %ProgramData% is
 # the same path for every account on the machine, and is where AppSandbox keeps
 # host.json for the same reason. A new file there is readable by every local
 # user (measured), and that is accepted rather than repaired: Draugr sets no
 # Windows permission, and docs/SECURITY.md says why. The paragraph above is what
-# makes that safe here - a weak ACL on this file costs a false refusal and can
+# makes that safe here. A weak ACL on this file costs a false refusal and can
 # never produce an authorisation.
 
 # Get-FullPath, Test-LayerName and Test-UnderRoot. layer.ps1 dot-sources this
@@ -65,25 +65,25 @@
 . (Join-Path $PSScriptRoot 'layerpath.ps1')
 
 # The format carries its own version, and an index written by a NEWER Draugr is
-# not something this code may read as "no children". An unknown version is
+# not something this code is allowed to read as "no children". An unknown version is
 # reported as unreadable, and the guard refuses. Fail closed, the same rule as
 # the rest of this review.
 $script:ParentIndexVersion = 1
 
-# NO TIMESTAMP IN AN ENTRY, on purpose. Nothing compares one, the reader would
-# have to carry a field it does not understand, and a field the reader drops is
+# NO TIMESTAMP IN AN ENTRY, on purpose. Nothing compares one, the reader
+# has to carry a field it does not understand, and a field the reader drops is
 # erased by the next write. This is a guard, not a log.
 function Get-ParentIndexPath {
     $base = $env:ProgramData
-    # An empty %ProgramData% would make Join-Path build a RELATIVE path, and the
-    # index would then follow the current directory of whoever ran the verb.
+    # An empty %ProgramData% makes Join-Path build a RELATIVE path, and the
+    # index then follows the current directory of whoever ran the verb.
     if (-not $base) { return '' }
     Join-Path $base 'Draugr\forge-parents.json'
 }
 
 # ------------------------------------------------------------------ reading a disk
 # ONE READER FOR EVERY DISK THIS FILE ASKS ABOUT, because each question below
-# needs the same two fields and none of them may throw. Get-VHD throws for a
+# needs the same two fields and none of them is allowed to throw. Get-VHD throws for a
 # disk that a running VM holds open, for a file that is not a VHDX at all, and
 # for every call without elevation: three different reasons that all mean
 # "cannot tell", and none of them mean "not a child".
@@ -91,7 +91,7 @@ function Get-VhdFacts {
     param([string]$Path)
     $full = Get-FullPath $Path
     # Absent is its own answer. A recorded child whose file is gone is a stale
-    # record, which is safe; a child that exists and cannot be read is not.
+    # record, which is safe. A child that exists and cannot be read is not.
     if (-not $full -or -not (Test-Path -LiteralPath $full)) {
         return [pscustomobject]@{
             Ok = $false; Absent = $true; Path = $full
@@ -119,7 +119,7 @@ function Get-VhdFacts {
 # ------------------------------------------------------------------ the index file
 # READ, AND SAY WHICH OF THE THREE THINGS HAPPENED. "There is no file yet" is
 # normal before the first `new` and must not read the same as "there is a file
-# and I could not understand it" - that second one is a child the guard cannot
+# and I could not understand it". That second one is a child the guard cannot
 # see, and the whole class of bug this review is about is an error that arrives
 # as a reassuring answer.
 function Read-ParentIndex {
@@ -150,8 +150,8 @@ function Read-ParentIndex {
         return $out
     }
     # -ErrorAction Stop, and not the ambient preference: a test dot-sources this
-    # file without one, and a non-terminating error would leave $doc null and
-    # the entries empty - which is the reassuring answer again.
+    # file without one, and a non-terminating error leaves $doc null and
+    # the entries empty, which is the reassuring answer again.
     $doc = $null
     try { $doc = ConvertFrom-Json $raw -ErrorAction Stop }
     catch {
@@ -173,7 +173,7 @@ function Read-ParentIndex {
     # unwraps a one-element array through ConvertFrom-Json, and `foreach` walks
     # a bare object as readily as a list, so both shapes arrive here safely. An
     # ABSENT `entries` does not: @($null) is a list holding one null, which
-    # would be reported as an unusable entry in an index that has none.
+    # is reported as an unusable entry in an index that has none.
     $raws = @()
     if ($null -ne $doc.entries) { $raws = @($doc.entries) }
     $good = @()
@@ -183,19 +183,19 @@ function Read-ParentIndex {
         $n++
         # EACH FIELD DECIDES A COMPARISON BELOW, so an entry missing one is
         # unusable rather than half-checked. An unusable entry is reported, and
-        # the guard turns that into "cannot tell" - it is never skipped.
+        # the guard turns that into "cannot tell". It is never skipped.
         if ($null -eq $e) { $bad += "entry ${n}: empty"; continue }
         $child = "$($e.child)"; $parent = "$($e.parent)"; $id = "$($e.id)"
         if (-not $child -or -not $parent -or -not $id) {
             $bad += "entry ${n}: child, parent or id is missing"; continue
         }
-        # A relative path in the index would resolve against whatever directory
+        # A relative path in the index resolves against whatever directory
         # the verb happened to run in, which is a different disk each time.
         if (-not [IO.Path]::IsPathRooted($child) -or -not [IO.Path]::IsPathRooted($parent)) {
             $bad += "entry ${n}: a path is not absolute"; continue
         }
         # The id is compared against a DiskIdentifier, which is a GUID. Anything
-        # else cannot match one, so it would make every re-check an alarm.
+        # else cannot match one, so it makes every re-check an alarm.
         $g = [guid]::Empty
         if (-not [guid]::TryParse($id, [ref]$g)) {
             $bad += "entry ${n}: '$id' is not a GUID"; continue
@@ -213,7 +213,7 @@ function Read-ParentIndex {
 }
 
 # Written beside the real file and renamed over it, so that no reader ever sees
-# half an index - which it would read as "no children recorded".
+# half an index, which it reads as "no children recorded".
 function Write-ParentIndex {
     param($Entries, [string]$Index)
     if (-not $Index) { throw 'Write-ParentIndex: no index path' }
@@ -223,9 +223,9 @@ function Write-ParentIndex {
     }
     # -Depth IS A MARGIN HERE, AND NOT A FIX. A mutation run showed that the
     # default of 2 round-trips this shape unharmed, so no test can tell the flag
-    # is there; it stays because the failure it guards against is silent. Past
+    # is there. It stays because the failure it guards against is silent. Past
     # the depth, ConvertTo-Json writes an object as its type name and every
-    # field is gone, so one nested field added later would empty the index
+    # field is gone, so one nested field added later empties the index
     # without an error. @() so that one entry is still written as a list.
     $doc = [pscustomobject]@{ version = $script:ParentIndexVersion; entries = @($Entries) }
     $tmp = "$Index.tmp"
@@ -240,7 +240,7 @@ function Add-ParentRecord {
     param([string]$Child, [string]$Parent, [string]$Id, [string]$Index)
     $idx = Read-ParentIndex -Index $Index
     # An unreadable index is NOT replaced with a fresh one holding this single
-    # entry. That would erase the record of every child outside the scan, which
+    # entry. That erases the record of every child outside the scan, which
     # is the only thing this index is for.
     if ($idx.State -eq 'unreadable') {
         return [pscustomobject]@{ Ok = $false; Why = ($idx.Bad -join '; ') }
@@ -263,7 +263,7 @@ function Add-ParentRecord {
 function Remove-ParentRecords {
     param($Children, [string]$Index)
     $idx = Read-ParentIndex -Index $Index
-    # Nothing to prune from a file that is absent, and nothing may be written
+    # Nothing to prune from a file that is absent, and nothing is allowed to be written
     # over one that could not be read.
     if ($idx.State -ne 'ok') { return 0 }
     $drop = @(@($Children) | ForEach-Object { (Get-FullPath $_).ToLowerInvariant() })
@@ -291,8 +291,8 @@ function New-ParentClaim {
 # Blocks is deliberately narrow: it means "this disk still has a dependent, or I
 # cannot tell whether it does". An inconsistency that concerns ANOTHER chain is
 # reported loudly and does not refuse the operation, because a write to this
-# disk cannot reach a child that no longer points at it - and refusing would
-# leave no way to finish legitimate work over a fault somewhere else.
+# disk cannot reach a child that no longer points at it, and refusing
+# leaves no way to finish legitimate work over a fault somewhere else.
 function Test-ParentClaim {
     param($Entry, [string]$Disk)
     $disk = Get-FullPath $Disk
@@ -328,7 +328,7 @@ function Test-ParentClaim {
         return New-ParentClaim $f.Path 'dangling' $false 'index' ("now names $($f.ParentPath), " +
             "which cannot be read: $($now.Why)")
     }
-    # The identifier is the chain's, so a child and the parent it points at
+    # The identifier is the one of the chain, so a child and the parent it points at
     # must report the same one. This is the comparison that no single stored
     # field can make, and the reason a record is a pair.
     if ($now.Id -ieq $f.Id) {
@@ -340,7 +340,7 @@ function Test-ParentClaim {
 
 # THE SCAN, as it always was, with the enumeration of candidate disks lifted out
 # so that a test can supply the list. layer.ps1 builds the real one from -Root,
-# every fixed drive's ForgeLayers and vms.cfg; see Get-LayerCandidates there.
+# the ForgeLayers of every fixed drive and vms.cfg. See Get-LayerCandidates there.
 function Get-ScanClaims {
     param([string]$Disk, $Candidates)
     $disk = Get-FullPath $Disk
@@ -375,9 +375,9 @@ function Get-ScanClaims {
 
 # THE WHOLE GUARD: the scan and the index, merged, with one answer for the verb
 # that has to decide. The two halves complement each other and neither is
-# redundant. The scan sees a child that nothing recorded - one made by hand, or
+# redundant. The scan sees a child that nothing recorded, one made by hand, or
 # by a Draugr from before this index existed. The index sees a child that the
-# scan cannot reach - `new --root <somewhere else> --keep-registered` leaves
+# scan cannot reach, `new --root <somewhere else> --keep-registered` leaves
 # exactly that, since nothing then puts it in a scanned store or in vms.cfg.
 #
 # -ScanErrors is the list of directories the caller could not enumerate. A
@@ -394,7 +394,7 @@ function Get-ChildGuard {
 
     # Every record that names this disk as the parent, re-checked against the
     # disk itself. A child the scan already found is not a second child, but the
-    # record's verdict carries the identifier comparison that the scan cannot
+    # verdict of the record carries the identifier comparison that the scan cannot
     # make, so the record wins and the claim is marked as seen by both.
     foreach ($e in @($idx.Entries | Where-Object { $_.parent -ieq $disk })) {
         $claim = Test-ParentClaim -Entry $e -Disk $disk
@@ -413,8 +413,8 @@ function Get-ChildGuard {
     foreach ($e in @($ScanErrors)) { $why += "a layer store could not be listed: $e" }
     $cannotTell = (@($why).Count -gt 0)
 
-    # Children BLOCKS; alarms report. Prunable is what has been proved stale,
-    # and Unrecorded is what the scan found and the index did not - which is how
+    # Children BLOCKS. Alarms report. Prunable is what has been proved stale,
+    # and Unrecorded is what the scan found and the index did not, which is how
     # a reader learns that the index is partial.
     $children = @($all | Where-Object { $_.Blocks })
     $alarmed = @('changed', 'mismatch', 'dangling')

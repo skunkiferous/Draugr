@@ -99,7 +99,7 @@ if [ -n "$DRAUGR_KIT" ]; then
 
     # A KIT YOU ASKED FOR BY NAME AND THAT IS NOT THERE IS FATAL. This used to
     # warn and build the mound anyway, and what it left out is what you asked
-    # for: a kit is where a project's DENY rules live, while the ~190 allow
+    # for: a kit is where the DENY rules of a project live, while the ~190 allow
     # rules of the machine policy stay in force either way. So the mound came
     # up MORE OPEN than the configuration described, with one yellow line
     # about it, and a script saw a successful create.
@@ -108,7 +108,7 @@ if [ -n "$DRAUGR_KIT" ]; then
     # a repo with no kit there is an ordinary repo and not an error.
     #
     # Fatal on CREATE, and this runs before the --recreate removal further
-    # down - which is the point: a typo in DRAUGR_KIT must never leave you
+    # down. That is the point: a typo in DRAUGR_KIT must never leave you
     # unable to remove the mound that the typo built. dr-rm resolves no kits
     # at all, so the destroy path cannot be trapped this way.
     #
@@ -130,8 +130,8 @@ if [ -n "$DRAUGR_KIT" ]; then
     if [ ${#_missing_kits[@]} -gt 0 ]; then
         dr_die "${#_missing_kits[@]} configured kit(s) do not exist" \
             "$(printf '%s ' "${_missing_kits[@]}")" \
-            "A configured kit can carry this project's deny rules, and the mound" \
-            "would come up without them - more open than your configuration says." \
+            "A configured kit can carry the deny rules of this project, and the mound" \
+            "comes up without them, more open than your configuration says." \
             "Draugr does not guess that a kit you named was optional." \
             "Looked in $DR_REPO and in the kit store $(dr_kit_store)." \
             "DRAUGR_KIT came from ${DR_ORIGIN[DRAUGR_KIT]}. Saved kits:  dr-kit list"
@@ -183,11 +183,11 @@ state=$(dr_sandbox_state "$DRAUGR_SANDBOX")
 # A mound built by Draugr 0.9 or older carries a name that kept the case of the
 # repo folder. This Draugr derives a lower-case one, because sbx cannot add a
 # kit to a mound whose name has a capital and it has no rename. Without this
-# test, dr-up would quietly build a SECOND mound beside the one you have, and
-# the first would keep its disk and the work inside it.
+# test, dr-up quietly builds a SECOND mound beside the one you have, and
+# the first keeps its disk and the work inside it.
 #
 # Only when the derived name is the one in use, and only when the new mound is
-# absent. If you named the mound yourself, you have already decided; with both
+# absent. If you named the mound yourself, you have already decided. With both
 # mounds present, a warning on every dr-up is noise.
 if [ "$state" = absent ] && [ "${DR_ORIGIN[DRAUGR_SANDBOX]:-}" = "derived from repo name" ]; then
     _legacy=$(dr_sandbox_name_legacy "$DR_REPO")
@@ -196,7 +196,7 @@ if [ "$state" = absent ] && [ "${DR_ORIGIN[DRAUGR_SANDBOX]:-}" = "derived from r
             "Draugr used to keep the case of the repo folder in the name of the mound." \
             "It no longer does: sbx cannot add a kit to a mound whose name has a capital" \
             "letter, and sbx has no rename, so the name must be right before the build." \
-            "This dr-up would build a SECOND mound, $DRAUGR_SANDBOX, beside that one." \
+            "This dr-up builds a SECOND mound, $DRAUGR_SANDBOX, beside that one." \
             "To keep the mound you have, and with it the old name and no in-place path:" \
             "  put  DRAUGR_SANDBOX=$_legacy  in .draugr.conf, then dr-trust it" \
             "To move to the new name, which loses the clone and the home of the agent:" \
@@ -259,7 +259,7 @@ if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
                    "Try again when the mound answers, or accept the loss:  dr-up --recreate --force" ;;
             *) dr_die \
                    "dr-sync --check-only ended with status $_check, which dr-up does not know" \
-                   "So nothing here can tell whether the recreate would destroy unfetched commits." \
+                   "So nothing here can tell whether the recreate destroys unfetched commits." \
                    "Accept that loss:  dr-up --recreate --force" ;;
         esac
     fi
@@ -281,7 +281,7 @@ if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
                    "Try again when the mound answers, or accept the loss:  dr-up --recreate --force" ;;
             *) dr_die \
                    "dr-mem check ended with status $_mcheck, which dr-up does not know" \
-                   "So nothing here can tell whether the recreate would destroy memory." \
+                   "So nothing here can tell whether the recreate destroys memory." \
                    "Accept that loss:  dr-up --recreate --force" ;;
         esac
     fi
@@ -294,7 +294,7 @@ fi
 # guard in dr-rm.
 #
 # Captured, and not `mapfile < <(...)`: mapfile reports its own status, so a
-# failed query would be an empty array, and an empty array is "there is
+# failed query is an empty array, and an empty array is "there is
 # nothing here to lose". See the same guard in dr-rm.
 if [ -n "$recreate" ] && [ -z "$force" ] && [ "$state" != absent ]; then
     _unadopted=$(dr_policy_unadopted) || dr_die \

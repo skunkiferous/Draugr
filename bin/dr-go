@@ -151,7 +151,7 @@ fi
 # AND IT IS NO LONGER THE CONFIGURATION THAT DECIDES. `if ! dr_is_true
 # "$DRAUGR_CLONE"` asks what you want for the NEXT mound. dr-up reuses the one
 # you have, so a mound built with DRAUGR_CLONE=false keeps your tree
-# read-write however the key reads today - and the question was skipped. A
+# read-write however the key reads today, and the question was skipped. A
 # security review attached to such a mound with no prompt at all.
 #
 # The mound that exists is asked about itself (see dr_mound_tree_state, which

@@ -157,10 +157,10 @@ load_helpers() {
 # "closed" IS A SECURITY CLAIM. Before, the counter was raised beside the
 # warning whatever sbx answered, so a removal that failed still produced
 # "closed host port 11434 ... (1 rule(s))" and exit 0, and the caller believed
-# the agent could no longer reach a host service that is still allowed.
+# the agent can no longer reach a host service that is still allowed.
 #
 # DR_MOCK_FAIL_AT, not DR_MOCK_FAIL: the listing must succeed, or the removal is
-# never reached and the test would pass for the wrong reason.
+# never reached and the test passes for the wrong reason.
 @test "dr-hostport --close: a removal that fails is not reported as closed" {
     export DR_MOCK_ADHOC="172.19.192.26:11434"
     export DR_MOCK_FAIL_AT="policy rm"
@@ -182,7 +182,7 @@ load_helpers() {
 }
 
 # The refresh path made the same claim: it counted a stale rule as replaced
-# before asking sbx to remove it, so "replaced 1 old rule(s)" could appear
+# before asking sbx to remove it, so "replaced 1 old rule(s)" appeared
 # while the old address was still allowed next to the new one.
 @test "dr-hostport: an old rule that will not go stops the refresh" {
     export DR_MOCK_ADHOC="10.0.0.5:11434"
@@ -357,13 +357,13 @@ load_helpers() {
 # --- what a 0.0.0.0 bind inside WSL reaches ---------------------------------
 #
 # The two reporters behind the dr-doctor lines. Each answers a question about
-# somebody's network, so the test that matters most is the one proving that a
+# the network of somebody, so the test that matters most is the one proving that a
 # "could not find out" never arrives as "not on your LAN".
 #
 # The seam is _dr_wslconfig: these tests source common.sh and then replace it,
 # which is why there is no cmd.exe mock. The value set, the default and the
 # "unknown values use NAT" rule are from the wsl-config documentation of
-# Microsoft; dr_wsl_net_mode holds the mapping and the reasons.
+# Microsoft. dr_wsl_net_mode holds the mapping and the reasons.
 
 # wslconfig <text>: make that text the .wslconfig of this machine. Call it
 # after load_helpers, which defines the function this one replaces.
@@ -414,7 +414,7 @@ networkingMode=bridged
 
 @test "dr_wsl_net_mode: consomme is 2, not a quiet 0" {
     # WSL falls back to consomme from a failed NAT, so it is probably confined.
-    # "Probably" is not a thing to print about somebody's LAN.
+    # "Probably" is not a thing to print about the LAN of somebody.
     load_helpers
     wslconfig '[wsl2]
 networkingMode=consomme
@@ -439,7 +439,7 @@ networkingMode=banana
 @test "dr_wsl_net_mode: networkingMode outside [wsl2] is 2, never a silent 0" {
     # The key shipped under [experimental] in WSL 2.0.0 and errors in the wild
     # still name experimental.networkingMode. Ignoring it is the one path that
-    # could print a false "not on your LAN".
+    # can print a false "not on your LAN".
     load_helpers
     wslconfig '[experimental]
 networkingMode=mirrored
@@ -517,7 +517,7 @@ networkingMode=nat
 
 @test "dr_wsl_portproxy: a missing netsh.exe answers 2, held by the source" {
     # There is no lever for "netsh.exe is not on this machine": the mock is on
-    # PATH for every test, which is the point of it - the CI runner and this
+    # PATH for every test, which is the point of it, so the CI runner and this
     # host must answer the same. The shape is held here instead, as the claude
     # quiesce probe is in tests/mem.bats.
     cd "$DR_ROOT" || return 1

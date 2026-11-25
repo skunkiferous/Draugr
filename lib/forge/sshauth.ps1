@@ -9,9 +9,9 @@
 # WHY A FUNCTION, AND NOT `-notmatch 'password'`. That was the test, and it
 # passes a server that offers "publickey,keyboard-interactive". On Windows sshd
 # keyboard-interactive is the interactive path, and that is where a password
-# prompt comes back; a server offering it is not keys-only, whatever the word
+# prompt comes back. A server offering it is not keys-only, whatever the word
 # in the string. The gateway mound gets a rule that can reach this sshd, so
-# what a sandbox may try to guess is the whole point of the phase.
+# what a sandbox can try to guess is the whole point of the phase.
 #
 # POSITIVE EVIDENCE ONLY. An empty list is not "passwords are off": during an
 # sshd restart the connection is refused and nothing is offered at all. A

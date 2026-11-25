@@ -194,9 +194,9 @@ PY
 # --- the library is built where no sandbox can reach it ---------------------
 #
 # The host used to write library.json, library.json.next and every marketplace
-# catalog inside the build mound's own workspace, and then publish that tree.
+# catalog inside the workspace of the build mound itself, and then publish that tree.
 # A security review redirected one of those writes with a link planted at
-# `library.json.next` and watched the host's jq output land in a file outside
+# `library.json.next` and watched the jq output of the host land in a file outside
 # the build directory. Validating plugin NAMES cannot see that: the name was
 # never the problem.
 
@@ -233,7 +233,7 @@ codex_library() {
     printf 'original\n' > "$DR_TMP/victim"
     build="$DRAUGR_PLUGIN_STORE/codex/.build"
     mkdir -p "$build/seed"
-    # A link at the old location of the host's temporary file. --force,
+    # A link at the old location of the temporary file of the host. --force,
     # because a leftover build directory is itself a refusal.
     ln -s "$DR_TMP/victim" "$build/seed/library.json.next" 2>/dev/null \
         || skip "this drive does not take a symlink"
@@ -249,15 +249,15 @@ codex_library() {
 }
 
 # The two assertions below are about the SOURCE, and they say so. The staged
-# library is already out of a sandbox's reach, so the last gate before
+# library is already out of the reach of a sandbox, so the last gate before
 # publication can only fire if something changes between the install and the
-# commit - which needs a real build mound to produce. Its two siblings (the
+# commit. Only a real build mound can produce that. Its two siblings (the
 # check in _dr_cp_begin, and the per-package check after each export) are
 # tested by running them.
 @test "codex plugins: the host writes nothing under the mound's workspace" {
     local f="$DR_ROOT/lib/plugins/codex.sh"
     # The workspace is created, handed to sbx, and removed. Every other
-    # mention of it would be a host write inside a directory the sandbox owns,
+    # mention of it counts as a host write inside a directory the sandbox owns,
     # which is the shape the review exploited.
     run bash -c "grep -vE '^[[:space:]]*#' '$f' | grep '_cp_build' \
         | grep -vE 'mkdir -p|rm -rf|dr_path_win|for d in|local _cp_seed'"
@@ -472,8 +472,8 @@ YAML
 }
 
 # THE FOUR QUESTIONS, IN THE ORDER THAT IS THE CONTRACT. A plugin build cannot
-# be run from here - it needs a build mound and a Codex that has the native
-# plugin CLI - so the order is read out of the source, the same way the test
+# be run from here, because it needs a build mound and a Codex that has the native
+# plugin CLI. Thus the order is read out of the source, the same way the test
 # above reads the one that matters most.
 #
 # Why the order is a contract and not a style: the shape test is what makes
@@ -495,7 +495,7 @@ YAML
 }
 
 # The swap is the one step where a mistake is not recoverable, so there is one
-# copy of it. A hand-rolled mv here would drift from the memory export's.
+# copy of it. A hand-rolled mv here can drift from the one of the memory export.
 @test "codex plugins: the library is published with the shared helper, not its own mv" {
     local f="$DR_ROOT/lib/plugins/codex.sh" body
     body=$(sed -n '/^_dr_cp_commit() {/,/^}/p' "$f")

@@ -49,15 +49,15 @@ It is loud, but not fatal. Nothing failed, so the exit status stays `0`. `dr-con
 the same answer as a table. `dr-trust` with no arguments offers each configuration and hook that
 you did not accept, all at once.
 
-**And for the settings that decide what the mound may reach, "not read" is not an answer.** The
-table above shows no value *from that file* — but the run does not continue with nothing, it
-continues with the values of the layers below, and those are not the safe values, they are somebody
-else's. Measured with a throwaway repo whose `.draugr.conf` asked for one mount, its own kit and
+**And for the settings that decide what the mound can reach, "not read" is not an answer.** The
+table above shows no value *from that file*. But the run does not continue with nothing. It
+continues with the values of the layers below, and those are not the safe values. They belong to somebody
+else. Measured with a throwaway repo whose `.draugr.conf` asked for one mount, its own kit and
 `DRAUGR_EXCLUSIVE=true`, none of it trusted: what was in force was a *different* mount and a
 *different* kit from `~/.config/draugr/config`, and `false` from the built-in default. A different
 kit is a different set of network rules.
 
-So every command names them, with the value in force and where that value came from:
+Thus every command names them, with the value in force and where that value came from:
 
 ```
 dr-status: did not source /mnt/c/src/myproject/.draugr.conf, because it is not trusted
@@ -71,16 +71,16 @@ dr-status: 3 setting(s) that decide what the mound may reach are NOT what the pr
   what you asked for. The values above are the ones in force.
 ```
 
-and a command that would **act** on them stops there, naming `dr-trust`. The keys are the kit and
+and a command that is about to **act** on them stops there, naming `dr-trust`. The keys are the kit and
 the kit store, the clone mode, the mounts, the ports and host ports, `DRAUGR_ENV`, the model URL,
 `DRAUGR_EXCLUSIVE` and `DRAUGR_REQUIRES`, the three `DRAUGR_SCAN*` keys, `DRAUGR_DATA`,
 `DRAUGR_DATA_PUSH` and `DRAUGR_DATA_DELETE`, `DRAUGR_AGENT_ARGS` and `DRAUGR_FORGE_NOSCAN`.
 
-Two kinds of command carry on instead. Those that only **report** — `dr-status`, `dr-log`,
+Two kinds of command carry on instead. Those that only **report**: `dr-status`, `dr-log`,
 `dr-diff`, `dr-ls`, `dr-doctor`, and the query verbs of `dr-dep`, `dr-mem`, `dr-ports` and
-`dr-policy` — because a command you run to see the state has to work in the state you are looking
-at. And those that only **take away**: `dr-rm` and `dr-stop`, because refusing to remove a mound
-over an untrusted file would leave no way out but trusting it. `dr-up --recreate` is not one of
+`dr-policy`. They carry on because a command you run to see the state has to work in the state you
+are looking at. And those that only **take away**: `dr-rm` and `dr-stop`, because refusing to remove a mound
+over an untrusted file leaves no way out but trusting it. `dr-up --recreate` is not one of
 those, since it builds a mound afterwards.
 
 ---
@@ -279,8 +279,8 @@ no rename, so the name a mound is born with decides for its whole life whether `
 ever work on it. The only place to prevent that is here, before the mound is built.
 
 Draugr 0.9 and older kept the case of the folder, so `C:\Code\MyApp` gave `draugr-MyApp`. Such a
-mound still works, and keeps its name — this key changed what Draugr derives, not what `sbx`
-holds. Draugr still recognises it: `dr-ls` marks it as this repo's mound, and `dr-up` refuses to
+mound still works, and keeps its name. This key changed what Draugr derives, not what `sbx`
+holds. Draugr still recognizes it: `dr-ls` marks it as the mound of this repo, and `dr-up` refuses to
 build a second one beside it and names both ways on. Set this key to that old name to keep it, or
 remove it and build again under the new one. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
@@ -954,9 +954,10 @@ missing. Refer to [docs/CLAUDE_PLUGINS.md](CLAUDE_PLUGINS.md).
 Three channels write files on your host with bytes the agent produced: a **data pull**
 (`dr-data pull`), a **memory export** (`dr-mem export`) and a **Codex plugin build**
 (`dr-plugin`). They use different transfer tools, and they ask the same questions before anything
-is published — what shape the tree may have, how much of it there may be, and where it may land.
+is published: which shapes the tree is allowed to have, how much of it is allowed, and where it is
+allowed to land.
 [`docs/SECURITY.md`](SECURITY.md#what-arrives-from-a-mound-and-what-it-has-to-pass) describes the
-sequence; these two keys are the only part of it you set.
+sequence. These two keys are the only part of it you set.
 
 Both apply to all three channels. One pair rather than three is deliberate: a limit for each
 channel is three limits to keep in step, and the one that gets forgotten is the one that matters.
@@ -967,19 +968,19 @@ turns the check off.
 
 ### `DRAUGR_INCOMING_MAX_SIZE`
 Default `8G`. The largest total size Draugr publishes from one transfer. Takes `K`, `M`, `G` and
-`T`; a bare number is bytes. Empty or `0` turns the check off. A value that is not a size is a
-refusal, not a guess — a typo in a limit must not read as "no limit".
+`T`. A bare number is bytes. Empty or `0` turns the check off. A value that is not a size is a
+refusal, not a guess, because a typo in a limit must not read as "no limit".
 
 **What these do, and what they do not.** In all three channels the bytes are already on this disk
 when the limit is applied: a staged pull transfers first on purpose, so that the tree that was
-reviewed is the tree that gets published, and `sbx cp` has no cap of its own either. So this is a
-ceiling on what reaches your **repository, memory store and plugin library** — the things that
-outlive the command — and not a disk quota. A transfer that is refused leaves its bytes in the
+reviewed is the tree that gets published, and `sbx cp` has no cap of its own either. Thus this is a
+ceiling on what reaches your **repository, memory store and plugin library**, which are the things
+that outlive the command, and not a disk quota. A transfer that is refused leaves its bytes in the
 staging directory, which the command removes as it exits.
 
 The defaults are far above every real data set, memory store and plugin library this project has
 measured, so a refusal means something surprising arrived. Raise the key if your data genuinely is
-that large; the refusal names which of the two fired and what it measured.
+that large. The refusal names which of the two fired and what it measured.
 
 ## Run-state dependencies
 
@@ -1090,19 +1091,19 @@ the declared paths are excluded and which are not. A difference is **not a failu
 works either way. It is slower, and the disk of the guest grows faster.
 
 **Why a check, and not the change.** Draugr used to make the change itself, and that was a mistake
-with a measurement behind it. Defender's own signature for a real-time-protection-off command
+with a measurement behind it. The signature that Defender has for a real-time-protection-off command
 matches the **text** of that command, in any file, and does not care whether anything ever runs it:
 it quarantined the session transcript of an agent that had merely **read** that part of the script.
 A data file, not a script. The signature is right about what the line does, so the honest response
-is not to argue with it. Thus **no file in Draugr holds a command that writes to Defender** — not in
-a script, not in an example, not in a comment, not in this page — and a test in `tests/repo.bats`
+is not to argue with it. Thus **no file in Draugr holds a command that writes to Defender**. Not in
+a script, not in an example, not in a comment, not in this page. A test in `tests/repo.bats`
 keeps it that way. An agent that reads this repository copies what it reads into logs, patches and
 transcripts that this project does not control, so a doc is no safer a place for such a line than a
 script is.
 
 **Why you still want the state.** Real-time protection reads each file that a build writes, and each
 file that it reads back. In a forge VM a differencing disk handles that write pattern worst
-([FORGE.md](FORGE.md#what-is-a-layer-not-the-base)). `init` is generic: it cannot know which trees
+([FORGE.md](FORGE.md#what-is-a-layer-not-the-base)). `init` is generic, and it cannot know which trees
 are build output that you can make again, and which hold something worth scanning. Thus Draugr holds
 the question, and your project gives the paths.
 
@@ -1110,7 +1111,7 @@ the question, and your project gives the paths.
 Security → Virus & threat protection → Manage settings**. The real-time protection switch is at the
 top of that page, and *Add or remove exclusions* is further down it. Neither needs a command.
 Microsoft documents the PowerShell route for the same two settings, under *Configure and validate
-exclusions for Microsoft Defender Antivirus* and the `Defender` module reference; this project does
+exclusions for Microsoft Defender Antivirus* and the `Defender` module reference. This project does
 not reproduce those commands, for the reason above.
 
 **`*` declares that real-time protection is off**, and declares no path:
@@ -1132,10 +1133,10 @@ mound](SECURITY.md). Why it is a real decision: an agent that controls that gues
 the allowlist reaches.
 
 Three practical notes. **Tamper Protection** is on by default on Windows 11, and refuses a scripted
-change to real-time protection while the call returns with no error — one more reason that the only
-honest half of this is the check. **Windows turns real-time protection on again** after some
-updates, so a guest that matched can stop matching with nothing changed in your configuration; the
-report tells you, and a run of `init` does not undo it. **Reading the exclusions needs administrator
+change to real-time protection while the call returns with no error. That is one more reason that
+the only honest half of this is the check. **Windows turns real-time protection on again** after
+some updates, so a guest that matched can stop matching with nothing changed in your configuration.
+The report tells you, and a run of `init` does not undo it. **Reading the exclusions needs administrator
 rights**, and a shell without them does not fail: the call returns a message where a path belongs.
 An ssh session into the guest is elevated, so `init` reads the real list, and says that it could not
 rather than report your paths as missing.

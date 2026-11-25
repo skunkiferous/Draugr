@@ -2,7 +2,7 @@
 #
 # WHY THIS FILE EXISTS. Three scripts carried their own version of this line,
 # and one of them was wrong. provision.ps1 and vm.ps1 wrapped the run in
-# cmd.exe with `if exist … else (exit /b 127)`; init.ps1 called
+# cmd.exe with `if exist … else (exit /b 127)`, and init.ps1 called
 # `powershell -File <path>` directly. The difference is not cosmetic:
 #
 #   `powershell -File <missing>` EXITS ZERO. It writes "The argument '...' to
@@ -25,15 +25,15 @@
 #    -File $remote                intact       |   intact
 #
 # The remote path has no space, so the bare form is the correct one here. An
-# argument VALUE with a space needs the escaped quotes instead; see
+# argument VALUE with a space needs the escaped quotes instead. See
 # Format-GuestArg in provision.ps1.
 #
 # WHAT `if exist` CANNOT DO ON ITS OWN: tell this file from a stale one. It
 # answers "is something there", never "is the right thing there". That used to
-# matter, because the destination was FIXED — every run of every VM used
-# C:\Windows\Temp\<name> — so a copy that failed left whatever an earlier run
+# matter, because the destination was FIXED: every run of every VM used
+# C:\Windows\Temp\<name>, so a copy that failed left whatever an earlier run
 # had put there, and the test below was just as happy with that file as with a
-# fresh one. It would run it and report its result as this run's.
+# fresh one. It ran it and reported its result as the result of this run.
 #
 # NOW EACH RUN OWNS A DIRECTORY, and that removes the question instead of
 # guarding it. See New-GuestRunDir below. The directory is created empty at the
@@ -43,7 +43,7 @@
 # The callers still check their own scp status, and should: it is the earliest
 # and clearest place to say "the copy failed". But a forgotten check is no
 # longer a stale file running under a name that looks right. init.ps1 forgot it
-# in four places, and that is how a .pub from an earlier run could be
+# in four places, and that is how a .pub from an earlier run was able to be
 # authorized while the phase reported success.
 function Get-GuestRunCommand([string]$Remote, [string]$ScriptArgs = '') {
     return ("if exist $Remote " +
@@ -61,7 +61,7 @@ function Get-GuestRunCommand([string]$Remote, [string]$ScriptArgs = '') {
 # of bug here.
 #
 # A DIRECTORY, NOT A RANDOM NAME FOR EACH FILE. The cleanup is then one
-# `rmdir /s /q` that cannot fall out of step with the copies - the list of
+# `rmdir /s /q` that cannot fall out of step with the copies. The list of
 # fixed names in init.ps1 had to be kept in sync by hand, and a file it forgot
 # stayed in the guest. The files keep their own basenames inside it, so an
 # error still says `install-msys2.ps1` and not a random string.
@@ -79,7 +79,7 @@ function New-GuestRunDir() {
     }
 }
 
-# `mkdir` alone fails when the directory is there, and that failure would be
+# `mkdir` alone fails when the directory is there, and that failure is
 # the status the caller reads. scp does not create a destination directory, so
 # this must run before the first copy.
 function Get-GuestMkdirCommand([string]$Dir) {

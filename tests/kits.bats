@@ -207,7 +207,7 @@ make_kit_v3() {
 }
 
 # This used to warn and create the mound without the kit, and the thing left
-# out is the thing that was asked for: a kit is where a project's DENY rules
+# out is the thing that was asked for: a kit is where the DENY rules of a project
 # live, while the machine policy keeps its allow rules either way. So the mound
 # came up MORE OPEN than the configuration described.
 @test "dr-up: a missing library kit stops the create" {
@@ -478,7 +478,7 @@ build_mound() {
 # such a line: a tab is IFS whitespace, so bash joins the run of two into one
 # separator, hands the hash to `name`, and leaves `hash` empty. apply then
 # compared a real hash with nothing, found them different, and reported that
-# the untouched kit had changed - which sends you to dr-up --recreate, the one
+# the untouched kit had changed, which sends you to dr-up --recreate, the one
 # command that destroys the clone and the home of the agent.
 #
 # Every kit in the tests above has a `name:`, which is why none of them saw it.

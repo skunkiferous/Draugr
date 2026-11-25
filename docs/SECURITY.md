@@ -58,9 +58,9 @@ not**. That is the full purpose. Bare `git ls-files --others` is on purpose. `--
 removes the ignored files from the list. `--ignored --exclude-standard` lists only the ignored ones.
 In both cases, half the danger is not reported.
 
-**The scan reports untracked files, so a credential that is COMMITTED is invisible to it for ever.**
+**The scan reports untracked files, so a credential that is COMMITTED is invisible to it forever.**
 That makes the first commit of a repository Draugr creates (`DRAUGR_ON_MISSING_REPO=create-add-all`)
-the one moment where this matters most — and the credential rules used to be written only when the
+the one moment where this matters most. The credential rules used to be written only when the
 directory had no `.gitignore` at all. One pre-existing ignore file, a single `*.log`, skipped them,
 and `git add -A` then committed the `private.key` beside it. The rules are now appended to an
 existing file in a marked block, and the **index** is checked before the commit with the same
@@ -161,9 +161,9 @@ built-in defaults, not to the weaker values.
 
 **One of those two fallbacks used to cut the wrong way, and that is worth stating plainly.**
 `DRAUGR_SCAN` falls back to `true`, which is the stronger value. `DRAUGR_CLONE` falls back to `true`
-as well — and because the bind-mount prompt was *asked of the key*, "fall back to clone" meant
-"ask nothing". In bind mode the agent can write `.draugr.conf`, so it could remove its own warning
-by editing the file it was never trusted to edit. `.draugr/create.applied` was no better: it lives in
+as well. Because the bind-mount prompt was *asked of the key*, "fall back to clone" meant
+"ask nothing". In bind mode the agent can write `.draugr.conf`, so it was able to remove its own
+warning by editing the file it was never trusted to edit. `.draugr/create.applied` was no better: it lives in
 the repository too. The prompt now asks **sandboxd** about the mound that exists, which is the one
 party in this picture that a mound cannot write to. See
 [Things Draugr refuses to do](#things-draugr-refuses-to-do).
@@ -191,18 +191,18 @@ hash. But it cannot tell a good value from a bad one. Read what you merge.
 ### Where the trust record itself can live
 
 Everything above rests on one file: `~/.config/draugr/trusted`. A line in it tells Draugr to source
-a `.draugr.conf` without asking, and to source a file is to run it. So **whatever can write that
-file decides what Draugr runs** — and the `chmod 600` that is supposed to prevent that is not
+a `.draugr.conf` without asking, and to source a file is to run it. Thus **whatever can write that
+file decides what Draugr runs**. The `chmod 600` that is supposed to prevent that is not
 enforced everywhere. Measured on a Windows 11 host with WSL 2:
 
 | where the file sits | what `chmod 600` achieves there |
 |---|---|
-| the WSL home (ext4) — **the default** | mode 600, enforced. Windows cannot even read an ACL on that path |
-| a Windows drive (`/mnt/c/…`) | **nothing.** It reports 777 before and after; a directory stays 777 after `chmod 700`; a file chmodded 644 is still executable |
+| the WSL home (ext4), **the default** | mode 600, enforced. Windows cannot even read an ACL on that path |
+| a Windows drive (`/mnt/c/…`) | **nothing.** It reports 777 before and after. A directory stays 777 after `chmod 700`. A file chmodded 644 is still executable |
 
 The second row is not a weaker mode, it is an inert one: the mount is 9p with no `metadata` option,
 so the file keeps what NTFS hands down from its parent folder instead. What that inherits was
-measured too, for a new file in each place Draugr might be pointed at:
+measured too, for a new file in each place Draugr can be pointed at:
 
 | parent folder | who can read it | who can write it |
 |---|---|---|
@@ -210,28 +210,28 @@ measured too, for a new file in each place Draugr might be pointed at:
 | `%ProgramData%` | **every local user** | you, Administrators, SYSTEM |
 | `C:\Temp` | every local user | **any authenticated account** |
 
-And with `options = "metadata"` in `/etc/wsl.conf` the mode does report 600 — and still keeps
+And with `options = "metadata"` in `/etc/wsl.conf` the mode does report 600, and still keeps
 nobody out, because a Linux mode binds Linux processes while every Windows process reads the NTFS
 permissions. That is why Draugr judges this by the **path** and not only by the mode.
 
-**So keep trusted state on a Linux file system.** The default already does, `DRAUGR_CONFIG_HOME` is
+**Thus keep trusted state on a Linux file system.** The default already does, `DRAUGR_CONFIG_HOME` is
 the only thing that moves it, and both `dr-trust` and `dr-doctor` say so when it has been moved
-somewhere a mode means nothing. `dr-setup` says the same about `~/.ssh/config` and the forge key —
-there, ssh refuses such a key anyway, which is a second guard on the same fact.
+somewhere a mode means nothing. `dr-setup` says the same about `~/.ssh/config` and the forge key.
+There, ssh refuses such a key anyway, which is a second guard on the same fact.
 
 **Draugr will not tighten a Windows permission for you, and that is a decision rather than an
 omission.** "Validate the ACL" reads two ways, and repairing one is the reading this project
-declined. On Windows a permission that gets in the way is something the machine's owner resets so
-that they can carry on — a fair instinct on your own PC, and a poor foundation for a guarantee.
-Nor would there be anything to repair that you had not chosen: this state is on a Windows drive
+declined. On Windows a permission that gets in the way is something the owner of the machine resets so
+that they can carry on. This is a fair instinct on your own PC, and a poor foundation for a
+guarantee. Nor is there anything to repair that you had not chosen: this state is on a Windows drive
 only because `DRAUGR_CONFIG_HOME` was pointed at one, and silently rewriting the permissions of a
-file somebody moved on purpose is both fragile and surprising. So the cure Draugr names is a
+file somebody moved on purpose is both fragile and surprising. Thus the cure Draugr names is a
 **location**, never an ACL, and `tests/repo.bats` keeps every shell surface free of `icacls` so that
 the convenient version of this does not get written later by mistake.
 
 The forge is the one part of Draugr that sets a Windows permission at all, and neither case is a
 claim of this kind. `ssh` **refuses** a private key that other accounts can read, so the forge key
-gets the ACL that ssh needs in order to work; a plaintext password that the guest needs (VNC, and
+gets the ACL that ssh needs in order to work. A plaintext password that the guest needs (VNC, and
 the SMB share) gets the same treatment for want of anything better, and `docs/FORGE.md` records that
 trade-off where it is made. Neither of them is a protection Draugr claims for itself.
 
@@ -299,11 +299,11 @@ directories. The destination is a Windows drive, which Draugr requires, and ther
 | `GIT~1/config` | `.git/config`, **overwritten** |
 
 The second one is not a case problem. `GIT~1` is the 8.3 short name of `.git`, which this volume
-still generates — `dir /x` lists it — and Win32 resolves the alias, so a write through it is a write
+still generates (`dir /x` lists it), and Win32 resolves the alias, so a write through it is a write
 to the long name. `.git/config` decides what git *runs* for you (`core.sshCommand`, `core.fsmonitor`,
 every alias), so these two names reach the file the review exists to protect.
 
-So the name check now works on each path component, and refuses the spellings that resolve to
+Thus the name check now works on each path component, and refuses the spellings that resolve to
 something else: `.git` and `.draugr` **in any case**, their `~1` aliases, a trailing dot or space
 (Win32 strips both, so `report.` writes `report`), a backslash (a *separator* on the destination),
 and a colon (a drive prefix, or an alternate data stream). It still accepts `.gitignore`,
@@ -314,7 +314,7 @@ switch off.
 --no-devices --no-specials`, so a symlink in either direction is skipped rather than recreated. A
 symlink is how two findings chained: a sender ships `.draugr/tmp` as a link to anywhere, and the
 next host command that writes through it writes there. rsync still exits 0 when it skips one
-(measured), so `dr-data status` and `diff` read the skip from rsync's output instead of trusting
+(measured), so `dr-data status` and `diff` read the skip from the output of rsync instead of trusting
 the status, and refuse rather than reporting an incomplete list. A `pull` does not have to read a
 sentence at all: it tests the entry on disk.
 
@@ -322,20 +322,20 @@ sentence at all: it tests the entry on disk.
 two separate conversations with the sender: one `rsync --dry-run` decided what to refuse and what
 to ask about, and a second rsync did the transfer. The mound keeps running between them, so the
 list that was judged and the files that landed were never the same observation. That matters
-because `dr_data_path_safe` is the only thing that refuses a name like `.git.` — the filter rules
+because `dr_data_path_safe` is the only thing that refuses a name like `.git.`. The filter rules
 are exact patterns and do not match it, and a Windows drive resolves it to `.git`, whose `config`
 decides what git runs. A sender that showed a tidy tree to the dry run and wrote that name
-afterwards got it past the one check that would have refused it.
+afterwards got it past the one check that refuses such a name.
 
-So the transfer happens **first**, into the staging directory below, and the review reads that
+Thus the transfer happens **first**, into the staging directory below, and the review reads that
 tree: names from `find -print0`, types from a test on each entry. One conversation with the sender,
 and the thing that was judged is the thing that is published. Anything refused stops the whole
 pull, and nothing is published at all.
 
-Reading the names from the filesystem also removes a second problem. `%n` is rsync's *presentation*
-output, and a name is not always what it prints as: measured with rsync 3.2.7, a newline in a name
+Reading the names from the filesystem also removes a second problem. `%n` is the *presentation*
+output of rsync, and a name is not always what it prints as: measured with rsync 3.2.7, a newline in a name
 arrives as the four characters `\#012`, a `\001` as `\#001`, and a backslash is itself escaped to
-`\#134` where the result would otherwise be ambiguous — while a tab is passed through as itself. A
+`\#134` where an unescaped backslash makes the result ambiguous, while a tab is passed through as itself. A
 review of that text reviews an encoding. (It was refused either way, as it happens, because the
 escape introduces a backslash, which the name rule above already refuses. That is now a test, so it
 stays true on purpose rather than by luck.)
@@ -345,7 +345,7 @@ file becomes a hard link on the way in and the published file is a hard link to 
 128 MB of unchanged data costs 65 ms on each leg, and 128 MB of *changed* data takes 1130 ms staged
 against 1104 ms straight into the repository. Both links need `--no-perms`, because `/mnt/c` reports
 every file as 0777 whatever `--chmod` asked for, and `--link-dest` links only a file that matches in
-full. `--chmod` therefore now goes to the mound only, where a mode is a mode.
+full. `--chmod` thus now goes to the mound only, where a mode is a mode.
 
 **An empty review is not "nothing to pull".** The preview that `dr-data status` and `diff` use was
 `rsync … 2>/dev/null | grep -v '/$' || true`: the status of *grep*, with even that discarded. An
@@ -356,33 +356,34 @@ failed transfer is a failed pull.
 
 **A configuration Draugr could not read is not a configuration of defaults.** It refuses to source
 a project configuration whose hash it does not know, and says so on every command. The run then
-continues with the layers below — `~/.config/draugr/config` and the built-in defaults — and those
-are not the safe values, they are somebody else's. Measured with a throwaway repo whose
+continues with the layers below, which are `~/.config/draugr/config` and the built-in defaults.
+Those are not the safe values. They belong to somebody else. Measured with a throwaway repo whose
 `.draugr.conf` asked for one mount, its own kit and `DRAUGR_EXCLUSIVE=true`, none of it trusted:
 what was in force was a *different* mount and a *different* kit from the user-level config, and
-`false` from the default. A different kit is a different set of network rules, and `dr-up` would
-have built that mound.
+`false` from the default. A different kit is a different set of network rules, and a `dr-up` run
+in that state builds that mound.
 
-Each command now names the settings that decide what the mound may reach, with the value in force
-and the layer it came from, and a command that would **act** on them stops until `dr-trust` resolves
-it. Two kinds carry on: those that only report, because a command you run to see the state has to
-work in the state you are looking at; and those that only take away, `dr-rm` and `dr-stop`, on the
-same reasoning as "fail on create, let destroy proceed" — refusing to remove a mound over an
-untrusted file would leave no way out but trusting it. `docs/CONFIG.md` lists the keys.
+Each command now names the settings that decide what the mound can reach, with the value in force
+and the layer it came from, and a command that is about to **act** on them stops until `dr-trust`
+resolves it. Two kinds carry on. Those that only report carry on because a command you run to see
+the state has to work in the state you are looking at. Those that only take away, `dr-rm` and
+`dr-stop`, carry on for the same reason as "fail on create, let destroy proceed": refusing to remove
+a mound over an untrusted file leaves no way out but trusting it. `docs/CONFIG.md` lists the keys.
 
 **What the mound sends is judged by the host, not by the mound.** `dr-mem export` had three things
 looking at the memory before it reached your store: the agent module refuses a link before it packs,
 it refuses an entry named `transcripts`, and the hash list the export is compared against is the one
-that module produced. All three run inside the mound, with the mound's own `sh`, `find` and `cp`, on
-a filesystem the agent can write — an agent that wants past them replaces a binary rather than
-defeating a check. The comparison could not see the problem either way: it lists `-type f`, so a
+that module produced. All three run inside the mound, with the `sh`, `find` and `cp` of the mound
+itself, on a filesystem the agent can write. An agent that wants past them replaces a binary rather
+than defeating a check. The comparison could not see the problem either way, because it lists `-type f`, so a
 link, a fifo or a socket is absent from *both* sides of it and travels into the store uncounted.
 
 The received tree is now validated on the host, by the same rule the import path applies in the
 other direction. Measured on sbx 0.53.0 in a disposable sandbox, nothing of that kind gets as far as
-that check today — a link in a tree copied out of a mound makes extraction fail with "a required
-privilege is not held by the client" and status 1 — but that is `sbx`'s guarantee, and `sbx` changed
-its mind about links once already between 0.37.1 and 0.53.0. This one is Draugr's.
+that check today. A link in a tree copied out of a mound makes extraction fail with "a required
+privilege is not held by the client" and status 1. But that is the guarantee of `sbx`, and `sbx`
+changed its mind about links once already between 0.37.1 and 0.53.0. The check on the host is the
+guarantee of Draugr.
 
 **`dr-cp --verify` compares both sides after a copy.** The same measurement in the other direction:
 a copy *into* a mound leaves a link out, keeps every other file, and exits **0**, with nothing but a
@@ -423,8 +424,8 @@ Three channels write files on your host with bytes the agent produced:
 They used to do the same steps in three different orders, each with its own gaps. The security
 review calls the fix *hardening 1* and asks for one quarantine that owns the whole transaction.
 Draugr does the other half of that on purpose: the three transfers genuinely differ, so **each
-channel keeps its own transfer and they share every question that decides whether the bytes may
-land**.
+channel keeps its own transfer and they share every question that decides whether the bytes are
+allowed to land**.
 
 | step | what it answers |
 |---|---|
@@ -440,17 +441,17 @@ and nothing else.
 
 **One channel takes two of those steps its own way, and that is visible in its code rather than
 hidden behind a shared function.** `dr-data pull` publishes by merging into your working tree
-instead of replacing a directory, so there is no directory to confine — the repository *is* the
-root, and each incoming name is tested component by component instead (`.GIT`, `GIT~1` and
+instead of replacing a directory, so there is no directory to confine, because the repository *is* the
+root. Each incoming name is tested component by component instead (`.GIT`, `GIT~1` and
 `.git.` are all `.git` on a Windows drive). Its shape test is its own too, because it **reports**
 every entry it refuses rather than stopping at the first: a pull you are asked to approve is worth
 reading.
 
-What a destination test would have caught there, rsync's default already does. Measured with rsync
+The default of rsync already catches there what a destination test catches. Measured with rsync
 3.2.7: a staged `data/out.txt` published onto a working tree where `data` is a symlink out of the
-tree replaces that link with a real directory and leaves the outside file untouched; the same holds
-for a symlinked file. One flag reverses it — `--keep-dirlinks` writes straight through the link —
-and `tests/data.bats` keeps that flag out of the command.
+tree replaces that link with a real directory and leaves the outside file untouched. The same holds
+for a symlinked file. One flag reverses it: `--keep-dirlinks` writes straight through the link.
+`tests/data.bats` keeps that flag out of the command.
 
 ## Two more, worth knowing before they bite
 
@@ -521,7 +522,7 @@ the mound     DRAUGR_HOST_PORTS="11435"
 That is strictly **less** exposed than the service itself on `0.0.0.0`, because the management API
 then has no listener that anything outside the host can reach.
 
-**But "outside the host" depends on a setting that is not Draugr's.** Inside WSL, `0.0.0.0` means
+**But "outside the host" depends on a setting that does not belong to Draugr.** Inside WSL, `0.0.0.0` means
 every interface *of the distro*, and on the default NAT networking those sit behind the host: the
 audience is this machine and its other WSL distros, not the LAN. Two host settings change that, and
 both belong to whoever owns the machine:
@@ -532,16 +533,16 @@ both belong to whoever owns the machine:
 | a `netsh interface portproxy` rule into the distro | Windows forwards a port of the LAN in, whatever the mode is |
 
 Draugr can change neither, and deliberately does not bind somewhere else instead: a mound reaches
-that proxy from *outside* the distro, so a loopback bind would turn the feature off. What it does is
+that proxy from *outside* the distro, so a loopback bind turns the feature off. What it does is
 measure and report. `dr-doctor` reads `networkingMode` from the `[wsl2]` section and asks `netsh`
 for the rules, and prints which of three answers it got: confined to this machine, also on your
 LAN, or not established.
 
 **It never prints the reassuring answer for a mode it has not measured.** `consomme`, and a
-`networkingMode` written in a section other than `[wsl2]`, both report as *not established* —
-the first because WSL falls back to it from a failed NAT so it is only probably confined, the
-second because the key shipped under `[experimental]` once and ignoring it is the one path that
-could print a false "not on your LAN". A value WSL itself does not recognise reports as confined,
+`networkingMode` written in a section other than `[wsl2]`, both report as *not established*.
+The first is because WSL falls back to it from a failed NAT, so it is only probably confined. The
+second is because the key shipped under `[experimental]` once, and ignoring it is the one path that
+can print a false "not on your LAN". A value WSL itself does not recognize reports as confined,
 because its own documentation says such a value means NAT.
 
 [`share/ollama-proxy/`](../share/ollama-proxy/) is a worked example of exactly this, for Ollama. It is
@@ -561,20 +562,20 @@ large difference, but not the same as safety.
 An agent that cannot reach something will ask for a way in, and the way it names is usually a token.
 For *reading*, there is a cheaper answer, and it is the same answer twice:
 
-- **Something that is not yours.** A private repository you have access to but do not own — an
-  engine, a partner SDK — is not something a mound needs your account for. Clone it on the host,
+- **Something that is not yours.** A private repository you have access to but do not own, such as an
+  engine or a partner SDK, is not something a mound needs your account for. Clone it on the host,
   where you already accepted whatever you accepted, and mount it read-only with
   [`DRAUGR_MOUNTS`](CONFIG.md#draugr_mounts): `/mnt/c/Code/SomeEngine:ro`.
 - **Something that is yours.** The same command, for the same reason. A read-only copy is what the
-  agent actually wanted; your credential was only the route it knew.
+  agent actually wanted. Your credential was only the route it knew.
 
-So the rule is short. **A mound never needs a credential of yours to look at something.** That is
-not a restriction laid on top of Draugr; it is the boundary Draugr already draws, said for
+Thus the rule is short. **A mound never needs a credential of yours to look at something.** That is
+not a restriction laid on top of Draugr. It is the boundary Draugr already draws, said for
 credentials. The working tree is a clone, the real repository is mounted read-only, a `git push` to
 `origin` cannot work because that remote *is* the read-only mount, and everything that leaves does
 so on the host, where you look at it first: `dr-sync`, then `dr-diff` and `dr-merge`.
 
-Two things the rule does not say. The agent's **own** sign-in is a credential and it is required —
+Two things the rule does not say. The sign-in of the agent **itself** is a credential and it is required.
 `sbx` keeps it on the host and its proxy adds it to each request, so it is not in the mound either,
 and [Running the agent on a local model](#running-the-agent-on-a-local-model) has the measurement.
 And **writing** to a service, such as opening a pull request or publishing a package, is a different
@@ -748,7 +749,7 @@ has no trigger, and runs only on request.
 
 **`DRAUGR_FORGE_NOSCAN` set to `*` declares that the guest runs with real-time protection off**
 ([`DRAUGR_FORGE_NOSCAN`](CONFIG.md#draugr_forge_noscan)). Draugr does not turn it off, and holds no
-command that would: `dr-forge init` reads the state of the guest and reports it, and the change is
+command that turns it off: `dr-forge init` reads the state of the guest and reports it, and the change is
 yours to make there. The caution stands all the same, because the state is what matters and not who
 set it. You are deciding to run a machine that reaches the internet through the gateway with its
 protection off, and the forge is already the weaker of the two boundaries in this project.
@@ -768,26 +769,26 @@ a write to the parent of a differencing child damages the child with no message 
 used to find children by **scanning** three places, and a scan is bounded by where it looks: a child
 outside all of them was invisible, and both verbs then reported "children none".
 
-A parent cannot be asked for its children — `Get-VHD` has no such property *(measured)* — so Draugr
-records each edge where it is made, in `%ProgramData%\Draugr\forge-parents.json`, as the pair
+A parent cannot be asked for its children, because `Get-VHD` has no such property *(measured)*. Thus
+Draugr records each edge where it is made, in `%ProgramData%\Draugr\forge-parents.json`, as the pair
 `(child, parent, chain id)`. [FORGE.md](FORGE.md#which-disks-difference-from-this-one-and-why-a-scan-is-not-enough)
 has the table of what each disagreement means.
 
 **It is host state, and it is deliberately not a trust decision.** The file can only ever *add* a
-refusal: nothing in it authorises a delete, a write or a publication, and `drop` still resolves what
-it removes from `-Name` and `-Root` through the same two checks as before. So the worst a corrupt or
+refusal: nothing in it authorizes a delete, a write or a publication, and `drop` still resolves what
+it removes from `-Name` and `-Root` through the same two checks as before. Thus the worst a corrupt or
 hostile entry can do is make a layer verb refuse to run, and the worst a *deleted* entry can do is
 take the guard back to what the scan alone can see. Both are visible: `dr-layer list` prints the
 file and its contents without elevation, and the refusal names the file and says that deleting it
 is safe.
 
 It is under `%ProgramData%` rather than `%LOCALAPPDATA%` because `dr-layer` re-launches itself
-elevated, and with over-the-shoulder elevation that child runs as *another account* — the verb that
-records a child and the verb that reads the record would then use two different files, and the
-protection would disappear without a message. That choice has a cost, and it was measured rather
+elevated, and with over-the-shoulder elevation that child runs as *another account*. Under `%LOCALAPPDATA%`, the verb that
+records a child and the verb that reads the record use two different files, and the
+protection disappears without a message. That choice has a cost, and it was measured rather
 than assumed: a new directory under `%ProgramData%` grants **every local user read** and keeps write
-to the owner, Administrators and SYSTEM. So another account on the machine can learn which layers
-exist and where, and cannot plant an entry — and because the index only ever adds a refusal, an
+to the owner, Administrators and SYSTEM. Thus another account on the machine can learn which layers
+exist and where, and cannot plant an entry. Because the index only ever adds a refusal, an
 entry is not a permission anyway. [Where the trust record itself can live](#where-the-trust-record-itself-can-live)
 has the full table.
 
@@ -820,16 +821,16 @@ your real files read-write, which is exactly what this project exists to prevent
 you to confirm it each time. If you want no prompt, you are outside the purpose of the product.
 
 **And the question is asked of the mound, not of `DRAUGR_CLONE`.** The key says what you want for
-the *next* mound; `dr-up` reuses the one you have. So a mound built with `DRAUGR_CLONE=false` keeps
+the *next* mound; `dr-up` reuses the one you have. Thus a mound built with `DRAUGR_CLONE=false` keeps
 your tree read-write after the key is set back to `true`, and that mound used to be attached to in
 silence. `dr-go` now asks sandboxd: measured on sbx 0.53, `sbx inspect <name> --json` reports each
 `host_mount` with its `read_only` flag, and `--clone` means this repository is mounted **read-only**
-at `/run/sandbox/source`. Only a confirmed clone is quiet — a writable mount of your repository asks,
+at `/run/sandbox/source`. Only a confirmed clone is quiet. A writable mount of your repository asks,
 and so does an answer Draugr cannot read, or no answer at all. `dr-status` describes the mound the
 same way, and names the key beside it only when the two disagree.
 
-A missing kit is in the same family, and is also a refusal rather than a warning: a kit is where a
-project's deny rules live, so creating the mound without one you asked for by name would leave it
+A missing kit is in the same family, and is also a refusal rather than a warning: a kit is where
+the deny rules of a project live, so a mound that is created without a kit you asked for by name is
 more open than your configuration describes. The built-in default *location* stays silent, because
 nobody asked for it.
 

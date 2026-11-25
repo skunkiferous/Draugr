@@ -19,7 +19,7 @@ case "$*" in
                 exit 1
                 ;;
             rules)
-                # The real header is localised, which is why dr_wsl_portproxy
+                # The real header is localized, which is why dr_wsl_portproxy
                 # tests for emptiness and not for these words.
                 printf '\nListen on ipv4:             Connect to ipv4:\n\n'
                 printf 'Address         Port        Address         Port\n'

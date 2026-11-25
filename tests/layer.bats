@@ -720,7 +720,7 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
 #
 # THE WRAPPER MOVED, and that is the point of this version of the test.
 # init.ps1 had its own copy of this call WITHOUT the `if exist` guard, so the
-# weaker one could run a stale script and report its result. There is one
+# weaker one can run a stale script and report its result. There is one
 # wrapper now, in guestexec.ps1, and neither caller builds its own.
 @test "live 2026-10-26: the remote path is sent unquoted" {
     local ps="$DR_ROOT/lib/forge/guestexec.ps1"
@@ -893,8 +893,8 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
 #
 # These four come from a review of 0.9.0, and they are all the same defect in
 # the forge PowerShell: a phase that could not prove its claim said nothing, or
-# said it in yellow, and the run ended green. The behaviour of the first two is
-# executed in tests/forge-ps.bats and tests/forge-api.bats; what is asserted
+# said it in yellow, and the run ended green. The behavior of the first two is
+# executed in tests/forge-ps.bats and tests/forge-api.bats. What is asserted
 # here is the wiring, which no mock can see.
 
 # A ROW IN A TABLE THAT NOTHING READS IS NOT A RESULT. Each phase wrote
@@ -912,7 +912,7 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     grep -vE '^[[:space:]]*#' "$ps" | grep -q "Add-FailedPhase 'sshd auth"
     grep -q 'if (\$script:failed.Count -gt 0)' "$ps"
     # 13 is the documented code, and bin/dr-forge already turns it into a
-    # refusal that names the detail. A new code would be silence again.
+    # refusal that names the detail. A new code is silence again.
     grep -q 'exit 13' "$ps"
     grep -q '13) dr_die' "$DR_ROOT/bin/dr-forge"
 }
@@ -947,10 +947,10 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     # guestexec.ps1 is that one place, and the only file that spells it out.
     grep -q 'C:.Windows.Temp' "$DR_ROOT/lib/forge/guestexec.ps1"
     # The cleanup is the directory. A list of names is a second place to keep in
-    # step with the copies, and init.ps1's list had fallen out of step.
+    # step with the copies, and the list of init.ps1 had fallen out of step.
     #
     # ALL THREE REMOVE THEIR OWN. provision.ps1 is the one that seals a layer,
-    # so a directory it leaves behind is in the image for ever: a look inside
+    # so a directory it leaves behind is in the image forever: a look inside
     # layer-0 found the staged write-manifest.ps1 of the run that built it,
     # under a name that a later run copies in again.
     for f in init.ps1 provision.ps1 vm.ps1; do
@@ -960,7 +960,7 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
 
 # A NAME THAT BECOMES A RECURSIVE DELETE. `drop` did `Join-Path $Root $Name`
 # on a bare [string] and removed what it found, so `..\..\x` left the store and
-# `.` selected the root. The predicates are executed in forge-ps.bats; what
+# `.` selected the root. The predicates are executed in forge-ps.bats. What
 # this test can say is that the verb which deletes actually calls them, and
 # that is worth saying, because the verb itself needs Hyper-V and a closed
 # AppSandbox to run at all.
@@ -978,7 +978,7 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     grep -q "Join-Path \$dir 'layer.json'" "$ps"
 }
 
-# An enumeration that FAILED is not an enumeration that found nothing - and
+# An enumeration that FAILED is not an enumeration that found nothing, and
 # the answer "no stray disks in there" is what leads to Remove-Item -Recurse.
 @test "layer.ps1: adopt does not read a failed listing as an empty folder" {
     local ps="$DR_ROOT/lib/forge/layer.ps1"
@@ -1020,7 +1020,7 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
 
 # A WARNING IS NOT A FINDING. Only an ANSWERED request marked the auth phase
 # bad. A timeout, a 500 and a refused connection each printed a yellow
-# "(expected 401)" and the run still ended in "automation ready" - with the
+# "(expected 401)" and the run still ended in "automation ready", with the
 # claim "only the token protects the desktop" resting on nothing.
 @test "install-automation.ps1: the token test needs a 401, and a control that is not one" {
     local au="$DR_ROOT/lib/forge/guest/install-automation.ps1"
@@ -1034,13 +1034,13 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
 }
 
 # `git --version | head -1` for a git that does not exist prints
-# "bash: line 1: git: command not found" - a non-empty first line, which was the
+# "bash: line 1: git: command not found": a non-empty first line, which was the
 # whole test. It was printed in the column where a version belongs.
 @test "install-base-tools.ps1: a tool is proved by command -v, not by printing something" {
     local bt="$DR_ROOT/lib/forge/guest/install-base-tools.ps1"
     grep -q 'command -v \$bin >/dev/null 2>&1 && echo DRAUGR_FOUND' "$bt"
     grep -q 'DRAUGR_FOUND' "$bt"
-    # And the package install is judged by pacman's status, not by its words.
+    # And the package install is judged by the status of pacman, not by its words.
     grep -q '\$script:rc = \$LASTEXITCODE' "$bt"
     grep -q 'were not installed' "$bt"
 }
@@ -1192,7 +1192,7 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
 # and both learned about children by scanning three places. A child outside all
 # three was invisible, and the two verbs then did the one thing the guard exists
 # to prevent. The decisions are executed in forge-ps.bats against a mocked
-# Get-VHD; what these say is that the verbs CALL them, which is worth saying
+# Get-VHD. What these say is that the verbs CALL them, which is worth saying
 # because each verb needs Hyper-V, elevation and a closed AppSandbox to run.
 
 @test "layer.ps1: thaw and drop ask the one guard that knows about the index" {
@@ -1208,14 +1208,14 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     ! grep -q 'Get-LayerChildren' "$ps" || return 1
 }
 
-# A scan that cannot see a child is the finding; a scan that cannot see a child
+# A scan that cannot see a child is the finding. A scan that cannot see a child
 # AND says "children none" is the bug. `drop` deletes a directory recursively,
-# so "I could not tell" has to cost the command and not the disk - and unlike
+# so "I could not tell" has to cost the command and not the disk, and unlike
 # `thaw` it has no -Force to get past that.
 @test "layer.ps1: drop has no way past the child guard" {
     local ps="$DR_ROOT/lib/forge/layer.ps1"
     grep -qF 'if ($guard.Blocks) { exit 20 }' "$ps"
-    # thaw is the one that may proceed, and only on an explicit -Force.
+    # thaw is the one that is allowed to proceed, and only on an explicit -Force.
     grep -q 'if (-not \$Force) { exit 20 }' "$ps"
 }
 
@@ -1226,18 +1226,18 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     local ps="$DR_ROOT/lib/forge/layer.ps1" rec keep
     grep -qF 'Add-ParentRecord -Child $disk -Parent $parentDisk' "$ps"
     # BEFORE the early return for -KeepRegistered, which is the flag that
-    # leaves a child in no layer store and in no vms.cfg - the one case the
+    # leaves a child in no layer store and in no vms.cfg, the one case the
     # scan cannot reach at all.
     rec=$(grep -n 'Add-ParentRecord -Child \$disk' "$ps" | cut -d: -f1)
     keep=$(grep -n 'if (\$KeepRegistered)' "$ps" | cut -d: -f1)
     [ -n "$rec" ] && [ -n "$keep" ]
     [ "$rec" -lt "$keep" ]
     # A disk that exists and was not recorded is said out loud. Silence there
-    # would leave the scan as the only guard, with nothing to show it.
+    # leaves the scan as the only guard, with nothing to show it.
     grep -q 'the parent reference was NOT recorded' "$ps"
 }
 
-# A record of a disk that no longer exists would be reported as stale by every
+# A record of a disk that no longer exists is reported as stale by every
 # later guard, and a path that something re-creates is a different layer with
 # the same name.
 @test "layer.ps1: drop forgets the record of the layer it removed" {
@@ -1249,7 +1249,7 @@ sent() { grep '^powershell ' "$DR_MOCK_LOG" | tail -1; }
     [ "$(grep -c 'Prunable).Count -and -not \$WhatIfOnly' "$ps")" -eq 2 ]
 }
 
-# A LISTING THAT FAILED IS NOT A LISTING THAT FOUND NOTHING - the same bug
+# A LISTING THAT FAILED IS NOT A LISTING THAT FOUND NOTHING, the same bug
 # `adopt` had with its stray-disk listing, in the function whose whole job is to
 # find every child.
 @test "layer.ps1: a layer store that could not be listed is not an empty one" {

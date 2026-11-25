@@ -126,9 +126,9 @@ function Add-ToMachinePath([string]$Dir, [string]$Before = "$env:SystemRoot\syst
 # caller judged a package install or a tool by the TEXT it printed. $script:rc
 # holds the exit status of the last call, and is read directly after one.
 #
-# A pipeline inside $cmd would hide the status of its first stage, which is how
+# A pipeline inside $cmd hides the status of its first stage, which is how
 # `git --version | head -1` reports 0 for a git that does not exist. Thus the
-# verification below does not rely on this status for those - it asks
+# verification below does not rely on this status for those. It asks
 # `command -v` as a separate question. The status is for the plain commands:
 # pacman, and nothing else here.
 $script:rc = 0
@@ -152,7 +152,7 @@ if (-not $VerifyOnly) {
         # THE STATUS DECIDES, NOT THE WORDS ABOVE. "done" was printed whatever
         # pacman answered, and the yellow lines were a courtesy. A sync that
         # downloaded nothing, a mirror that refused, and 124 from `timeout` all
-        # ended in a green "done" - and then the verification below was the only
+        # ended in a green "done", and then the verification below was the only
         # thing between that and a base image with no tools in it.
         if ($rc -ne 0) {
             $why = if ($rc -eq 124) { 'it ran into the 600 s timeout' } else { "pacman exited $rc" }
@@ -197,7 +197,7 @@ $checks = [ordered]@{
 # "Is the binary there?" is `command -v`, which answers with a marker that this
 # code prints itself. "Does it run?" is the version command.
 #
-# BEFORE, THE ONLY TEST WAS A NON-EMPTY FIRST LINE - and a tool that is not
+# BEFORE, THE ONLY TEST WAS A NON-EMPTY FIRST LINE, and a tool that is not
 # installed prints one: `bash: line 1: git: command not found` is a non-empty
 # first line, and it was printed in the column where a version belongs, in the
 # green rows. A guest with no git at all passed.

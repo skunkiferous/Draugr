@@ -10,7 +10,7 @@
 #
 #   - "is this sshd keys-only?" was "the offered list has no 'password' in it",
 #     which passes a server that offers keyboard-interactive
-#   - "what is the state of this VM?" was a boolean, so a daemon that could not
+#   - "what is the state of this VM?" was a boolean, so a daemon that was not able to
 #     be asked answered "it does not run"
 #   - "run the script I just copied in" ran a FIXED path with no proof that
 #     anything had arrived there
@@ -57,8 +57,8 @@ ps_win_slash() {
 #
 # THE CRs GO, AND NOT THROUGH A PIPE. Write-Output ends a line with CRLF, and a
 # test that compares the whole line then fails against an expectation that looks
-# character for character the same - the CR is invisible in the failure message.
-# But `powershell | tr` would report the status of tr, which is always 0, and
+# character for character the same, and the CR is invisible in the failure message.
+# But `powershell | tr` reports the status of tr, which is always 0, and
 # every test here asserts the status. So: capture, keep the status, then strip.
 # forge-api.bats has the same two lines for the same two reasons.
 ps_with() {
@@ -134,10 +134,10 @@ ps_with() {
 }
 
 # TWO SPELLINGS OF ONE PATH. cmd.exe and every -File / -PubKeyFile argument need
-# backslashes; the destination of scp needs forward slashes, because it splits
+# backslashes. The destination of scp needs forward slashes, because it splits
 # on ':' and the backslashes do not survive. [char]92 and [char]47 are used
 # instead of the characters themselves, because a literal backslash does not
-# survive the crossing from here to powershell.exe either - which is the same
+# survive the crossing from here to powershell.exe either. This is the same
 # trap, one level out.
 @test "New-GuestRunDir: two spellings, and only the cmd one has backslashes" {
     run ps_with guestexec.ps1 \
@@ -145,7 +145,7 @@ ps_with() {
     [ "$status" -eq 0 ]
 }
 
-# `mkdir` alone fails when the directory is there, and that failure would be the
+# `mkdir` alone fails when the directory is there, and that failure becomes the
 # status the caller reads. And the path is unquoted, for the same measured
 # reason as the -File path above.
 @test "Get-GuestMkdirCommand: only when absent, and the path is not quoted" {
@@ -156,7 +156,7 @@ ps_with() {
 
 # The whole directory. The list of fixed names it replaces was a second place to
 # remember, and a file added to the copies and forgotten here stayed in the
-# guest - including a public key.
+# guest, including a public key.
 @test "Get-GuestRmdirCommand: the directory, not a list of names" {
     run ps_with guestexec.ps1 "Write-Output (Get-GuestRmdirCommand 'C:/Windows/Temp/draugr-x')"
     [ "$status" -eq 0 ]
@@ -209,7 +209,7 @@ ps_with() {
     [ "$status" -eq 0 ]
 }
 
-# --- layerpath.ps1: a name that `drop` may turn into a path -------------------------------
+# --- layerpath.ps1: a name that `drop` can turn into a path -------------------------------
 #
 # `dr-layer drop` removes a directory recursively, elevated, and -Name was a
 # bare [string]. `..\..\x` left the layer store and `.` selected the root.
@@ -283,7 +283,7 @@ ps_with() {
 #
 # U05. `thaw` and `drop` learn about children by SCANNING three places, and a
 # scan is bounded by where it looks: a child outside all three was invisible,
-# and both verbs then did the one thing the guard exists to prevent - a write to
+# and both verbs then did the one thing the guard exists to prevent: a write to
 # the parent of a differencing child, which damages it with no message. The
 # index is the other half of the answer, and these are its decisions, executed.
 #
@@ -301,7 +301,7 @@ PF_IDB='BC48A104-2771-4CEB-9273-4FEF6F9A3174'
 # Empty files stand in for the disks: Test-Path is real inside the snippets and
 # Get-VHD is the mock, so nothing here needs a VHDX or elevation. On a real
 # Windows drive, because $DR_TMP is on the ext4 of WSL, which has no Windows
-# path - the same scratch name that dr_test_teardown removes.
+# path. It is the same scratch name that dr_test_teardown removes.
 pf_setup() {
     local wroot
     wroot=$(dr_win_root) || return 1
@@ -323,7 +323,7 @@ pf_setup() {
 #
 # $asked counts the calls per disk. One test needs it: the stores a scan walks
 # overlap by construction, so "each disk is asked once" is a guarantee that
-# nothing else can see - the claims are keyed by path further on, which hides a
+# nothing else can see. The claims are keyed by path further on, which hides a
 # repeated question behind a correct answer.
 #
 # A fixture that cannot be made FAILS the test rather than skipping it. This
@@ -393,7 +393,7 @@ if (-not \$g.Blocks -or -not \$g.CannotTell) { exit 6 }; exit 0"
     [ "$status" -eq 0 ]
 }
 
-# A fresh index holding this one entry would ERASE the record of every child
+# A fresh index holding this one entry erases the record of every child
 # outside the scan, which is the only thing the index is for. So the write
 # refuses and the caller reports it.
 @test "Add-ParentRecord: an unreadable index is never replaced by a fresh one" {
@@ -405,7 +405,7 @@ if ((Remove-ParentRecords -Children @((Join-Path \$b 'childA.vhdx')) -Index \$ix
 }
 
 # A child re-created at the same path replaces its record. A second record for
-# one path would leave the next read choosing between two answers.
+# one path leaves the next read choosing between two answers.
 @test "Add-ParentRecord: one record per child path" {
     run pf_run "\$pa = Join-Path \$b 'parentA.vhdx'; \$ca = Join-Path \$b 'childA.vhdx'; \
 [void](Add-ParentRecord -Child \$ca -Parent \$pa -Id \$idA -Index \$ix); \
@@ -477,8 +477,8 @@ if (@(\$g.Prunable).Count -ne 1) { exit 7 }; exit 0"
 
 # MEASURED, in tmp/u05-identity.log: `Set-VHD -ParentPath -IgnoreIdMismatch`
 # moves a child onto another chain and the identifier does NOT follow, so the
-# child claims a chain it no longer sits on. That is the one state Hyper-V's own
-# check would have refused, and -IgnoreIdMismatch is what turns it off. It is an
+# child claims a chain it no longer sits on. That is the one state that the
+# check of Hyper-V itself refuses, and -IgnoreIdMismatch is what turns it off. It is an
 # alarm about ANOTHER chain, so it is reported and does not refuse this disk.
 @test "the child guard: mismatch is the -IgnoreIdMismatch signature, an alarm and not a refusal" {
     run pf_run "Set-Fake 'childB.vhdx' (Join-Path \$b 'parentA.vhdx') \$idB; \
@@ -491,7 +491,7 @@ if (-not \$g.Claims[0].Why.Contains('IgnoreIdMismatch')) { exit 5 }; exit 0"
 }
 
 # A child whose parent was deleted stays readable and still reports the old
-# path - measured. So the record is kept rather than pruned: the broken chain is
+# path (measured). So the record is kept rather than pruned: the broken chain is
 # the finding, and nothing here can repair it.
 @test "the child guard: dangling, when it now names a disk that cannot be read" {
     run pf_run "Set-Fake 'childB.vhdx' (Join-Path \$b 'vanished.vhdx') \$idB; \
@@ -532,7 +532,7 @@ if (\$g.Claims[0].Verdict -ne 'changed') { exit 7 }; exit 0"
     [ "$status" -eq 0 ]
 }
 
-# The other direction: a child the scan found and nothing recorded - made by
+# The other direction: a child the scan found and nothing recorded, made by
 # hand, or by a Draugr from before the index. It blocks, as it always did, and
 # it is reported as unrecorded, so that "children none" never sounds like proof.
 @test "the child guard: the scan's own children are reported as not recorded" {
@@ -544,8 +544,8 @@ if (@(\$g.Unrecorded).Count -ne 1) { exit 7 }; if (\$g.IndexState -ne 'absent') 
 }
 
 # A LISTING THAT FAILED IS NOT A LISTING THAT FOUND NOTHING. It was
-# -ErrorAction SilentlyContinue alone, so a layer store that could not be read
-# contributed no candidates and the verb reported "children none" - the same bug
+# -ErrorAction SilentlyContinue alone, so a layer store that was not readable
+# contributed no candidates and the verb reported "children none". This is the same bug
 # `adopt` had with its stray-disk listing.
 @test "the child guard: a store that could not be listed is not a store with no children" {
     run pf_run "\$g = Get-ChildGuard -Disk (Join-Path \$b 'parentA.vhdx') -Candidates @() -Index \$ix \
@@ -562,7 +562,7 @@ if (@(\$g.Why).Count -ne 1) { exit 7 }; exit 0"
 # verb refuses because of the very disk it was asked about.
 #
 # AND THE CALL COUNT, because the claims are keyed by path later on: without it,
-# dropping the dedupe changed nothing a test could see, and a layout where every
+# dropping the dedupe changed nothing a test was able to see, and a layout where every
 # candidate appears twice is the NORMAL one. A mutation run found that.
 @test "the child guard: the disk is never its own child, and a repeated candidate is one claim" {
     run pf_run "\$me = Join-Path \$b 'locked.vhdx'; \$ca = Join-Path \$b 'childA.vhdx'; \
@@ -585,10 +585,10 @@ if (-not \$g.Blocks) { exit 7 }; exit 0"
 }
 
 # NOT %LOCALAPPDATA%. layer.ps1 re-launches itself elevated, and with
-# over-the-shoulder elevation that child runs as another account - so the verb
-# that records a child and the verb that reads the record would use two
-# different files, and the protection would vanish without a message. And an
-# empty %ProgramData% must not make a RELATIVE path, which would follow the
+# over-the-shoulder elevation that child runs as another account. Thus the verb
+# that records a child and the verb that reads the record use two
+# different files, and the protection vanishes without a message. And an
+# empty %ProgramData% must not make a RELATIVE path, which follows the
 # current directory of whoever ran the verb.
 @test "Get-ParentIndexPath: under ProgramData, and never a relative path" {
     run pf_run "\$p = Get-ParentIndexPath; \

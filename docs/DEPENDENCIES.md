@@ -136,7 +136,7 @@ Five properties, all from the decision above:
   because somebody else is a few filesystem operations from giving it back: `sbx` is asked before
   the lock is taken, so nothing held under it waits on a daemon. A lock left behind by a process
   that died is broken once it is old enough, and a lock whose age cannot even be read is left
-  alone — breaking that one would put two claimants inside at once, which is the whole point.
+  alone. Breaking that one puts two claimants inside at once, which is the whole point.
 
 Draugr claims each resource **separately**. A forge project holds one claim on the gateway, and one
 on the forge VM, because their lifetimes are different. The gateway can serve while the forge is

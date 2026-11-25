@@ -107,7 +107,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     [[ "$output" != *"visible.key"* ]]
 }
 
-# A backstop that cannot run must not report a clean result. git's failure used
+# A backstop that cannot run must not report a clean result. The failure of git used
 # to be discarded with `2>/dev/null || true`, which left an empty candidate list
 # and printed "no files that look like credentials".
 @test "dr-scan: a file listing that fails is a refusal, not a clean report" {
@@ -115,8 +115,8 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     real=$(command -v git)
     mkdir -p "$DR_TMP/bin"
     # ONLY ls-files fails, and everything else reaches the real git. A mock that
-    # failed every call would be refused by dr_context first, and the test would
-    # pass without ever reaching the scan.
+    # fails every call is refused by dr_context first, and the test passes
+    # without ever reaching the scan.
     {
         printf '#!/usr/bin/env bash\n'
         printf 'case " $* " in *" ls-files "*) exit 3 ;; esac\n'

@@ -193,15 +193,15 @@ fi
 # A status screen that nobody reads is worse than a short one.
 heading "configuration"
 # THE MOUND, NOT THE KEY. A status screen that reads DRAUGR_CLONE describes
-# the mound you would get next, which is not the one you have: a mound built
+# the mound you get next, which is not the one you have: a mound built
 # with DRAUGR_CLONE=false keeps your tree read-write after the key is changed
 # back. So when there is a mound, sandboxd is asked about it, and the key is
 # reported beside the answer only when the two disagree.
 if [ "$state" = absent ]; then
     if dr_is_true "$DRAUGR_CLONE"; then
-        row clone "${_DR_GREEN}true${_DR_OFF}. A new mound would work on its own clone."
+        row clone "${_DR_GREEN}true${_DR_OFF}. A new mound works on its own clone."
     else
-        row clone "${_DR_RED}false${_DR_OFF}. A new mound would get your real working tree, read-write."
+        row clone "${_DR_RED}false${_DR_OFF}. A new mound gets your real working tree, read-write."
     fi
 else
     case "$(dr_mound_tree_state "$DRAUGR_SANDBOX" "$DR_REPO")" in

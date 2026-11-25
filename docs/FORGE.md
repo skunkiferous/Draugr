@@ -801,9 +801,9 @@ That guard is the reason the read-only attribute exists: **a write to the parent
 child damages the child, silently, and nothing in the stack reports it.** It shows up later as a
 guest that boots wrong.
 
-The guard used to answer that question by **scanning**: the layer root of this run, every fixed
-drive's `ForgeLayers`, and each `VhdxPath` in `vms.cfg`. That is wide, and it is the layout people
-actually have — a base on the fast disk, the engine layers on the large one. But a scan is bounded
+The guard used to answer that question by **scanning**: the layer root of this run, the `ForgeLayers`
+of every fixed drive, and each `VhdxPath` in `vms.cfg`. That is wide, and it is the layout people
+actually have: a base on the fast disk and the engine layers on the large one. But a scan is bounded
 by where it looks, and a child outside all three was invisible. `dr-layer new --root <somewhere
 else> --keep-registered` leaves exactly that: a disk in no scanned store and in no `vms.cfg`.
 
@@ -811,7 +811,7 @@ else> --keep-registered` leaves exactly that: a disk in no scanned store and in 
 either side of a chain, so discovery is a scan or it is nothing. That is what makes a record the
 only robust answer, rather than a wider glob.
 
-So `new` writes the edge down where it is made, into one machine-wide file:
+Thus `new` writes the edge down where it is made, into one machine-wide file:
 
 ```text
 %ProgramData%\Draugr\forge-parents.json
@@ -821,26 +821,26 @@ So `new` writes the edge down where it is made, into one machine-wide file:
 ```
 
 **An entry is a pair, and a disagreement inside the pair is the alarm.** `ParentPath` is exact about
-which disk an edge points at, and is a path. `DiskIdentifier` is immune to the spelling of a path —
+which disk an edge points at, and is a path. `DiskIdentifier` is immune to the spelling of a path,
 but it identifies the **chain**, not the edge: a parent, its child and its grandchild all report the
 same value *(measured)*. And `Set-VHD -ParentPath -IgnoreIdMismatch` moves a child to another chain
 without updating it *(measured)*, so it can be left naming a chain the child no longer sits on.
 Neither key is enough alone.
 
-A re-check therefore asks three questions, and `dr-layer` acts on the answers:
+Thus a re-check asks three questions, and `dr-layer` acts on the answers:
 
 | what the child says now | what the verb does |
 |---|---|
-| it still names this disk, with the recorded chain | **refuses.** `thaw` takes `--force`; `drop` does not |
+| it still names this disk, with the recorded chain | **refuses.** `thaw` takes `--force`, and `drop` does not |
 | it still names this disk, with another chain | **refuses**, and says which chain it expected |
 | it is there and will not answer (a running VM, no elevation) | **refuses.** "Cannot be asked" is not "not a child" |
 | it names another disk, which agrees with it | prunes the record, and carries on |
 | it names another disk, which does **not** agree | **warns loudly**, and carries on: a write here cannot reach it |
 | the file is gone | prunes the record, and carries on |
 
-**The index can only ever add a refusal.** Nothing in it authorises a delete, a write or a
-publication — `drop` still resolves its target from `-Name` and `-Root`, through the same two
-checks as before. So if it is ever corrupt, `thaw` and `drop` refuse (an error that arrives as a
+**The index can only ever add a refusal.** Nothing in it authorizes a delete, a write or a
+publication. `drop` still resolves its target from `-Name` and `-Root`, through the same two
+checks as before. Thus if it is ever corrupt, `thaw` and `drop` refuse (an error that arrives as a
 reassuring answer is the bug this closes), and **deleting the file is safe**: the scan still runs,
 and what is lost is the record of children outside the places it looks. `dr-layer list` prints the
 file and every record, and needs no elevation to do it.
@@ -1848,20 +1848,20 @@ to fail the task.
   return it.
 
   **And it took a security review to notice that only two of the three copies had it.**
-  `provision.ps1` and `vm.ps1` had the wrapper; `init.ps1` ran the file directly, with no
+  `provision.ps1` and `vm.ps1` had the wrapper. `init.ps1` ran the file directly, with no
   `if exist` and with the status of its `scp` discarded. The wrapper is one function now,
   `Get-GuestRunCommand` in `lib/forge/guestexec.ps1`, and all three callers use it.
-  **A note in one file is not a rule; a shared function is.**
+  **A note in one file is not a rule. A shared function is.**
 
 - **A run owns a directory in the guest, and the destination is no longer fixed** *(measured, and
   then redesigned)*. The destination used to be `C:\Windows\Temp\<name>` for every run of every VM.
   `if exist` cannot see the difference that makes: it answers "is something there", never "is the
   **right** thing there", so a copy that failed left an older file under the name the run was about
-  to use, and the wrapper would run it and report its result. The data files were worse than the
-  scripts, because no wrapper touches them at all — they are read as an argument by a script that
+  to use, and the wrapper ran it and reported its result. The data files were worse than the
+  scripts, because no wrapper touches them at all. They are read as an argument by a script that
   *is* run, and two of them are **public keys that the guest then authorizes**. A failed copy of
-  `draugr_tunnel.pub` could therefore authorize the key of an earlier run, or of another VM, with
-  the `permitopen` of the tunnel, and the phase would report `permitopen set`.
+  `draugr_tunnel.pub` made it possible to authorize the key of an earlier run, or of another VM, with
+  the `permitopen` of the tunnel, and for the phase to report `permitopen set`.
 
   So each run now makes `C:\Windows\Temp\draugr-<id>\` (`New-GuestRunDir`), copies everything into
   it, and removes the whole directory at the end. The directory is empty until this run fills it, so
@@ -1869,10 +1869,10 @@ to fail the task.
   check is no longer a stale file running under a name that looks right. The callers still check
   their `scp` status, because that is the earliest and clearest place to say what went wrong.
 
-  Two details worth knowing before you touch this. The directory has **two spellings** — backslashes
+  Two details worth knowing before you touch this. The directory has **two spellings**: backslashes
   for `cmd.exe`, `-File` and `-PubKeyFile`, forward slashes for the destination of `scp`, which
-  splits on `:` and loses backslashes — which is the same hazard as the three names of a repository
-  in `lib/common.sh`. And the **cleanup phase empties `C:\Windows\Temp`**, this run's directory
+  splits on `:` and loses backslashes. This is the same hazard as the three names of a repository
+  in `lib/common.sh`. And the **cleanup phase empties `C:\Windows\Temp`**, the directory of this run
   included, so `provision.ps1` makes it again before the manifest phase copies anything else in.
 - **A Cygwin `curl` eats the braces out of `-w '%{http_code}'`** *(measured)*. That killed the one
   test that proves that the guest can reach the internet:
@@ -2435,7 +2435,7 @@ elevated PowerShell for the full recipe taught people to elevate for work that n
 verb knows what runs, and a failed query used to arrive as an empty list: `status` then said "no VM
 runs, so the daemon can stop directly", and the per-VM wait in `stop` counted a guest that was
 missing from a listing nobody could read as one that had shut down. `status` now reports that it
-cannot say which VMs run and exits **4**, and `stop` changes nothing and exits **20** — the same
+cannot say which VMs run and exits **4**, and `stop` changes nothing and exits **20**. This is the same
 code as a VM that did not stop, because both are the refusal that happens before anything changed.
 The same rule holds one level down, for a single VM: `lib/forge/vmstate.ps1` answers running,
 stopped, absent **or unknown**, and the waits that `down`, `base`, `rollback` and `rm` are built on
@@ -2515,12 +2515,12 @@ it again. It reports one line for each phase, and needs the daemon **up** and no
 
 **A phase that failed decides the exit code.** Each phase reports one line, and a line is
 not a result: `FAILED (<rc>)` used to go into the row while the command still ended with success,
-so `init` could say that a VM is set up over a run in which the restricted tunnel key never arrived
+so `init` was able to say that a VM is set up over a run in which the restricted tunnel key never arrived
 and the guest still offered password logins. The failures are collected and exit **13**, which
 `dr-forge` turns into a refusal that points at the detail. The disk-churn phase below is *not* in
-that set — it is tuning a guest may refuse, and `--no-tune` exists for exactly that — and a phase
-skipped because its input was not given (no tunnel key, no WSL key) is a declaration by absence,
-not a failure. The keys-only phase is the strictest of them: it requires **every** method the
+that set, because it is tuning that a guest can refuse, and `--no-tune` exists for exactly that. A
+phase skipped because its input was not given (no tunnel key, no WSL key) is a declaration by
+absence, not a failure. The keys-only phase is the strictest of them: it requires **every** method the
 server offers to be `publickey`, because a list without the word `password` in it can still offer
 `keyboard-interactive`, which is where a Windows `sshd` password prompt comes back.
 
@@ -2566,16 +2566,16 @@ know which trees are output that you can make again, and which hold something to
 `DRAUGR_FORGE_NOSCAN` declares the state that you want, and `init` reports whether the guest matches
 it. An empty key declares nothing.
 
-**Draugr makes that change nowhere, and holds no command that would.** Defender's own signature for
+**Draugr makes that change nowhere, and holds no command that makes it.** The signature that Defender has for
 a real-time-protection-off command matches the **text** of it in any file: it quarantined the
 session transcript of an agent that had only **read** the earlier version of that script block, a
 data file that nothing executes. The signature is right about what the line does, so Draugr stopped
 shipping the line rather than argue with it. `tests/repo.bats` keeps it out, docs included, because
 an agent copies what it reads into files that this project does not control. You make the change in
-the guest, in Windows Security, which needs no command;
-[`DRAUGR_FORGE_NOSCAN`](CONFIG.md#draugr_forge_noscan) says where, and when a lone **`*`** —
-which declares that real-time protection is off — is defensible. Tamper Protection would have
-refused the scripted change anyway, while the call returned with no error: a success reported
+the guest, in Windows Security, which needs no command.
+[`DRAUGR_FORGE_NOSCAN`](CONFIG.md#draugr_forge_noscan) says where, and says when a lone **`*`**,
+which declares that real-time protection is off, is defensible. Tamper Protection refuses
+the scripted change anyway, while the call returns with no error: a success reported
 because a call returned is exactly the false green that this family of scripts suffers from.
 *(decided)*
 
@@ -2829,8 +2829,8 @@ that it was built on, and that shows three steps away.
 
 **`drop` deletes a directory recursively, so it asks what that directory is.** `-Name` was a bare
 string: `drop` joined it to the root, accepted whatever directory existed there, and removed it.
-`..\..\something` therefore left the layer store, and `.` selected the **root** — every layer in one
-elevated call. A security review reproduced the first of those against a fixture root. Three
+Thus `..\..\something` left the layer store, and `.` selected the **root**, which is every layer in
+one elevated call. A security review reproduced the first of those against a fixture root. Three
 questions now stand in front of that `Remove-Item`, and they are different questions:
 
 | | what it rules out |
@@ -2840,11 +2840,11 @@ questions now stand in front of that `Remove-Item`, and they are different quest
 | the **contents** are a layer | `disk.vhdx` and `layer.json` beside it. An existing directory is not a layer, and `drop` removes only what this tool made |
 
 The predicates are in `lib/forge/layerpath.ps1` rather than inside `layer.ps1`, because dot-sourcing
-`layer.ps1` would *run* it; `tests/forge-ps.bats` executes them under the real `powershell.exe`,
-junction included. `adopt`'s cleanup of the old VM folder got the same treatment from the other
+`layer.ps1` *runs* it. `tests/forge-ps.bats` executes them under the real `powershell.exe`,
+junction included. The cleanup of the old VM folder in `adopt` got the same treatment from the other
 side: it lists with `-Force` (a hidden `.vhdx` was invisible before), an enumeration that **failed**
 is no longer read as "no disks in there", and it refuses outright when that folder is the layer root
-or holds it — the case this document warns about three sections above, where a VM built inside the
+or holds it. This is the case this document warns about three sections above, where a VM built inside the
 store is one delete from taking every layer with it.
 
 **The most important guard looks wider than the root.** `thaw` and `drop` both refuse when a disk

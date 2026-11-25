@@ -134,7 +134,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 }
 
 # An exclusive claim exists to refuse. Through a pipe into `head`, the status of
-# dr_dep_claims was replaced by head's, so an unknown liveness read as "no other
+# dr_dep_claims was replaced by the status of head, so an unknown liveness read as "no other
 # claim" and the lock was granted on top of a live one.
 @test "an exclusive claim refuses while another holder cannot be ruled out" {
     dr_dep_claim gwmound /other/repo other-mound false
@@ -147,7 +147,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 # dr-forge asks this before stopping, deleting and rolling back a shared VM.
 # The claim has to exist first: with no claim directory at all, dr_dep_claims
 # answers a certain "nobody" without probing liveness, which is correct and
-# would make this test pass without reaching the code it is about.
+# makes this test pass without reaching the code it is about.
 @test "dr_dep_report_others: an unknown liveness is reported, not passed over" {
     dr_dep_claim gwmound /other/repo other-mound false
     export DR_MOCK_FAIL=ls
@@ -251,7 +251,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 }
 
 # A SHARED claim takes the lock too. Its write is what an exclusive claimant
-# tests against, so a write that skipped the lock could still land beside a
+# tests against, so a write that skipped the lock can still land beside a
 # holder that had just checked and found nothing.
 @test "a lock that is never given back refuses the claim, and names it" {
     local dir
@@ -284,7 +284,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
     touch -d "@$(( $(date +%s) - 1000 ))" "$dir/.lock"
     # The lock is old enough to break. The only thing that keeps it is that its
     # age cannot be read, and an age that cannot be read is not an age past the
-    # limit: breaking on it would put two claimants in the section at once.
+    # limit: breaking on it puts two claimants in the section at once.
     # shellcheck disable=SC2317  # called from _dr_dep_lock_age, not from here
     stat() { return 1; }
     DR_DEP_LOCK_WAIT=0 DR_DEP_LOCK_STALE=60 run dr_dep_claim gwmound "$REPO" draugr-app true
@@ -304,7 +304,7 @@ calls() { grep "^$1 " "$DR_MOCK_LOG" || true; }
 }
 
 # One answer from sbx, used by the prune AND by the test for a holder. Two
-# calls meant two moments: a mound could stop between them, so the prune kept a
+# calls meant two moments, and a mound can stop between them, so the prune kept a
 # claim that the test then read as stale. It is also what keeps the lock cheap,
 # because nothing held under it waits on a daemon.
 @test "a claim asks sbx once, and judges both of its steps with that answer" {

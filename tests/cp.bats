@@ -253,7 +253,7 @@ cp_line() { grep '^cp ' "$DR_MOCK_LOG" | tail -1; }
     # the walk, last in the walk and inside a subdirectory: the link is left
     # out and EVERY other file arrives, and sbx exits 0. The old text said the
     # copy stops at the link and drops everything after it, which is what the
-    # OTHER direction does - where the status is 1, not 0.
+    # OTHER direction does. There the status is 1, not 0.
     [[ "$output" == *"leaves it out of the copy"* ]]
     [[ "$output" == *"Everything else arrives"* ]]
     [[ "$output" == *"-L does not help"* ]]
@@ -313,7 +313,7 @@ setup_real_mound() {
     [[ "$output" == *"missing"* ]]
     [[ "$output" == *"b.txt"* ]]
     # The entry that DID arrive is still there, and the message says so.
-    # /tmp/dest did not exist, so the copy BECOMES /tmp/dest - measured, and
+    # /tmp/dest did not exist, so the copy BECOMES /tmp/dest (measured), and
     # the rule the --verify code resolves the destination with.
     [ -f "$DR_MOCK_MOUND/tmp/dest/a.txt" ]
     [[ "$output" == *"did arrive ARE at the destination"* ]]
@@ -364,7 +364,7 @@ setup_real_mound() {
     mkdir -p "$REPO/tree"
     printf 'a\n' > "$REPO/tree/a.txt"
 
-    # -mindepth, because the listing script reaches the mock's log as several
+    # -mindepth, because the listing script reaches the log of the mock as several
     # lines: only its first one starts with "exec", and "find" is on a later
     # one. Nothing else in dr-cp uses that flag.
     run dr-cp --to tree /tmp/dest
@@ -377,12 +377,12 @@ setup_real_mound() {
     [ "$(grep -c mindepth "$DR_MOCK_LOG" || true)" -ge 1 ]
 }
 
-# --- and the other direction's warning, which it never had ------------------
+# --- and the warning of the other direction, which it never had ------------------
 #
 # Out of the mound a link does not make a partial copy, it makes a FAILED copy
 # with part of the tree already on the host. Draugr cannot see that tree from
-# here, so it asks - and the answer is a WORD. Any output read as "there is a
-# link" would turn an unreachable mound, or a find that printed a diagnostic,
+# here, so it asks, and the answer is a WORD. Any output read as "there is a
+# link" turns an unreachable mound, or a find that printed a diagnostic,
 # into a warning about something nobody saw.
 @test "dr-cp: a link in the MOUND tree is named before the copy out" {
     setup_real_mound || skip "no writable Windows drive path"

@@ -16,15 +16,15 @@
 # THE FOUR ANSWERS: running, stopped, absent, unknown. Only a caller knows what
 # to do about unknown, so this reports it instead of choosing.
 #
-# ABSENT IS CONFIRMED, NOT ASSUMED. The API documents 404 as "unknown VM/route"
-# — one code for both (C:\AppSandbox\headless-api\README.md, "HTTP status /
-# error model"). A route that moved in a later daemon would thus make EVERY VM
+# ABSENT IS CONFIRMED, NOT ASSUMED. The API documents 404 as "unknown VM/route",
+# one code for both (C:\AppSandbox\headless-api\README.md, "HTTP status /
+# error model"). A route that moves in a later daemon thus makes EVERY VM
 # look absent, which is the answer that lets a delete report success. Thus a 404
 # on one VM is checked against the list of VMs before it becomes a verdict.
 #
 # This file needs an `Asb <Method> <Path>` in the scope that dot-sources it.
 # Each script defines its own, with its own timeout, and that is deliberate: a
-# snapshot call may take two minutes, a status call may not.
+# snapshot call can take two minutes, a status call cannot.
 
 # The HTTP status of a failed Invoke-RestMethod, or 0. In Windows PowerShell the
 # exception is a WebException whose .Response holds it. A network-level failure

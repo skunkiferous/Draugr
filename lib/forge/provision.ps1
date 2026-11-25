@@ -185,7 +185,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 # The cmd.exe wrapper that proves a guest script is really the one just copied
-# in. It was written here first; init.ps1 ran the file directly and could run a
+# in. It was written here first. The script init.ps1 ran the file directly and was able to run a
 # stale copy, so the line moved to one place. See guestexec.ps1.
 . (Join-Path $PSScriptRoot 'guestexec.ps1')
 
@@ -202,7 +202,7 @@ function Fail($msg)  { Write-Host "  $msg" -ForegroundColor Red }
 # multi-line block as not complete, and silently loses the rest, with exit code
 # 0 and no output. A test showed this, after three scripts "succeeded" that way.
 # $Dest defaults to the run directory of THIS run. A default is evaluated at the
-# call, so $script:gdir is already set by then - it is made directly after the
+# call, so $script:gdir is already set by then. It is made directly after the
 # ssh port is known, above the first phase that copies anything.
 function Copy-ToGuest([string[]]$Paths, [string]$Dest = "$($script:gdir.Scp)/") {
     Invoke-Native { & scp.exe -q -i $AdminKey -P $script:sshPort -o IdentitiesOnly=yes `
@@ -210,7 +210,7 @@ function Copy-ToGuest([string[]]$Paths, [string]$Dest = "$($script:gdir.Scp)/") 
         "$($script:guestUser)@127.0.0.1:$Dest" 2>&1 } | ForEach-Object { Write-Host "  $_" }
     if ($LASTEXITCODE -ne 0) {
         throw ("scp to the guest failed ($LASTEXITCODE). The destination is " +
-               "$Dest, which this run makes once, above phase 1 - and the cleanup " +
+               "$Dest, which this run makes once, above phase 1, and the cleanup " +
                'phase empties C:\Windows\Temp, so a phase after it re-makes it.')
     }
 }
@@ -252,7 +252,7 @@ function Invoke-GuestScript([string]$Name, [string[]]$ScriptArgs = @()) {
     #    is the shell convention for "not found", and no guest script here uses it.
     # ====================================================================================
     # The wrapper itself now lives in guestexec.ps1, because init.ps1 ran the
-    # file WITHOUT it and so could run a stale copy and report its result. The
+    # file WITHOUT it and so was able to run a stale copy and report its result. The
     # reasoning above is kept there, where both callers can find it.
     $cmd = Get-GuestRunCommand $remote ($ScriptArgs -join ' ')
     # The output of the guest goes to the console, and is NOT returned.
@@ -1002,7 +1002,7 @@ Note "ssh: $($ssh.user)@127.0.0.1:$($ssh.port) (sshState=$($ssh.sshState))"
 # itself, shared by every run of every VM, so a copy that failed left an older
 # file under the name the run was about to use. See lib/forge/guestexec.ps1.
 #
-# IN BOTH MODES. -VerifyOnly copies the guest scripts in too; it only tells them
+# IN BOTH MODES. -VerifyOnly copies the guest scripts in too. It only tells them
 # to change nothing.
 $script:gdir = New-GuestRunDir
 $script:gmk = Get-GuestMkdirCommand $script:gdir.Win
@@ -1011,7 +1011,7 @@ Invoke-Native { & ssh.exe -n -i $AdminKey -p $script:sshPort -o IdentitiesOnly=y
     "$($script:guestUser)@127.0.0.1" $script:gmk 2>&1 } | ForEach-Object { Write-Host "  $_" }
 if ($LASTEXITCODE -ne 0) {
     Fail "could not make $($script:gdir.Win) in the guest (ssh $LASTEXITCODE)."
-    Fail '  Nothing was copied in, so nothing below could have run.'
+    Fail '  Nothing was copied in, so nothing below has run.'
     exit 2
 }
 Note "guest temp: $($script:gdir.Win)"
@@ -1140,7 +1140,7 @@ if ($SkipTunnelKey) { Phase 'tunnel key' 'skipped' } elseif ($VerifyOnly) {
     $rc = Invoke-GuestScript 'install-tunnel-key.ps1' @("-PubKeyFile $($script:gdir.Win)\$(Split-Path "$TunnelKey.pub" -Leaf)")
     Phase 'tunnel key' $(if ($rc -eq 0) { 'ok' } else { "FAILED ($rc)" })
     # The key goes at once, and does not wait for the cleanup of the whole
-    # directory in phase 12: a reboot between here and there would leave it in
+    # directory in phase 12: a reboot between here and there leaves it in
     # the guest. Copy-ToGuest threw if the copy failed, so the file this
     # authorized is the one it sent.
     Invoke-GuestPs "Remove-Item '$($script:gdir.Win)\$(Split-Path "$TunnelKey.pub" -Leaf)' -Force -EA SilentlyContinue" | Out-Null
@@ -1445,8 +1445,8 @@ if (-not $NetFxSource) {
 } else {
     Say '.NET Framework 3.5'
     # Inside the run directory, not beside it: a fixed C:\Windows\Temp\draugr-sxs
-    # would hold the cab of an earlier run if that run died between the copy and
-    # the Remove-Item below, and DISM would install from THAT payload.
+    # holds the cab of an earlier run if that run died between the copy and
+    # the Remove-Item below, and DISM installs from THAT payload.
     $sxs = "$($script:gdir.Scp)/sxs"
     Invoke-GuestPs "New-Item -ItemType Directory -Force -Path '$($sxs -replace '/','\')' | Out-Null" | Out-Null
     # The cab, then the script. Pushed the same way as the MSI of the screen
@@ -1477,9 +1477,9 @@ if ($SkipCleanup) { Phase 'cleanup' 'skipped' } else {
     Phase 'cleanup' $(if ($rc -eq 0) { $(if ($VerifyOnly) { 'reported' } else { 'ok' }) } else { "FAILED ($rc)" })
 
     # CLEANUP JUST DELETED THE RUN DIRECTORY, and that is correct: it empties
-    # C:\Windows\Temp, and this run's directory is in there. Phase 13 copies the
+    # C:\Windows\Temp, and the directory of this run is in there. Phase 13 copies the
     # manifest script in, so the destination has to exist again. A phase added
-    # below this line needs the same thing - without it, scp lands in a
+    # below this line needs the same thing. Without it, scp lands in a
     # directory that is not there.
     if (-not $VerifyOnly) {
         Invoke-Native { & ssh.exe -n -i $AdminKey -p $script:sshPort -o IdentitiesOnly=yes `
@@ -1501,7 +1501,7 @@ if ($SkipManifest) { Phase 'manifest' 'skipped' } else {
     Phase 'manifest' $(if ($rc -eq 0) { 'ok' } else { "FAILED ($rc)" })
 }
 
-# --- this run's directory in the guest ----------------------------------------------------
+# --- the directory of this run in the guest ----------------------------------------------------
 # LAST, because the manifest phase above is the last thing that copies anything
 # in, and it runs AFTER the cleanup phase emptied the temp directory. Without
 # this, a sealed layer carries the staged copy of write-manifest.ps1 for ever:

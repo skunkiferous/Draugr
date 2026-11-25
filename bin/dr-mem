@@ -285,7 +285,7 @@ export)
     dr_info "exporting $DRAUGR_SANDBOX memory"
     # THE MODULE HAS ALREADY SAID WHY. This used to add "Is the mound running?
     # dr-status" to every failure, including the one whose own report, one line
-    # above, was "codex runs in <mound>" - which can only be true of a running
+    # above, was "codex runs in <mound>". That can only be true of a running
     # mound. A caller that answers a diagnosis with a guess costs the reader the
     # diagnosis. So report the status and add nothing that the module did not
     # measure. See "Pattern: a reporter with three answers" in docs/HACKING.md.
@@ -293,7 +293,7 @@ export)
     dr_agent_mem_pack "$DR_REPO" "$DR_MOUND_STAGE" || pack_rc=$?
     case "$pack_rc" in
         0) ;;
-        # Its own exit code, not dr_die's 1. See the top of this file: dr-go
+        # Its own exit code, not the 1 of dr_die. See the top of this file: dr-go
         # exports again after a stop, and only for this answer.
         1) dr_error "could not collect the memory of $(dr_agent_mem_label) in the mound"
            printf '  %sThe lines above say why. Nothing was exported, and the store is unchanged.%s\n' \
@@ -319,8 +319,8 @@ export)
     #
     # Everything that has already looked at this memory looked at it inside the
     # mound: the agent module refuses a link before it packs, and the hash list
-    # below is the one the module produced. Both run with the mound's own sh,
-    # find and cp, on a filesystem the agent can write. An agent that wants to
+    # below is the one the module produced. Both run with the own sh,
+    # find and cp of the mound, on a filesystem the agent can write. An agent that wants to
     # get past them replaces a binary; it does not have to defeat a check.
     #
     # The list cannot see it either way. list_local reads `-type f`, so a link,
@@ -330,10 +330,10 @@ export)
     # Measured on sbx 0.53.0, in a disposable sandbox: a link in a tree copied
     # OUT of a mound makes extraction fail with "a required privilege is not
     # held by the client" and status 1, after writing an unpredictable part of
-    # the tree, so today nothing of the sort reaches this line. That is sbx's
-    # guarantee, not Draugr's, and sbx changed its mind about links once
+    # the tree, so today nothing of the sort reaches this line. That guarantee is
+    # from sbx, not from Draugr, and sbx changed its mind about links once
     # already between 0.37.1 and 0.53.0. This is the same question asked by the
-    # side that keeps the answer - and it is the rule the import path applies
+    # side that keeps the answer. It is also the rule the import path applies
     # in the other direction, so the store holds one shape of tree.
     dr_incoming_validate_tree "$packed" || dr_die \
         "what came out of $DRAUGR_SANDBOX is not a plain tree of files" \
@@ -341,9 +341,9 @@ export)
         "the staging directory, which this command removes as it exits." \
         "Look at what the agent wrote:  dr-mem diff"
 
-    # How much of it there may be. The staging copy is already on this disk
-    # when this asks - see dr_incoming_within_limits for what that does and
-    # does not prevent - so this decides what reaches the store, and the trap
+    # The limit on how much of it is allowed. The staging copy is already on this disk
+    # when this asks (see dr_incoming_within_limits for what that does and
+    # does not prevent). Thus this decides what reaches the store, and the trap
     # takes the rest away with the staging directory.
     dr_incoming_within_limits "$packed" || dr_die \
         "what came out of $DRAUGR_SANDBOX is larger than this host accepts" \
@@ -358,8 +358,8 @@ export)
     # and overwrites a store that was not empty. Then one `mv` brings it back.
     mkdir -p "$store_dir"
 
-    # And where it may land, asked once the directory it lands in exists. The
-    # root is the whole store, not this repo's corner of it: a link anywhere on
+    # And where it is allowed to land, asked once the directory it lands in exists. The
+    # root is the whole store, not the corner of this repo in it: a link anywhere on
     # the way down to memory/ publishes into whatever that link names, and the
     # receipt afterwards still prints the path that was asked for.
     dr_incoming_dest_ok "$DRAUGR_MEM_STORE" "$store_dir/memory" || dr_die \
@@ -373,7 +373,7 @@ export)
 
     # "sbx cp exited 0" is not "the copy is complete". Measured on sbx 0.53.0,
     # out of a mound: a tree holding a link fails at that link with status 1,
-    # after writing a part of the tree that is not predictable - one fixture
+    # after writing a part of the tree that is not predictable. One fixture
     # arrived with all four of its regular files, one with a single file out of
     # four, one with nothing. A fifo and a name holding a control character do
     # the same with their own messages. In the OTHER direction the entry is
@@ -397,7 +397,7 @@ export)
 
     # The swap itself is the shared one, so that the three channels that bring
     # bytes onto this host cannot drift apart in the one step where a mistake
-    # is not recoverable. memory.previous is this command's own name for the
+    # is not recoverable. memory.previous is the name that this command gives to the
     # copy it replaces, and the helper takes it as an argument for that reason.
     dr_incoming_publish "$store_dir/memory.incoming" "$store_dir/memory" \
         "$store_dir/memory.previous" || dr_die \
@@ -503,7 +503,7 @@ import)
     # removal can undo a credential that already crossed the boundary.
     # Three answers, and the middle one used to be reported as the first: a
     # probe that could not tell was announced as "in use", which sends the
-    # reader to close an agent that may not be running.
+    # reader to close an agent that is perhaps not running.
     ready_rc=0
     dr_agent_mem_import_ready || ready_rc=$?
     case "$ready_rc" in

@@ -41,11 +41,11 @@ done
 # With a name, $repo stays empty, because a repo possibly does not exist. Then
 # the test for unsynced work below has nothing to compare with.
 #
-# The exception is the reason a name is usually given now: this repo's own
-# mound, under the spelling that Draugr derived before it began lower-casing.
+# The exception is the reason a name is usually given now: the own
+# mound of this repo, under the spelling that Draugr derived before it began lower-casing.
 # There, everything the tests need is here, and they are exactly what you want.
 # DRAUGR_SANDBOX is exported with it, because dr-sync and dr-mem are separate
-# processes that resolve the configuration again. Without that they would ask
+# processes that resolve the configuration again. Without that they ask
 # the mound of the new name, which does not exist, and report nothing to lose.
 repo=
 if [ -z "$name" ]; then
@@ -62,7 +62,7 @@ fi
 
 # Two statements, not `[ "$(dr_sandbox_state "$name")" != absent ]`. A failed
 # probe dies inside the $( ), which ends only the subshell, and the empty output
-# then differs from "absent" — so the mound "exists" and this command goes on to
+# then differs from "absent". So the mound "exists" and this command goes on to
 # destroy it. See dr_sandbox_exists for the full reason.
 _state=$(dr_sandbox_state "$name") || dr_die \
     "cannot tell whether $name exists, so nothing was removed" \
@@ -142,7 +142,7 @@ fi
 #
 # Captured, and not `mapfile -t _opened < <(dr_policy_unadopted)`: mapfile
 # reports its OWN status, which is 0 for an input that ended early. A failed
-# query would thus fill the array with nothing, and this guard would find
+# query thus fills the array with nothing, and this guard finds
 # nothing to protect, at the last moment where the rules still exist.
 if [ -z "$force" ] && [ -n "$repo" ]; then
     _unadopted=$(dr_policy_unadopted) || dr_die \

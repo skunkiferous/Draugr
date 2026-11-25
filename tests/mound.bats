@@ -53,7 +53,7 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
 }
 
 # Draugr 0.9 and older kept the capital, so such a mound exists on machines that
-# upgrade. Building the lower-case one beside it, in silence, would leave the
+# upgrade. Building the lower-case one beside it, in silence, leaves the
 # old mound holding its disk and the work inside it.
 @test "dr-up: refuses to build a second mound beside one with the older name" {
     local repo
@@ -188,7 +188,7 @@ attached() { [ -n "$(calls run)$(calls ssh)" ]; }
     # state variable is read before the removal, and the recreate path sets it
     # to absent. A guard that tests the wrong one leaves every rebuilt mound
     # without rsync, and nothing says so until the first transfer.
-    # A recreate destroys a mound, so it asks what would be lost first. An
+    # A recreate destroys a mound, so it asks what will be lost first. An
     # unanswerable question is a refusal, and this test is about the rsync
     # install after the rebuild. Thus the mound answers.
     dr_mound_answers
@@ -404,21 +404,21 @@ stale_tracking_ref() {
 }
 
 @test "dr-up: a missing default kit is silent, a missing configured one stops" {
-    # The default LOCATION is nobody's request, so a repo with no kit there is
+    # The default LOCATION is not requested by anybody, so a repo with no kit there is
     # an ordinary repo and not an error.
     DR_MOCK_STATE=absent run dr-up
     [ "$status" -eq 0 ]
     [[ "$output" != *"do not exist"* ]]
 
     # A kit asked for BY NAME and not there is fatal: it can carry the deny
-    # rules of the project, and the mound would come up without them.
+    # rules of the project, and the mound comes up without them.
     #
     # Reported by the name that you wrote, not by a resolved path. Draugr looks
     # for a bare entry in two places. Thus "no kit at /repo/nope" hides half of
     # the places where Draugr looked.
     #
     # The log is emptied first. It accumulates over a whole test, and the half
-    # above already created a mound - so "nothing was created" has to be asked
+    # above already created a mound, so "nothing was created" has to be asked
     # about THIS run.
     : > "$DR_MOCK_LOG"
     DRAUGR_KIT=.draugr/nope DR_MOCK_STATE=absent run dr-up
@@ -640,7 +640,7 @@ stale_tracking_ref() {
 
 @test "dr-go: the key alone does not raise the question for a clone mound" {
     # DRAUGR_CLONE=false against a mound that IS a clone. The agent cannot
-    # write your tree, so there is nothing to confirm - but the key is not in
+    # write your tree, so there is nothing to confirm, but the key is not in
     # effect either, and one dim line says so.
     DRAUGR_CLONE=false DR_MOCK_TREE=clone DR_MOCK_STATE=running run dr-go
     [[ "$output" != *"read-write"* ]]
@@ -784,7 +784,7 @@ go_rc() {
     export DR_MOCK_FAIL=ls
     run dr-rm --yes
     [ "$status" -ne 0 ]
-    # The exact words of dr-rm's OWN check. "cannot tell whether" alone is not
+    # The exact words of the check of dr-rm ITSELF. "cannot tell whether" alone is not
     # enough: with the defect put back, the command still stopped further down
     # the chain and still printed that phrase from dr_sandbox_exists, so the
     # assertion passed while the line it is about was gone. A mutation run
@@ -834,7 +834,7 @@ go_rc() {
 }
 
 # A mound built by Draugr 0.9 or older kept the case of the repo folder, and
-# sbx cannot rename it. It must not look like somebody else's mound.
+# sbx cannot rename it. It must not look like the mound of somebody else.
 @test "dr-ls: marks a mound that an older Draugr named, too" {
     local repo
     repo=$(dr_make_win_repo MyApp) || skip "no writable path under /mnt/<drive>"
@@ -880,7 +880,7 @@ go_rc() {
 }
 
 @test "dr-status: the clone row describes the MOUND, not the key" {
-    # A row that reads DRAUGR_CLONE describes the mound you would get NEXT.
+    # A row that reads DRAUGR_CLONE describes the mound you get NEXT.
     # The dangerous disagreement is the one where the key says clone and the
     # mound is a bind mount, so the row has to come from sandboxd.
     DR_MOCK_TREE=writable DRAUGR_CLONE=true DR_MOCK_STATE=running run dr-status

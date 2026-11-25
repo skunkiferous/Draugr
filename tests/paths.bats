@@ -104,7 +104,7 @@ teardown() { dr_test_teardown; }
 }
 
 # The case of the repo folder used to be kept, and it decided for the life of
-# the mound whether a kit could ever be added to it in place.
+# the mound whether a kit can ever be added to it in place.
 @test "dr_sandbox_name: lower-cases the name of the folder" {
     run dr_sandbox_name /mnt/c/Code/MyApp
     [ "$output" = draugr-myapp ]
@@ -129,7 +129,7 @@ teardown() { dr_test_teardown; }
     done
 }
 
-# Nothing creates this one. dr-up and dr-ls use it to recognise a mound that an
+# Nothing creates this one. dr-up and dr-ls use it to recognize a mound that an
 # older Draugr built, which sbx cannot rename.
 @test "dr_sandbox_name_legacy: keeps the case and the plus sign, as 0.9 did" {
     run dr_sandbox_name_legacy /mnt/c/Code/MyApp
@@ -322,8 +322,8 @@ teardown() { dr_test_teardown; }
 
 # --- a name is not a path ----------------------------------------------------
 #
-# Identifiers arrive from places Draugr does not control - a plugin registry
-# that a build sandbox wrote, a marketplace that named itself - and the host
+# Identifiers arrive from places Draugr does not control (a plugin registry
+# that a build sandbox wrote, a marketplace that named itself) and the host
 # then puts them in a path. These two helpers are what stands between such a
 # name and `rm -rf`.
 
@@ -345,7 +345,7 @@ teardown() { dr_test_teardown; }
     ! dr_simple_name 'a\b' || return 1
     # A leading dash is read as an option by whatever runs next.
     ! dr_simple_name "-rf" || return 1
-    # And the characters that a shell or a path would treat specially.
+    # And the characters that a shell or a path treats specially.
     ! dr_simple_name 'a b' || return 1
     ! dr_simple_name 'a@b' || return 1
     ! dr_simple_name 'a$b' || return 1
@@ -356,7 +356,7 @@ teardown() { dr_test_teardown; }
     mkdir -p "$DR_TMP/root/sub/deep" "$DR_TMP/outside"
     dr_path_contained "$DR_TMP/root" "$DR_TMP/root/sub"
     dr_path_contained "$DR_TMP/root" "$DR_TMP/root/sub/deep"
-    # Strict: the root is not inside itself. Nothing may delete its own root.
+    # Strict: the root is not inside itself. Nothing is allowed to delete its own root.
     ! dr_path_contained "$DR_TMP/root" "$DR_TMP/root" || return 1
     ! dr_path_contained "$DR_TMP/root" "$DR_TMP/outside" || return 1
     ! dr_path_contained "$DR_TMP/root" "$DR_TMP/root/../outside"
@@ -366,7 +366,7 @@ teardown() { dr_test_teardown; }
     mkdir -p "$DR_TMP/root" "$DR_TMP/elsewhere"
     ln -s "$DR_TMP/elsewhere" "$DR_TMP/root/away" 2>/dev/null \
         || skip "this filesystem does not take a symlink"
-    # The whole reason the check canonicalises: the NAME is innocent.
+    # The whole reason the check canonicalizes: the NAME is innocent.
     ! dr_path_contained "$DR_TMP/root" "$DR_TMP/root/away"
 }
 

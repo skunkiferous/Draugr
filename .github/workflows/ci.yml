@@ -14,7 +14,7 @@ jobs:
     steps:
       # Pinned to a commit, not to the moving tag `v4`. A tag is a name that
       # its owner can repoint at any commit, so `@v4` says "whatever actions
-      # publishes under that name when this job runs". A SHA is the artefact
+      # publishes under that name when this job runs". A SHA is the artifact
       # itself: the code that runs here is the code somebody read. The trailing
       # comment is the release it came from, for humans; git does not read it.
       #

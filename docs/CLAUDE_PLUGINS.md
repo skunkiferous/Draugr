@@ -309,8 +309,8 @@ with no link left in it.
 > - **Into the mound** the link is left out, every other file arrives, and `sbx cp` exits **0**.
 >   The only trace is a line on stderr: `Can't add file …\mlink to tar: unknown file mode`. A
 >   Windows junction behaves the same way, and `-L` changes nothing.
-> - **Out of the mound** extraction *fails* — `symlinkat …: A required privilege is not held by the
->   client`, status **1** — after writing a part of the tree that is not predictable: one fixture
+> - **Out of the mound** extraction *fails* with `symlinkat …: A required privilege is not held by the
+>   client` and status **1**. It fails after writing a part of the tree that is not predictable: one fixture
 >   arrived with all four of its regular files, one with a single file out of four, one with
 >   nothing. A fifo gives `Object Name not found.`, a name holding a control character gives
 >   `The filename, directory name, or volume label syntax is incorrect.` `-L` on such a tree
@@ -704,22 +704,22 @@ solve, only a fact to know.
 
 **The registry is written by a build, and a build runs in a sandbox.** `installed_plugins.json`
 holds entries keyed `<plugin>@<marketplace>`, and `dr-plugin clean` turned those keys into a path:
-`$SEED/cache/<marketplace>/<plugin>`, whose version directories it deletes. A key of `x@../../..`
-therefore selected a directory outside the store, and the cleanup removed what it found there with
+`$SEED/cache/<marketplace>/<plugin>`, whose version directories it deletes. Thus a key of `x@../../..`
+selected a directory outside the store, and the cleanup removed what it found there with
 your authority. A security review reproduced exactly that with a planted entry.
 
-So an identifier is checked where it is produced *and* where it is used. `dr-plugin` refuses to
-publish a built library whose ids or versions are not simple names — at the swap, which is the
-moment those bytes become yours, and which names the build that made them. `clean` asks again, and
-adds the question a name cannot answer: every directory it is about to delete must *canonicalise*
+Thus an identifier is checked where it is produced *and* where it is used. `dr-plugin` refuses to
+publish a built library whose ids or versions are not simple names. It does this at the swap, which
+is the moment those bytes become yours, and which names the build that made them. `clean` asks
+again, and adds the question a name cannot answer: every directory it is about to delete must *canonicalize*
 to a strict descendant of the plugin cache, so a link inside the store with an innocent name is
-refused rather than followed. Either refusal stops the whole run; a half-finished clean would leave
+refused rather than followed. Either refusal stops the whole run. A half-finished clean leaves
 you guessing which half ran. A plugin whose entry records **no** version is now left alone with a
 warning, instead of being treated as "keep nothing", which deleted every version it had.
 
 The Codex library (`dr-plugin --agent codex`) got the matching fix on the other side: the host no
-longer builds the library inside the build mound's own workspace. It stages in a directory no
-sandbox is given, validates the whole tree — not only each package — and publishes by rename after
+longer builds the library inside the workspace of the build mound itself. It stages in a directory no
+sandbox is given, validates the whole tree and not only each package, and publishes by rename after
 the build mound has stopped.
 
 ### What the seed will not do

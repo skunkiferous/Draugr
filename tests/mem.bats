@@ -150,7 +150,7 @@ setup_mound() {
 # repository and its default is %LOCALAPPDATA%\Draugr\stage, which on a normal
 # Windows account sits under `C:\Users\<first last>\…`. Every fixture path in
 # this suite is space-free, so without this test the one route that every user
-# takes would be the untested one, and `sbx cp` gets that path as an argument.
+# takes is the untested one, and `sbx cp` gets that path as an argument.
 @test "dr-mem export: a staging root with a space in it still exports" {
     setup_mound || skip "no writable Windows drive path"
     mkdir -p "$MEMDIR"
@@ -390,7 +390,7 @@ setup_mound() {
 # lives only in the disk image, so this is the one question whose answer cannot
 # be reconstructed afterwards. Status 2 used to print a warning and then ask
 # whether to destroy it anyway. DR_MOCK_FAIL=exec fails exactly the call that
-# lists the memory, and nothing else in dr-rm's chain uses it.
+# lists the memory, and nothing else in the chain of dr-rm uses it.
 @test "dr-rm: a mound that cannot say what memory it holds is not destroyed" {
     setup_mound || skip "no writable Windows drive path"
     dr_mound_answers
@@ -651,7 +651,7 @@ seed_codex() {
 #
 # The probe kept its three answers and the caller threw two of them away. These
 # tests are about the MESSAGE, not the exit code: both non-zero answers refuse,
-# so behaviour alone cannot tell them apart, and a refusal that names the wrong
+# so behavior alone cannot tell them apart, and a refusal that names the wrong
 # cause sends the reader to do the wrong thing.
 @test "dr-mem export: a running agent is reported without a guess about the mound" {
     setup_codex || skip "no writable Windows drive path"
@@ -661,7 +661,7 @@ seed_codex() {
     run dr-mem export
     # 3, not 1. dr-go reads it to export again after the stop that ends the agent.
     [ "$status" -eq 3 ]
-    # The module's own diagnosis survives.
+    # The diagnosis of the module itself survives.
     [[ "$output" == *"codex runs in"* ]]
     # And nothing is appended that the module did not measure. This line used to
     # arrive directly under "codex runs in <mound>", which can only be true of a
@@ -730,7 +730,7 @@ seed_codex() {
     export DR_MOCK_PGREP_BROKEN=1
 
     run dr-mem export
-    # 1, not 3: nothing says that a stop would help, so dr-go must not repeat it.
+    # 1, not 3: nothing says that a stop helps, so dr-go must not repeat it.
     [ "$status" -eq 1 ]
     [[ "$output" == *"could not find out"* ]]
     # Here the hint is right: nothing answered, so the mound is what to look at.
@@ -759,7 +759,7 @@ seed_codex() {
 
     # The agent is quiet and the MOUND is what fails. Every failure in pack used
     # to be 1, so this was indistinguishable from a running agent, and the
-    # caller's advice was wrong for one of the two whichever it chose.
+    # advice of the caller was wrong for one of the two whichever it chose.
     #
     # TWO steps, and the filters are chosen with care. The mock matches the whole
     # argv, and the state script travels with EVERY call, so a filter that looks
@@ -797,7 +797,7 @@ seed_codex() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"dr-mem: Draugr could not find out"* ]]
     # "the context of the agent is in use" as the VERDICT sends the reader to
-    # close an agent that may not be running. The honest message contains that
+    # close an agent that is possibly not running. The honest message contains that
     # phrase too ("could not find out whether the context ... is in use"), so
     # anchor on the headline that dr_die prints rather than on the words.
     [[ "$output" != *"dr-mem: the context of the agent is in use"* ]] || return 1
@@ -815,7 +815,7 @@ seed_codex() {
     [ -z "$output" ]
 
     # And the reported branch of pack must hand the answer out, not a literal.
-    # This is the one shape the claude module cannot prove by behaviour here.
+    # This is the one shape the claude module cannot prove by behavior here.
     for _f in lib/agents/claude.sh lib/agents/codex.sh; do
         grep -q 'return "\$rc"' "$_f" || return 1
     done
@@ -1140,13 +1140,13 @@ release_transcript() {
 }
 
 @test "dr-mem export: an entry the mound never declared is refused on the host" {
-    # The mound-side refusal above runs with the mound's own find, on a
+    # The mound-side refusal above runs with the find that is in the mound, on a
     # filesystem the agent can write, so it is advisory. This is the same
     # question asked by the side that keeps the answer.
     #
     # A symlink, because that is the entry a hash list cannot see: list_local
     # reads `-type f`, so the link is absent from BOTH sides of the
-    # completeness comparison and would travel into the store uncounted.
+    # completeness comparison and travels into the store uncounted.
     setup_mound || skip "no writable Windows drive path"
     mkdir -p "$MEMDIR"
     printf 'real\n' > "$MEMDIR/a.md"
@@ -1285,9 +1285,9 @@ stop_fakes() {
 # --- the shared receive path, in the memory channel -------------------------
 #
 # Hardening 1. The export is the channel that takes all four steps, so these
-# are about the two that are new to it: how much there may be, and where it
-# may land. The exports are EXPORTED variables, because `run` is a function
-# and dr-mem is a child process that would never see a prefix assignment.
+# are about the two that are new to it: how much there can be, and where it
+# is allowed to land. The exports are EXPORTED variables, because `run` is a function
+# and dr-mem is a child process that never sees a prefix assignment.
 
 @test "dr-mem export: more than DRAUGR_INCOMING_MAX_FILES leaves the store alone" {
     setup_mound || skip "no writable Windows drive path"
@@ -1303,8 +1303,8 @@ stop_fakes() {
 }
 
 # THE PROTECTION THAT DID NOT EXIST BEFORE. The store corner is a link, so the
-# rename would publish the agent's memory wherever that link points - and the
-# receipt would still name the store.
+# rename publishes the memory of the agent wherever that link points, and the
+# receipt still names the store.
 @test "dr-mem export: a link where the store's memory goes is refused" {
     setup_mound || skip "no writable Windows drive path"
     mkdir -p "$MEMDIR"
@@ -1317,14 +1317,14 @@ stop_fakes() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"not the place it names"* ]]
     # Nothing was written through the link, and the link is still a link: a
-    # refusal that had quietly replaced it would be its own surprise.
+    # refusal that had quietly replaced it is its own surprise.
     [ -z "$(ls -A "$DR_TMP/outside")" ]
     [ -L "$store/memory" ]
 }
 
 # The same question one level up: the corner is fine and the store itself is
 # the link. dr_path_contained resolves both sides, so this is the case a name
-# comparison would have called contained.
+# comparison calls contained.
 @test "dr-mem export: a memory store that is itself a link is refused" {
     setup_mound || skip "no writable Windows drive path"
     mkdir -p "$MEMDIR"
