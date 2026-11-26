@@ -23,8 +23,8 @@ unless `DRAUGR_FORGE` names a VM**. Thus a machine that needs no forge works as 
 
 **WARNING:** [Claude Code](https://claude.ai) "vibe-coded" this full project.
 
-> **Status: 0.7.0, with changes under Unreleased.** Each command in the tables below exists and has tests. The
-> mechanics were tested with `sbx` v0.37.1 on Windows 11 + WSL2. Only its author used it until now, so
+> **Status: 0.10.0** Each command in the tables below exists and has tests. The
+> mechanics were tested with `sbx` v0.53.0 on Windows 11 + WSL2. Only its author used it until now, so
 > expect rough edges in the places that nobody tried.
 >
 > This file is the specification. It was written before the code. If the two do not agree, the

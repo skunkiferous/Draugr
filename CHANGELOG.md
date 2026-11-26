@@ -12,6 +12,16 @@ people reading the source, not for people calling it.
 
 ### Added
 
+### Removed
+
+### Changed
+
+### Fixed
+
+## [0.10.0] — 2026-11-26
+
+### Added
+
 - **`dr-doctor` now measures what a `0.0.0.0` bind inside WSL reaches, where three documents used
   to assert it.** `share/ollama-proxy` binds `0.0.0.0`, and its own header, its README and
   [SECURITY.md](docs/SECURITY.md) all stated flatly that nothing off the host could reach it. That
@@ -74,8 +84,6 @@ people reading the source, not for people calling it.
   credentials. The two things it does not cover are named there too: the agent's own sign-in, which
   is required and which the proxy holds on the host, and *writing* to a service, which is yours to
   do.
-
-### Removed
 
 ### Changed
 
@@ -2102,7 +2110,8 @@ Docker Sandboxes `v0.37.1` on Windows 11 + WSL2, and 390 tests run in CI.
   name instead.
 - One repository per mound.
 
-[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/skunkiferous/draugr/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.10.0
 [0.9.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.9.0
 [0.8.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.8.0
 [0.7.0]: https://github.com/skunkiferous/draugr/releases/tag/v0.7.0
